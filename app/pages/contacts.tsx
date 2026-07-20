@@ -269,27 +269,27 @@ function ContactListView() {
 
         {hasAnyContacts ? (
           <Box mt={6} pt={4} borderTopWidth="1px" borderColor="borderSubtle">
-            <Text mb={2} fontWeight="medium">
-              {copy.contacts.hiddenFilterLabel}
-            </Text>
             <HStack spacing={4} flexWrap="wrap" data-testid="contacts-hidden-filter">
-              <Button
-                variant={showHidden ? 'outline' : 'solid'}
-                onClick={() => setShowHidden(false)}
-                data-testid="contacts-filter-hide-hidden"
-                size="lg"
-              >
-                {copy.contacts.hideHiddenOption}
-              </Button>
-              <Button
-                variant={showHidden ? 'solid' : 'outline'}
-                colorScheme="danger"
-                onClick={() => setShowHidden(true)}
-                data-testid="contacts-filter-show-hidden"
-                size="lg"
-              >
-                {copy.contacts.showHiddenOption(hiddenCount)}
-              </Button>
+              {showHidden ? (
+                <Button
+                  variant="solid"
+                  onClick={() => setShowHidden(false)}
+                  data-testid="contacts-filter-hide-hidden"
+                  size="lg"
+                >
+                  {copy.contacts.hideHiddenOption}
+                </Button>
+              ) : (
+                <Button
+                  variant="solid"
+                  colorScheme="danger"
+                  onClick={() => setShowHidden(true)}
+                  data-testid="contacts-filter-show-hidden"
+                  size="lg"
+                >
+                  {copy.contacts.showHiddenOption(hiddenCount)}
+                </Button>
+              )}
             </HStack>
           </Box>
         ) : null}

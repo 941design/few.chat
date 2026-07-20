@@ -48,14 +48,12 @@ describe('block-contact copy relabel (S5)', () => {
     const en = getCopy('en').contacts;
     const de = getCopy('de').contacts;
 
-    expect(en.hiddenFilterLabel).toBe('Blocked contacts');
     expect(en.hideHiddenOption).toBe('Hide blocked contacts');
     expect(en.showHiddenOption(0)).toBe('Show blocked contacts');
     expect(en.showHiddenOption(3)).toBe('Show blocked contacts (3)');
     expect(en.hiddenOnlyBody(1)).toBe('1 blocked contact is currently filtered out.');
     expect(en.hiddenOnlyBody(2)).toBe('2 blocked contacts are currently filtered out.');
 
-    expect(de.hiddenFilterLabel).toBe('Blockierte Kontakte');
     expect(de.hideHiddenOption).toBe('Blockierte Kontakte ausblenden');
     expect(de.showHiddenOption(0)).toBe('Blockierte Kontakte anzeigen');
     expect(de.showHiddenOption(3)).toBe('Blockierte Kontakte anzeigen (3)');
@@ -63,8 +61,10 @@ describe('block-contact copy relabel (S5)', () => {
     expect(de.hiddenOnlyBody(2)).toBe('2 blockierte Kontakte werden aktuell ausgeblendet.');
 
     // No prior "Hidden contacts" / "Versteckte Kontakte" wording remains.
-    expect(en.hiddenFilterLabel).not.toMatch(/hidden/i);
-    expect(de.hiddenFilterLabel).not.toMatch(/versteckt/i);
+    expect(en.hideHiddenOption).not.toMatch(/hidden/i);
+    expect(en.showHiddenOption(0)).not.toMatch(/hidden/i);
+    expect(de.hideHiddenOption).not.toMatch(/versteckt/i);
+    expect(de.showHiddenOption(0)).not.toMatch(/versteckt/i);
   });
 
   it('AC-COPY-6: new confirm-dialog copy keys are present, non-empty, and distinct in both locales', () => {

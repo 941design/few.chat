@@ -288,7 +288,6 @@ export type Copy = {
     emptyTitle: string;
     emptyBody: string;
     listHeading: string;
-    hiddenFilterLabel: string;
     hideHiddenOption: string;
     showHiddenOption: (count: number) => string;
     hiddenOnlyBody: (count: number) => string;
@@ -948,7 +947,6 @@ const copy: Record<LanguageCode, Copy> = {
       emptyTitle: 'No contacts yet',
       emptyBody: 'Join a group with someone, or open a contact card link they share with you, and they will appear here.',
       listHeading: 'All contacts',
-      hiddenFilterLabel: 'Blocked contacts',
       hideHiddenOption: 'Hide blocked contacts',
       showHiddenOption: (count: number) => count === 0 ? 'Show blocked contacts' : `Show blocked contacts (${count})`,
       hiddenOnlyBody: (count: number) => count === 1 ? '1 blocked contact is currently filtered out.' : `${count} blocked contacts are currently filtered out.`,
@@ -1512,7 +1510,6 @@ const copy: Record<LanguageCode, Copy> = {
       emptyTitle: 'Noch keine Kontakte',
       emptyBody: 'Tritt einer Gruppe mit anderen Personen bei oder öffne eine Kontaktkarte, die dir jemand teilt, dann erscheinen sie hier.',
       listHeading: 'Alle Kontakte',
-      hiddenFilterLabel: 'Blockierte Kontakte',
       hideHiddenOption: 'Blockierte Kontakte ausblenden',
       showHiddenOption: (count: number) => count === 0 ? 'Blockierte Kontakte anzeigen' : `Blockierte Kontakte anzeigen (${count})`,
       hiddenOnlyBody: (count: number) => count === 1 ? '1 blockierter Kontakt wird aktuell ausgeblendet.' : `${count} blockierte Kontakte werden aktuell ausgeblendet.`,
