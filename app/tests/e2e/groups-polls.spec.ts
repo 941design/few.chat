@@ -123,14 +123,6 @@ test.describe.serial('Poll creation and panel UI', () => {
     await expect(pgA.getByTestId('create-poll-btn')).toBeVisible();
   });
 
-  test('Poll panel toggle hides and shows panel', async () => {
-    await pgA.getByTestId('toggle-poll-panel-btn').click();
-    await expect(pgA.getByTestId('poll-panel')).not.toBeVisible({ timeout: 5_000 });
-
-    await pgA.getByTestId('toggle-poll-panel-btn').click();
-    await expect(pgA.getByTestId('poll-panel')).toBeVisible({ timeout: 5_000 });
-  });
-
   test('Create poll modal opens and validates input', async () => {
     await pgA.getByTestId('create-poll-btn').click();
     await expect(pgA.getByTestId('create-poll-modal')).toBeVisible();

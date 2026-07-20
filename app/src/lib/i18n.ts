@@ -447,8 +447,6 @@ export type Copy = {
     noPolls: string;
     showClosed: (count: number) => string;
     hideClosed: (count: number) => string;
-    showPolls: string;
-    hidePolls: string;
     createPoll: string;
     pollButton: string;
     singleChoice: string;
@@ -1025,8 +1023,6 @@ const copy: Record<LanguageCode, Copy> = {
       noPolls: 'No polls yet',
       showClosed: (count: number) => `Show closed polls (${count})`,
       hideClosed: (count: number) => `Hide closed polls (${count})`,
-      showPolls: 'Show Polls',
-      hidePolls: 'Hide Polls',
       createPoll: 'Create Poll',
       pollButton: 'Poll',
       singleChoice: 'Single choice',
@@ -1588,8 +1584,6 @@ const copy: Record<LanguageCode, Copy> = {
       noPolls: 'Noch keine Umfragen',
       showClosed: (count: number) => `Geschlossene Umfragen anzeigen (${count})`,
       hideClosed: (count: number) => `Geschlossene Umfragen ausblenden (${count})`,
-      showPolls: 'Umfragen anzeigen',
-      hidePolls: 'Umfragen ausblenden',
       createPoll: 'Umfrage erstellen',
       pollButton: 'Umfrage',
       singleChoice: 'Einzelauswahl',

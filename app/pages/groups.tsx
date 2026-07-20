@@ -277,7 +277,6 @@ function GroupDetailView({ id }: { id: string }) {
   const inviteLinkDisclosure = useDisclosure();
   const manageLinksDisclosure = useDisclosure();
   const pollDisclosure = useDisclosure();
-  const [pollPanelOpen, setPollPanelOpen] = useState(true);
   const [group, setGroup] = useState<Group | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [profileMap, setProfileMap] = useState<Record<string, MemberProfile>>({});
@@ -840,14 +839,6 @@ function GroupDetailView({ id }: { id: string }) {
                 )}
                 <Button
                   size="xs"
-                  variant="ghost"
-                  onClick={() => setPollPanelOpen((v) => !v)}
-                  data-testid="toggle-poll-panel-btn"
-                >
-                  {pollPanelOpen ? copy.polls.hidePolls : copy.polls.showPolls}
-                </Button>
-                <Button
-                  size="xs"
                   onClick={pollDisclosure.onOpen}
                   data-testid="create-poll-btn"
                 >
@@ -875,11 +866,9 @@ function GroupDetailView({ id }: { id: string }) {
                   <Box flex="1" minW={0}>
                     <GroupChat threadId={group.id} pubkey={pubkeyHex ?? ''} profileMap={profileMap} />
                   </Box>
-                  {pollPanelOpen && (
-                    <Box w={{ base: '100%', md: '280px' }} flexShrink={0}>
-                      <PollPanel pubkey={pubkeyHex ?? ''} profileMap={profileMap} />
-                    </Box>
-                  )}
+                  <Box w={{ base: '100%', md: '280px' }} flexShrink={0}>
+                    <PollPanel pubkey={pubkeyHex ?? ''} profileMap={profileMap} />
+                  </Box>
                 </Flex>
                 <CreatePollModal isOpen={pollDisclosure.isOpen} onClose={pollDisclosure.onClose} />
               </PollStoreProvider>
