@@ -38,6 +38,25 @@ function getPendingInvitationsServerSnapshot() {
   return [] as ReturnType<typeof getPendingInvitationsSnapshot>;
 }
 
+/**
+ * The imprint footer shows on every page EXCEPT the two open-chat pages: the
+ * direct-message thread (`/contacts?id=…`) and the group chat (`/groups?id=…`).
+ * On those the message composer sits at the bottom of the viewport and a legal
+ * link beneath it reads as chat chrome, so it is dropped there only. The list
+ * views for both routes carry no `id` and keep the footer, as does every other
+ * page. Keyed on route + presence of `id` (not on whether the contact/group
+ * actually resolves), so the decision is a pure function of the URL — testable
+ * without mounting the router. `id` may be a string[] for a repeated query
+ * param; any non-empty value counts as "a chat is addressed".
+ */
+export function shouldHideImprintFooter(
+  pathname: string,
+  id: string | string[] | undefined,
+): boolean {
+  const hasId = Array.isArray(id) ? id.length > 0 : Boolean(id);
+  return hasId && (pathname === '/contacts' || pathname === '/groups');
+}
+
 type LayoutProps = {
   children: React.ReactNode;
 };
@@ -75,6 +94,9 @@ export default function Layout({ children }: LayoutProps) {
     getPendingInvitationsServerSnapshot,
   );
   const pendingInvitationCount = pendingInvitations.length;
+
+  // Hide the imprint footer on the two open-chat pages (see helper above).
+  const hideImprintFooter = shouldHideImprintFooter(router.pathname, router.query.id);
 
   const navItems = [
     { label: copy.layout.nav.contacts, href: '/contacts', icon: 'contacts' },
@@ -423,23 +445,27 @@ export default function Layout({ children }: LayoutProps) {
         </Container>
       )}
 
-      {/* Footer — legal links at the very bottom of every page */}
-      <Box as="footer" borderTopWidth="1px" borderTopColor="borderSubtle" py={4}>
-        <Container maxW="container.xl">
-          <Flex justify="center">
-            <NextLink href="/imprint" passHref legacyBehavior>
-              <Link
-                fontSize="sm"
-                color="textMuted"
-                _hover={{ color: 'brand.500', textDecoration: 'underline' }}
-                data-testid="footer-imprint-link"
-              >
-                {copy.layout.imprintLink}
-              </Link>
-            </NextLink>
-          </Flex>
-        </Container>
-      </Box>
+      {/* Footer — legal links at the very bottom of every page, except the two
+          open-chat pages (DM thread, group chat) where the composer owns the
+          bottom of the viewport. */}
+      {!hideImprintFooter && (
+        <Box as="footer" borderTopWidth="1px" borderTopColor="borderSubtle" py={4}>
+          <Container maxW="container.xl">
+            <Flex justify="center">
+              <NextLink href="/imprint" passHref legacyBehavior>
+                <Link
+                  fontSize="sm"
+                  color="textMuted"
+                  _hover={{ color: 'brand.500', textDecoration: 'underline' }}
+                  data-testid="footer-imprint-link"
+                >
+                  {copy.layout.imprintLink}
+                </Link>
+              </NextLink>
+            </Flex>
+          </Container>
+        </Box>
+      )}
     </Box>
   );
 }

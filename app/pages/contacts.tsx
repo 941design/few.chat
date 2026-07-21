@@ -14,6 +14,7 @@ import {
   Heading,
   HStack,
   IconButton,
+  Image,
   Text,
   VStack,
 } from '@chakra-ui/react';
@@ -413,11 +414,43 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
           </Button>
         </NextLink>
         <Flex align={{ base: 'start', md: 'center' }} justify="space-between" gap={3} wrap="wrap">
-          <Box>
-            <Heading as="h1" size="xl">
+          <HStack spacing={3} align="center" minW={0}>
+            {/* Contact's avatar image at the top of the DM thread — mirrors the
+                round avatar treatment used in the contacts list (ProfileSummary):
+                the shared image when the contact has one, otherwise the display
+                name's initial on a muted disc. */}
+            <Box
+              w="56px"
+              h="56px"
+              borderRadius="full"
+              overflow="hidden"
+              bg="surfaceMutedBg"
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              borderWidth="1px"
+              borderColor="borderSubtle"
+              flexShrink={0}
+              data-testid="contact-detail-avatar"
+            >
+              {contact.avatar ? (
+                <Image
+                  src={contact.avatar.imageUrl}
+                  alt={displayName}
+                  w="100%"
+                  h="100%"
+                  objectFit="cover"
+                />
+              ) : (
+                <Text fontWeight="bold" color="textMuted" fontSize="xl">
+                  {displayName.slice(0, 1).toUpperCase()}
+                </Text>
+              )}
+            </Box>
+            <Heading as="h1" size="xl" noOfLines={1}>
               {displayName}
             </Heading>
-          </Box>
+          </HStack>
           <HStack spacing={2}>
             {/* Voice/video call icons — rendered only while the call feature
                 is enabled (CALLS_ENABLED); feature code retained when off. */}

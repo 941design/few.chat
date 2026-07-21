@@ -152,6 +152,12 @@ test.describe.serial('Block contact: blocked view, confirm dialog, block action,
     await alicePage.waitForLoadState('networkidle');
     await dismissErrorOverlay(alicePage);
     await expect(alicePage.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
+
+    // The DM thread header shows the contact's avatar (image when set, else the
+    // display-name initial on a muted disc), and the imprint footer is dropped
+    // on this open-chat page so the composer owns the bottom of the viewport.
+    await expect(alicePage.getByTestId('contact-detail-avatar')).toBeVisible();
+    await expect(alicePage.getByTestId('footer-imprint-link')).toHaveCount(0);
   });
 
   test('AC-CONFIRM-1: clicking the block trigger opens a confirm modal without archiving', async () => {
