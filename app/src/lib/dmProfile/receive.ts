@@ -221,23 +221,28 @@ export function decideScheduleAction(writeResult: {
  * schedule; `'mark-incomplete'` loads the existing schedule (if any),
  * transitions it via `scheduler.ts#markAnsweredIncomplete`, and saves it
  * back; `'none'` touches no schedule.
+ *
+ * Returns `true` iff the contact cache was actually updated (the announce won
+ * LWW and stored new nickname/avatar) — the caller uses this to drive the live
+ * contacts change-signal (epic: contacts-live-updates) only when a displayed
+ * value really changed. Every drop/no-win path returns `false`.
  */
 export async function handleProfileAnnounce(
   rumor: UnsignedRumor,
   senderHex: string,
   ctx: ProfileAnnounceHandlerContext,
-): Promise<void> {
+): Promise<boolean> {
   const authenticatedSenderHex = rumor.pubkey.toLowerCase();
   if (senderHex.toLowerCase() !== authenticatedSenderHex) {
     logger.info('dm-profile:sender-mismatch-dropped', { arm: 'announce' });
-    return;
+    return false;
   }
-  if (rumor.kind !== DM_PROFILE_ANNOUNCE_KIND) return;
+  if (rumor.kind !== DM_PROFILE_ANNOUNCE_KIND) return false;
 
   const parsed = parseProfileAnnounce(rumor.content);
-  if (!parsed.ok) return; // AC-PROF-6a: malformed (incl. avatar null/absent) — never stored, schedule untouched
+  if (!parsed.ok) return false; // AC-PROF-6a: malformed (incl. avatar null/absent) — never stored, schedule untouched
 
-  if (!passesDisclosureGate(authenticatedSenderHex, ctx)) return; // AC-PROF-4 / AC-PROF-4b
+  if (!passesDisclosureGate(authenticatedSenderHex, ctx)) return false; // AC-PROF-4 / AC-PROF-4b
 
   const writeResult = writeContactEntryNeutralized(authenticatedSenderHex, {
     nickname: parsed.value.nickname,
@@ -254,4 +259,5 @@ export async function handleProfileAnnounce(
       await saveSchedule(markAnsweredIncomplete(existingSchedule));
     }
   }
+  return writeResult.lwwWon;
 }

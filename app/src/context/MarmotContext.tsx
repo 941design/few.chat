@@ -360,6 +360,29 @@ type MarmotContextValue = {
    * block/unblock immediately, without unmount/remount or a page reload.
    */
   notifyBlockedPeersChanged: () => void;
+  /**
+   * Monotonically increasing counter bumped whenever a contact record in
+   * `lp_contacts_v1` / the contact cache changes as the result of an arriving
+   * event — a newly-remembered or newly-pending contact, or a profile
+   * announcement updating a contact's nickname/avatar (epic: contacts-live-
+   * updates). Mirrors `blockedPeersRevision`'s ref/memo-refresh mechanism but
+   * is a SEPARATE counter: `blockedPeersRevision` means specifically
+   * "archivedAt changed", `knownPeersRevision` means "lp_knownPeers_v1
+   * changed"; this one means "a contact's list membership or displayed
+   * profile changed" and drives the live contacts list, the DM detail header,
+   * and the notification bell's name/avatar row lookups to re-derive without a
+   * reload. Consumers list it in their memo/effect dependency arrays; the
+   * contacts store itself stays a pure localStorage layer (no React import) —
+   * the notify is issued from the watcher/effect layer that owns the write.
+   */
+  contactsRevision: number;
+  /**
+   * Bumps contactsRevision. Call after any arrival-time contact write lands —
+   * inbound-DM `rememberContact`, a profile-announce cache write, or the
+   * issuer-side pending admission — so the always-mounted contacts surfaces
+   * observe the change immediately, without unmount/remount or a page reload.
+   */
+  notifyContactsChanged: () => void;
 };
 
 const MarmotContext = createContext<MarmotContextValue | null>(null);
@@ -654,6 +677,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   // notifyBlockedPeersChanged (epic: block-contact, S1). Deliberately a
   // separate counter from knownPeersRevision (see the field's JSDoc above).
   const [blockedPeersRevision, setBlockedPeersRevision] = useState(0);
+  // Bumped whenever an arriving event changes a contact's list membership or
+  // displayed profile (nickname/avatar) — see notifyContactsChanged (epic:
+  // contacts-live-updates). Separate counter from blockedPeersRevision /
+  // knownPeersRevision per those fields' documented convention.
+  const [contactsRevision, setContactsRevision] = useState(0);
   // Track discoverability status
   const [discoverable, setDiscoverable] = useState(false);
 
@@ -1122,6 +1150,13 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // the paired peer's first DMs/calls are silently dropped by the
             // stale walled-garden cache for the rest of the session.
             setKnownPeersRevision((n) => n + 1);
+            // Issuer-side admission also wrote a new pending contact to
+            // lp_contacts_v1 (rememberPendingContact, inside handlePairingAck).
+            // Bump contactsRevision so the always-mounted contacts list shows
+            // the new pending row immediately, without a reload (epic:
+            // contacts-live-updates). The bell is already rung separately at
+            // welcomeSubscription.ts's dispatch site (incrementPendingContact).
+            setContactsRevision((n) => n + 1);
           },
         ).then((unsub) => {
           if (cancelled) {
@@ -2028,6 +2063,15 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     setBlockedPeersRevision((n) => n + 1);
   }, []);
 
+  // Bumps contactsRevision so the always-mounted contacts surfaces (the
+  // contacts list + DM detail header in contacts.tsx, the notification bell's
+  // name/avatar row lookups) re-derive from localStorage the moment an
+  // arriving event changes a contact's membership or profile. Functional
+  // update keeps this callback stable (epic: contacts-live-updates).
+  const notifyContactsChanged = useCallback((): void => {
+    setContactsRevision((n) => n + 1);
+  }, []);
+
   /**
    * Re-publish key-package discoverability and kind 30051 relay list to the given
    * relay URLs. Called from the relay settings save handler so discoverability
@@ -2115,6 +2159,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       notifyKnownPeersChanged,
       blockedPeersRevision,
       notifyBlockedPeersChanged,
+      contactsRevision,
+      notifyContactsChanged,
     }),
     [
       ready,
@@ -2155,6 +2201,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       notifyKnownPeersChanged,
       blockedPeersRevision,
       notifyBlockedPeersChanged,
+      contactsRevision,
+      notifyContactsChanged,
     ]
   );
 
@@ -2206,6 +2254,8 @@ const DEFAULT_MARMOT: MarmotContextValue = {
   notifyKnownPeersChanged: () => {},
   blockedPeersRevision: 0,
   notifyBlockedPeersChanged: () => {},
+  contactsRevision: 0,
+  notifyContactsChanged: () => {},
 };
 
 export function useMarmot(): MarmotContextValue {

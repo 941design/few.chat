@@ -30,7 +30,14 @@ export function buildInitDirectMessagePeerList(
 
 export default function DirectMessageNotificationsWatcher() {
   const { hydrated, pubkeyHex, privateKeyHex } = useNostrIdentity();
-  const { groups, knownPeersRevision, blockedPeersRevision } = useMarmot();
+  const { groups, knownPeersRevision, blockedPeersRevision, notifyContactsChanged } = useMarmot();
+
+  // Live ref to the contacts change-signal so the long-lived subscription
+  // callback can bump it after an inbound-DM rememberContact write without
+  // recreating the subscription (epic: contacts-live-updates). Same live-ref
+  // pattern as blockedPeersRef below.
+  const notifyContactsChangedRef = useRef(notifyContactsChanged);
+  useEffect(() => { notifyContactsChangedRef.current = notifyContactsChanged; }, [notifyContactsChanged]);
 
   // Live ref keeps the gate current without recreating the subscription on
   // every group membership change. Pattern matches ContactChat.tsx groupsRef.
@@ -96,6 +103,7 @@ export default function DirectMessageNotificationsWatcher() {
             blockedPeersRef.current,
             ownPubkey,
           ),
+          onContactChanged: () => notifyContactsChangedRef.current(),
         });
       } catch (err) {
         console.warn('[DMNotifications] subscribe failed:', err);

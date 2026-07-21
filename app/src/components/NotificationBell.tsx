@@ -90,7 +90,11 @@ export function buildInviteExpiryRows(
 
 export default function NotificationBell() {
   const { counts, joinRequests, directMessages, inviteExpiries, pendingContacts, totalUnread } = useUnreadCounts();
-  const { groups } = useMarmot();
+  // contactsRevision (context) re-derives the row name/avatar lookups below
+  // when an arriving profile announce updates a contact — the unread slice
+  // itself does not change, so without this the bell shows a stale name/avatar
+  // until reload (epic: contacts-live-updates).
+  const { groups, contactsRevision } = useMarmot();
   const { pubkeyHex } = useNostrIdentity();
   const copy = useCopy();
   const { isOpen, onToggle, onClose } = useDisclosure();
@@ -153,7 +157,7 @@ export default function NotificationBell() {
         href: isMaintainer ? '/feedback' : `/contacts?id=${peer}`,
       };
     });
-  }, [directMessages, pubkeyHex]);
+  }, [directMessages, pubkeyHex, contactsRevision]);
 
   // Build list of pending contacts awaiting the recipient's Confirm/Reject
   // (epic: pending-contact-notification, S2). Sourced from the `pendingContacts`
@@ -173,7 +177,7 @@ export default function NotificationBell() {
         displayName: contact?.nickname || fallbackName,
       };
     });
-  }, [pendingContacts, pubkeyHex]);
+  }, [pendingContacts, pubkeyHex, contactsRevision]);
 
   const hasNotifications =
     unreadGroups.length > 0 ||

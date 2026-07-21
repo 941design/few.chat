@@ -543,6 +543,72 @@ describe('AC-PROF-6 / AC-PROF-10 — completing write clears schedule; LWW gover
   });
 });
 
+// ── contacts-live-updates: return value drives the live change-signal ──────
+//
+// handleProfileAnnounce returns true iff the contact cache was actually
+// updated (won LWW). ProfileHealWatcher bumps MarmotContext#contactsRevision
+// only on a true return, so the contacts list / DM header / bell rows
+// re-derive their name/avatar exactly when a displayed value changed and never
+// on a dropped or stale announce (epic: contacts-live-updates, AC-SIGNAL-2 /
+// AC-PROFILE-1/2).
+describe('handleProfileAnnounce — return signals whether a displayed value changed', () => {
+  it('returns true when a gate-passing, LWW-won announce lands a new nickname/avatar', async () => {
+    const owner = makeIdentity();
+    const contact = makeIdentity();
+    seedActiveContact(contact.pubHex);
+    const rumor = makeRumor({
+      kind: DM_PROFILE_ANNOUNCE_KIND,
+      content: encodeProfileAnnounce({ nickname: 'Bob', avatar: { imageUrl: '//few.chat/assets/bob.png' } }),
+      pubkey: contact.pubHex,
+    });
+    const wrote = await handleProfileAnnounce(rumor, contact.pubHex, allowingGateCtx(owner.pubHex, contact.pubHex));
+    expect(wrote).toBe(true);
+  });
+
+  it('returns false when the announce loses LWW (nothing displayed changed)', async () => {
+    const owner = makeIdentity();
+    const contact = makeIdentity();
+    seedActiveContact(contact.pubHex);
+    writeContactEntryNeutralized(contact.pubHex, {
+      nickname: 'Newer',
+      avatar: { imageUrl: '//few.chat/assets/newer.png' },
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    const rumor = makeRumor({
+      kind: DM_PROFILE_ANNOUNCE_KIND,
+      content: encodeProfileAnnounce({ nickname: 'Stale', avatar: { imageUrl: '//few.chat/assets/stale.png' } }),
+      pubkey: contact.pubHex,
+    });
+    const wrote = await handleProfileAnnounce(rumor, contact.pubHex, allowingGateCtx(owner.pubHex, contact.pubHex));
+    expect(wrote).toBe(false);
+  });
+
+  it('returns false when the disclosure gate drops a stranger announce', async () => {
+    const owner = makeIdentity();
+    const stranger = makeIdentity();
+    const rumor = makeRumor({
+      kind: DM_PROFILE_ANNOUNCE_KIND,
+      content: encodeProfileAnnounce({ nickname: 'Mallory', avatar: { imageUrl: '//few.chat/assets/m.png' } }),
+      pubkey: stranger.pubHex,
+    });
+    const wrote = await handleProfileAnnounce(rumor, stranger.pubHex, gateCtx(owner.pubHex));
+    expect(wrote).toBe(false);
+  });
+
+  it('returns false for a malformed (avatar null/absent) announce', async () => {
+    const owner = makeIdentity();
+    const contact = makeIdentity();
+    seedActiveContact(contact.pubHex);
+    const rumor = makeRumor({
+      kind: DM_PROFILE_ANNOUNCE_KIND,
+      content: JSON.stringify({ type: 'profile-announce', nickname: 'NoAvatar', updatedAt: '2026-01-01T00:00:00.000Z' }),
+      pubkey: contact.pubHex,
+    });
+    const wrote = await handleProfileAnnounce(rumor, contact.pubHex, allowingGateCtx(owner.pubHex, contact.pubHex));
+    expect(wrote).toBe(false);
+  });
+});
+
 // ── passesDisclosureGate / decideScheduleAction — direct unit coverage ─────
 
 describe('passesDisclosureGate — both failing halves independently (VQ-S04-001)', () => {

@@ -363,8 +363,15 @@ export async function applyInboundReachabilitySignal(
 
 export default function ProfileHealWatcher() {
   const { hydrated, pubkeyHex, privateKeyHex } = useNostrIdentity();
-  const { groups, knownPeersRevision } = useMarmot();
+  const { groups, knownPeersRevision, notifyContactsChanged } = useMarmot();
   const { profile } = useProfile();
+
+  // Live ref to the contacts change-signal so the long-lived subscription
+  // callback can bump it after a profile-announce updates a contact's
+  // nickname/avatar, driving the live contacts list / DM header / bell row
+  // lookups to re-derive without a reload (epic: contacts-live-updates).
+  const notifyContactsChangedRef = useRef(notifyContactsChanged);
+  useEffect(() => { notifyContactsChangedRef.current = notifyContactsChanged; }, [notifyContactsChanged]);
 
   // Live refs so the subscription/sweep never churns on every context change
   // (mirrors DirectMessageNotificationsWatcher's groupsRef/knownPeersRef
@@ -505,7 +512,11 @@ export default function ProfileHealWatcher() {
                 localProfile: profileRef.current,
               });
             } else if (decision.action === 'route-announce') {
-              await handleProfileAnnounce(rumor, senderHex, gateCtx());
+              const wrote = await handleProfileAnnounce(rumor, senderHex, gateCtx());
+              // Only re-derive the contacts surfaces when the announce actually
+              // updated a displayed value (won LWW) — a stale/gate-dropped
+              // announce changes nothing to show (epic: contacts-live-updates).
+              if (wrote) notifyContactsChangedRef.current();
             }
           } catch {
             // Foreign key, not addressed to us, malformed, or a non-profile

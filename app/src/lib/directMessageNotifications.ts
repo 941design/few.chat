@@ -94,8 +94,16 @@ export function subscribeDirectMessageNotifications(params: {
   ownPubkeyHex: string;
   privateKeyHex: string;
   isAllowedSender: (peer: string) => boolean;
+  /**
+   * Called after an inbound DM writes a contact record via `rememberContact`
+   * (a newly-remembered peer or a refreshed `lastSeenAt`). The always-mounted
+   * contacts surfaces subscribe to this so the list re-derives from
+   * localStorage without a reload (epic: contacts-live-updates). Optional so
+   * existing callers/tests that omit it are unaffected.
+   */
+  onContactChanged?: () => void;
 }): () => void {
-  const { ndk, ownPubkeyHex, privateKeyHex, isAllowedSender } = params;
+  const { ndk, ownPubkeyHex, privateKeyHex, isAllowedSender, onContactChanged } = params;
   const ownLower = ownPubkeyHex.toLowerCase();
 
   // kind-4 dedup key: event id (the outer event is the DM itself)
@@ -125,6 +133,8 @@ export function subscribeDirectMessageNotifications(params: {
     const createdMs = (event.created_at ?? 0) * 1000;
     if (createdMs <= getDirectMessageLastReadAt(peer)) return;
     rememberContact(peer);
+    // Contacts list re-derives live on this write (epic: contacts-live-updates).
+    onContactChanged?.();
     // Epic: pending-contact-confirmation (AC-OBS-1) / pending-contact-
     // notification (AC-DM-1/2). rememberContact still fires unconditionally
     // above. While the sender is a still-pending contact the bell bump stays
@@ -189,6 +199,8 @@ export function subscribeDirectMessageNotifications(params: {
       seenRumorIds.add(rumor.id);
 
       rememberContact(peer);
+      // Contacts list re-derives live on this write (epic: contacts-live-updates).
+      onContactChanged?.();
       // Epic: pending-contact-confirmation (AC-OBS-1) / pending-contact-
       // notification (AC-DM-1/2) — see kind4Handler's matching comment above.
       // notification-domain-invariants (INV-2): suppress the bell when this

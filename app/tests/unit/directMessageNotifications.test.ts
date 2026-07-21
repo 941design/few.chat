@@ -209,6 +209,66 @@ describe('subscribeDirectMessageNotifications', () => {
     expect(incrementDirectMessage).toHaveBeenCalledWith(PEER_PUB);
   });
 
+  // ── contacts-live-updates: onContactChanged fires the live signal ──────────
+
+  it('calls onContactChanged after an allowed inbound DM writes the contact (epic: contacts-live-updates)', async () => {
+    vi.mocked(unwrapAndOpen).mockResolvedValue({
+      id: 'rumor-id-live',
+      pubkey: PEER_PUB,
+      kind: 14,
+      content: 'hi',
+      tags: [['p', OWN_PUB]],
+      created_at: 1_700_000_000,
+    });
+    const onContactChanged = vi.fn();
+    const ndk = makeFakeNdk();
+    subscribeDirectMessageNotifications({
+      ndk: ndk as unknown as any,
+      ownPubkeyHex: OWN_PUB,
+      privateKeyHex: OWN_PRIV,
+      isAllowedSender: allowPeerOnly,
+      onContactChanged,
+    });
+    const kind1059Sub = ndk.subs.find((s) => JSON.stringify(s.filter).includes('"kinds":[1059]'))!;
+    await emitEvent(kind1059Sub, {
+      id: 'wrap-live',
+      kind: 1059,
+      pubkey: 'ephemeral-key',
+      created_at: { getTime: () => 1_700_000_000 * 1000 },
+    });
+    expect(rememberContact).toHaveBeenCalledTimes(1);
+    expect(onContactChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT call onContactChanged when the sender is dropped at the walled garden', async () => {
+    vi.mocked(unwrapAndOpen).mockResolvedValue({
+      id: 'rumor-id-stranger',
+      pubkey: PEER_PUB,
+      kind: 14,
+      content: 'hi',
+      tags: [['p', OWN_PUB]],
+      created_at: 1_700_000_000,
+    });
+    const onContactChanged = vi.fn();
+    const ndk = makeFakeNdk();
+    subscribeDirectMessageNotifications({
+      ndk: ndk as unknown as any,
+      ownPubkeyHex: OWN_PUB,
+      privateKeyHex: OWN_PRIV,
+      isAllowedSender: () => false,
+      onContactChanged,
+    });
+    const kind1059Sub = ndk.subs.find((s) => JSON.stringify(s.filter).includes('"kinds":[1059]'))!;
+    await emitEvent(kind1059Sub, {
+      id: 'wrap-stranger',
+      kind: 1059,
+      pubkey: 'ephemeral-key',
+      created_at: { getTime: () => 1_700_000_000 * 1000 },
+    });
+    expect(rememberContact).not.toHaveBeenCalled();
+    expect(onContactChanged).not.toHaveBeenCalled();
+  });
+
   // ── AC-17 ────────────────────────────────────────────────────────────────────
 
   it('AC-17: kind-1059 event whose unwrap throws does not call rememberContact/incrementDirectMessage; no unhandled rejection', async () => {

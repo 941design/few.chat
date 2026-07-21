@@ -42,7 +42,12 @@ function ContactListView() {
   const copy = useCopy();
   const router = useRouter();
   const { pubkeyHex } = useNostrIdentity();
-  const { groups, ready } = useMarmot();
+  // `contactsRevision` (context) bumps whenever an arriving event changes a
+  // contact's list membership or profile (epic: contacts-live-updates), so the
+  // list re-derives live without a reload. Aliased to avoid colliding with the
+  // page-local `contactsRevision` state below (which covers the group-change /
+  // manual-confirm bumps).
+  const { groups, ready, contactsRevision: contactsSignal } = useMarmot();
   const { directMessages } = useUnreadCounts();
   const [showHidden, setShowHidden] = useState(false);
   // Revision counter forces a re-read of localStorage after rememberContactsFromGroups runs.
@@ -63,16 +68,17 @@ function ContactListView() {
     () => listContacts(pubkeyHex, { includeArchived: showHidden }).filter(
       (contact) => !isMaintainerPubkey(contact.pubkeyHex),
     ),
-    // contactsRevision ensures a re-read after rememberContactsFromGroups writes.
+    // contactsRevision ensures a re-read after rememberContactsFromGroups writes;
+    // contactsSignal (context) re-reads on arriving contact cards / profile updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pubkeyHex, showHidden, contactsRevision],
+    [pubkeyHex, showHidden, contactsRevision, contactsSignal],
   );
   const hiddenCount = useMemo(
     () => listContacts(pubkeyHex, { includeArchived: true })
       .filter((contact) => !isMaintainerPubkey(contact.pubkeyHex))
       .filter((contact) => contact.isArchived).length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pubkeyHex, contactsRevision],
+    [pubkeyHex, contactsRevision, contactsSignal],
   );
   const hasAnyContacts = contacts.length > 0 || hiddenCount > 0;
 
@@ -336,10 +342,13 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
   // hook into ContactChat is needed. Symmetrically, an Unblock action taken
   // from the Blocked banner's own button (below) re-derives `contact` the
   // same way, swapping back to ContactChat without a page navigation.
-  const { blockedPeersRevision } = useMarmot();
+  // contactsRevision (context) re-derives this contact when its profile
+  // (avatar/nickname) is updated by an arriving announce, so the DM header
+  // updates in place without a reload (epic: contacts-live-updates).
+  const { blockedPeersRevision, contactsRevision: contactsSignal } = useMarmot();
   const contact = useMemo(
     () => getContact(contactPubkeyHex, pubkeyHex, { includeArchived: true }),
-    [contactPubkeyHex, pubkeyHex, blockedPeersRevision],
+    [contactPubkeyHex, pubkeyHex, blockedPeersRevision, contactsSignal],
   );
   const signer = useMemo(
     () => (privateKeyHex ? createPrivateKeySigner(privateKeyHex) : null),
