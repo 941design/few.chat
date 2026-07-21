@@ -99,6 +99,19 @@ export type AddContactSubmissionResult =
        * produces, not a new decision.
        */
       error: 'invalid_npub' | 'self' | 'already_exists' | 'unsupported_version';
+      /**
+       * The decoded peer pubkey (lowercase hex), present iff
+       * `error === 'already_exists'` AND the contact is NOT blocked. Lets the
+       * `/add` page navigate a returning scanner straight to the
+       * already-existing contact's DM page — exactly the destination a fresh
+       * add lands on — without re-decoding the card. Undefined for a blocked
+       * re-add (AC-VIEW-13: a blocked peer is a full cut-off, there is no DM
+       * to open), for `self` (the user's own pubkey is never a navigation
+       * target), and for the parse-failure errors
+       * (`invalid_npub`/`unsupported_version`), which reject before any pubkey
+       * is decoded.
+       */
+      pubkeyHex?: string;
       /** Review-remediation (sev 5): present iff `error === 'already_exists'` AND the parsed card carried an unexpired `pairing` field — a RETURNING scanner re-scanning a live code must still reciprocate. Always undefined for `invalid_npub`/`self`/`unsupported_version`. Always undefined when `blocked` is `true` (AC-VIEW-13) — see below. */
       pairingEcho?: PairingEchoCandidate;
       /**
@@ -167,7 +180,14 @@ export function processContactInput(
   }
 
   if (!addResult.ok) {
-    return { ok: false, error: addResult.error, blocked: addResult.blocked, pairingEcho };
+    // Carry the peer pubkey ONLY for a genuine (non-blocked) already_exists —
+    // this is the returning-scanner case the /add page navigates to the DM
+    // for. `parsed.pubkeyHex` is the same lowercase-hex key a fresh add would
+    // land on. A blocked re-add is a full cut-off (AC-VIEW-13) and `self`/the
+    // parse-failure errors have no DM to open, so none of those carry it.
+    const alreadyExistsPubkeyHex =
+      addResult.error === 'already_exists' && !addResult.blocked ? parsed.pubkeyHex : undefined;
+    return { ok: false, error: addResult.error, pubkeyHex: alreadyExistsPubkeyHex, blocked: addResult.blocked, pairingEcho };
   }
 
   return {

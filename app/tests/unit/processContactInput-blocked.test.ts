@@ -135,6 +135,9 @@ describe('processContactInput — blocked re-add cut-off (AC-VIEW-13)', () => {
     if (result.ok) throw new Error('unreachable');
     expect(result.error).toBe('already_exists');
     expect(result.blocked).toBeUndefined();
+    // Non-blocked already_exists carries the peer pubkey (so /add can open the
+    // DM); the blocked cases above deliberately do NOT — a full cut-off.
+    expect(result.pubkeyHex).toBe(pubkeyHex);
     expect(result.pairingEcho).toEqual({ issuerPubkeyHex: pubkeyHex, nonceHex, expiresAt });
     // The legitimate returning-scanner cache refresh (AC-UX-6) still fires.
     expect(readContactEntry(pubkeyHex)?.nickname).toBe('Quinn');

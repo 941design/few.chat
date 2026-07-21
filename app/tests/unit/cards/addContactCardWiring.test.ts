@@ -216,7 +216,7 @@ describe('processContactInput — cache refresh is independent of the add outcom
 
     const result = processContactInput(newerPayload, null);
 
-    expect(result).toEqual({ ok: false, error: 'already_exists' });
+    expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
     // No duplicate contact entry was created.
     expect(Object.keys(readStoredContacts())).toEqual([pubkeyHex]);
     // But the nickname WAS refreshed despite the add failing.
@@ -236,7 +236,7 @@ describe('processContactInput — cache refresh is independent of the add outcom
 
     const result = processContactInput(olderPayload, null);
 
-    expect(result).toEqual({ ok: false, error: 'already_exists' });
+    expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
     expect(readContactEntry(pubkeyHex)?.nickname).toBe('Synced Name');
   });
 
@@ -396,7 +396,7 @@ describe('processContactInput — pairingEcho candidate computation', () => {
       // One second past expiresAt, per the scanner's own clock.
       const result = processContactInput(payload, null, () => (expiresAt + 1) * 1000);
 
-      expect(result).toEqual({ ok: false, error: 'already_exists' });
+      expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
       expect((result as { pairingEcho?: unknown }).pairingEcho).toBeUndefined();
     });
 
@@ -407,7 +407,7 @@ describe('processContactInput — pairingEcho candidate computation', () => {
       const payload = await buildSignedCardPayload(pubkeyHex, signer, 'Priya', 1735689600);
       const result = processContactInput(payload, null);
 
-      expect(result).toEqual({ ok: false, error: 'already_exists' });
+      expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
     });
   });
 });

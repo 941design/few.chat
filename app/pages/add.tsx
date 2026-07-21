@@ -249,38 +249,54 @@ export default function AddPage(): JSX.Element {
       return;
     }
 
-    // Review-remediation (sev 5): a RETURNING scanner — `already_exists`
-    // because the issuer was already a one-directional contact from before
-    // this epic (or from a shared group) — must still reciprocate when the
-    // live code they just scanned carries an unexpired pairing field.
-    // `result.pairingEcho` is only ever populated here for exactly that
-    // branch (processContactInput.ts). Fired in the BACKGROUND, deliberately
-    // WITHOUT touching this page's existing already_exists rendering below
-    // (the `getErrorMessage('already_exists')` alert stays exactly as it
-    // was pre-remediation) — the only visible change is a possible redirect
-    // to name setup for a nameless returning scanner, mirroring AC-SCAN-5
-    // exactly.
+    // A RETURNING scanner — `already_exists` because the contact already
+    // existed (a one-directional contact from before this epic, a peer from a
+    // shared group, or simply a reload of the same card). This is NOT a
+    // dead-end: land them on that contact's DM page, exactly the destination a
+    // fresh add reaches, so re-opening a known contact's card always takes you
+    // to the chat. `&exists=1` (never `&added=1`, since nothing was newly
+    // added) tells the contact page to surface the informative "already in
+    // your contacts" banner over the DM instead of the green "Contact added"
+    // confirmation.
     //
-    // Epic: block-contact, story S4 (AC-VIEW-13). The explicit
-    // `!result.blocked` guard below is defense-in-depth: processContactInput
-    // already never populates `pairingEcho` when `blocked` is true (a full
-    // cut-off in both directions, DD-2), so this guard is redundant with the
-    // `result.pairingEcho` check today — but it makes the invariant directly
-    // visible and independently testable at this call site rather than
-    // resting solely on the upstream suppression.
-    if (result.error === 'already_exists' && !result.blocked && result.pairingEcho && pubkeyHex && privateKeyHex) {
+    // Epic: block-contact, story S4 (AC-VIEW-13). Gated on `!result.blocked`:
+    // a blocked re-add is a full cut-off in both directions (DD-2) with no DM
+    // to open, so it falls through to the existing already_exists error alert
+    // rendered below. processContactInput never carries `pubkeyHex` for a
+    // blocked result, so `result.pubkeyHex` also fails here — the `!blocked`
+    // guard is defense-in-depth, making the invariant visible at this call
+    // site rather than resting solely on the upstream suppression.
+    if (result.error === 'already_exists' && !result.blocked && result.pubkeyHex) {
+      const targetPubkeyHex = result.pubkeyHex;
+      // Epic: contact-pairing-code, story S4 (RD-7). A v2 code with an
+      // unexpired pairing field must still reciprocate on this
+      // returning-scanner path — routed through the SAME durable
+      // persist-then-attempt core as a fresh add so an interrupted send is
+      // never lost (AC-SCAN-3). `result.pairingEcho` is only ever populated
+      // for exactly this branch (processContactInput.ts).
       const pairingEcho = result.pairingEcho;
-      const ctx = buildPendingIntentSendContext(pubkeyHex, privateKeyHex, profile.nickname);
-      void attemptOrQueuePairingEcho(pairingEcho, ctx)
-        .catch(() => 'queued-for-retry' as const)
-        .then((status) => {
-          if (status === 'deferred') {
-            router.replace(`/profile?pairing=1&issuer=${pairingEcho.issuerPubkeyHex}`);
-          }
-          // 'sent' | 'queued-for-retry' | 'expired' — no redirect, no UX
-          // change: the existing already_exists error alert (rendered below)
-          // is left completely untouched.
-        });
+      if (pairingEcho && pubkeyHex && privateKeyHex) {
+        const ctx = buildPendingIntentSendContext(pubkeyHex, privateKeyHex, profile.nickname);
+        void attemptOrQueuePairingEcho(pairingEcho, ctx)
+          .catch(() => 'queued-for-retry' as const)
+          .then((status) => {
+            if (status === 'deferred') {
+              // AC-SCAN-5: nameless scanner — route to name setup BEFORE
+              // landing on the issuer's contact, identical to the fresh-add
+              // deferred branch. The intent is already durably persisted; the
+              // echo fires once a name is saved (profile.tsx's saveProfile
+              // chokepoint, AC-SCAN-6) or on a later online/mount drain.
+              router.replace(`/profile?pairing=1&issuer=${pairingEcho.issuerPubkeyHex}`);
+            } else {
+              // 'sent' | 'queued-for-retry' | 'expired' — the reciprocation
+              // outcome never blocks the UX; land on the DM regardless.
+              router.replace(`/contacts?id=${targetPubkeyHex}&exists=1`);
+            }
+          });
+      } else {
+        router.replace(`/contacts?id=${targetPubkeyHex}&exists=1`);
+      }
+      return;
     }
   }, [hydrated, pubkeyHex, privateKeyHex, profile.nickname, notifyKnownPeersChanged, router, showContactWelcome]);
 
@@ -324,6 +340,20 @@ export default function AddPage(): JSX.Element {
     );
   }
 
+  // A non-blocked `already_exists` re-add is navigated to the contact's DM
+  // page by the effect above (with `&exists=1`, where the contact page shows
+  // the informative "already in your contacts" banner), exactly like a fresh
+  // add navigates on — so it must show the same brief "redirecting" state
+  // here, never the dead-end already_exists error alert. A blocked re-add
+  // carries no `pubkeyHex` and still falls through to that alert.
+  const isRedirectingReAdd =
+    outcome !== null &&
+    outcome.state === 'complete' &&
+    !outcome.ok &&
+    outcome.error === 'already_exists' &&
+    !outcome.blocked &&
+    !!outcome.pubkeyHex;
+
   let body: JSX.Element;
   if (outcome === null || outcome.state === 'awaiting_identity') {
     body = (
@@ -332,10 +362,11 @@ export default function AddPage(): JSX.Element {
         <Text color="textMuted">{copy.add.settingUp}</Text>
       </VStack>
     );
-  } else if (outcome.state === 'complete' && outcome.ok) {
-    // Add succeeded — the effect is navigating to /contacts?id=…&added=1.
-    // Show a brief redirecting state rather than a terminal success alert;
-    // the green confirmation is rendered on the contacts page.
+  } else if (outcome.state === 'complete' && (outcome.ok || isRedirectingReAdd)) {
+    // Add succeeded (or a known contact was re-opened) — the effect is
+    // navigating to /contacts?id=… . Show a brief redirecting state rather
+    // than a terminal success/error alert; a fresh add's green confirmation
+    // is rendered on the contacts page.
     body = (
       <VStack spacing={4} py={10} data-testid="add-page-redirecting">
         <Spinner />

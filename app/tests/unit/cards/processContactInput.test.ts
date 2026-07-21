@@ -130,6 +130,8 @@ describe('processContactInput — already_exists pairingEcho regression (review-
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.error).toBe('already_exists');
+    // Carries the peer pubkey (non-blocked) so /add can navigate to the DM.
+    expect(result.pubkeyHex).toBe(pubkeyHex);
     expect(result.pairingEcho).toEqual({ issuerPubkeyHex: pubkeyHex, nonceHex, expiresAt });
     // The cache-refresh side effect (AC-UX-6) is unaffected by this fix.
     expect(readContactEntry(pubkeyHex)?.nickname).toBe('Quinn');
@@ -146,7 +148,10 @@ describe('processContactInput — already_exists pairingEcho regression (review-
     // One second past expiresAt, per the scanner's own clock.
     const result = processContactInput(payload, null, () => (expiresAt + 1) * 1000);
 
-    expect(result).toEqual({ ok: false, error: 'already_exists' });
+    // A non-blocked already_exists now carries the peer pubkey so the /add
+    // page can navigate the returning scanner to the DM (an expired code still
+    // opens the chat — only the reciprocation echo is dropped).
+    expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
     expect((result as { pairingEcho?: unknown }).pairingEcho).toBeUndefined();
   });
 
@@ -158,7 +163,7 @@ describe('processContactInput — already_exists pairingEcho regression (review-
     const payload = await encodeCard(pubkeyHex, { nickname: 'Sam', createdAt: 1735689600 }, signer.signEvent);
     const result = processContactInput(payload, null);
 
-    expect(result).toEqual({ ok: false, error: 'already_exists' });
+    expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
     expect((result as { pairingEcho?: unknown }).pairingEcho).toBeUndefined();
   });
 
@@ -170,7 +175,7 @@ describe('processContactInput — already_exists pairingEcho regression (review-
 
     const result = processContactInput(npub, null);
 
-    expect(result).toEqual({ ok: false, error: 'already_exists' });
+    expect(result).toEqual({ ok: false, error: 'already_exists', pubkeyHex });
     expect((result as { pairingEcho?: unknown }).pairingEcho).toBeUndefined();
   });
 

@@ -307,6 +307,13 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
   // (it redirects here instead of showing its own success screen). Surface the
   // green "Contact added" confirmation on this, the selected-contact view.
   const justAdded = router.query.added === '1';
+  // `?exists=1` is set by the /add deep-link page when the opened card belongs
+  // to a contact you ALREADY have (a re-add). Instead of dead-ending on /add's
+  // "already in your contacts" error, /add navigates here to the DM and we
+  // surface that same message as an informative (not error) banner over the
+  // chat. Mutually exclusive with `?added=1` by construction — a re-add never
+  // newly adds, so the green "Contact added" confirmation is not shown.
+  const alreadyInContacts = router.query.exists === '1';
   // Epic: contact-pairing-code, story S4 (AC-SCAN-4). `?pairing=sent|pending`
   // is set by /add.tsx exactly when a pairing-ack echo was attempted for this
   // add (v2 code, unexpired). Neither value implies A has admitted yet — no
@@ -474,6 +481,12 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
             <AlertDescription>
               {pairingEchoInFlight ? copy.contacts.addContactPairingInFlight : copy.contacts.addContactSuccess}
             </AlertDescription>
+          </Alert>
+        ) : null}
+        {alreadyInContacts ? (
+          <Alert status="info" borderRadius="md" mt={4} data-testid="contact-already-exists-info">
+            <AlertIcon />
+            <AlertDescription>{copy.contacts.addContactErrorAlreadyExists}</AlertDescription>
           </Alert>
         ) : null}
         {/* Only a normal (non-blocked, non-pending) contact ever reaches here:

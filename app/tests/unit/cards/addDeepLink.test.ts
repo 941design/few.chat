@@ -199,7 +199,9 @@ describe('resolveAddDeepLink — existing identity, valid card (AC-UX-3, VQ-S7-0
     // re-resolves from scratch (fresh call, no carried-over JS state) —
     // idempotent per AC-CACHE-3 / AC-UX-6 (already_exists, cache unchanged).
     const second = resolveAddDeepLink(hash, true, null);
-    expect(second).toEqual({ state: 'complete', ok: false, error: 'already_exists' });
+    // A non-blocked already_exists now carries the peer pubkey so pages/add.tsx
+    // navigates the returning scanner straight to that contact's DM page.
+    expect(second).toEqual({ state: 'complete', ok: false, error: 'already_exists', pubkeyHex });
     expect(readContactEntry(pubkeyHex)?.nickname).toBe('Carol');
     expect(Object.keys(readStoredContacts())).toEqual([pubkeyHex]);
   });
