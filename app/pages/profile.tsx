@@ -723,6 +723,7 @@ export default function ProfilePage() {
               peerPubkeyHex={contact.pubkeyHex}
               isArchived={contact.isArchived}
               prominent={isBlocked}
+              danger
               onChanged={() => setVersion((v) => v + 1)}
             />
           )}

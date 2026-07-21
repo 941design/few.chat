@@ -196,7 +196,7 @@ export default function ManageInviteLinksModal({
                       <HStack spacing={2}>
                         <Text fontSize="xs">{copy.groups.manageLinksRemoveConfirm}</Text>
                         <Button
-                          size="xs"
+                          size="md"
                           variant="ghost"
                           onClick={() => setConfirmingNonce(null)}
                           data-testid={`invite-link-delete-cancel-${link.nonce}`}
@@ -204,7 +204,7 @@ export default function ManageInviteLinksModal({
                           {copy.groups.cancel}
                         </Button>
                         <Button
-                          size="xs"
+                          size="md"
                           colorScheme="danger"
                           onClick={() => void handleConfirmDelete(link.nonce)}
                           data-testid={`invite-link-delete-confirm-${link.nonce}`}

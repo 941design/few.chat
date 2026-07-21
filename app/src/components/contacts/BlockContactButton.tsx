@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   Button,
+  type ButtonProps,
   Modal,
   ModalOverlay,
   ModalContent,
@@ -45,6 +46,22 @@ type BlockContactButtonProps = {
    * their compact Unblock/Reject affordances stay visually secondary.
    */
   prominent?: boolean;
+  /**
+   * Themes the block (isArchived=false) trigger as a danger outline
+   * (`colorScheme="danger"` on the `outline` variant) to signal the
+   * destructive nature of the action up front. Used on a contact's profile
+   * page. The inline-list "Reject" reuse leaves this false so its compact
+   * affordance stays a neutral outline. Does not affect the unblock branch.
+   */
+  danger?: boolean;
+  /**
+   * Size of the trigger button (both the block and unblock branches). Defaults
+   * to Chakra's `md`, matching the profile page and the detail-view Blocked
+   * banner. Contact-list rows pass `sm` so the inline affordance matches the
+   * row's other `sm` action buttons (`ConfirmButton`/`RejectButton`). Does not
+   * affect the confirm modal's own buttons.
+   */
+  size?: ButtonProps['size'];
 };
 
 /**
@@ -74,6 +91,8 @@ export default function BlockContactButton({
   isDisabled = false,
   label,
   prominent = false,
+  danger = false,
+  size,
 }: BlockContactButtonProps) {
   const copy = useCopy();
   const { notifyBlockedPeersChanged } = useMarmot();
@@ -105,6 +124,7 @@ export default function BlockContactButton({
       <Button
         variant={prominent ? 'solid' : 'outline'}
         colorScheme={prominent ? 'brand' : undefined}
+        size={size}
         onClick={handleUnblock}
         isDisabled={isDisabled}
         data-testid={testId}
@@ -118,6 +138,8 @@ export default function BlockContactButton({
     <>
       <Button
         variant="outline"
+        colorScheme={danger ? 'danger' : undefined}
+        size={size}
         onClick={onOpen}
         isDisabled={isDisabled}
         data-testid={testId}

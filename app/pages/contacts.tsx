@@ -216,6 +216,7 @@ function ContactListView() {
                           <BlockContactButton
                             peerPubkeyHex={contact.pubkeyHex}
                             isArchived
+                            size="sm"
                             onChanged={() => setContactsRevision((r) => r + 1)}
                             testId={`contact-unblock-${contact.pubkeyHex}`}
                           />
@@ -243,6 +244,7 @@ function ContactListView() {
                             peerPubkeyHex={contact.pubkeyHex}
                             isArchived={false}
                             label={copy.contacts.pendingRejectButton}
+                            size="sm"
                             onChanged={() => setContactsRevision((r) => r + 1)}
                             testId={`contact-pending-reject-${contact.pubkeyHex}`}
                           />
@@ -272,20 +274,21 @@ function ContactListView() {
             <HStack spacing={4} flexWrap="wrap" data-testid="contacts-hidden-filter">
               {showHidden ? (
                 <Button
-                  variant="solid"
+                  variant="outline"
+                  colorScheme="success"
                   onClick={() => setShowHidden(false)}
                   data-testid="contacts-filter-hide-hidden"
-                  size="lg"
+                  size="md"
                 >
                   {copy.contacts.hideHiddenOption}
                 </Button>
               ) : (
                 <Button
-                  variant="solid"
-                  colorScheme="danger"
+                  variant="outline"
+                  colorScheme="success"
                   onClick={() => setShowHidden(true)}
                   data-testid="contacts-filter-show-hidden"
-                  size="lg"
+                  size="md"
                 >
                   {copy.contacts.showHiddenOption(hiddenCount)}
                 </Button>
