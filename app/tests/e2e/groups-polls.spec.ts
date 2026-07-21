@@ -245,14 +245,10 @@ test.describe.serial('Poll creation and panel UI', () => {
     // Confirm close
     await pollCard.getByText('Confirm').click();
 
-    // After close, poll moves to collapsed "closed" section — expand it
-    await expect(pgA.getByTestId('poll-toggle-closed')).toBeVisible({ timeout: 30_000 });
-    await pgA.getByTestId('poll-toggle-closed').click();
-
-    // Should transition to results display
+    // After close, poll moves to the always-visible closed results section
     await expect(
       panel.locator('[data-testid^="poll-results-card-"]').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 30_000 });
 
     // Results should show vote tally
     await expect(panel.getByText('1 voter')).toBeVisible();
@@ -264,18 +260,10 @@ test.describe.serial('Poll creation and panel UI', () => {
     await expect(pgA.getByText('Alice closed the poll')).toBeVisible();
   });
 
-  test('Closed polls appear in collapsible section', async () => {
+  test('Closed polls are always shown in the panel', async () => {
     const panel = pgA.getByTestId('poll-panel');
 
-    // Should show toggle for closed polls
-    await expect(pgA.getByTestId('poll-toggle-closed')).toBeVisible();
-
-    // Closed poll results should be visible since section starts open after close
-    // Toggle to hide closed polls
-    await pgA.getByTestId('poll-toggle-closed').click();
-
-    // Toggle to show again
-    await pgA.getByTestId('poll-toggle-closed').click();
+    // Closed poll results are rendered inline without any toggle
     await expect(
       panel.locator('[data-testid^="poll-results-card-"]').first(),
     ).toBeVisible();
@@ -457,14 +445,10 @@ test.describe.serial('Cross-user poll lifecycle', () => {
     await expect(pollCard.getByText('Close this poll?')).toBeVisible();
     await pollCard.getByText('Confirm').click();
 
-    // After close, poll moves to collapsed "closed" section — expand it
-    await expect(pgA.getByTestId('poll-toggle-closed')).toBeVisible({ timeout: 30_000 });
-    await pgA.getByTestId('poll-toggle-closed').click();
-
-    // Should show results
+    // After close, poll moves to the always-visible closed results section
     await expect(
       panel.locator('[data-testid^="poll-results-card-"]').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 30_000 });
     await expect(panel.getByText('2 voters')).toBeVisible();
   });
 
@@ -474,14 +458,10 @@ test.describe.serial('Cross-user poll lifecycle', () => {
   });
 
   test('B sees closed poll with results', async () => {
-    // B should receive the close message — wait for the closed toggle to appear
-    await expect(pgB.getByTestId('poll-toggle-closed')).toBeVisible({ timeout: 60_000 });
-    await pgB.getByTestId('poll-toggle-closed').click();
-
-    // Results card should be visible in the expanded closed section
+    // B should receive the close message — results card is shown inline, no toggle
     await expect(
       pgB.getByTestId('poll-panel').locator('[data-testid^="poll-results-card-"]').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 60_000 });
     await expect(pgB.getByTestId('poll-panel').getByText('2 voters')).toBeVisible();
   });
 
@@ -554,10 +534,10 @@ test.describe.serial('Multiple concurrent polls', () => {
     await firstCard.getByText('Close Poll').click();
     await firstCard.getByText('Confirm').click();
 
-    // Should have 1 active poll and 1 closed
+    // Should have 1 active poll and 1 closed (shown inline as a results card)
     await expect(pgA.getByRole('heading', { name: 'Polls (1)' })).toBeVisible({ timeout: 10_000 });
     await expect(panel.locator('[data-testid^="poll-card-"]')).toHaveCount(1);
-    await expect(pgA.getByTestId('poll-toggle-closed')).toBeVisible();
+    await expect(panel.locator('[data-testid^="poll-results-card-"]')).toHaveCount(1);
   });
 });
 
@@ -599,9 +579,7 @@ test.describe.serial('Close poll with zero votes', () => {
     await pollCard.getByText('Close Poll').click();
     await pollCard.getByText('Confirm').click();
 
-    // After close, the poll moves to the closed section — expand it
-    await expect(pgA.getByTestId('poll-toggle-closed')).toBeVisible({ timeout: 30_000 });
-    await pgA.getByTestId('poll-toggle-closed').click();
+    // After close, the poll moves to the always-visible closed results section
 
     // Results should show 0 voters
     await expect(

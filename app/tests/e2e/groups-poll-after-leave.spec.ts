@@ -191,12 +191,10 @@ test.describe.serial('Group works after soft-leave', () => {
     await expect(pollCard.getByText('Close this poll?')).toBeVisible();
     await pollCard.getByText('Confirm').click();
 
-    await expect(pgA.getByTestId('poll-toggle-closed')).toBeVisible({ timeout: 30_000 });
-    await pgA.getByTestId('poll-toggle-closed').click();
-
+    // Closed poll results are shown inline, no toggle to expand
     await expect(
       panel.locator('[data-testid^="poll-results-card-"]').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 30_000 });
     await expect(panel.getByText('1 voter')).toBeVisible();
   });
 });

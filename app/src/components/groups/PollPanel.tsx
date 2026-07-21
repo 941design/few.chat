@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Box,
-  Button,
   Flex,
   Heading,
   Text,
@@ -21,7 +20,6 @@ type PollPanelProps = {
 export default function PollPanel({ pubkey, profileMap }: PollPanelProps) {
   const { polls, votes } = usePollStore();
   const copy = useCopy();
-  const [showClosed, setShowClosed] = useState(false);
 
   const activePolls = polls.filter((p) => !p.closed);
   const closedPolls = polls.filter((p) => p.closed);
@@ -59,27 +57,14 @@ export default function PollPanel({ pubkey, profileMap }: PollPanelProps) {
             />
           ))}
 
-          {/* Closed polls section */}
-          {closedPolls.length > 0 && (
-            <>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => setShowClosed((v) => !v)}
-                data-testid="poll-toggle-closed"
-              >
-                {showClosed ? copy.polls.hideClosed(closedPolls.length) : copy.polls.showClosed(closedPolls.length)}
-              </Button>
-              {showClosed &&
-                closedPolls.map((poll) => (
-                  <PollResultsCard
-                    key={poll.id}
-                    poll={poll}
-                    profileMap={profileMap}
-                  />
-                ))}
-            </>
-          )}
+          {/* Closed polls — always shown inline */}
+          {closedPolls.map((poll) => (
+            <PollResultsCard
+              key={poll.id}
+              poll={poll}
+              profileMap={profileMap}
+            />
+          ))}
         </VStack>
       )}
     </Box>
