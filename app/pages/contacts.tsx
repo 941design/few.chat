@@ -133,7 +133,7 @@ function ContactListView() {
             duplicated here because handing out your own card is what a user
             comes to this page to do when the list is still short or empty. */}
         <Box mb={6}>
-          <ShareContactCard />
+          <ShareContactCard context="contacts" />
           <Divider mt={6} />
         </Box>
 

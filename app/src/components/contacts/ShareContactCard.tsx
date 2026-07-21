@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
+import NextLink from 'next/link';
 import {
   Alert,
   AlertDescription,
@@ -28,7 +29,16 @@ import { getOwnShareCard, hasShareableName, type ShareCardCacheEntry } from '@/s
  * the signer is re-derived on every cache MISS via the existing
  * `activeEventSignerOverride ?? createPrivateKeySigner` precedent.
  */
-export default function ShareContactCard({ headingAs = 'h2' }: { headingAs?: 'h2' | 'h3' }) {
+export default function ShareContactCard({
+  headingAs = 'h2',
+  context = 'profile',
+}: {
+  headingAs?: 'h2' | 'h3';
+  // Where this card is mounted. The profile page carries the name field itself,
+  // so its "needs a name" hint points "above"; the contacts page has no name
+  // field, so it instead links the visitor to the profile page to set one.
+  context?: 'profile' | 'contacts';
+}) {
   const copy = useCopy();
   const { npub, pubkeyHex, privateKeyHex, signerMode } = useNostrIdentity();
   const { profile: savedProfile } = useProfile();
@@ -100,7 +110,20 @@ export default function ShareContactCard({ headingAs = 'h2' }: { headingAs?: 'h2
         {!canShareCard && (
           <Alert status="warning" borderRadius="md" mt={3} data-testid="profile-share-card-needs-name">
             <AlertIcon />
-            <AlertDescription fontSize="sm">{copy.profile.shareCardNeedsName}</AlertDescription>
+            <AlertDescription fontSize="sm">
+              {context === 'contacts' ? (
+                <>
+                  {copy.profile.shareCardNeedsNameContacts}{' '}
+                  <NextLink href="/profile" passHref legacyBehavior>
+                    <Button as="a" variant="link" size="sm">
+                      {copy.profile.shareCardNeedsNameContactsLink}
+                    </Button>
+                  </NextLink>
+                </>
+              ) : (
+                copy.profile.shareCardNeedsName
+              )}
+            </AlertDescription>
           </Alert>
         )}
         {shareCardError && (

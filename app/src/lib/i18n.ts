@@ -407,6 +407,8 @@ export type Copy = {
     shareCardDescription: string;
     shareCardButton: string;
     shareCardNeedsName: string;
+    shareCardNeedsNameContacts: string;
+    shareCardNeedsNameContactsLink: string;
     shareCardTitle: string;
     copyCardLink: string;
     copiedCardLink: string;
@@ -998,6 +1000,8 @@ const copy: Record<LanguageCode, Copy> = {
       shareCardValidityHint: 'This code works for about 30 minutes.',
       shareCardButton: 'Share contact card',
       shareCardNeedsName: 'Set a name above before you can share your contact card.',
+      shareCardNeedsNameContacts: 'Set a name on your profile before you can share your contact card.',
+      shareCardNeedsNameContactsLink: 'Go to your profile',
       shareCardTitle: 'Share Contact Card',
       copyCardLink: 'Copy card link',
       copiedCardLink: 'Copied!',
@@ -1559,6 +1563,8 @@ const copy: Record<LanguageCode, Copy> = {
       shareCardValidityHint: 'Dieser Code funktioniert etwa 30 Minuten lang.',
       shareCardButton: 'Kontaktkarte teilen',
       shareCardNeedsName: 'Lege oben einen Namen fest, um deine Kontaktkarte teilen zu können.',
+      shareCardNeedsNameContacts: 'Lege in deinem Profil einen Namen fest, um deine Kontaktkarte teilen zu können.',
+      shareCardNeedsNameContactsLink: 'Zum Profil',
       shareCardTitle: 'Kontaktkarte teilen',
       copyCardLink: 'Kartenlink kopieren',
       copiedCardLink: 'Kopiert!',
