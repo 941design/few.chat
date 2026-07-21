@@ -506,7 +506,12 @@ export default function ChatBox({
       );
     }
     if (structured?.type === 'leave_intent' && allowPollMessages) {
-      const memberDisplay = profileMap[structured.pubkey]?.nickname
+      // Prefer the name carried in the announcement itself (the leaver's own
+      // display name), so the row reads "<name> left the group" even when we
+      // never received the leaver's MemberProfile. Fall back to the cached
+      // profile, then to a truncated npub only as a last resort.
+      const memberDisplay = structured.name
+        ?? profileMap[structured.pubkey]?.nickname
         ?? truncateNpub(pubkeyToNpub(structured.pubkey));
       return <LeaveChatAnnouncement memberDisplay={memberDisplay} />;
     }

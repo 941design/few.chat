@@ -197,8 +197,13 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
 
   // AC-MEMBERS-2 (final step): Leave-chat announcement appears in USER_A's chat.
   // The kind-9 rumor USER_B sent is displayed as a LeaveChatAnnouncement row.
-  test('Leave-chat announcement appears in USER_A chat (AC-MEMBERS-2)', async () => {
-    await expect(pgA.getByTestId('leave-chat-announcement')).toBeVisible({ timeout: 15_000 });
+  // It must name the departed member ("Bob left the group") — never an npub.
+  test('Leave-chat announcement names the departed member in USER_A chat (AC-MEMBERS-2)', async () => {
+    const announcement = pgA.getByTestId('leave-chat-announcement');
+    await expect(announcement).toBeVisible({ timeout: 15_000 });
+    await expect(announcement).toContainText('Bob left the group');
+    // The leaver's name, not their identifier: no npub must leak into the row.
+    await expect(announcement).not.toContainText('npub1');
   });
 
   // Step 6 / AC-MEMBERS-2: USER_A can still send a chat message after the removal.

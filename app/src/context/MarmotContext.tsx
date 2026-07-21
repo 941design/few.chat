@@ -1726,6 +1726,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       },
       groupId,
       selfPubkeyHex,
+      // Leaver's own display name — embedded in the kind-9 announcement so it
+      // renders "<name> left the group" for every recipient. Read from the ref
+      // to avoid a stale closure.
+      localProfileRef.current?.nickname,
     );
   }, [reloadGroups, markBackupDirty, pubkeyHex]);
 

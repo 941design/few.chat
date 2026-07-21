@@ -92,6 +92,7 @@ export async function leaveGroupImpl(
   deps: Deps,
   groupId: string,
   selfPubkeyHex: string,
+  selfDisplayName?: string,
 ): Promise<boolean> {
   const mlsGroup = await deps.getGroup(groupId);
 
@@ -125,10 +126,19 @@ export async function leaveGroupImpl(
     }
 
     // AC-SEND-2: kind-9 chat announcement — fire-and-forget. Failure must not
-    // block the purge or navigation.
+    // block the purge or navigation. The leaver's own display name rides along
+    // so the announcement reads "<name> left the group" for every recipient,
+    // regardless of whether they hold the leaver's MemberProfile. This is the
+    // leaver's own name over the encrypted MLS group channel (never a public
+    // broadcast), so it carries no privacy or cross-identity-spoofing risk.
+    const trimmedName = selfDisplayName?.trim();
     const kind9Rumor = deps.buildRumor(
       9,
-      JSON.stringify({ type: 'leave_intent', pubkey: selfPubkeyHex }),
+      JSON.stringify(
+        trimmedName
+          ? { type: 'leave_intent', pubkey: selfPubkeyHex, name: trimmedName }
+          : { type: 'leave_intent', pubkey: selfPubkeyHex },
+      ),
       selfPubkeyHex,
     );
     mlsGroup.sendApplicationRumor(kind9Rumor).catch(() => {});

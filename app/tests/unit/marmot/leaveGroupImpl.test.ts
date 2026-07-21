@@ -87,7 +87,7 @@ describe('leaveGroupImpl', () => {
   it('AC-SEND-2: two-member group — both kind-13 and kind-9 are sent exactly once', async () => {
     const deps = makeDeps({ members: [SELF, OTHER] });
 
-    const result = await leaveGroupImpl(deps, GROUP_ID, SELF);
+    const result = await leaveGroupImpl(deps, GROUP_ID, SELF, 'Alice');
 
     expect(result).toBe(true);
     expect(deps.sendRumorSafe).toHaveBeenCalledTimes(1);
@@ -100,6 +100,32 @@ describe('leaveGroupImpl', () => {
     // kind-9 announcement rumor
     const kind9Rumor = (deps.mlsGroup!.sendApplicationRumor as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(kind9Rumor.kind).toBe(9);
+  });
+
+  // The kind-9 announcement must carry the leaver's own display name so every
+  // recipient renders "<name> left the group" (never an npub), even when they
+  // never received the leaver's MemberProfile.
+  it('kind-9 leave announcement embeds the leaver display name', async () => {
+    const deps = makeDeps({ members: [SELF, OTHER] });
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF, 'Alice');
+
+    const kind9Rumor = (deps.mlsGroup!.sendApplicationRumor as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const payload = JSON.parse(kind9Rumor.content);
+    expect(payload).toMatchObject({ type: 'leave_intent', pubkey: SELF, name: 'Alice' });
+  });
+
+  // When no display name is available, the payload omits `name` entirely (no
+  // empty/whitespace field) so the renderer falls back to profile/npub.
+  it('kind-9 leave announcement omits name when the leaver has no display name', async () => {
+    const deps = makeDeps({ members: [SELF, OTHER] });
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF, '   ');
+
+    const kind9Rumor = (deps.mlsGroup!.sendApplicationRumor as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const payload = JSON.parse(kind9Rumor.content);
+    expect(payload).toEqual({ type: 'leave_intent', pubkey: SELF });
+    expect(payload).not.toHaveProperty('name');
   });
 
   // AC-PURGE-1: both new leak-fixing clears fire on the abandon (solo) path.

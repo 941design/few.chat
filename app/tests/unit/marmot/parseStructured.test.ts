@@ -37,6 +37,18 @@ describe('parseStructured', () => {
     expect(result).toEqual({ type: 'leave_intent', pubkey: 'abcd1234' });
   });
 
+  it('carries the leaver display name when present', () => {
+    const result = parseStructured('{"type":"leave_intent","pubkey":"abcd1234","name":"Alice"}');
+    expect(result).toEqual({ type: 'leave_intent', pubkey: 'abcd1234', name: 'Alice' });
+  });
+
+  it('trims the leaver display name and drops blank/whitespace names', () => {
+    expect(parseStructured('{"type":"leave_intent","pubkey":"abcd1234","name":"  Alice  "}'))
+      .toEqual({ type: 'leave_intent', pubkey: 'abcd1234', name: 'Alice' });
+    expect(parseStructured('{"type":"leave_intent","pubkey":"abcd1234","name":"   "}'))
+      .toEqual({ type: 'leave_intent', pubkey: 'abcd1234' });
+  });
+
   it('returns null for leave_intent missing pubkey', () => {
     const result = parseStructured('{"type":"leave_intent"}');
     expect(result).toBeNull();
