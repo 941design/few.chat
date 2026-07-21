@@ -984,7 +984,7 @@ const copy: Record<LanguageCode, Copy> = {
       contactInviteLine: (name: string) => `${name} invited you to few.chat`,
       groupInviteLine: (group: string) => `You're invited to join ${group}`,
       nameLabel: 'Your name',
-      namePlaceholder: 'e.g. Alex',
+      namePlaceholder: 'You',
       contactPrimaryAction: 'Get started',
     },
     profile: {
@@ -1545,7 +1545,7 @@ const copy: Record<LanguageCode, Copy> = {
       contactInviteLine: (name: string) => `${name} hat dich zu few.chat eingeladen`,
       groupInviteLine: (group: string) => `Du bist eingeladen, der Gruppe ${group} beizutreten`,
       nameLabel: 'Dein Name',
-      namePlaceholder: 'z. B. Alex',
+      namePlaceholder: 'Du',
       contactPrimaryAction: "Los geht's",
     },
     profile: {
