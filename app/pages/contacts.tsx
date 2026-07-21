@@ -31,7 +31,7 @@ import { useMarmot } from '@/src/context/MarmotContext';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useProfile } from '@/src/context/ProfileContext';
 import { commonGroups, confirmContact, getContact, listContacts, rememberContactsFromGroups } from '@/src/lib/contacts';
-import { useUnreadCounts } from '@/src/lib/unreadStore';
+import { useUnreadCounts, clearPendingContact, reconcileConfirmedContactDirectMessageCount } from '@/src/lib/unreadStore';
 import { isMaintainerPubkey } from '@/src/config/maintainer';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
@@ -82,39 +82,27 @@ function ContactListView() {
   // same session — no new revision counter needed here, unlike the detail
   // view's `ContactDetailView` below.
   //
-  // Gate-remediation (Codex P2, 2026-07-15): deliberately calls
-  // `confirmContact` directly instead of `PendingConfirmationPrompt`'s
-  // `confirmPendingContact` (which also runs
-  // `reconcileConfirmedContactDirectMessageCount`) — this list row never
-  // mounts `ContactChat` afterward, so there is no reason to reconcile the
-  // bell here at all; AC-OBS-1/AC-OBS-2 already guarantee it was never
-  // incorrectly bumped while pending, and it simply catches up the next
-  // time the user actually opens the conversation (ContactChat's own
-  // mount-time `loadMessages` + `markDirectMessagesRead`).
-  //
-  // (Historical note: at the time this list-path fix landed,
-  // `reconcileConfirmedContactDirectMessageCount` itself routed through
-  // `chatPersistence.ts#loadMessages`, whose one-time-per-thread self-heal
-  // side effect this list row could never consume — that was a second,
-  // independent bug, since fixed directly in
-  // `reconcileConfirmedContactDirectMessageCount` by switching it to a raw
-  // idb-keyval read. See that function's doc comment in unreadStore.ts.
-  // Skipping the call here remains correct regardless, since this row has
-  // no use for reconciliation in the first place.)
-  //
-  // Gate-remediation (2026-07-15, finding G): this handler is a plain
-  // synchronous function, not `async` — both `confirmContact` and
-  // `setContactsRevision` are synchronous, so there was never anything to
-  // await. A prior version was declared `async` with a dead
-  // `if (!pubkeyHex) return;` guard (a residue of an earlier call shape that
-  // once needed the signed-in user's own pubkey); that guard silently
-  // no-op'd the whole confirm action whenever identity state had not yet
-  // hydrated. Dropped both — the guard was never load-bearing since
-  // `peerPubkeyHex` (the confirm target) is unrelated to `pubkeyHex` (the
-  // local user).
-  function handleConfirmFromList(peerPubkeyHex: string) {
+  // Epic: pending-contact-notification (AC-DM-3). This path now reconciles
+  // the unread pill on confirm — reversing the prior "list row never mounts
+  // ContactChat, so never reconcile" decision. That decision assumed nothing
+  // was retained while pending; the retain-and-reveal change
+  // (directMessageNotifications.ts) now persists a pending peer's inbound DMs,
+  // so on Confirm `reconcileConfirmedContactDirectMessageCount` finds them and
+  // the pill appears immediately — for BOTH confirm entry points (the prompt
+  // path already reconciles via `confirmPendingContact`). `confirmContact`
+  // clears the pending flag first, so the recompute is no longer gated by
+  // `isPendingConfirmation`. The reconcile reads via a raw idb-keyval lookup
+  // (never `loadMessages`), so it does not consume ContactChat's one-time
+  // self-heal signal. The revision bump is issued BEFORE the await so the row
+  // flips to its confirmed state immediately; the pill reveal follows.
+  async function handleConfirmFromList(peerPubkeyHex: string) {
     confirmContact(peerPubkeyHex);
+    // Clear the pending-contact bell entry on confirm (AC-LIFE-3).
+    clearPendingContact(peerPubkeyHex);
     setContactsRevision((r) => r + 1);
+    if (pubkeyHex) {
+      await reconcileConfirmedContactDirectMessageCount(peerPubkeyHex, pubkeyHex);
+    }
   }
 
   return (
@@ -223,15 +211,18 @@ function ContactListView() {
                         </>
                       ) : isPending ? (
                         <>
-                          <Badge colorScheme="warning" data-testid={`contact-pending-badge-${contact.pubkeyHex}`}>
-                            {copy.contacts.pendingBadge}
-                          </Badge>
+                          {/* Epic: pending-contact-notification (AC-BADGE-1,
+                              DD-3): the recipient's pending row shows Confirm +
+                              Reject only — the buttons already make the state and
+                              required action obvious, so the orange "Pending"
+                              badge was removed as redundant. The blocked branch
+                              (checked first) is untouched. */}
                           <ConfirmButton
                             data-testid={`contact-pending-confirm-${contact.pubkeyHex}`}
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              handleConfirmFromList(contact.pubkeyHex);
+                              void handleConfirmFromList(contact.pubkeyHex);
                             }}
                           >
                             {copy.contacts.pendingConfirmButton}
@@ -245,7 +236,14 @@ function ContactListView() {
                             isArchived={false}
                             label={copy.contacts.pendingRejectButton}
                             size="sm"
-                            onChanged={() => setContactsRevision((r) => r + 1)}
+                            onChanged={() => {
+                              // Reject-is-block: clear the pending-contact bell
+                              // entry so no stranded contribution remains in the
+                              // badge total (epic: pending-contact-notification,
+                              // AC-LIFE-4).
+                              clearPendingContact(contact.pubkeyHex);
+                              setContactsRevision((r) => r + 1);
+                            }}
                             testId={`contact-pending-reject-${contact.pubkeyHex}`}
                           />
                         </>

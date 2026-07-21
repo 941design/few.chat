@@ -33,9 +33,19 @@ type UnreadState = {
    * `inviteExpirySweep.ts`.
    */
   inviteExpiries: Record<string, number>;
+  /**
+   * Pending-contact bell count per peer pubkey (lowercase hex), value 1 per
+   * pending contact (epic: pending-contact-notification, S1). Re-derivable
+   * from persisted contact state (`pendingConfirmationSince` set AND not
+   * archived) via `initPendingContactCounts`, mirroring the `inviteExpiries`
+   * "derive from persisted flags, live-increment on top" pattern (DD-2). A
+   * fresh pairing-ack admission live-increments it (AC-LIFE-1); Confirm and
+   * Reject/block clear it (AC-LIFE-3/4).
+   */
+  pendingContacts: Record<string, number>;
 };
 
-let state: UnreadState = { counts: {}, joinRequests: {}, directMessages: {}, inviteExpiries: {} };
+let state: UnreadState = { counts: {}, joinRequests: {}, directMessages: {}, inviteExpiries: {}, pendingContacts: {} };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -52,7 +62,7 @@ function getSnapshot(): UnreadState {
 }
 
 function getServerSnapshot(): UnreadState {
-  return { counts: {}, joinRequests: {}, directMessages: {}, inviteExpiries: {} };
+  return { counts: {}, joinRequests: {}, directMessages: {}, inviteExpiries: {}, pendingContacts: {} };
 }
 
 // --- Init / live-increment reconciliation ---
@@ -65,16 +75,18 @@ function getServerSnapshot(): UnreadState {
 // paths likewise store before counting), so a key "touched" by a live increment
 // during init can be authoritatively RE-READ from IDB — capturing the new
 // message without double-counting the live bump.
-type CountSlice = 'counts' | 'joinRequests' | 'directMessages';
+type CountSlice = 'counts' | 'joinRequests' | 'directMessages' | 'pendingContacts';
 const initInProgress: Record<CountSlice, boolean> = {
   counts: false,
   joinRequests: false,
   directMessages: false,
+  pendingContacts: false,
 };
 const initTouched: Record<CountSlice, Set<string>> = {
   counts: new Set(),
   joinRequests: new Set(),
   directMessages: new Set(),
+  pendingContacts: new Set(),
 };
 
 function noteLiveIncrement(slice: CountSlice, key: string) {
@@ -141,6 +153,7 @@ const reconcileChain: Record<CountSlice, Promise<void>> = {
   counts: Promise.resolve(),
   joinRequests: Promise.resolve(),
   directMessages: Promise.resolve(),
+  pendingContacts: Promise.resolve(),
 };
 
 async function reconcileInit(
@@ -368,6 +381,82 @@ export function clearJoinRequestGroup(groupId: string) {
     const next = { ...state.joinRequests };
     delete next[groupId];
     state = { ...state, joinRequests: next };
+    emit();
+  }
+}
+
+// --- Pending-contact bell API (epic: pending-contact-notification, S1) ---
+// Mirrors the joinRequests slice's init/increment/mark-read/clear/hook shape
+// (DD-2). Structural difference, like `initInviteExpiries`: the init takes no
+// id argument — the authoritative source is `readStoredContacts()`. The count
+// is a per-peer boolean (0 or 1): a contact is either pending-and-unactioned
+// or not, so `incrementPendingContact` SETS to 1 (idempotent) rather than
+// accumulating, and mark-read / clear delete the entry (AC-BELL-3).
+
+/**
+ * Initialise the pending-contact bell slice from persisted contact state
+ * (AC-BELL-2, AC-LIFE-2). One entry per stored contact whose
+ * `pendingConfirmationSince` is set AND which is NOT archived — block wins
+ * over pending, so an archived pending contact contributes nothing.
+ * `isPendingConfirmation` alone ignores `archivedAt`, so the not-archived
+ * condition is combined explicitly here. Routes through `reconcileInit` so a
+ * live `incrementPendingContact` arriving during the recompute is not lost.
+ */
+export async function initPendingContactCounts(): Promise<void> {
+  const isPendingNonArchived = (c: { pendingConfirmationSince?: string | null; archivedAt?: string | null }) =>
+    Boolean(c.pendingConfirmationSince) && !c.archivedAt;
+  const pendingKeys = Object.values(readStoredContacts())
+    .filter(isPendingNonArchived)
+    .map((c) => c.pubkeyHex.toLowerCase());
+  await reconcileInit('pendingContacts', pendingKeys, async (key) => {
+    const stillPending = Object.values(readStoredContacts()).some(
+      (c) => c.pubkeyHex.toLowerCase() === key && isPendingNonArchived(c),
+    );
+    return stillPending ? 1 : 0;
+  });
+}
+
+/**
+ * Set the pending-contact bell entry for a peer (idempotent; count is 0 or 1).
+ *
+ * Rings ONLY for a genuinely pending, non-archived contact (block wins,
+ * AC-BELL-2). A fresh pairing-ack `admitted` result can re-fire for a sender
+ * who is ALREADY a confirmed or archived contact — `rememberPendingContact`
+ * preserves their existing `pendingConfirmationSince`/`archivedAt` rather than
+ * re-pending them — so gating purely on the `admitted` status at the call site
+ * would create a misleading, non-actionable bell row (no Confirm/Reject to
+ * resolve it) for a contact that is not pending. Enforcing the invariant here
+ * protects every caller and keeps live-increment consistent with the
+ * init-from-stored derivation.
+ */
+export function incrementPendingContact(peerPubkeyHex: string) {
+  const key = dmKey(peerPubkeyHex);
+  const stored = Object.values(readStoredContacts()).find((c) => c.pubkeyHex.toLowerCase() === key);
+  if (!stored || !stored.pendingConfirmationSince || stored.archivedAt) return;
+  noteLiveIncrement('pendingContacts', key);
+  if (state.pendingContacts[key] === 1) return;
+  state = { ...state, pendingContacts: { ...state.pendingContacts, [key]: 1 } };
+  emit();
+}
+
+/** Mark a pending-contact bell entry read (removes it). */
+export function markPendingContactRead(peerPubkeyHex: string) {
+  const key = dmKey(peerPubkeyHex);
+  if (state.pendingContacts[key]) {
+    const next = { ...state.pendingContacts };
+    delete next[key];
+    state = { ...state, pendingContacts: next };
+    emit();
+  }
+}
+
+/** Clear a pending-contact bell entry (called on Confirm and on Reject/block). */
+export function clearPendingContact(peerPubkeyHex: string) {
+  const key = dmKey(peerPubkeyHex);
+  if (state.pendingContacts[key]) {
+    const next = { ...state.pendingContacts };
+    delete next[key];
+    state = { ...state, pendingContacts: next };
     emit();
   }
 }
@@ -713,6 +802,7 @@ if (typeof window !== 'undefined') {
     incrementJoinRequest, markJoinRequestsRead, decrementJoinRequest, clearJoinRequestGroup,
     incrementDirectMessage, markDirectMessagesRead, clearDirectMessageContact,
     incrementInviteExpiry, markInviteExpiriesRead, clearInviteExpiries,
+    incrementPendingContact, markPendingContactRead, clearPendingContact,
   };
 }
 
@@ -747,13 +837,15 @@ export function useUnreadCounts() {
     Object.values(snapshot.counts).reduce((sum, n) => sum + n, 0) +
     Object.values(snapshot.joinRequests).reduce((sum, n) => sum + n, 0) +
     Object.values(snapshot.directMessages).reduce((sum, n) => sum + n, 0) +
-    Object.values(snapshot.inviteExpiries).reduce((sum, n) => sum + n, 0);
+    Object.values(snapshot.inviteExpiries).reduce((sum, n) => sum + n, 0) +
+    Object.values(snapshot.pendingContacts).reduce((sum, n) => sum + n, 0);
 
   return {
     counts: snapshot.counts,
     joinRequests: snapshot.joinRequests,
     directMessages: snapshot.directMessages,
     inviteExpiries: snapshot.inviteExpiries,
+    pendingContacts: snapshot.pendingContacts,
     totalUnread,
   };
 }

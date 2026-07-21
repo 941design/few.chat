@@ -4,7 +4,7 @@ import ProfileSummary from '@/src/components/ProfileSummary';
 import BlockContactButton from '@/src/components/contacts/BlockContactButton';
 import { useCopy } from '@/src/context/LanguageContext';
 import { confirmContact } from '@/src/lib/contacts';
-import { reconcileConfirmedContactDirectMessageCount } from '@/src/lib/unreadStore';
+import { reconcileConfirmedContactDirectMessageCount, clearPendingContact } from '@/src/lib/unreadStore';
 import type { ContactListItem } from '@/src/lib/contacts';
 import type { UserProfile } from '@/src/types';
 
@@ -55,6 +55,9 @@ import type { UserProfile } from '@/src/types';
  */
 export async function confirmPendingContact(peerPubkeyHex: string, ownPubkeyHex: string): Promise<void> {
   confirmContact(peerPubkeyHex);
+  // Clear the pending-contact bell entry on confirm (epic:
+  // pending-contact-notification, AC-LIFE-3).
+  clearPendingContact(peerPubkeyHex);
   await reconcileConfirmedContactDirectMessageCount(peerPubkeyHex, ownPubkeyHex);
 }
 
@@ -146,7 +149,12 @@ export default function PendingConfirmationPrompt({
             peerPubkeyHex={contact.pubkeyHex}
             isArchived={false}
             label={copy.contacts.pendingRejectButton}
-            onChanged={() => { /* blockedPeersRevision bump already drives ContactDetailView's re-derive */ }}
+            onChanged={() => {
+              // Reject-is-block: clear the pending-contact bell entry (epic:
+              // pending-contact-notification, AC-LIFE-4). The blockedPeersRevision
+              // bump already drives ContactDetailView's re-derive.
+              clearPendingContact(contact.pubkeyHex);
+            }}
             testId="pending-confirmation-block-btn"
             isDisabled={isConfirming}
           />

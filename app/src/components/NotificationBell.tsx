@@ -18,6 +18,7 @@ import {
   markJoinRequestsRead,
   markDirectMessagesRead,
   markInviteExpiriesRead,
+  markPendingContactRead,
 } from '@/src/lib/unreadStore';
 import { runInviteExpiryCycle } from '@/src/lib/marmot/inviteExpirySweep';
 import { useMarmot } from '@/src/context/MarmotContext';
@@ -88,7 +89,7 @@ export function buildInviteExpiryRows(
 }
 
 export default function NotificationBell() {
-  const { counts, joinRequests, directMessages, inviteExpiries, totalUnread } = useUnreadCounts();
+  const { counts, joinRequests, directMessages, inviteExpiries, pendingContacts, totalUnread } = useUnreadCounts();
   const { groups } = useMarmot();
   const { pubkeyHex } = useNostrIdentity();
   const copy = useCopy();
@@ -154,11 +155,32 @@ export default function NotificationBell() {
     });
   }, [directMessages, pubkeyHex]);
 
+  // Build list of pending contacts awaiting the recipient's Confirm/Reject
+  // (epic: pending-contact-notification, S2). Sourced from the `pendingContacts`
+  // slice; resolves the display name via the same fallback-to-truncated-npub
+  // pattern the DM rows use. Each row deep-links to /contacts, where the
+  // Confirm + Reject controls live (AC-UI-1).
+  const pendingContactRows = useMemo(() => {
+    const peerKeys = Object.keys(pendingContacts).filter((k) => pendingContacts[k] > 0);
+    if (peerKeys.length === 0) return [];
+    const contacts = listContacts(pubkeyHex, { includeArchived: true });
+    const byPubkey = new Map(contacts.map((c) => [c.pubkeyHex.toLowerCase(), c] as const));
+    return peerKeys.map((peer) => {
+      const contact = byPubkey.get(peer);
+      const fallbackName = truncateNpub(pubkeyToNpub(peer));
+      return {
+        peerPubkeyHex: peer,
+        displayName: contact?.nickname || fallbackName,
+      };
+    });
+  }, [pendingContacts, pubkeyHex]);
+
   const hasNotifications =
     unreadGroups.length > 0 ||
     joinRequestGroups.length > 0 ||
     directMessageContacts.length > 0 ||
-    inviteExpiryRows.length > 0;
+    inviteExpiryRows.length > 0 ||
+    pendingContactRows.length > 0;
 
   return (
     <Popover
@@ -368,6 +390,58 @@ export default function NotificationBell() {
                       flexShrink={0}
                     >
                       {g.requestCount > 99 ? '99+' : g.requestCount}
+                    </Box>
+                  </HStack>
+                </NextLink>
+              ))}
+              {pendingContactRows.map((c) => (
+                <NextLink
+                  key={`pending-contact-${c.peerPubkeyHex}`}
+                  href="/contacts"
+                  passHref
+                  legacyBehavior
+                >
+                  <HStack
+                    as="a"
+                    px={4}
+                    py={3}
+                    spacing={3}
+                    _hover={{ bg: 'surfaceMutedBg', textDecoration: 'none' }}
+                    cursor="pointer"
+                    onClick={() => {
+                      markPendingContactRead(c.peerPubkeyHex);
+                      onClose();
+                    }}
+                    data-testid={`notification-pending-contact-${c.peerPubkeyHex}`}
+                  >
+                    <Box flex="1" minW={0}>
+                      <Text
+                        fontSize="sm"
+                        fontWeight="semibold"
+                        isTruncated
+                      >
+                        {c.displayName}
+                      </Text>
+                      <Text fontSize="xs" color="textMuted">
+                        {copy.layout.pendingContactNotification}
+                      </Text>
+                    </Box>
+                    <Box
+                      bg="orange.500"
+                      color="white"
+                      fontSize="xs"
+                      fontWeight="bold"
+                      minW="20px"
+                      h="20px"
+                      borderRadius="full"
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      px="6px"
+                      flexShrink={0}
+                      aria-hidden
+                    >
+                      !
                     </Box>
                   </HStack>
                 </NextLink>

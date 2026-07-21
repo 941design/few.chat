@@ -1235,6 +1235,73 @@ describe('subscribeToWelcomes — pairing-ack dispatch (S3)', () => {
     unsub();
   });
 
+  // AC-LIFE-1 (epic: pending-contact-notification): a FRESH pairing-ack
+  // admission rings the recipient's pending-contact bell exactly once; an
+  // `already-admitted` re-delivery (a differently-wrapped ack for the same
+  // scanner+nonce, so the outer-eventId SEEN dedup does not swallow it) must
+  // NOT re-ring. Spies on the REAL unreadStore export (call-through), the same
+  // vi.spyOn-on-an-imported-module style as the push-trigger test below.
+  it('AC-LIFE-1: a fresh admission increments the pending-contact bell once; already-admitted does not re-increment', async () => {
+    const unreadStoreModule = await import('@/src/lib/unreadStore');
+    const incrementSpy = vi
+      .spyOn(unreadStoreModule, 'incrementPendingContact')
+      .mockImplementation(() => {});
+
+    const issuer = makeIdentity();
+    const scanner = makeIdentity();
+    const minted = await getOrMintActiveNonce();
+
+    const makeWrap = async () => {
+      const card = await encodeCard(
+        scanner.pubHex,
+        { nickname: 'Bob', createdAt: Math.floor(Date.now() / 1000) },
+        scanner.signer.signEvent,
+      );
+      const content: PairingAckContent = { type: 'pairing-ack', nonce: minted.nonce, card };
+      const rumor = createRumor(
+        {
+          kind: PAIRING_ACK_KIND,
+          content: JSON.stringify(content),
+          tags: [['p', issuer.pubHex]],
+          created_at: Math.floor(Date.now() / 1000),
+          pubkey: scanner.pubHex,
+        },
+        hexToBytes(scanner.privHex),
+      );
+      // Each sealAndWrap uses a fresh ephemeral key → a distinct outer
+      // gift-wrap id, so the second delivery passes welcomeSubscription's
+      // SEEN-id dedup and reaches handlePairingAck (which returns
+      // already-admitted for the same scanner+nonce).
+      return sealAndWrap(rumor as never, issuer.pubHex, scanner.privHex);
+    };
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const onPairingAckReceived = vi.fn();
+
+    const unsub = await subscribeToWelcomes(
+      issuer.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      { nip44: { decrypt: vi.fn().mockRejectedValue(new Error('n/a')) } } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      issuer.privHex,
+      onPairingAckReceived,
+    );
+
+    await fireEvent(await makeWrap());
+    expect(incrementSpy).toHaveBeenCalledTimes(1);
+    expect(incrementSpy).toHaveBeenCalledWith(scanner.pubHex);
+
+    await fireEvent(await makeWrap());
+    // Still exactly once — already-admitted did not re-ring.
+    expect(incrementSpy).toHaveBeenCalledTimes(1);
+
+    incrementSpy.mockRestore();
+    unsub();
+  });
+
   it('omitting the two new trailing params behaves exactly as before — no pairing-ack dispatch attempted', async () => {
     const { mockNdk, fireEvent } = makeNdkWithEventCapture();
 

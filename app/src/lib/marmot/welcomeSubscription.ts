@@ -37,6 +37,7 @@ import {
 } from './outboundJoinRequests';
 import type { OutboundJoinRequestRecord } from './outboundJoinRequests';
 import { handlePairingAck } from '@/src/lib/pairing/pairingAck';
+import { incrementPendingContact } from '@/src/lib/unreadStore';
 import { createLogger } from '@/src/lib/logger';
 
 const logger = createLogger('welcomeSubscription');
@@ -485,6 +486,15 @@ export async function subscribeToWelcomes(
               localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
             }
           } catch { /* ignore */ }
+          if (pairingResult.status === 'admitted') {
+            // Fresh pending admission → ring the recipient's pending-contact
+            // bell exactly once (epic: pending-contact-notification, AC-LIFE-1).
+            // Wired here at the dispatch site (which already reads the
+            // HandlePairingAckResult) so pairingAck.ts stays free of
+            // unread-store imports. `already-admitted` is idempotent by
+            // design and must NOT re-ring, so it is deliberately excluded.
+            incrementPendingContact(pairingResult.senderPubkeyHex);
+          }
           if (pairingResult.status === 'admitted' || pairingResult.status === 'already-admitted') {
             onPairingAckReceived?.({ senderPubkeyHex: pairingResult.senderPubkeyHex });
           }

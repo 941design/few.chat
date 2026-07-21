@@ -22,8 +22,12 @@ import {
   CHAT_MESSAGE_KIND,
   DIRECT_MESSAGE_KIND,
   GIFT_WRAP_KIND,
+  decryptDirectPayload,
+  directConversationId,
+  parseDirectPayload,
   unwrapAndOpen,
 } from '@/src/lib/directMessages';
+import { appendMessage } from '@/src/lib/marmot/chatPersistence';
 import { createLogger } from '@/src/lib/logger';
 import {
   getDirectMessageLastReadAt,
@@ -38,7 +42,36 @@ export type IncomingDmEvent = {
   id?: string;
   pubkey?: string;
   created_at?: number;
+  /** Encrypted NIP-04 payload — needed to retain a pending peer's DM. */
+  content?: string;
 };
+
+/**
+ * Persist an inbound DM received while its sender is a still-pending contact
+ * (epic: pending-contact-notification, AC-DM-2). The message is retained (still
+ * suppressed from the unread pill/DM bell — AC-DM-1) so that on Confirm,
+ * `reconcileConfirmedContactDirectMessageCount` finds it and the pill appears
+ * immediately (AC-DM-3). `appendMessage` is insert-if-absent by message id, so
+ * a later `ContactChat` mount re-appending the same id is a safe no-op — no
+ * double-count (AC-DM-4). Best-effort: any failure is swallowed so retention
+ * never breaks the bell watcher.
+ */
+async function retainPendingInboundDm(
+  peer: string,
+  meta: { id: string; senderPubkey: string; createdAtMs: number },
+  parsed: ReturnType<typeof parseDirectPayload>,
+): Promise<void> {
+  if (!parsed) return;
+  const threadId = directConversationId(peer);
+  await appendMessage(threadId, {
+    id: meta.id,
+    content: parsed.content,
+    senderPubkey: meta.senderPubkey,
+    groupId: threadId,
+    createdAt: meta.createdAtMs,
+    ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
+  });
+}
 
 /**
  * Subscribe to inbound DMs (kind-4 NIP-04 and kind-1059 NIP-17 gift wraps)
@@ -77,7 +110,7 @@ export function subscribeDirectMessageNotifications(params: {
     '#p': [ownPubkeyHex],
   });
 
-  const kind4Handler = (event: IncomingDmEvent) => {
+  const kind4Handler = async (event: IncomingDmEvent) => {
     const peer = (event.pubkey ?? '').toLowerCase();
     if (!peer || peer === ownLower) return;
     // AC-SEC-3/4: gate before dedup-set population and all side-effects.
@@ -92,14 +125,25 @@ export function subscribeDirectMessageNotifications(params: {
     const createdMs = (event.created_at ?? 0) * 1000;
     if (createdMs <= getDirectMessageLastReadAt(peer)) return;
     rememberContact(peer);
-    // Epic: pending-contact-confirmation (AC-OBS-1). rememberContact still
-    // fires unconditionally above — only the bell bump is held back while
-    // the sender is a still-pending contact. Imports the single exported
+    // Epic: pending-contact-confirmation (AC-OBS-1) / pending-contact-
+    // notification (AC-DM-1/2). rememberContact still fires unconditionally
+    // above. While the sender is a still-pending contact the bell bump stays
+    // held back, but the message is now RETAINED (persisted) so the unread
+    // pill can be revealed on Confirm (AC-DM-2/3). Imports the single exported
     // predicate (AC-STRUCT-3) rather than re-deriving pendingConfirmationSince.
     // notification-domain-invariants (INV-2): if this peer's DM thread is the
     // active view, ContactChat renders + marks it read live, so the bell must
     // not also ring. Any other view rings it (INV-1).
-    if (!isPendingConfirmation(peer) && !isActiveView('dm', peer)) {
+    if (isPendingConfirmation(peer)) {
+      if (event.id && event.content) {
+        try {
+          const parsed = await decryptDirectPayload(event.content, privateKeyHex, peer);
+          await retainPendingInboundDm(peer, { id: event.id, senderPubkey: peer, createdAtMs: createdMs }, parsed);
+        } catch (err) {
+          logger.info('dm:retain-pending-failed', { pubkey: peer.slice(0, 8), kind: 4 });
+        }
+      }
+    } else if (!isActiveView('dm', peer)) {
       incrementDirectMessage(peer);
     }
   };
@@ -145,11 +189,25 @@ export function subscribeDirectMessageNotifications(params: {
       seenRumorIds.add(rumor.id);
 
       rememberContact(peer);
-      // Epic: pending-contact-confirmation (AC-OBS-1) — see kind4Handler's
-      // matching comment above.
+      // Epic: pending-contact-confirmation (AC-OBS-1) / pending-contact-
+      // notification (AC-DM-1/2) — see kind4Handler's matching comment above.
       // notification-domain-invariants (INV-2): suppress the bell when this
       // peer's DM thread is the active view — see the kind-4 branch above.
-      if (!isPendingConfirmation(peer) && !isActiveView('dm', peer)) {
+      if (isPendingConfirmation(peer)) {
+        // Retain the pending peer's DM (still no pill/bell) so Confirm can
+        // reveal the unread pill immediately (AC-DM-2/3). The rumor is already
+        // the decrypted kind-14 content here.
+        try {
+          const parsed = parseDirectPayload(rumor.content);
+          await retainPendingInboundDm(
+            peer,
+            { id: rumor.id, senderPubkey: peer, createdAtMs: createdMs },
+            parsed,
+          );
+        } catch {
+          logger.info('dm:retain-pending-failed', { pubkey: peer.slice(0, 8), kind: 1059 });
+        }
+      } else if (!isActiveView('dm', peer)) {
         incrementDirectMessage(peer);
       }
     } catch {

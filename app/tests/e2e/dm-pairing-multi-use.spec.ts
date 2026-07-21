@@ -96,7 +96,10 @@ test.describe('Pairing: multi-use within the active window (AC-PAIR-4)', () => {
       await a.page.goto('/contacts');
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_C.pubkeyHex}`)).toBeVisible({ timeout: 20_000 });
       await a.page.getByTestId(`contact-pending-confirm-${USER_C.pubkeyHex}`).click();
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_C.pubkeyHex}`)).not.toBeVisible({ timeout: 15_000 });
+      // Confirmed: the inline Confirm control clears (the "Pending" badge was
+      // removed by the pending-contact-notification epic — the buttons are the
+      // pending-state indicator now).
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_C.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
 
       // Now C is a confirmed contact — the detail page opens with the chat.
       await a.page.goto(`/contacts?id=${USER_C.pubkeyHex}`);

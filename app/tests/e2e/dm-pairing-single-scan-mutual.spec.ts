@@ -94,7 +94,10 @@ test.describe('Pairing: single-scan mutual admission (AC-ADMIT-6)', () => {
       await a.page.goto('/contacts');
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 20_000 });
       await a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`).click();
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).not.toBeVisible({ timeout: 15_000 });
+      // Confirmed: the inline Confirm control clears (the "Pending" badge was
+      // removed by the pending-contact-notification epic — the buttons are the
+      // pending-state indicator now).
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
 
       // Now B is a confirmed contact — the detail page opens with the chat.
       await a.page.goto(`/contacts?id=${USER_B.pubkeyHex}`);

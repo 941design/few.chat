@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
-import { initDirectMessageCounts } from '@/src/lib/unreadStore';
+import { initDirectMessageCounts, initPendingContactCounts } from '@/src/lib/unreadStore';
 import { readStoredContacts } from '@/src/lib/contacts';
 import type { StoredContact } from '@/src/lib/contacts';
 import { useMarmot } from '@/src/context/MarmotContext';
@@ -67,6 +67,11 @@ export default function DirectMessageNotificationsWatcher() {
       try {
         const peerPubkeys = buildInitDirectMessagePeerList(readStoredContacts(), ownPubkey);
         await initDirectMessageCounts(peerPubkeys, ownPubkey);
+        // Initialise the pending-contact bell from persisted contact state so a
+        // pending contact carried over from a previous session appears without a
+        // new event (epic: pending-contact-notification, AC-LIFE-2). Derives its
+        // own key list from readStoredContacts(), so no peer list is passed.
+        await initPendingContactCounts();
 
         const { connectNdk } = await import('@/src/lib/ndkClient');
         const ndk = await connectNdk(privateKeyHex);

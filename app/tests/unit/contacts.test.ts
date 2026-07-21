@@ -438,66 +438,57 @@ describe('confirmContact (AC-CONFIRM-1, AC-CONFIRM-2, AC-STRUCT-4)', () => {
   });
 });
 
-// ── Gate-remediation (Codex P2, 2026-07-15): the contacts-LIST confirm
-// action must never route through chatPersistence.ts#loadMessages ────────
-// `app/pages/contacts.tsx`'s list-row confirm handler (`handleConfirmFromList`,
-// AC-UX-1) used to call `PendingConfirmationPrompt.tsx`'s
-// `confirmPendingContact`, which also runs
-// `reconcileConfirmedContactDirectMessageCount` — and that routes through
-// `chatPersistence.ts#loadMessages`, which marks the DM thread "healed" and
-// returns any repair `refetchIds` to whichever caller invoked it FIRST; a
-// thread already marked healed returns `refetchIds: []` on every later
-// call. The list row never mounts `ContactChat` afterward (unlike the
-// detail view), so any refetchIds it received would have been silently
-// discarded — and because the thread is now marked healed, a LATER opening
-// of that contact's `ContactChat` would never get another chance to detect
-// and repair those rows. The fix: `handleConfirmFromList` now calls the
-// plain `confirmContact` directly, with no reconciliation step at all —
-// per AC-OBS-1/AC-OBS-2, the bell was never incorrectly bumped while
-// pending, so it simply catches up the next time the user opens the
-// conversation (ContactChat's own mount-time `loadMessages`).
-describe('list-confirm path never triggers loadMessages/self-heal (gate-remediation, Codex P2, 2026-07-15)', () => {
-  it('contacts.tsx no longer imports confirmPendingContact, and the list-confirm handler body has no path to reconciliation', () => {
+// ── The contacts-LIST confirm action reveals the unread pill but must never
+// route through chatPersistence.ts#loadMessages ──────────────────────────
+// Epic: pending-contact-notification (AC-DM-3) reverses the prior "list-confirm
+// never reconciles" decision. `handleConfirmFromList` now calls
+// `reconcileConfirmedContactDirectMessageCount` so DMs retained while the
+// contact was pending surface as an unread pill IMMEDIATELY on confirm — for
+// BOTH confirm entry points (the prompt path already reconciled). The original
+// concern that made this path skip reconciliation — that
+// `reconcileConfirmedContactDirectMessageCount` routed through
+// `chatPersistence.ts#loadMessages`, whose one-time-per-thread self-heal this
+// list row (which never mounts `ContactChat` afterward) would silently consume
+// — no longer applies: that function was since switched to a raw idb-keyval
+// read (see its doc comment in unreadStore.ts). So the load-bearing invariant
+// preserved here is narrower but still essential: the list-confirm path
+// reconciles WITHOUT ever calling `loadMessages`.
+describe('list-confirm path reveals the pill via reconcile but never triggers loadMessages/self-heal (AC-DM-3)', () => {
+  it('contacts.tsx imports reconcileConfirmedContactDirectMessageCount and the async list-confirm handler reconciles without loadMessages', () => {
     const source = readSource('pages/contacts.tsx');
-    // Not imported at all — the structural proof this file cannot reach
-    // confirmPendingContact (and therefore reconcileConfirmedContactDirectMessageCount)
-    // from anywhere, regardless of call site.
+    // AC-DM-3: the reconcile function is imported directly (NOT via the prompt's
+    // confirmPendingContact wrapper — the list row has its own pubkeyHex).
+    expect(source).toMatch(/import\s*\{[^}]*reconcileConfirmedContactDirectMessageCount/);
     expect(source).not.toMatch(/import\s*\{[^}]*confirmPendingContact/);
 
-    // The handler body itself (not surrounding prose/comments, which may
-    // legitimately name these identifiers for context) calls confirmContact
-    // directly and nothing reconciliation-shaped. Gate-remediation
-    // (2026-07-15, finding G): the handler is plain/synchronous now — the
-    // prior `async` declaration had nothing to await and its
-    // `if (!pubkeyHex) return;` guard was dead code that silently no-op'd
-    // the confirm action before identity state hydrated.
     const handlerMatch = source.match(
-      /function handleConfirmFromList\(peerPubkeyHex: string\) \{[\s\S]*?\n {2}\}/,
+      /async function handleConfirmFromList\(peerPubkeyHex: string\) \{[\s\S]*?\n {2}\}/,
     );
     expect(handlerMatch).not.toBeNull();
     const handlerBody = handlerMatch![0];
-    expect(handlerBody).not.toMatch(/^async /);
-    expect(handlerBody).not.toContain('if (!pubkeyHex)');
+    // Now async and reconciliation-shaped (AC-DM-3) …
     expect(handlerBody).toContain('confirmContact(peerPubkeyHex)');
-    expect(handlerBody).not.toContain('confirmPendingContact');
-    expect(handlerBody).not.toContain('reconcileConfirmedContactDirectMessageCount');
+    expect(handlerBody).toContain('reconcileConfirmedContactDirectMessageCount');
+    // … but still never routes through loadMessages (the preserved invariant).
     expect(handlerBody).not.toContain('loadMessages');
   });
 
-  it('calling exactly what the list-confirm handler calls (confirmContact) never touches chatPersistence#loadMessages', async () => {
+  it('the full list-confirm work (confirmContact + reconcile) never touches chatPersistence#loadMessages', async () => {
     const chatPersistence = await import('@/src/lib/marmot/chatPersistence');
+    const { reconcileConfirmedContactDirectMessageCount } = await import('@/src/lib/unreadStore');
     const loadMessagesSpy = vi.spyOn(chatPersistence, 'loadMessages');
 
     const pubkeyHex = '5'.repeat(64);
+    const ownHex = '6'.repeat(64);
     rememberPendingContact(pubkeyHex, '2026-06-01T00:00:00.000Z');
 
+    // Exactly what handleConfirmFromList runs, in order.
     confirmContact(pubkeyHex);
+    await reconcileConfirmedContactDirectMessageCount(pubkeyHex, ownHex);
 
     expect(loadMessagesSpy).not.toHaveBeenCalled();
-    // The underlying data mutation the list row's badge reacts to
-    // (isPendingConfirmation, AC-UX-1) still happened on this exact path —
-    // the deeper confirmContact behavior itself is already covered by the
-    // `confirmContact` describe block above (AC-CONFIRM-1/2).
+    // The data mutation the list row's badge reacts to (isPendingConfirmation)
+    // still happened on this exact path.
     expect(readStoredContacts()[pubkeyHex].pendingConfirmationSince).toBeNull();
 
     loadMessagesSpy.mockRestore();

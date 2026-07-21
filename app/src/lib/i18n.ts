@@ -19,6 +19,7 @@ export type Copy = {
     joinRequestNotification: (count: number) => string;
     directMessageNotification: (count: number) => string;
     inviteExpiryNotification: (count: number) => string;
+    pendingContactNotification: string;
     backupNeededLabel: string;
     imprintLink: string;
   };
@@ -627,6 +628,7 @@ const copy: Record<LanguageCode, Copy> = {
       joinRequestNotification: (count: number) => count === 1 ? '1 join request' : `${count} join requests`,
       directMessageNotification: (count: number) => count === 1 ? '1 new direct message' : `${count} new direct messages`,
       inviteExpiryNotification: (count: number) => count === 1 ? '1 invite link expired' : `${count} invite links expired`,
+      pendingContactNotification: 'New contact — confirm or reject',
       backupNeededLabel: 'Backup needed',
       imprintLink: 'Imprint',
     },
@@ -1191,6 +1193,7 @@ const copy: Record<LanguageCode, Copy> = {
       joinRequestNotification: (count: number) => count === 1 ? '1 Beitrittsanfrage' : `${count} Beitrittsanfragen`,
       directMessageNotification: (count: number) => count === 1 ? '1 neue Direktnachricht' : `${count} neue Direktnachrichten`,
       inviteExpiryNotification: (count: number) => count === 1 ? '1 Einladungslink abgelaufen' : `${count} Einladungslinks abgelaufen`,
+      pendingContactNotification: 'Neuer Kontakt — bestätigen oder ablehnen',
       backupNeededLabel: 'Sicherung erforderlich',
       imprintLink: 'Impressum',
     },

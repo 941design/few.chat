@@ -111,10 +111,25 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       const admitted = await waitForAdmission(a.page, USER_B.pubkeyHex, 90_000);
       expect(admitted, 'A must auto-admit B from the pairing-ack (as a PENDING contact)').toBe(true);
 
-      // ── 2. AC-UX-1: the contacts list shows B with the pending badge and
-      // an explicit confirm action, distinct from the blocked badge. ──────
+      // ── 2. AC-BADGE-1 (epic: pending-contact-notification): the contacts
+      // list shows B with Confirm + Reject and NO "Pending" badge (removed as
+      // redundant). AC-E2E-1: A's notification bell shows a pending-contact
+      // item; AC-E2E-2: no DM bell entry for B while pending. ──────────────
       await a.page.reload();
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`contact-pending-reject-${USER_B.pubkeyHex}`)).toBeVisible();
+      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
+
+      // AC-E2E-1: the bell rings for the pending contact (a distinct item that
+      // deep-links to /contacts); AC-E2E-2: no DM bell item for B yet.
+      // NotificationBell is mounted twice (desktop header + mobile menu), so
+      // scope to the visible instance (mirrors dm-feedback-channel.spec.ts).
+      await a.page.getByTestId('notification-bell').locator('visible=true').first().click();
+      await expect(
+        a.page.getByTestId(`notification-pending-contact-${USER_B.pubkeyHex}`).locator('visible=true').first(),
+      ).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`notification-dm-${USER_B.pubkeyHex}`)).toHaveCount(0);
+      await a.page.keyboard.press('Escape');
 
       const baselineLastSeenAt = await readContactLastSeenAt(a.page, USER_B.pubkeyHex);
 
@@ -144,12 +159,22 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
         async () => readContactLastSeenAt(a.page, USER_B.pubkeyHex),
         { timeout: 30_000 },
       ).not.toBe(baselineLastSeenAt);
-      expect(await readBadgeCount(a.page)).toBe(0);
+      // AC-DM-1 / AC-E2E-2: B's DMs did NOT bump the DM pill while pending —
+      // B's per-contact unread badge is absent. The total notification badge is
+      // 1 (the pending-contact bell item from step 2), NOT the held DMs.
+      await expect(a.page.getByTestId(`contact-unread-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
+      expect(await readBadgeCount(a.page)).toBe(1);
 
-      // ── 5. AC-UX-1: confirm from the LIST row. The pending badge clears
-      // and B becomes an ordinary confirmed contact. ──────────────────────
+      // ── 5. AC-BADGE-1 / AC-DM-3: confirm from the LIST row. B becomes an
+      // ordinary confirmed contact (Confirm control gone), the pending-contact
+      // bell clears, and the unread pill for the two held DMs appears
+      // IMMEDIATELY — before A ever opens the thread (AC-E2E-3). ────────────
       await a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`).click();
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).not.toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
+      // The pending-contact bell item clears and the DM pill (2 held messages)
+      // is revealed on confirm — total badge settles at 2 with no chat open.
+      await expect.poll(async () => readBadgeCount(a.page), { timeout: 15_000 }).toBe(2);
+      await expect(a.page.getByTestId(`contact-unread-badge-${USER_B.pubkeyHex}`)).toHaveText('2', { timeout: 15_000 });
 
       // ── 6. AC-MSG-1: no message is lost — both DMs sent while B was
       // pending are still recoverable once A actually opens the thread
@@ -206,14 +231,16 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await expect(a.page.getByTestId('pending-confirmation-prompt')).toHaveCount(0);
       await expect(a.page.getByTestId('chat-input')).toHaveCount(0);
 
-      // The pending row is present with an inline Confirm, and the card itself
-      // is NOT a link (a non-linked UserCard renders no anchor).
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+      // The pending row is present with an inline Confirm (and Reject) and NO
+      // "Pending" badge (AC-BADGE-1); the card itself is NOT a link (a
+      // non-linked UserCard renders no anchor).
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
       await expect(a.page.getByTestId(`contact-card-${USER_B.pubkeyHex}`).locator('a')).toHaveCount(0);
 
-      // Confirm inline from the list row — the pending badge clears.
+      // Confirm inline from the list row — the Confirm control clears.
       await a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`).click();
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).not.toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
 
       // Now B is a normal contact: the detail page opens, AC-MSG-2's held
       // message renders, and opening the thread clears the bell (AC-OBS-2, via
@@ -244,8 +271,12 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       expect(admitted).toBe(true);
       await a.page.reload();
 
-      // The pending row carries an inline Reject button next to Confirm.
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+      // The pending row carries an inline Confirm + Reject and NO "Pending"
+      // badge (AC-BADGE-1). AC-E2E-1: the pending-contact bell rang (total
+      // notification badge is 1 — the pending item, no DMs in this flow).
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
+      await expect.poll(async () => readBadgeCount(a.page), { timeout: 15_000 }).toBe(1);
       const rejectBtn = a.page.getByTestId(`contact-pending-reject-${USER_B.pubkeyHex}`);
       await expect(rejectBtn).toBeVisible();
       await expect(rejectBtn).toHaveText('Reject');
@@ -259,9 +290,11 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await expect(a.page.getByTestId('block-confirm-modal')).not.toBeVisible();
 
       // Blocked: the pending row leaves the default list (blocked contacts are
-      // hidden unless "show hidden" is toggled), and the contact is durably
-      // archived in storage.
-      await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).not.toBeVisible({ timeout: 15_000 });
+      // hidden unless "show hidden" is toggled), the contact is durably
+      // archived in storage, AND the pending-contact bell entry clears — no
+      // stranded contribution to the badge total (AC-E2E-4 / AC-LIFE-4).
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
+      await expect.poll(async () => readBadgeCount(a.page), { timeout: 15_000 }).toBe(0);
       const archived = await a.page.evaluate((hex) => {
         const raw = localStorage.getItem('lp_contacts_v1');
         const parsed = raw ? JSON.parse(raw) : {};

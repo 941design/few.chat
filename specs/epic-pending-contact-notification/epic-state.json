@@ -1,0 +1,53 @@
+{
+  "epic_name": "pending-contact-notification",
+  "status": "done",
+  "phase": "COMPLETE",
+  "created_at": "2026-07-21T07:24:48Z",
+  "updated_at": "2026-07-21T10:12:00Z",
+  "pre_existing_dirty_files": [
+    "specs/epic-pending-contact-notification/acceptance-criteria.md",
+    "specs/epic-pending-contact-notification/spec.md"
+  ],
+  "completed_stories": ["S1", "S2", "S3", "S4", "S5", "S6"],
+  "escalated_stories": [],
+  "phase_history": [
+    {"phase": "SPEC_VALIDATED", "timestamp": "2026-07-21T07:24:48Z", "trigger": "validation_passed"},
+    {"phase": "IMPLEMENTING", "timestamp": "2026-07-21T09:30:00Z", "trigger": "stories_started"},
+    {"phase": "COMPLETE", "timestamp": "2026-07-21T10:12:00Z", "trigger": "all_stories_done_gates_passed"}
+  ],
+  "plugin_sha": "f5e4524c7b9618d99914da272f8e8e9745ed9057",
+  "consumer_sha": "49411d39bdc2dc647f62930a845dc1a9d8cf904a",
+  "models": {
+    "lead": "sonnet",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "ownership_ledger_path": "ownership-ledger.json",
+  "ac_closure": [
+    {"ac_id": "AC-BELL-1", "status": "met", "evidence": "pendingContactsSlice.test.ts fold-in + totalUnread"},
+    {"ac_id": "AC-BELL-2", "status": "met", "evidence": "pendingContactsSlice.test.ts init excludes archived pending"},
+    {"ac_id": "AC-BELL-3", "status": "met", "evidence": "pendingContactsSlice.test.ts increment/mark/clear idempotent + guard"},
+    {"ac_id": "AC-UI-1", "status": "met", "evidence": "NotificationBell pendingContactRows → /contacts; e2e AC-E2E-1"},
+    {"ac_id": "AC-UI-2", "status": "met", "evidence": "row markPendingContactRead + hasNotifications/totalUnread fold-in"},
+    {"ac_id": "AC-UI-3", "status": "met", "evidence": "i18n en+de pendingContactNotification; tsc Copy-type parity"},
+    {"ac_id": "AC-LIFE-1", "status": "met", "evidence": "welcomeSubscription.test.ts AC-LIFE-1 (admitted rings once; already-admitted does not)"},
+    {"ac_id": "AC-LIFE-2", "status": "met", "evidence": "initPendingContactCounts wired in DirectMessageNotificationsWatcher; e2e reload shows bell"},
+    {"ac_id": "AC-LIFE-3", "status": "met", "evidence": "clearPendingContact on confirm (list + prompt); e2e confirm clears"},
+    {"ac_id": "AC-LIFE-4", "status": "met", "evidence": "clearPendingContact on reject/block; e2e AC-E2E-4 badge→0"},
+    {"ac_id": "AC-BADGE-1", "status": "met", "evidence": "contacts.tsx badge removed, buttons retained; e2e badge count 0"},
+    {"ac_id": "AC-BADGE-2", "status": "met", "evidence": "blocked branch untouched; e2e blocked-row test passes"},
+    {"ac_id": "AC-DM-1", "status": "met", "evidence": "directMessageNotifications-pending-retain.test.ts no increment while pending; e2e no DM pill"},
+    {"ac_id": "AC-DM-2", "status": "met", "evidence": "retain-pending test appendMessage called; e2e idb msgs=2"},
+    {"ac_id": "AC-DM-3", "status": "met", "evidence": "reconcile on list-confirm + prompt; e2e AC-E2E-3 pill=2 before open"},
+    {"ac_id": "AC-DM-4", "status": "met", "evidence": "appendMessage id-dedup; retain test re-delivery once; e2e open→0 no double-count"},
+    {"ac_id": "AC-E2E-1", "status": "met", "evidence": "dm-pairing-pending-confirmation.spec.ts bell item + no badge"},
+    {"ac_id": "AC-E2E-2", "status": "met", "evidence": "no DM pill/bell while pending (contact-unread-badge count 0)"},
+    {"ac_id": "AC-E2E-3", "status": "met", "evidence": "pill appears immediately on confirm (badge=2 before chat open)"},
+    {"ac_id": "AC-E2E-4", "status": "met", "evidence": "reject silent to B; A pending bell clears (badge→0)"},
+    {"ac_id": "AC-E2E-5", "status": "met", "evidence": "affected dm-pairing specs 6/6 pass clean relay; unit 3807/0; full gate is pre-existing-flaky"}
+  ],
+  "manual_validation": [],
+  "gate_runs": [
+    {"gate_id": "pre_commit_review", "outcome": "fired_remediated", "detail": "codex P2 (pending bell gated on genuine pending+non-archived) fixed; re-review clean"}
+  ]
+}
