@@ -49,9 +49,11 @@ type BlockContactButtonProps = {
   /**
    * Themes the block (isArchived=false) trigger as a danger outline
    * (`colorScheme="danger"` on the `outline` variant) to signal the
-   * destructive nature of the action up front. Used on a contact's profile
-   * page. The inline-list "Reject" reuse leaves this false so its compact
-   * affordance stays a neutral outline. Does not affect the unblock branch.
+   * destructive nature of the action up front. This is the app-wide standard
+   * for negative actions on contact components (matching `RejectButton`), so
+   * every reject/block reuse — the profile page, the contacts-list pending
+   * row, and the pending-confirmation prompt — passes it. Does not affect the
+   * unblock branch.
    */
   danger?: boolean;
   /**

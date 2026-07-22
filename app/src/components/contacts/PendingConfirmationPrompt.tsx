@@ -149,6 +149,7 @@ export default function PendingConfirmationPrompt({
             peerPubkeyHex={contact.pubkeyHex}
             isArchived={false}
             label={copy.contacts.pendingRejectButton}
+            danger
             onChanged={() => {
               // Reject-is-block: clear the pending-contact bell entry (epic:
               // pending-contact-notification, AC-LIFE-4). The blockedPeersRevision

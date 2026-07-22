@@ -22,8 +22,16 @@ import type { UserProfile } from '@/src/types';
  * Action buttons must be one of two categories so the affordance reads
  * consistently everywhere: {@link ConfirmButton} for confirming/affirmative
  * actions (Confirm contact, Make admin, Approve) and {@link RejectButton} for
- * rejecting/destructive ones (Cancel invite, Deny). Navigation-only affordances
- * (the view-profile icon) stay neutral ghost buttons and are exempt.
+ * rejecting/destructive ones (Cancel invite, Deny, Remove member). Navigation-
+ * only affordances (the view-profile icon) stay neutral ghost buttons and are
+ * exempt.
+ *
+ * The two categories are deliberately asymmetric: affirmative actions are
+ * filled (solid) so they read as the encouraged path, while negative actions
+ * are a danger *outline* — clearly destructive (red) yet visually secondary,
+ * so a reject/remove never competes with the affirmative action for the eye.
+ * This danger-outline treatment for negative actions is the app-wide standard
+ * (see also `BlockContactButton`'s `danger` reject variant).
  */
 
 /** Filled success (green) button — the "confirming / affirmative" action category. */
@@ -31,9 +39,9 @@ export function ConfirmButton(props: ButtonProps) {
   return <Button size="sm" variant="solid" colorScheme="success" {...props} />;
 }
 
-/** Filled danger (red) button — the "rejecting / destructive" action category. */
+/** Danger outline (red) button — the "rejecting / destructive" action category. */
 export function RejectButton(props: ButtonProps) {
-  return <Button size="sm" variant="solid" colorScheme="danger" {...props} />;
+  return <Button size="sm" variant="outline" colorScheme="danger" {...props} />;
 }
 
 type UserCardProps = {

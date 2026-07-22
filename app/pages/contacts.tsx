@@ -242,6 +242,7 @@ function ContactListView() {
                             peerPubkeyHex={contact.pubkeyHex}
                             isArchived={false}
                             label={copy.contacts.pendingRejectButton}
+                            danger
                             size="sm"
                             onChanged={() => {
                               // Reject-is-block: clear the pending-contact bell
