@@ -321,10 +321,13 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       const admitted = await waitForAdmission(a.page, USER_B.pubkeyHex, 90_000);
       expect(admitted).toBe(true);
 
-      // A blocks the still-pending B via the real Profile block action.
+      // A blocks the still-pending B via the real Profile block action. On a
+      // pending contact's profile the standalone Block button is replaced by
+      // the Confirm + Reject pair (epic: pending-contact-profile-gate); Reject
+      // is the block flow relabelled, opening the same block-confirm modal.
       await a.page.goto(`/profile?pubkey=${USER_B.pubkeyHex}`);
-      await expect(a.page.getByTestId('profile-archive')).toBeVisible({ timeout: 15_000 });
-      await a.page.getByTestId('profile-archive').click();
+      await expect(a.page.getByTestId('profile-pending-reject')).toBeVisible({ timeout: 15_000 });
+      await a.page.getByTestId('profile-pending-reject').click();
       await expect(a.page.getByTestId('block-confirm-modal')).toBeVisible();
       await a.page.getByTestId('block-confirm-btn').click();
       await expect(a.page.getByTestId('block-confirm-modal')).not.toBeVisible();
@@ -353,6 +356,64 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await unblockBtn.click();
       await expect(a.page.getByTestId('block-confirm-modal')).toHaveCount(0);
       await expect(unblockBtn).not.toBeVisible({ timeout: 15_000 });
+    },
+  );
+
+  test(
+    "a pending contact's PROFILE page mirrors the overview gate: Confirm + Reject replace the Block button, Send message is disabled, and confirming from the profile flips it to the normal layout in place (epic: pending-contact-profile-gate, AC-PEND-1..5)",
+    async ({ browser }) => {
+      // ── Set up A with a PENDING contact for B via the real pairing flow. ─
+      const a = await bootIdentity(browser, USER_A, 'Alice-Pending-Profile');
+      const cardLink = await getShareCardLink(a.page);
+      const payload = extractCardPayload(cardLink);
+
+      const b = await bootIdentity(browser, USER_B, 'Bob-Pending-Profile');
+      await b.page.goto(`/add#c=${payload}`);
+      await expect(b.page.getByTestId('contact-added-success')).toBeVisible({ timeout: 20_000 });
+
+      await a.page.goto('/contacts');
+      const admitted = await waitForAdmission(a.page, USER_B.pubkeyHex, 90_000);
+      expect(admitted, 'A must auto-admit B as a PENDING contact').toBe(true);
+      await a.page.reload();
+      await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
+
+      // ── Open B's PROFILE (reachable via the row's view-profile icon; here
+      // driven by the direct query-param URL the icon navigates to). ───────
+      await a.page.goto(`/profile?pubkey=${USER_B.pubkeyHex}`);
+      await expect(a.page.getByTestId('profile-page')).toBeVisible({ timeout: 20_000 });
+
+      // AC-PEND-1: Confirm + Reject are shown (the same inline pair as the
+      // overview). AC-PEND-4: the standalone Block button is REPLACED — it is
+      // not rendered while pending.
+      await expect(a.page.getByTestId('profile-pending-actions')).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId('profile-pending-confirm')).toBeVisible();
+      const rejectBtn = a.page.getByTestId('profile-pending-reject');
+      await expect(rejectBtn).toBeVisible();
+      await expect(rejectBtn).toHaveText('Reject');
+      await expect(a.page.getByTestId('profile-archive')).toHaveCount(0);
+
+      // AC-PEND-2: Send message is VISIBLE but DISABLED while pending.
+      const sendDm = a.page.getByTestId('profile-send-dm');
+      await expect(sendDm).toBeVisible();
+      await expect(sendDm).toBeDisabled();
+
+      // ── AC-PEND-5: confirm from the PROFILE. The profile re-derives in
+      // place (no navigation): the pending actions disappear, the standalone
+      // Block button appears, and Send message becomes enabled. ────────────
+      await a.page.getByTestId('profile-pending-confirm').click();
+      await expect(a.page.getByTestId('profile-pending-actions')).toHaveCount(0, { timeout: 15_000 });
+      await expect(a.page.getByTestId('profile-archive')).toBeVisible({ timeout: 15_000 });
+      await expect(a.page.getByTestId('profile-send-dm')).toBeEnabled();
+
+      // The confirm durably cleared the pending state in storage.
+      const stillPending = await a.page.evaluate((hex) => {
+        const raw = localStorage.getItem('lp_contacts_v1');
+        const parsed = raw ? JSON.parse(raw) : {};
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const entry = Object.values(parsed).find((c: any) => (c.pubkeyHex || '').toLowerCase() === hex.toLowerCase()) as any;
+        return entry ? Boolean(entry.pendingConfirmationSince) : null;
+      }, USER_B.pubkeyHex);
+      expect(stillPending).toBe(false);
     },
   );
 });

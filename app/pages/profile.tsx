@@ -28,6 +28,9 @@ import ShareContactCard from '@/src/components/contacts/ShareContactCard';
 import { hasShareableName } from '@/src/lib/shareCard';
 import { addableGroupsForContact, eligibleGroupsForContact, getContact, listContacts } from '@/src/lib/contacts';
 import BlockContactButton from '@/src/components/contacts/BlockContactButton';
+import { ConfirmButton } from '@/src/components/UserCard';
+import { confirmPendingContact } from '@/src/components/contacts/PendingConfirmationPrompt';
+import { clearPendingContact } from '@/src/lib/unreadStore';
 import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
 import { markPendingDirectInvite, clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { drainPendingIntents, type PendingIntentSendContext } from '@/src/lib/pairing/pendingIntent';
@@ -516,6 +519,33 @@ export async function addToGroupWithMarker(
   return result;
 }
 
+/**
+ * Code-level guard behind the profile page's "Add to group" action (epic:
+ * pending-contact-profile-gate, AC-PEND-6). Returns `true` only for a contact
+ * that may actually be invited to a group; `false` otherwise. This is the
+ * enforcement that backs the disabled Add-to-group button on a pending
+ * contact's profile — a bypassed click still cannot invite an unconfirmed
+ * contact, because `handleAddToGroup` early-returns when this is `false`.
+ *
+ * A contact is not addable when:
+ *   - it is null (no contact record), or
+ *   - it is archived (blocked) — already gated by the blocked branch, but
+ *     enforced here too so the guard is complete on its own, or
+ *   - it is pending confirmation (unconfirmed) — the case this epic adds.
+ *
+ * Pure and synchronous; takes only the two boolean-bearing fields so it is
+ * trivially unit-testable without a full `ContactListItem` (repo convention:
+ * tests/unit only, no jsdom/renderHook — mirrors `planProfileAnnounceFanout`).
+ */
+export function canAddContactToGroup(
+  contact: Pick<ContactListItem, 'isArchived' | 'isPendingConfirmation'> | null,
+): boolean {
+  if (!contact) return false;
+  if (contact.isArchived) return false;
+  if (contact.isPendingConfirmation) return false;
+  return true;
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const copy = useCopy();
@@ -586,6 +616,13 @@ export default function ProfilePage() {
   // route into the now-redirecting detail page), the identity is visually
   // de-emphasised, and Unblock is promoted to the primary call to action.
   const isBlocked = !!contact?.isArchived;
+  // A pending (unconfirmed) contact's profile mirrors the contacts overview's
+  // inline gate (epic: pending-contact-profile-gate): Confirm + Reject replace
+  // the plain Block button, and Send message / Add to group stay VISIBLE but
+  // DISABLED (a preview of what Confirm unlocks — unlike the blocked branch,
+  // which hides them). Blocked wins over pending (pending-contact-confirmation
+  // DD-9), so this is only true when NOT blocked.
+  const isPending = !isBlocked && !!contact?.isPendingConfirmation;
 
   const addableGroups = addableGroupsForContact(groups, pubkeyHex!, adminGroupIds);
   const effectiveGroupId = selectedGroupId || addableGroups[0]?.id || '';
@@ -598,6 +635,11 @@ export default function ProfilePage() {
 
   async function handleAddToGroup() {
     if (!effectiveGroupId || !pubkeyHex) return;
+    // Code-level enforcement (AC-PEND-6): never invite a pending/unconfirmed
+    // (or blocked) contact to a group, even if the disabled button were
+    // bypassed. The UI already disables the control while pending; this is the
+    // guarantee behind it.
+    if (!canAddContactToGroup(contact)) return;
     setAddToGroupStatus('loading');
     try {
       const result = await addToGroupWithMarker(pubkeyHex, effectiveGroupId, inviteByNpub, {
@@ -613,6 +655,17 @@ export default function ProfilePage() {
     } catch {
       setAddToGroupStatus('error');
     }
+  }
+
+  // Confirm a pending contact directly from their profile (AC-PEND-5). Reuses
+  // the shared confirm+reconcile bundle (confirmContact + clearPendingContact +
+  // DM-count reconcile), then bumps `version` so the `contact` memo re-derives
+  // and this branch flips to the confirmed (normal) layout in place — no
+  // navigation, mirroring the contacts-overview inline confirm.
+  async function handleConfirmPending() {
+    if (!pubkeyHex || !ownPubkeyHex) return;
+    await confirmPendingContact(pubkeyHex, ownPubkeyHex);
+    setVersion((v) => v + 1);
   }
 
   return (
@@ -649,6 +702,28 @@ export default function ProfilePage() {
             </Alert>
           )}
 
+          {/* Pending (unconfirmed) contact: explanatory notice mirroring the
+              overview's confirm prompt, reusing the existing pending-confirm
+              copy — no new i18n keys (epic: pending-contact-profile-gate). */}
+          {isPending && (
+            <Alert
+              status="info"
+              borderRadius="md"
+              flexDirection="column"
+              alignItems="flex-start"
+              gap={1}
+              data-testid="profile-pending-notice"
+            >
+              <HStack>
+                <AlertIcon />
+                <Text fontWeight="semibold">{copy.contacts.pendingConfirmHeading}</Text>
+              </HStack>
+              <AlertDescription fontSize="sm">
+                {copy.contacts.pendingConfirmBody(displayName)}
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* npub display hidden on contact profile — see handleCopyNpub/npubCopied above
           <HStack spacing={3} align="center" flexWrap="wrap">
             <Code fontSize="xs" userSelect="all" data-testid="profile-npub">
@@ -664,6 +739,7 @@ export default function ProfilePage() {
             <Button
               colorScheme="brand"
               onClick={() => router.push(`/contacts?id=${pubkeyHex}`)}
+              isDisabled={isPending}
               data-testid="profile-send-dm"
             >
               {copy.profile.sendDm}
@@ -697,6 +773,7 @@ export default function ProfilePage() {
                   aria-label={copy.profile.addToGroupSelect}
                   data-testid="profile-add-to-group-select"
                   bg="surfaceBg"
+                  isDisabled={isPending}
                 >
                   {addableGroups.map((group) => (
                     <option key={group.id} value={group.id}>
@@ -709,7 +786,7 @@ export default function ProfilePage() {
                   flexShrink={0}
                   onClick={() => void handleAddToGroup()}
                   isLoading={addToGroupStatus === 'loading'}
-                  isDisabled={!effectiveGroupId}
+                  isDisabled={!effectiveGroupId || isPending}
                   data-testid="profile-add-to-group-btn"
                 >
                   {copy.profile.addToGroupBtn}
@@ -718,7 +795,36 @@ export default function ProfilePage() {
             </Box>
           )}
 
-          {contact && (
+          {/* Pending: the standalone Block button is REPLACED by the Confirm +
+              Reject pair (AC-PEND-1/AC-PEND-4) — the same inline actions the
+              contacts overview shows. Reject IS the block flow relabelled, so
+              no separate Block button is offered while pending. */}
+          {contact && isPending ? (
+            <HStack spacing={3} align="center" flexWrap="wrap" data-testid="profile-pending-actions">
+              <ConfirmButton
+                size="md"
+                onClick={() => void handleConfirmPending()}
+                data-testid="profile-pending-confirm"
+              >
+                {copy.contacts.pendingConfirmButton}
+              </ConfirmButton>
+              <BlockContactButton
+                peerPubkeyHex={contact.pubkeyHex}
+                isArchived={false}
+                label={copy.contacts.pendingRejectButton}
+                danger
+                onChanged={() => {
+                  // Reject-is-block: clear the pending-contact bell entry so no
+                  // stranded contribution remains in the badge total, then bump
+                  // version so the profile re-derives (the block itself flips
+                  // this branch to the blocked layout).
+                  clearPendingContact(contact.pubkeyHex);
+                  setVersion((v) => v + 1);
+                }}
+                testId="profile-pending-reject"
+              />
+            </HStack>
+          ) : contact ? (
             <BlockContactButton
               peerPubkeyHex={contact.pubkeyHex}
               isArchived={contact.isArchived}
@@ -726,7 +832,7 @@ export default function ProfilePage() {
               danger
               onChanged={() => setVersion((v) => v + 1)}
             />
-          )}
+          ) : null}
         </VStack>
       </Box>
     </>
