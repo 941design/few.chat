@@ -27,5 +27,5 @@ export const IMPRINT = {
 
   // §5 (1) Nr. 6 DDG / §27a UStG: VAT identification number.
   // REQUIRED only if the company has been issued one; omit otherwise.
-  vatId: '',
+  vatId: 'DE463560219',
 };
