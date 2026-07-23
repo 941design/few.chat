@@ -1,0 +1,117 @@
+{
+  "story_id": "S5",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S5-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the `authenticated` boolean persisted on `PendingInvitation` at enqueue time a genuine reflection of the Welcome's gift-wrap seal authentication result at receipt (real success/failure signal from the actual unwrap path), rather than a hardcoded `true` (which would make AC-DECLINE-4's 'skip send when false' path dead/untestable in practice) or a value that is always recomputed as `true` regardless of the original seal check? Is `groupId` genuinely sourced from `readWelcomeGroupInfo`'s `groupContext.groupId` rather than a placeholder/empty string that happens to satisfy a loose test assertion?"
+    },
+    {
+      "question_id": "VQ-S5-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the `groupId`/`authenticated` surfacing done at the pre-join Welcome reader seam (fixing `readPreJoinGroupData`'s current discarding of `groupContext.groupId`, per architecture.md), with the new fields persisted on `PendingInvitation` in `pendingInvitations.ts`, and the gift-wrap send logic contained in `welcomeSubscription.ts`'s `declinePendingInvitation`? Does the ephemeral-sender-key gift-wrap construction reuse the existing NIP-59 wrap helper rather than reimplementing gift-wrapping inline?"
+    },
+    {
+      "question_id": "VQ-S5-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `decline-b` (`welcomeSubscription.ts`'s `declinePendingInvitation` + `pendingInvitations.ts`) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `decline-a`'s receive-side dispatch, or duplicate `INVITE_DECLINE_KIND`'s definition rather than exporting a single constant `decline-a` also imports), and do they flow through the declared `DeclineGiftWrapPayload` seam contract?"
+    },
+    {
+      "question_id": "VQ-S5-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do `app/tests/unit/marmot/welcomeSubscription.test.ts` and `app/tests/unit/pendingInvitations.test.ts` cover AC-DECLINE-1 through AC-DECLINE-6 and AC-DECLINE-13 with tests that would fail under each specific regression: (a) `groupId` not persisted, (b) `authenticated` not persisted or always `true`, (c) send occurring despite `authenticated:false`, (d) local removal skipped when the send throws, (e) a stray group-channel publish or MLS Add call on the decline path, and (f) an extra field (nickname/avatar) leaking into the inner rumor content? Confirm each is a distinct assertion, not one broad 'decline works' smoke test."
+    },
+    {
+      "question_id": "VQ-S5-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed decline-send behavior match the spec's intent that declining is a purely B-side, addressed, best-effort notification to A — never a group-channel action, never blocking on network success for local cleanup? Does `INVITE_DECLINE_KIND=21063` as assigned in stories.json actually get used as the wrapped rumor's kind, and was it verified (per stories.json's notes) to be distinct from every existing `*_KIND` sentinel in `app/src/lib` before being hardcoded?"
+    },
+    {
+      "question_id": "VQ-S5-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Per this project's non-negotiable privacy invariant (CLAUDE.md: profile information must never be broadcast, and even an addressed gift wrap must carry no unnecessary metadata), does the decline gift wrap's inner rumor plaintext contain ONLY `{groupId, pubkey: selfHex}` — verified by inspecting the actual object passed to the gift-wrap/encrypt call, not just the high-level function signature — with no nickname, avatar, device info, or other profile metadata attached anywhere in the wrap (including outer gift-wrap tags), and does it use a fresh ephemeral sender key rather than B's real identity key as the wrap's outer signer?"
+    },
+    {
+      "question_id": "VQ-S5-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-1",
+      "question": "Does the pre-join Welcome reader surface the MLS `groupId` from `readWelcomeGroupInfo`'s `groupContext.groupId` and persist it on the stored `PendingInvitation` at enqueue time? Provide (a) the fix to `readPreJoinGroupData`'s current discarding of this field, (b) a test enqueuing a `PendingInvitation` from a real Welcome fixture and asserting the stored record's `groupId` matches the Welcome's actual `groupContext.groupId` (not a placeholder), and (c) confirmation the decline send later reads this same persisted value rather than re-parsing the Welcome."
+    },
+    {
+      "question_id": "VQ-S5-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-2",
+      "question": "Does the stored `PendingInvitation` persist an `authenticated` boolean at enqueue time reflecting whether the Welcome's gift-wrap seal was authenticated at receipt? Provide (a) the code path threading the real seal-authentication result (not a hardcoded value) into the persisted field, (b) a test enqueuing from both an authenticated and an unauthenticated Welcome and asserting the two resulting `authenticated` values differ correctly, and (c) confirmation this is the same seal-check result already computed by the existing Welcome-processing path, not a newly-invented, differently-scoped check."
+    },
+    {
+      "question_id": "VQ-S5-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-3",
+      "question": "Does declining a `PendingInvitation` with `authenticated:true` send a NIP-59 gift-wrapped rumor of `INVITE_DECLINE_KIND`, addressed to `inviterPubkeyHex`, with ephemeral sender key and inner content exactly `{groupId, pubkey: selfHex}`? Provide (a) the send construction code, (b) a test asserting the wrapped rumor's kind, recipient, and inner content shape precisely (not just 'a gift wrap was sent'), and (c) confirmation the ephemeral key used differs from B's real identity key on each send (not a fixed key reused across declines, which would defeat the sender-hiding purpose)."
+    },
+    {
+      "question_id": "VQ-S5-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-4",
+      "question": "Does declining a `PendingInvitation` with `authenticated:false` skip the decline gift-wrap send entirely — no publish call for `INVITE_DECLINE_KIND` occurs? Provide (a) the guard branch short-circuiting the send, (b) a test asserting zero publish/send calls occurred for an `authenticated:false` invitation (via a spy on the actual send function, not merely absence of a thrown error), and (c) confirmation the local-removal step (AC-DECLINE-5) still proceeds in this case."
+    },
+    {
+      "question_id": "VQ-S5-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-5",
+      "question": "Does declining a `PendingInvitation` remove it from local storage regardless of whether the decline gift-wrap send succeeds or fails? Provide (a) the code structure showing local removal is not gated on the send's resolved promise (e.g. a `try/finally` or send-then-remove-unconditionally pattern), (b) a test forcing the send to reject/throw and asserting the local record is still removed, and (c) a second test with a successful send also asserting removal, so both outcomes are covered rather than only the happy path."
+    },
+    {
+      "question_id": "VQ-S5-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-6",
+      "question": "Does declining never publish any message on the group's MLS channel and never add B to the group — is the gift wrap to A the ONLY network effect? Provide (a) code-level confirmation no group-channel send or MLS-Add call exists anywhere on the decline code path, (b) a test asserting zero calls to the group-publish/MLS-Add functions during a decline, and (c) confirmation this test would fail if a stray group-channel announcement (e.g. an accidental `declined` post from the wrong story's code landing early) were mistakenly triggered from the send side rather than the receive side."
+    },
+    {
+      "question_id": "VQ-S5-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-13",
+      "question": "Does the decline gift wrap's plaintext inner rumor content contain only `groupId` and `pubkey` — no nickname, avatar, or other profile metadata — verified by inspecting the rumor content before gift-wrap encryption? Provide (a) the object literal passed into the gift-wrap/encrypt function call, (b) a test that intercepts or reconstructs the pre-encryption plaintext and asserts its key set is exactly `{groupId, pubkey}` (not merely that decryption later reproduces these two fields, which would not catch an over-inclusive plaintext that the test never inspects pre-encryption), and (c) confirmation this is the SAME dedicated contract-assertion also required by this story's seam-contract question (VQ-S5-014) rather than a duplicate, disconnected check."
+    },
+    {
+      "question_id": "VQ-S5-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-13",
+      "question": "[Seam contract — FR-5, DeclineGiftWrapPayload, consumed by S6] Does the exact contract in `stories.json#seams[1].contract` hold as landed: field `groupId` is a string sourced from `readWelcomeGroupInfo`'s `groupContext.groupId` (matching the group S6 will look up via `isPendingMemberImpl`), and field `pubkey` is the declining invitee's own `selfHex`? Provide (a) the type/shape of the object passed to the send function, (b) confirmation the send is invariant-gated on `authenticated:true` only (never sent otherwise, matching the seam's second invariant), and (c) confirmation S6's receive-side branch (once landed) reads these exact two field names — i.e. this story's export/constant naming was not renamed independently of what S6 expects, which would silently break the seam despite both sides individually passing their own tests."
+    },
+    {
+      "question_id": "VQ-S5-015",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "MarmotContext.tsx's `declinePendingInvitation` useCallback (necessary wiring beyond S5's literal file list, mirroring S3's identical precedent) gates the new `sendKeys` argument on `privateKeyHex && pubkeyHex` both being truthy, falling back to the old zero-arg call (local-removal-only, no send) otherwise. The file's own pre-existing comment at the `subscribeToWelcomes` call site states 'In nip46 mode, privateKeyHex is still present (we keep the local key in memory)' — i.e. even a remote-signer (bunker) user has a local raw key for MLS operations. Does this mean the fallback branch is effectively unreachable once identity is hydrated (in every signer mode), or is there a real, non-transient user state (not just the brief pre-hydration window) where `privateKeyHex`/`pubkeyHex` stay unset while the rest of the app is otherwise usable — which would make the decline send silently and durably dead for that population despite AC-DECLINE-3 requiring it to fire?"
+    },
+    {
+      "question_id": "VQ-S5-016",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "`readPreJoinGroupData` now calls BOTH `readWelcomeMarmotGroupData` AND `readWelcomeGroupInfo` per matched candidate key-package ref (to recover `groupContext.groupId` alongside the existing name/description/adminPubkeys). The function's own doc comment already establishes `readWelcomeMarmotGroupData` is side-effect-free (bottoms out in a pure `ts-mls` `joinGroup` derivation, no key-package 'burn', no MLS state adoption). Does the ADDED `readWelcomeGroupInfo` call carry the identical side-effect-free guarantee (it is documented as 'lighter than joinGroup — stops after decrypting group secrets and group info'), and does calling it a second time per ref (once for each of the two functions) risk any double-derivation cost or state interaction beyond the pre-existing 'heavier than ideal though cryptographically inert' efficiency caveat already on record?"
+    },
+    {
+      "question_id": "VQ-S5-017",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "The new ephemeral-key test (`AC-DECLINE-3 (ephemeral key)` in welcomeSubscription.test.ts) asserts the published gift wrap's outer `pubkey` is neither the sender's real key nor the inviter's, for a SINGLE decline call. Across MULTIPLE declines from the same local identity (e.g. a user who declines two different group invitations from the same or different inviters in the same session), does `sealAndWrap`/`wrapEvent` generate a FRESH ephemeral key each call (never a cached or session-reused ephemeral key), such that an observer correlating gift-wrap outer pubkeys across multiple declines could not link them to the same sender by outer-key reuse alone?"
+    }
+  ]
+}

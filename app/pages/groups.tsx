@@ -854,6 +854,7 @@ function GroupDetailView({ id }: { id: string }) {
               signer={signer}
               chatVersion={chatVersion}
               reactionsVersion={reactionsVersion}
+              isCurrentUserAdmin={isAdmin}
             >
               <ChatSendMessageCapture sendMessageRef={sendAnnouncementRef} />
               <PollStoreProvider
@@ -864,7 +865,7 @@ function GroupDetailView({ id }: { id: string }) {
               >
                 <Flex gap={4} direction={{ base: 'column', md: 'row' }}>
                   <Box flex="1" minW={0}>
-                    <GroupChat threadId={group.id} pubkey={pubkeyHex ?? ''} profileMap={profileMap} />
+                    <GroupChat threadId={group.id} pubkey={pubkeyHex ?? ''} profileMap={profileMap} isCurrentUserAdmin={isAdmin} />
                   </Box>
                   <Box w={{ base: '100%', md: '280px' }} flexShrink={0}>
                     <PollPanel pubkey={pubkeyHex ?? ''} profileMap={profileMap} />
@@ -881,6 +882,7 @@ function GroupDetailView({ id }: { id: string }) {
         isOpen={inviteDisclosure.isOpen}
         onClose={inviteDisclosure.onClose}
         groupId={group.id}
+        sendAnnouncement={(content: string) => sendAnnouncementRef.current?.(content) ?? Promise.resolve()}
       />
 
       <GenerateInviteLinkModal

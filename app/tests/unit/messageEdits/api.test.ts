@@ -49,6 +49,7 @@ const {
   applyDeleteEditSignal,
   resolvePendingSignalsForSlot,
   clearAllMessageEditsState,
+  registerGroupAdminsProvider,
   PENDING_SIGNAL_CAP,
   PENDING_SIGNAL_TTL_MS,
   MAX_REV_SKEW_SECONDS,
@@ -57,6 +58,8 @@ const { getPublicKey, generateSecretKey } = await import('nostr-tools/pure');
 const { buildDeleteRumor, buildEditReplacementRumor, buildEditMarkedCompanionKind5, hasEditMarkerTag } = await import(
   '@/src/lib/messageEdits/rumor'
 );
+const { isInformativeAnnouncementContent } = await import('@/src/lib/marmot/announcementFamily');
+const { isInformativeAnnouncement } = await import('@/src/lib/messageEdits/messageActionUi');
 
 // ── Fixtures / helpers ─────────────────────────────────────────────────────
 
@@ -70,6 +73,21 @@ const GROUP_THREAD = { kind: 'group' as const, groupId: 'group-1' };
 
 const AUTHOR = 'author-pubkey-aaa';
 const OTHER_AUTHOR = 'other-pubkey-bbb';
+
+// ── S8 (epic-group-invite-lifecycle): announcement gate + admin carve-out ──
+
+const ADMIN_PUBKEY = 'admin-pubkey-zzz';
+const NON_ADMIN_PUBKEY = 'non-admin-pubkey-yyy';
+
+/** A GROUP_THREAD.groupId-scoped admin-set: only ADMIN_PUBKEY is admin. */
+function registerAdmins(admins: string[] = [ADMIN_PUBKEY]): void {
+  registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_THREAD.groupId ? admins : []));
+}
+
+/** A non-`image` StructuredContent payload (member_admitted-shaped) — an "informative announcement". */
+function makeAnnouncementContent(pubkeyHex = 'b'.repeat(64)): string {
+  return JSON.stringify({ type: 'member_admitted', pubkey: pubkeyHex });
+}
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -149,10 +167,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(BASE_TIME_MS);
+  registerGroupAdminsProvider(null); // fail-closed default unless a test opts in via registerAdmins()
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  registerGroupAdminsProvider(null);
 });
 
 // ── Classification: marker-first (AC-DEL-7) ───────────────────────────────
@@ -1660,5 +1680,381 @@ describe('clearAllMessageEditsState — account-switch hygiene', () => {
     await appendMessage(DM_THREAD_GROUP_ID, makeOriginal(DM_THREAD_GROUP_ID, { id: 'clear-slot' }));
     const resolved = await resolvePendingSignalsForSlot(DM_THREAD, 'clear-slot', AUTHOR);
     expect(resolved.kind).toBe('noop');
+  });
+});
+
+// ─── S8 (epic-group-invite-lifecycle, DD-11): announcement-immutability gate ──
+
+describe('S8 — CRITICAL: the receive-side gate imports/reuses S7\'s SAME family predicate (no parallel definition)', () => {
+  const table: Array<{ name: string; content: string; expectAnnouncement: boolean }> = [
+    { name: 'invite_lifecycle', content: JSON.stringify({ type: 'invite_lifecycle', event: 'invited', pubkey: 'a'.repeat(64) }), expectAnnouncement: true },
+    { name: 'member_admitted', content: makeAnnouncementContent(), expectAnnouncement: true },
+    { name: 'image', content: JSON.stringify({ type: 'image', version: 1, caption: '' }), expectAnnouncement: false },
+    { name: 'plain text', content: 'just chatting', expectAnnouncement: false },
+    { name: 'not JSON at all', content: 'not { json', expectAnnouncement: false },
+  ];
+
+  it.each(table)(
+    'isInformativeAnnouncementContent (S8) and isInformativeAnnouncement (S7) agree for $name content',
+    ({ content, expectAnnouncement }) => {
+      // S7's predicate (messageActionUi.ts) and S8's receive-side gate
+      // (messageEdits/api.ts, marmot/chatPersistence.ts) both consume the
+      // SAME `isInformativeAnnouncementContent` from
+      // `lib/marmot/announcementFamily.ts` — this table proves they can
+      // never silently diverge into two parallel family definitions.
+      expect(isInformativeAnnouncementContent(content)).toBe(expectAnnouncement);
+      expect(isInformativeAnnouncement({
+        id: 'x', content, senderPubkey: AUTHOR, groupId: 'g', createdAt: 0,
+      })).toBe(expectAnnouncement);
+    },
+  );
+});
+
+describe('S8 — AC-IMMUT-4/5 direct site (applyDeleteEditSignal, known row): admin carve-out for a delete/tombstone against an announcement', () => {
+  it('AC-IMMUT-4: a non-admin delete targeting a KNOWN announcement is dropped — stored content/state byte-for-byte unchanged', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const original = makeOriginal(GROUP_THREAD.groupId, {
+      id: 'immut-direct-1',
+      content: makeAnnouncementContent(),
+      senderPubkey: AUTHOR, // present in the group, just not an admin
+    });
+    await appendMessage(GROUP_THREAD.groupId, original);
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeDeleteRumor({ pubkey: NON_ADMIN_PUBKEY, tags: [['e', 'immut-direct-1'], ['k', '9']] }),
+    );
+
+    expect(result).toEqual({ thread: GROUP_THREAD, slotId: 'immut-direct-1', kind: 'discarded' });
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'immut-direct-1')).toEqual(original);
+  });
+
+  it('AC-IMMUT-5: an ADMIN delete targeting the SAME kind of known announcement is honored', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, {
+      id: 'immut-direct-2',
+      content: makeAnnouncementContent(),
+      senderPubkey: AUTHOR,
+    }));
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeDeleteRumor({ pubkey: ADMIN_PUBKEY, tags: [['e', 'immut-direct-2'], ['k', '9']] }),
+    );
+
+    expect(result).toEqual({ thread: GROUP_THREAD, slotId: 'immut-direct-2', kind: 'delete' });
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'immut-direct-2')?.tombstoned).toBe(true);
+  });
+
+  it('regression: an ORDINARY (non-announcement) message delete/edit by its own author still works unaffected by the announcement gate', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'ordinary-1', content: 'just chatting', senderPubkey: AUTHOR }));
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeDeleteRumor({ pubkey: AUTHOR, tags: [['e', 'ordinary-1'], ['k', '9']] }),
+    );
+
+    expect(result.kind).toBe('delete');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'ordinary-1')?.tombstoned).toBe(true);
+  });
+
+  it('DM-thread carve-out (S7 symmetry): a DM\'s own announcement-shaped message stays own-author-deletable — the admin gate never fires for a dm: threadKey', async () => {
+    // No admin provider registered at all for this thread (DMs have no
+    // admin concept) — own-authorship alone must still authorize the delete.
+    await appendMessage(DM_THREAD_GROUP_ID, makeOriginal(DM_THREAD_GROUP_ID, {
+      id: 'dm-announcement-1',
+      content: makeAnnouncementContent(),
+      senderPubkey: AUTHOR,
+    }));
+
+    const result = await applyDeleteEditSignal(
+      DM_THREAD,
+      makeDeleteRumor({ pubkey: AUTHOR, tags: [['e', 'dm-announcement-1'], ['k', '14']] }),
+    );
+
+    expect(result.kind).toBe('delete');
+    const { messages } = await loadMessages(DM_THREAD_GROUP_ID);
+    expect(messages.find((m) => m.id === 'dm-announcement-1')?.tombstoned).toBe(true);
+  });
+});
+
+describe('S8 — AC-IMMUT-6/7 direct site (applyDeleteEditSignal, edit): edit is NEVER honored against an announcement, admin or not', () => {
+  it('AC-IMMUT-6: an edit targeting a known announcement from a NON-admin is rejected', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const original = makeOriginal(GROUP_THREAD.groupId, { id: 'immut-edit-1', content: makeAnnouncementContent(), senderPubkey: AUTHOR });
+    await appendMessage(GROUP_THREAD.groupId, original);
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({ pubkey: NON_ADMIN_PUBKEY, tags: [['e', 'immut-edit-1', '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]] }),
+    );
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'immut-edit-1')).toEqual(original);
+  });
+
+  it('AC-IMMUT-6 (the case most likely to be missed): an edit targeting a known announcement from an ADMIN sender is STILL rejected — no admin carve-out for edit', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const original = makeOriginal(GROUP_THREAD.groupId, { id: 'immut-edit-2', content: makeAnnouncementContent(), senderPubkey: AUTHOR });
+    await appendMessage(GROUP_THREAD.groupId, original);
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({ pubkey: ADMIN_PUBKEY, tags: [['e', 'immut-edit-2', '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]] }),
+    );
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'immut-edit-2')).toEqual(original);
+  });
+
+  it('AC-IMMUT-7: an edit whose REPLACEMENT content parses as an announcement is rejected even though the TARGET is an ordinary mutable message', async () => {
+    const original = makeOriginal(GROUP_THREAD.groupId, { id: 'immut-edit-3', content: 'plain text', senderPubkey: AUTHOR });
+    await appendMessage(GROUP_THREAD.groupId, original);
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({
+        pubkey: AUTHOR, // even the message's own author cannot fabricate an announcement via edit
+        content: makeAnnouncementContent(),
+        tags: [['e', 'immut-edit-3', '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]],
+      }),
+    );
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'immut-edit-3')).toEqual(original);
+  });
+
+  it('AC-IMMUT-7 vs AC-IMMUT-6 are distinguishable attack shapes: a plain edit (ordinary target, ordinary replacement) still applies', async () => {
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'immut-edit-4', content: 'plain text', senderPubkey: AUTHOR }));
+
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({ pubkey: AUTHOR, content: 'plain edited text', tags: [['e', 'immut-edit-4', '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]] }),
+    );
+
+    expect(result.kind).toBe('edit');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'immut-edit-4')?.content).toBe('plain edited text');
+  });
+});
+
+describe('S8 — AC-IMMUT-4/5/6/7 at the BUFFERED apply site (resolvePendingSignalsForSlot / resolveKnownRowAgainstStores): signal arrives BEFORE its target', () => {
+  it('AC-IMMUT-4 buffered: a non-admin delete buffered before an announcement target arrives resolves to noop, target stays visible', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const pendingResult = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeDeleteRumor({ pubkey: NON_ADMIN_PUBKEY, tags: [['e', 'buf-immut-1'], ['k', '9']] }),
+    );
+    expect(pendingResult.kind).toBe('pending');
+
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'buf-immut-1', content: makeAnnouncementContent(), senderPubkey: AUTHOR }));
+    const resolved = await resolvePendingSignalsForSlot(GROUP_THREAD, 'buf-immut-1', AUTHOR);
+
+    expect(resolved.kind).toBe('noop');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'buf-immut-1')?.tombstoned).toBeFalsy();
+  });
+
+  it('AC-IMMUT-5 buffered: an ADMIN delete buffered before an announcement target arrives IS honored once the target materializes', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const pendingResult = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeDeleteRumor({ pubkey: ADMIN_PUBKEY, tags: [['e', 'buf-immut-2'], ['k', '9']] }),
+    );
+    expect(pendingResult.kind).toBe('pending');
+
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'buf-immut-2', content: makeAnnouncementContent(), senderPubkey: AUTHOR }));
+    const resolved = await resolvePendingSignalsForSlot(GROUP_THREAD, 'buf-immut-2', AUTHOR);
+
+    expect(resolved.kind).toBe('delete');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'buf-immut-2')?.tombstoned).toBe(true);
+  });
+
+  it('AC-IMMUT-6 buffered: an edit buffered before an announcement target arrives (ADMIN sender) resolves to noop — no admin carve-out for edit at the buffered site either', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const pendingResult = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({ pubkey: ADMIN_PUBKEY, content: 'buffered edit attempt', tags: [['e', 'buf-immut-3', '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]] }),
+    );
+    expect(pendingResult.kind).toBe('pending');
+
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'buf-immut-3', content: makeAnnouncementContent(), senderPubkey: AUTHOR }));
+    const resolved = await resolvePendingSignalsForSlot(GROUP_THREAD, 'buf-immut-3', AUTHOR);
+
+    expect(resolved.kind).toBe('noop');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'buf-immut-3')?.content).toBe(makeAnnouncementContent());
+  });
+
+  it('AC-IMMUT-7 buffered: an edit whose replacement is an announcement is rejected BEFORE it even enters the pending buffer (unknown target)', async () => {
+    const result = await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({ pubkey: AUTHOR, content: makeAnnouncementContent(), tags: [['e', 'buf-immut-4', '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]] }),
+    );
+
+    // Never even buffered as 'pending' — AC-IMMUT-7 fires at classification
+    // time, before the target's existence is even known.
+    expect(result.kind).toBe('discarded');
+
+    // Confirm no pending entry exists: the later-arriving original is
+    // untouched by any buffered signal once it appears.
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'buf-immut-4', content: 'plain text', senderPubkey: AUTHOR }));
+    const resolved = await resolvePendingSignalsForSlot(GROUP_THREAD, 'buf-immut-4', AUTHOR);
+    expect(resolved.kind).toBe('noop');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'buf-immut-4')?.content).toBe('plain text');
+  });
+});
+
+describe('S8 — AC-IMMUT-4/5/6/7 at the TTL-expiry / cap-eviction apply site (persistExpiredEntryEffect)', () => {
+  it('AC-IMMUT-4/5 TTL-expiry (no known row): a delete materializes as a content-free marker regardless of admin sourcing — the admin/announcement gate is deferred to when the target arrives, per DD-11', async () => {
+    await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeDeleteRumor({ pubkey: NON_ADMIN_PUBKEY, tags: [['e', 'ttl-immut-1'], ['k', '9']] }),
+    );
+
+    vi.advanceTimersByTime(PENDING_SIGNAL_TTL_MS + 1);
+    await applyDeleteEditSignal(GROUP_THREAD, sweepTrigger());
+
+    // No row materialized for the marker itself (id-only).
+    const beforeOriginal = await loadMessages(GROUP_THREAD.groupId);
+    expect(beforeOriginal.messages.find((m) => m.id === 'ttl-immut-1')).toBeUndefined();
+
+    // DD-11: the gate applies HERE, when the target (an announcement)
+    // finally arrives — a non-admin's expired-to-marker delete must still
+    // be rejected at that point.
+    registerAdmins([ADMIN_PUBKEY]);
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, { id: 'ttl-immut-1', content: makeAnnouncementContent(), senderPubkey: AUTHOR }));
+    const resolved = await resolvePendingSignalsForSlot(GROUP_THREAD, 'ttl-immut-1', AUTHOR);
+
+    expect(resolved.kind).toBe('noop');
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'ttl-immut-1')?.tombstoned).toBeFalsy();
+  });
+
+  it('AC-IMMUT-7 TTL-expiry materialize-on-expiry (edit, no known row): a replacement that parses as an announcement is never materialized as a fabricated row', async () => {
+    await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({
+        pubkey: AUTHOR,
+        content: makeAnnouncementContent(),
+        tags: [['e', 'ttl-immut-2', '', 'edit'], ['rev', String(BASE_TIME_SECONDS + 5)]],
+      }),
+    );
+
+    // AC-IMMUT-7 already rejected this at classification time (never even
+    // buffered) — re-confirm the TTL-sweep path finds nothing to expire.
+    vi.advanceTimersByTime(PENDING_SIGNAL_TTL_MS + 1);
+    await applyDeleteEditSignal(GROUP_THREAD, sweepTrigger());
+
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    expect(messages.find((m) => m.id === 'ttl-immut-2')).toBeUndefined();
+  });
+
+  // The fill entries below MUST live on a thread DIFFERENT from the target
+  // (mirrors the pre-existing "a past-TTL pending delete evicted purely by
+  // cap pressure from other threads" test's pattern, finding 5): every
+  // `applyDeleteEditSignal` call sweeps its OWN thread first
+  // (`sweepExpiredForThreadKeyLocked`), and that sweep's phase 1 would
+  // resolve an already-known, past-TTL target via `resolveKnownRowAgainstStores`
+  // BEFORE cap eviction ever got a chance to run — silently testing the
+  // WRONG apply site. Filling on a separate thread guarantees the target
+  // entry is only ever reached by `evictOldestPendingIfOverCap` ->
+  // `persistExpiredEntryEffect(entry, knownRow)`, the actual site this test
+  // targets. A mutation check (temporarily forcing this branch's `authorized`
+  // to `true`) confirmed this pattern is load-bearing: without aging the
+  // target past `PENDING_SIGNAL_TTL_MS` (which `evictOldestPendingIfOverCap`
+  // requires before persisting an evicted entry's effect at all — an
+  // unexpired eviction victim is dropped bare, no gate ever consulted) the
+  // test passed VACUOUSLY, never actually exercising the gate.
+  const CAP_FILL_THREAD = { kind: 'group' as const, groupId: 'group-cap-fill-thread' };
+
+  it.each([
+    { label: 'AC-IMMUT-4: non-admin sender', sender: NON_ADMIN_PUBKEY, expectTombstoned: false },
+    { label: 'AC-IMMUT-5: admin sender', sender: ADMIN_PUBKEY, expectTombstoned: true },
+  ])(
+    'cap-eviction known-row branch (persistExpiredEntryEffect\'s knownRow path) — $label',
+    async ({ sender, expectTombstoned }) => {
+      registerAdmins([ADMIN_PUBKEY]);
+      const targetId = `cap-known-announcement-${sender}`;
+
+      // Buffer a delete for a target whose ORIGINAL then arrives via a path
+      // that bypasses the standard resolve hook (simulating the documented
+      // race persistExpiredEntryEffect's knownRow branch exists to self-heal).
+      await applyDeleteEditSignal(
+        GROUP_THREAD,
+        makeDeleteRumor({ id: `cap-oldest-${sender}`, pubkey: sender, tags: [['e', targetId], ['k', '9']] }),
+      );
+      await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, {
+        id: targetId,
+        content: makeAnnouncementContent(),
+        senderPubkey: AUTHOR,
+      }));
+
+      // Age the buffered entry well past TTL — required for
+      // evictOldestPendingIfOverCap to persist its effect at all (an
+      // unexpired eviction victim is dropped bare with no gate check).
+      vi.advanceTimersByTime(PENDING_SIGNAL_TTL_MS + 1);
+
+      // Fill a DIFFERENT thread's buffer to PENDING_SIGNAL_CAP so global cap
+      // pressure evicts our aged, oldest entry — without ever sweeping
+      // GROUP_THREAD.groupId itself (which would resolve it the ordinary
+      // buffered way instead of via cap eviction).
+      for (let i = 0; i < PENDING_SIGNAL_CAP; i++) {
+        await applyDeleteEditSignal(
+          CAP_FILL_THREAD,
+          makeDeleteRumor({ id: `cap-fill-${sender}-${i}`, tags: [['e', `cap-fill-slot-${sender}-${i}`], ['k', '9']] }),
+        );
+      }
+
+      const { messages } = await loadMessages(GROUP_THREAD.groupId);
+      const tombstoned = messages.find((m) => m.id === targetId)?.tombstoned;
+      if (expectTombstoned) {
+        expect(tombstoned).toBe(true);
+      } else {
+        expect(tombstoned).toBeFalsy();
+      }
+    },
+  );
+
+  it('AC-IMMUT-6 cap-eviction known-row branch: an EDIT resolved via cap eviction against a known announcement row is rejected even from an ADMIN sender — unlike delete, this branch has no downstream defense-in-depth (updateMessageInPlace has no independent gate re-check the way tombstoneMessage does), so this specific line is the ONLY thing protecting it', async () => {
+    registerAdmins([ADMIN_PUBKEY]);
+    const targetId = 'cap-known-announcement-edit';
+
+    await applyDeleteEditSignal(
+      GROUP_THREAD,
+      makeEditRumor({
+        pubkey: ADMIN_PUBKEY, // admin sender — proves there is still no edit carve-out
+        content: 'buffered admin edit attempt',
+        tags: [['e', targetId, '', 'edit'], ['rev', String(BASE_TIME_SECONDS)]],
+      }),
+    );
+    await appendMessage(GROUP_THREAD.groupId, makeOriginal(GROUP_THREAD.groupId, {
+      id: targetId,
+      content: makeAnnouncementContent(),
+      senderPubkey: AUTHOR,
+    }));
+
+    vi.advanceTimersByTime(PENDING_SIGNAL_TTL_MS + 1);
+
+    for (let i = 0; i < PENDING_SIGNAL_CAP; i++) {
+      await applyDeleteEditSignal(
+        CAP_FILL_THREAD,
+        makeDeleteRumor({ id: `cap-fill-edit-${i}`, tags: [['e', `cap-fill-edit-slot-${i}`], ['k', '9']] }),
+      );
+    }
+
+    const { messages } = await loadMessages(GROUP_THREAD.groupId);
+    const row = messages.find((m) => m.id === targetId);
+    expect(row?.content).toBe(makeAnnouncementContent());
+    expect(row?.edited).toBeFalsy();
   });
 });

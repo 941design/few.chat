@@ -1,0 +1,34 @@
+{
+  "module_name": "S9-cross-cutting-invariant-verification",
+  "purpose": "Integration story (is_integration_story: true, no owning_module). Verifies two whole-flow order-sensitivity guarantees over the REAL, already-implemented decline-a/decline-b (S6/S5) and immutability-receive (S8) production code, via exhaustive enumeration (parameterized/table-driven) over finite interleaving spaces rather than sampled property generation, per the epic reviewer's reduction. Adds no new production logic — only test/harness code.",
+  "public_api": [],
+  "private_files": [
+    "app/tests/unit/marmot/crossCuttingDeclineConvergence.test.ts (AC-CROSS-1: duplicate-redelivery x crash-timing x sync-timing x group-held space, driving the REAL subscribeToWelcomes/applyDecline dispatch)",
+    "app/tests/unit/messageEdits/crossCuttingImmutabilityInvariance.test.ts (AC-CROSS-2: apply-site x arrival-order verdict-invariance space, driving the REAL applyDeleteEditSignal/resolvePendingSignalsForSlot/tombstoneMessage)"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "decline-a (app/src/lib/marmot/welcomeSubscription.ts — subscribeToWelcomes, INVITE_DECLINE_KIND, DeclineReceiveDeps)",
+    "decline-b (app/src/lib/marmot/welcomeSubscription.ts's DeclineGiftWrapPayload seam + app/src/lib/pendingInvitations.ts, consumed only incidentally via the shared module)",
+    "the Remove reuse (app/src/lib/marmot/cancelInvitationImpl.ts — isPendingMemberImpl, cancelPendingInvitationImpl, exported Deps/MarmotGroupLike)",
+    "immutability-receive (app/src/lib/messageEdits/api.ts — applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider, PENDING_SIGNAL_TTL_MS; app/src/lib/marmot/chatPersistence.ts — appendMessage, loadMessages, tombstoneMessage; app/src/lib/marmot/announcementFamily.ts — isInformativeAnnouncementContent)",
+    "app/src/lib/marmot/subscribeToGroupMessages (drives the historical-sync gate that markGroupHistorySynced hooks into)",
+    "app/src/lib/marmot/parseStructured (round-trip verification only, mirrors S6/S8's own test-layer usage)",
+    "nostr-tools/pure, nostr-tools/nip59, nostr-tools/utils (genuine gift-wrap crypto fixtures, mirrors welcomeSubscription.test.ts)",
+    "vitest (describe/it/it.each/vi — fake timers for AC-CROSS-2's TTL-expiry dimension, deterministic Deferred gates for AC-CROSS-1's crash/concurrency dimension)"
+  ],
+  "dependencies_forbidden": [
+    "no new production code under app/src/lib/** — this story is verification-only",
+    "no re-implementation of applyDecline/authorizeDeleteAgainstTarget/isEditAuthorizedByAnnouncementGate logic inside the test file (shadow-init anti-pattern) — every verdict must come from calling the real exported functions"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [
+    "DeclineGiftWrapPayload (S5/decline-b seam, consumed read-only by constructing genuine gift wraps carrying this shape)",
+    "InviteLifecycleContent (S2/S6 seam, consumed read-only via parseStructured round-trip assertions on the `declined` announcement content)"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/crossCuttingDeclineConvergence.test.ts",
+    "app/tests/unit/messageEdits/crossCuttingImmutabilityInvariance.test.ts"
+  ]
+}

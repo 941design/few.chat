@@ -1,12 +1,53 @@
 /**
  * Reconciliation core — Seam S3 producer (ChangeResult).
  *
- * React-free and context-free: imports only chatPersistence, S2's
- * DELETE_EDIT_RUMOR_KIND constant, and idb-keyval. Never imports
+ * React-free and context-free: imports chatPersistence, S2's
+ * DELETE_EDIT_RUMOR_KIND constant, idb-keyval, and (as of S8,
+ * epic-group-invite-lifecycle) the shared `isInformativeAnnouncementContent`
+ * predicate (`lib/marmot/announcementFamily.ts`, itself only a thin
+ * `parseStructured` consumer — no React, no context). Never imports
  * app/src/context/, react, or app/src/components/. Both a React component
  * (ContactChat.tsx, DM) and a non-React dispatcher handler
  * (deleteEditHandler.ts, group) call this module directly (architecture.md
  * boundary rule).
+ *
+ * ─── S8 (DD-11): the announcement-immutability gate + admin carve-out ─────
+ *
+ * Every apply site — the direct known-row branch below, the buffered
+ * `resolveKnownRowAgainstStores` path, and the TTL-expiry
+ * `persistExpiredEntryEffect` path (both its known-row and no-known-row
+ * branches) — consults the SAME two decision functions:
+ * `authorizeDeleteAgainstTarget` (AC-IMMUT-4/5: a delete/tombstone against a
+ * GROUP-thread announcement is honored iff the signal's sender is a current
+ * admin; against an ordinary message, the pre-existing own-author rule is
+ * unchanged) and `isEditAuthorizedByAnnouncementGate` (AC-IMMUT-6/7: an edit
+ * is rejected outright when EITHER the target's current content OR the
+ * edit's own replacement content is a GROUP-thread announcement, admin or
+ * not — edit never gets the delete's admin carve-out). "GROUP-thread" scoping
+ * mirrors S7's `isGroupContext` UI carve-out (`messageActionUi.ts`): a DM
+ * thread has no admin concept and no shared announcement history, so a DM's
+ * own informative-announcement-shaped message (e.g. `call_notice`) keeps its
+ * pre-S8 own-author-deletable/editable behavior unchanged — this gate never
+ * fires for a `dm:`-prefixed threadKey (`isGroupThreadKey`).
+ *
+ * Admin lookup is a REGISTERED PROVIDER (`registerGroupAdminsProvider`), not
+ * a threaded function parameter, because `applyDeleteEditSignal` /
+ * `resolvePendingSignalsForSlot` are this module's frozen public seam,
+ * called from many existing call sites (DM + group, React + non-React —
+ * ContactChat.tsx, directMessages.ts, chatHandler.ts, deleteEditHandler.ts)
+ * that architecture.md's declared boundary keeps decoupled from group/admin
+ * state. Adding a required parameter would ripple across every one of those
+ * call sites, far outside this story's declared scope
+ * (messageEdits/api.ts, marmot/chatPersistence.ts, context/ChatStoreContext.tsx).
+ * A settable module-level singleton, registered ONCE by the composition root
+ * (MarmotContext.tsx — an authorized external port, mirroring S3's
+ * send-capability-injection precedent), lets every existing call site keep
+ * calling the unchanged public signature while the gate still resolves live
+ * admin state at apply time. Fail-closed (VQ-S8-006): no registered
+ * provider, a DM thread, or a provider that throws/rejects all resolve to an
+ * EMPTY admin set — never "everyone is admin". An empty result denies the
+ * admin carve-out (AC-IMMUT-5) but still correctly rejects a non-admin
+ * delete (AC-IMMUT-4), the safe default.
  *
  * Public surface:
  *   - applyDeleteEditSignal(thread, rumor)              — the frozen seam entrypoint
@@ -82,6 +123,7 @@ import {
   type ChatMessage,
 } from '@/src/lib/marmot/chatPersistence';
 import { DELETE_EDIT_RUMOR_KIND, hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
+import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
 
 // ─── Public types ─────────────────────────────────────────────────────────
 
@@ -474,6 +516,101 @@ function pubkeysMatch(a: string, b: string): boolean {
   return typeof a === 'string' && typeof b === 'string' && a.length > 0 && a.toLowerCase() === b.toLowerCase();
 }
 
+// ─── S8 (DD-11): announcement-immutability gate + admin carve-out ───────────
+
+/**
+ * A DM thread's flattened `threadKey` is always `dm:<peerHexLower>`
+ * (`groupIdFor`); a group thread's is the raw MLS groupId, which never
+ * legitimately collides with that prefix — the same assumption
+ * `chatPersistence.ts` (`loadMessages`) and `purgeStrangerDmThreads` already
+ * rely on. Used to scope the whole announcement-immutability gate to group
+ * threads only, mirroring S7's `isGroupContext` UI carve-out: a DM has no
+ * admin concept and no shared announcement history, so a DM's own
+ * announcement-shaped message keeps its pre-S8 own-author rule untouched.
+ */
+function isGroupThreadKey(threadKey: string): boolean {
+  return !threadKey.startsWith('dm:');
+}
+
+/** True iff `content` is a GROUP-thread informative announcement (see `isGroupThreadKey`). */
+function isAnnouncementInThread(threadKey: string, content: string): boolean {
+  return isGroupThreadKey(threadKey) && isInformativeAnnouncementContent(content);
+}
+
+/**
+ * Resolves a groupId's current admin pubkeys via the registered provider.
+ * See the module doc comment's "S8 (DD-11)" section for why this is a
+ * settable singleton rather than a threaded parameter. Fail-closed to `[]`
+ * on a DM thread, an unregistered provider, or a throwing/rejecting
+ * provider — an empty set can only ever DENY the admin carve-out
+ * (AC-IMMUT-5), never wrongly grant it.
+ */
+export type GroupAdminsProvider = (groupId: string) => Promise<string[]> | string[];
+
+let groupAdminsProvider: GroupAdminsProvider | null = null;
+
+/**
+ * Composition-root registration hook. Exactly one provider is registered
+ * app-wide (MarmotContext.tsx, backed by the live MLS client's
+ * `groups.get(groupId).groupData.adminPubkeys`). Pass `null` to clear it
+ * (e.g. on account switch / provider teardown).
+ */
+export function registerGroupAdminsProvider(provider: GroupAdminsProvider | null): void {
+  groupAdminsProvider = provider;
+}
+
+async function groupAdminsFor(threadKey: string): Promise<string[]> {
+  if (!isGroupThreadKey(threadKey)) return [];
+  if (!groupAdminsProvider) return [];
+  try {
+    const admins = await groupAdminsProvider(threadKey);
+    return Array.isArray(admins) ? admins : [];
+  } catch {
+    return [];
+  }
+}
+
+function isAdminPubkey(admins: string[], pubkeyHex: string): boolean {
+  return admins.some((a) => typeof a === 'string' && pubkeysMatch(a, pubkeyHex));
+}
+
+/**
+ * AC-IMMUT-4/5: authorizes a delete/tombstone signal against its target's
+ * CURRENT content. For a GROUP-thread informative announcement, ordinary
+ * authorship is irrelevant — only current-admin sourcing authorizes it. For
+ * anything else (ordinary message, or any DM-thread message regardless of
+ * shape), the pre-existing own-author rule applies unchanged.
+ */
+async function authorizeDeleteAgainstTarget(
+  threadKey: string,
+  targetContent: string,
+  senderPubkeyHex: string,
+  targetAuthorPubkeyHex: string,
+): Promise<{ authorized: boolean; adminPubkeysHex: string[] }> {
+  if (!isAnnouncementInThread(threadKey, targetContent)) {
+    return { authorized: pubkeysMatch(senderPubkeyHex, targetAuthorPubkeyHex), adminPubkeysHex: [] };
+  }
+  const adminPubkeysHex = await groupAdminsFor(threadKey);
+  return { authorized: isAdminPubkey(adminPubkeysHex, senderPubkeyHex), adminPubkeysHex };
+}
+
+/**
+ * AC-IMMUT-6/7: an edit is rejected outright — no admin carve-out exists for
+ * edit, ever — when EITHER the target's current content (AC-IMMUT-6) OR the
+ * edit's own replacement content (AC-IMMUT-7) is a GROUP-thread informative
+ * announcement. `targetContent` may be `undefined` when the target is not
+ * yet known (the replacement-content check still applies regardless).
+ */
+function isEditAuthorizedByAnnouncementGate(
+  threadKey: string,
+  targetContent: string | undefined,
+  replacementContent: string,
+): boolean {
+  if (targetContent !== undefined && isAnnouncementInThread(threadKey, targetContent)) return false;
+  if (isAnnouncementInThread(threadKey, replacementContent)) return false;
+  return true;
+}
+
 // ─── Rev sanitization (AC-ORDER-5 substrate + ingest cap) ────────────────
 
 /**
@@ -582,10 +719,33 @@ export function groupIdFor(thread: MessageEditsThreadKey): string {
  * `persistExpiredEntryEffect`). `applyToKnownSlot` below is a thin wrapper
  * that re-attaches `thread` for the public `ChangeResult` shape.
  */
+interface KnownSlotIncoming {
+  kind: 'delete' | 'edit';
+  rev: number;
+  rumorId: string;
+  content?: string;
+  /**
+   * S8: the signal's own sender pubkey (ADR-006 self-asserted). Threaded
+   * through to `tombstoneMessage`'s independent authorization re-check for
+   * a delete/tombstone; unused for an edit (edit never gets an admin
+   * carve-out — see `isEditAuthorizedByAnnouncementGate`).
+   */
+  senderPubkeyHex: string;
+  /**
+   * S8: the group's current admin pubkeys, already resolved by the CALLER
+   * (fail-closed empty when the target isn't an announcement, or on a DM
+   * thread — see `authorizeDeleteAgainstTarget`/`groupAdminsFor`). Passed
+   * through unchanged so `tombstoneMessage`'s own re-derivation of "is this
+   * an announcement" uses the SAME admin snapshot the caller already
+   * authorized against, rather than a second, possibly-inconsistent lookup.
+   */
+  adminPubkeysHex: string[];
+}
+
 async function applyToKnownSlotCore(
   threadKey: string,
   row: ChatMessage,
-  incoming: { kind: 'delete' | 'edit'; rev: number; rumorId: string; content?: string },
+  incoming: KnownSlotIncoming,
 ): Promise<{ slotId: string; kind: ChangeResultKind }> {
   const meta = await readSlotMeta(threadKey, row.id);
 
@@ -627,7 +787,28 @@ async function applyToKnownSlotCore(
   if (!wins) return { slotId: row.id, kind: 'noop' };
 
   if (incoming.kind === 'delete') {
-    await tombstoneMessage(threadKey, row.id, incoming.rev);
+    // S8: tombstoneMessage independently re-verifies the announcement/admin
+    // gate (defense-in-depth, AC-IMMUT-4/5) — a rejection there means this
+    // slot was NOT actually mutated, so ChangeResult must report 'noop', not
+    // 'delete'. In the normal call graph this authorization was already
+    // decided by this function's caller before `incoming` was built, so this
+    // should always agree; the boolean return closes the gap for any future
+    // caller that got that decision wrong.
+    // S8 DM carve-out: `tombstoneMessage`'s own re-check has no notion of
+    // "group vs DM" — it only sees raw content + an admin list — so
+    // `authorization` is supplied ONLY for a group thread. A DM message
+    // that happens to be announcement-SHAPED content (e.g. a DM
+    // `call_notice`) must keep its pre-S8 own-author-only behavior
+    // (S7's `isGroupContext` precedent); passing an authorization object
+    // for a DM thread would incorrectly re-apply the group-only
+    // announcement gate inside `tombstoneMessage`.
+    const applied = isGroupThreadKey(threadKey)
+      ? await tombstoneMessage(threadKey, row.id, incoming.rev, {
+          senderPubkeyHex: incoming.senderPubkeyHex,
+          adminPubkeysHex: incoming.adminPubkeysHex,
+        })
+      : await tombstoneMessage(threadKey, row.id, incoming.rev);
+    if (!applied) return { slotId: row.id, kind: 'noop' };
   } else {
     // Always pass tombstoned:false explicitly — MessagePatch is merge-only
     // (S1 carry-forward obligation): omitting the field would leave an
@@ -653,7 +834,7 @@ async function applyToKnownSlot(
   thread: MessageEditsThreadKey,
   threadKey: string,
   row: ChatMessage,
-  incoming: { kind: 'delete' | 'edit'; rev: number; rumorId: string; content?: string },
+  incoming: KnownSlotIncoming,
 ): Promise<ChangeResult> {
   const result = await applyToKnownSlotCore(threadKey, row, incoming);
   return { thread, ...result };
@@ -697,6 +878,17 @@ async function applyToKnownSlot(
  * `authorPubkeyHex`, so `winner` is null) has nothing to persist — both
  * mismatched entries are still removed below, so a stale/forged entry
  * cannot linger and be reprocessed.
+ *
+ * S8 (DD-11) addition: the bare `pubkeysMatch(entry.authorPubkeyHex,
+ * authorPubkeyHex)` gate this function used pre-S8 is now
+ * `isDeleteEntryAuthorized`/`isEditEntryAuthorized` below — for a
+ * GROUP-thread informative-announcement row, a DELETE/marker entry is
+ * authorized by CURRENT-ADMIN sourcing instead of own-authorship
+ * (AC-IMMUT-4/5), while an EDIT entry is never authorized against such a
+ * row, admin or not (AC-IMMUT-6), nor when its own replacement content is
+ * itself an announcement (AC-IMMUT-7). This is the buffered/deferred apply
+ * site DD-11 requires the gate to hold at — a signal arriving before its
+ * target must not bypass the gate once the target materializes.
  */
 async function resolveKnownRowAgainstStores(
   threadKey: string,
@@ -706,20 +898,47 @@ async function resolveKnownRowAgainstStores(
   const pendingEntry = await findPending(threadKey, row.id);
   const marker = await findMarker(threadKey, row.id);
 
-  let candidate: { kind: 'delete' | 'edit'; rev: number; rumorId: string; content?: string } | null = null;
-  if (pendingEntry && pubkeysMatch(pendingEntry.authorPubkeyHex, authorPubkeyHex)) {
-    candidate =
+  const targetIsAnnouncement = isAnnouncementInThread(threadKey, row.content);
+  const adminPubkeysHex = targetIsAnnouncement ? await groupAdminsFor(threadKey) : [];
+
+  function isDeleteEntryAuthorized(entryAuthorPubkeyHex: string): boolean {
+    if (targetIsAnnouncement) return isAdminPubkey(adminPubkeysHex, entryAuthorPubkeyHex);
+    return pubkeysMatch(entryAuthorPubkeyHex, authorPubkeyHex);
+  }
+
+  function isEditEntryAuthorized(entryAuthorPubkeyHex: string, replacementContent: string): boolean {
+    if (!isEditAuthorizedByAnnouncementGate(threadKey, row.content, replacementContent)) return false;
+    return pubkeysMatch(entryAuthorPubkeyHex, authorPubkeyHex);
+  }
+
+  type WinnerCandidate = { kind: 'delete' | 'edit'; rev: number; rumorId: string; content?: string; authorPubkeyHex: string };
+
+  let candidate: WinnerCandidate | null = null;
+  if (pendingEntry) {
+    const authorized =
       pendingEntry.kind === 'delete'
-        ? { kind: 'delete', rev: pendingEntry.rev, rumorId: pendingEntry.rumorId }
-        : { kind: 'edit', rev: pendingEntry.rev, rumorId: pendingEntry.rumorId, content: pendingEntry.content };
+        ? isDeleteEntryAuthorized(pendingEntry.authorPubkeyHex)
+        : isEditEntryAuthorized(pendingEntry.authorPubkeyHex, pendingEntry.content);
+    if (authorized) {
+      candidate =
+        pendingEntry.kind === 'delete'
+          ? { kind: 'delete', rev: pendingEntry.rev, rumorId: pendingEntry.rumorId, authorPubkeyHex: pendingEntry.authorPubkeyHex }
+          : {
+              kind: 'edit',
+              rev: pendingEntry.rev,
+              rumorId: pendingEntry.rumorId,
+              content: pendingEntry.content,
+              authorPubkeyHex: pendingEntry.authorPubkeyHex,
+            };
+    }
   }
 
-  let markerSignal: { kind: 'delete'; rev: number; rumorId: string } | null = null;
-  if (marker && pubkeysMatch(marker.authorPubkeyHex, authorPubkeyHex)) {
-    markerSignal = { kind: 'delete', rev: marker.rev, rumorId: '' };
+  let markerSignal: WinnerCandidate | null = null;
+  if (marker && isDeleteEntryAuthorized(marker.authorPubkeyHex)) {
+    markerSignal = { kind: 'delete', rev: marker.rev, rumorId: '', authorPubkeyHex: marker.authorPubkeyHex };
   }
 
-  let winner: { kind: 'delete' | 'edit'; rev: number; rumorId: string; content?: string } | null = null;
+  let winner: WinnerCandidate | null = null;
   if (markerSignal && candidate) {
     winner = signalBeats(markerSignal, candidate) ? markerSignal : candidate;
   } else {
@@ -729,7 +948,14 @@ async function resolveKnownRowAgainstStores(
   // Persist FIRST (see doc comment above) — only after this settles do we
   // remove the consumed entries below.
   const result: { slotId: string; kind: ChangeResultKind } = winner
-    ? await applyToKnownSlotCore(threadKey, row, winner)
+    ? await applyToKnownSlotCore(threadKey, row, {
+        kind: winner.kind,
+        rev: winner.rev,
+        rumorId: winner.rumorId,
+        content: winner.kind === 'edit' ? winner.content : undefined,
+        senderPubkeyHex: winner.authorPubkeyHex,
+        adminPubkeysHex,
+      })
     : { slotId: row.id, kind: 'noop' };
 
   // THEN remove, consumed either way (finding 6, carried forward): clears
@@ -798,8 +1024,33 @@ async function resolveKnownRowAgainstStores(
  */
 async function persistExpiredEntryEffect(entry: PendingSignal, knownRow: ChatMessage | undefined): Promise<void> {
   if (knownRow) {
-    if (pubkeysMatch(entry.authorPubkeyHex, knownRow.senderPubkey)) {
+    // S8 (DD-11, AC-IMMUT-4/5/6): the pre-S8 bare `pubkeysMatch` gate is
+    // replaced with the same announcement-aware authorization every other
+    // apply site uses — a delete/marker entry against a GROUP-thread
+    // announcement is authorized by current-admin sourcing, never by
+    // ordinary own-authorship; an edit entry is NEVER authorized against
+    // such a row, admin or not.
+    const targetIsAnnouncement = isAnnouncementInThread(entry.threadKey, knownRow.content);
+    let authorized: boolean;
+    let adminPubkeysHex: string[] = [];
+    if (targetIsAnnouncement) {
       if (entry.kind === 'edit') {
+        authorized = false; // AC-IMMUT-6 — no admin carve-out for edit
+      } else {
+        adminPubkeysHex = await groupAdminsFor(entry.threadKey);
+        authorized = isAdminPubkey(adminPubkeysHex, entry.authorPubkeyHex);
+      }
+    } else {
+      authorized = pubkeysMatch(entry.authorPubkeyHex, knownRow.senderPubkey);
+    }
+
+    if (authorized) {
+      if (entry.kind === 'edit') {
+        // AC-IMMUT-7: reject when the REPLACEMENT content itself is an
+        // announcement, regardless of the (here, non-announcement) target.
+        if (isAnnouncementInThread(entry.threadKey, entry.content)) {
+          return;
+        }
         const existingMarker = await findMarker(entry.threadKey, entry.targetId);
         if (existingMarker && existingMarker.rev >= entry.rev) {
           // A same/higher-rev marker already outranks this edit — leave it
@@ -813,13 +1064,22 @@ async function persistExpiredEntryEffect(entry: PendingSignal, knownRow: ChatMes
         rev: entry.rev,
         rumorId: entry.rumorId,
         content: entry.kind === 'edit' ? entry.content : undefined,
+        senderPubkeyHex: entry.authorPubkeyHex,
+        adminPubkeysHex,
       });
     }
-    // Mismatch: fail-closed, drop silently — mirrors resolvePendingSignalsForSlot's AC-AUTH-2 gate.
+    // Unauthorized (mismatched author, or announcement-gate rejection):
+    // fail-closed, drop silently — mirrors resolvePendingSignalsForSlot's
+    // AC-AUTH-2 gate.
     return;
   }
 
   if (entry.kind === 'delete') {
+    // Target unknown — its content can't be checked yet, so the marker is
+    // recorded unconditionally, exactly as before S8. The announcement +
+    // admin gate is deferred to whenever the row DOES arrive, applied by
+    // the knownRow branch above (via a later sweep) or by
+    // `resolveKnownRowAgainstStores` — DD-11's whole point.
     await upsertMarker({
       threadKey: entry.threadKey,
       targetId: entry.targetId,
@@ -830,7 +1090,42 @@ async function persistExpiredEntryEffect(entry: PendingSignal, knownRow: ChatMes
     return;
   }
 
-  // entry.kind === 'edit', no known row.
+  // entry.kind === 'edit', no known row: this branch MATERIALIZES a brand
+  // new ChatMessage row directly from the edit's own replacement content
+  // (there is no real target to check). AC-IMMUT-7: reject outright when
+  // that replacement content itself is an announcement — otherwise this is
+  // exactly the fabrication DD-11/AC-IMMUT-7 exists to prevent (an
+  // attacker using an edit-with-unknown-target to plant a forged,
+  // now-"immutable" announcement row).
+  if (isAnnouncementInThread(entry.threadKey, entry.content)) {
+    return;
+  }
+
+  // S9 gate-remediation: the row created below is a PLACEHOLDER, not a
+  // confirmed real message — its own target was never actually seen. It is
+  // flagged `materializedFromEdit` so that IF a genuine message later
+  // arrives at this exact id (chatPersistence.appendMessage, called from the
+  // normal ingest path once the real rumor shows up), that real arrival
+  // overwrites this placeholder INSTEAD OF silently no-op'ing against it —
+  // but ONLY when the arriving content is itself a group informative
+  // announcement (`isInformativeAnnouncementContent`, gated in
+  // `appendMessage`; see `ChatMessage.materializedFromEdit` and
+  // `appendMessage`'s doc comments in chatPersistence.ts). Without this, a
+  // group announcement arriving after this placeholder had already claimed
+  // the slot would be permanently suppressed — defeating AC-IMMUT-6
+  // announcement immutability at exactly this ordering.
+  //
+  // The ordinary-message case this branch exists for — a real target that
+  // never showed up before the edit signal expired — is NOT "completely
+  // unaffected" by a later arrival: the real original CAN still show up
+  // after materialization (e.g. a delayed/re-delivered rumor). Gate-
+  // remediated (severity 4): that arrival used to unconditionally overwrite
+  // this placeholder, reverting an already-applied edit or resurrecting an
+  // already-tombstoned message. `appendMessage` now only supersedes the
+  // placeholder for an announcement arrival; an ordinary real-original
+  // arrival is a no-op against it, so the materialized/edited/tombstoned
+  // row stands exactly as flagged.
+
   const existingMarker = await findMarker(entry.threadKey, entry.targetId);
   if (existingMarker && existingMarker.rev >= entry.rev) {
     // The delete-marker is at least as authoritative — the edit's effect
@@ -848,6 +1143,7 @@ async function persistExpiredEntryEffect(entry: PendingSignal, knownRow: ChatMes
     createdAt: entry.createdAtSeconds * 1000,
     edited: false,
     rev: entry.rev,
+    materializedFromEdit: true,
   });
   await writeSlotMeta(entry.threadKey, entry.targetId, {
     lastRumorId: entry.rumorId,
@@ -1030,7 +1326,17 @@ export function applyDeleteEditSignal(
         return { thread, slotId: null, kind: 'pending' as const };
       }
 
-      if (!pubkeysMatch(rumor.pubkey, knownRow.senderPubkey)) {
+      // S8 (AC-IMMUT-4/5): for a GROUP-thread announcement, own-authorship
+      // is irrelevant — only current-admin sourcing authorizes the
+      // delete/tombstone; an ordinary message keeps the pre-S8 own-author
+      // rule (`authorizeDeleteAgainstTarget` folds both branches together).
+      const { authorized, adminPubkeysHex } = await authorizeDeleteAgainstTarget(
+        threadKey,
+        knownRow.content,
+        rumor.pubkey,
+        knownRow.senderPubkey,
+      );
+      if (!authorized) {
         return { thread, slotId: knownRow.id, kind: 'discarded' as const };
       }
 
@@ -1038,12 +1344,23 @@ export function applyDeleteEditSignal(
         kind: 'delete',
         rev: classification.rev,
         rumorId: rumor.id,
+        senderPubkeyHex: rumor.pubkey,
+        adminPubkeysHex,
       });
     }
 
     // classification.type === 'edit'
     const targetId = classification.targetId;
     const knownRow = messages.find((m) => m.id === targetId);
+
+    // S8 (AC-IMMUT-6/7): reject outright when EITHER the (possibly still
+    // unknown) target's current content OR the edit's own replacement
+    // content is a GROUP-thread announcement — never an admin carve-out for
+    // edit. Checked BEFORE buffering so a forged replacement never even
+    // enters the pending buffer.
+    if (!isEditAuthorizedByAnnouncementGate(threadKey, knownRow?.content, classification.content)) {
+      return { thread, slotId: knownRow?.id ?? null, kind: 'discarded' as const };
+    }
 
     if (!knownRow) {
       await insertOrCollapsePending({
@@ -1069,6 +1386,8 @@ export function applyDeleteEditSignal(
       rev: classification.rev,
       rumorId: rumor.id,
       content: classification.content,
+      senderPubkeyHex: rumor.pubkey,
+      adminPubkeysHex: [],
     });
   });
 }
@@ -1086,15 +1405,24 @@ export function applyDeleteEditSignal(
  * still can: the marker's own stashed authorPubkeyHex is compared against
  * originalAuthorPubkeyHex here; on mismatch the marker is dropped rather
  * than applied, self-healing the tombstone away. This is a strictly better
- * outcome than never checking at all, but it cannot be fully symmetric with
- * the edit-materialize branch: once an edit has materialized as a real
- * ChatMessage row (chatPersistence.appendMessage is insert-if-absent), the
- * "real" original can never subsequently overwrite it, so there is no later
- * moment at which an edit-materialize's authorization could be verified.
- * This asymmetry is an accepted, spec-mandated residual (spec §2.8 requires
- * "neither branch silently drops its effect" even though the target's true
- * author is, by construction, never confirmed for a signal whose target
- * never arrives within the buffer window).
+ * outcome than never checking at all, but it is NOT symmetric with the
+ * edit-materialize branch, for a structural reason rather than a residual
+ * gap: a marker suppresses/tombstones the real original once it arrives
+ * (there IS a real row at that point to authenticate against, which is
+ * exactly what this function does), whereas an edit-materialize FABRICATES
+ * a row from the edit's own replacement content before any real original is
+ * ever seen — there is no "real original" here to retroactively compare
+ * an author against, because by the time this function could run, either
+ * the row is still the fabricated placeholder (nothing to authenticate) or
+ * the real original has already arrived and overwritten it outright (S9
+ * gate-remediation: `chatPersistence.appendMessage` now supersedes a row
+ * flagged `materializedFromEdit` rather than dedup-no-op'ing against it —
+ * see that flag's doc comment — so a genuine arrival, including a group
+ * announcement, always wins over a pre-emptive edit-materialize; this
+ * closed the prior residual where the fabricated content could stand
+ * forever). Either way, this function's own read of `row` here already
+ * reflects whichever of those two states is current — there is nothing
+ * further for MARKER-AUTH-style retroactive checking to do on this branch.
  *
  * Ordering (round-2 remediation finding 2): `slotId`'s OWN candidate-vs-
  * marker winner is resolved FIRST, via the shared `resolveKnownRowAgainstStores`,

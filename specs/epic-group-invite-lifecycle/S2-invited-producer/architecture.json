@@ -1,0 +1,62 @@
+{
+  "module_name": "invite-producer",
+  "purpose": "Emit the invite_lifecycle 'invited' group announcement exactly at the direct-invite call site (InviteMemberModal.tsx's submitInviteWithMarker, wired from pages/groups.tsx), fire-and-forget, only after a successful MLS Add. Must never be reachable from the join-request/invite-link approval flow (approveJoinRequestImpl / inviteByNpub), which is out of scope and already emits its own member_admitted announcement (DD-8).",
+  "public_api": [
+    {
+      "name": "buildInvitedAnnouncementContent",
+      "signature": "(inviteeHex: string) => string",
+      "description": "Pure payload builder. Returns JSON.stringify({ type: 'invite_lifecycle', event: 'invited', pubkey: <canonical lowercase-hex inviteeHex> }). No side effects; testable in isolation."
+    },
+    {
+      "name": "submitInviteWithMarker",
+      "signature": "(pubkeyHex: string, groupId: string, inviteByNpub: (groupId: string, npub: string) => Promise<{ok: boolean; error?: string}>, markerDeps: PendingInviteMarkerDeps, sendAnnouncement?: (content: string) => Promise<void>) => Promise<{ok: boolean; error?: string}>",
+      "description": "Existing exported async core (unchanged marker bookkeeping behavior). Extended with a new optional 5th param: on result.ok === true, fires buildInvitedAnnouncementContent(canonicalPubkey) through sendAnnouncement, fire-and-forget (never awaited, .catch(()=>{}) swallows any rejection). Never invoked when the invite fails. Backward compatible: omitting the param preserves prior behavior exactly (no announcement sent)."
+    },
+    {
+      "name": "InviteMemberModal",
+      "signature": "(props: { isOpen: boolean; onClose: () => void; groupId: string; sendAnnouncement?: (content: string) => Promise<void> }) => JSX.Element",
+      "description": "Default export React component. New optional sendAnnouncement prop threaded straight through to submitInviteWithMarker inside handleInvite. All other props/behavior unchanged."
+    },
+    {
+      "name": "resolveInviteTarget",
+      "signature": "(pubkeyHex: string) => ResolveInviteTargetResult",
+      "description": "Unchanged (pre-existing export)."
+    },
+    {
+      "name": "submitInvite",
+      "signature": "(pubkeyHex: string, groupId: string, inviteByNpub) => Promise<{ok: boolean; error?: string}>",
+      "description": "Unchanged (pre-existing export). Not touched by this story — the producer is wired one layer up, in submitInviteWithMarker, so submitInvite (also reachable in principle without the marker wrapper) never fires an announcement itself. inviteByNpub itself remains completely untouched (DD-8)."
+    },
+    {
+      "name": "computeSelectionState",
+      "signature": "(entries, selectedPubkeyHex: string) => { hasSelectable: boolean; isSelectionValid: boolean }",
+      "description": "Unchanged (pre-existing export)."
+    },
+    {
+      "name": "getErrorMessage",
+      "signature": "(errorCode: string | undefined, copy) => string",
+      "description": "Unchanged (pre-existing export)."
+    },
+    {
+      "name": "getInviteReasonText",
+      "signature": "(disabledReason, copy) => string | null",
+      "description": "Unchanged (pre-existing export)."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [],
+  "dependencies_forbidden": [
+    "app/src/context/MarmotContext.tsx's inviteByNpub (DD-8: shared with the out-of-scope join-request/invite-link flow — must remain untouched)",
+    "app/src/context/MarmotContext.tsx's approveJoinRequestImpl (out-of-scope join-request flow; already emits member_admitted independently and must not gain an invite_lifecycle side effect)",
+    "app/src/lib/marmot/parseStructured.ts (S1's owned parse boundary — this producer only constructs a JSON string matching the InviteLifecycleContent seam shape by convention; it does not import S1's guard/type)"
+  ],
+  "external_ports": [],
+  "events_emitted": [
+    "group application rumor (kind-9, via the existing sendMessage/sendApplicationRumor channel captured as sendAnnouncementRef in pages/groups.tsx): { type: 'invite_lifecycle', event: 'invited', pubkey: <inviteeHex> }"
+  ],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/groups/InviteMemberModal.test.ts"
+  ]
+}

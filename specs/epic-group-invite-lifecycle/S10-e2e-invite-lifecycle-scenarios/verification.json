@@ -1,0 +1,104 @@
+{
+  "story_id": "S10",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S10-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does `groups-invite-lifecycle-announcements.spec.ts` drive every scenario (invite, accept, decline, non-admin affordance-absence, admin moderation-Delete) through real browser contexts publishing via the app's own UI, with no `WebSocket.send`-to-relay shortcuts standing in for any step, and no scenario silently skipped or reduced to a stub `expect(true).toBe(true)` under time pressure? Are the announcement-visibility assertions genuine text/DOM checks (not merely 'element count increased by one', which would pass even if the wrong announcement type rendered)?"
+    },
+    {
+      "question_id": "VQ-S10-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the new spec file named `groups-invite-lifecycle-announcements.spec.ts` (per stories.json's explicit note distinguishing it from the pre-existing, unrelated `groups-direct-invite-lifecycle.spec.ts` for epic-invite-rescind-and-member-removal), and does its filename correctly place it in the relay/Docker bucket (matching the `groups-*` glob) rather than accidentally landing in the no-relay fast bucket where a relay-dependent spec can never pass (per this project's documented e2e-bucket-naming trap)?"
+    },
+    {
+      "question_id": "VQ-S10-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `e2e`'s `groups-invite-lifecycle-announcements.spec.ts` be deleted and rewritten using only the app's own public UI surfaces and the already-landed S2/S3/S5/S6/S7 behavior, without needing to import or reach into any module's internals (e.g. no direct import of `parseStructured`, `profileHandler`, or `welcomeSubscription` internals to short-circuit a scenario)? If any such reach-in exists, is it justified as the documented narrow exception for events the app cannot itself produce, and called out in the spec header?"
+    },
+    {
+      "question_id": "VQ-S10-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does the spec use at least two real browser contexts (per this project's e2e convention: 'boot a second `browser.newContext()`, sign in as that peer, and call the app's publish helper') for every scenario requiring a second participant (invite, accept, decline), rather than a single context simulating both sides? Does it use `expect.poll`/retrying assertions for relay-propagated state rather than a fixed `waitForTimeout` or a `reload()`+`isVisible()` race (both documented flake traps in this project), and was the invitee context's profile seeded via the documented safe re-seed-after-clearAppState pattern to avoid the profile-seed/clearState race?"
+    },
+    {
+      "question_id": "VQ-S10-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does this story correctly scope itself as a conformance oracle re-confirming AC-PROD-1/3, AC-DECLINE-3/9/10, and AC-IMMUT-1/3 at the assembled-system/UI level — one representative interleaving per scenario — rather than attempting (or omitting coverage that properly belongs to) the combinatorial ordering/interleaving search already owned by S9? Does it correctly exclude receive-side forgery/UI-bypass cases (AC-IMMUT-4 through 7, AC-CROSS-2) per acceptance-criteria.md's Manual Validation section, rather than either duplicating S8's unit coverage pointlessly or silently dropping it?"
+    },
+    {
+      "question_id": "VQ-S10-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Is the spec resilient to this project's chronic ~4 rotating ~30s VM-latency timeouts on the full gate (a known pre-existing flake floor, not a regression signal) — i.e. does it use reasonable timeouts/retries consistent with the rest of the `groups-*` suite rather than either a flaky tight timeout or a masking-overlong one? Is the pass criterion correctly stated as the full 60-test `make test-e2e-all` gate (per CLAUDE.md's e2e-gate section), not a filtered/subset run of only this new spec file?"
+    },
+    {
+      "question_id": "VQ-S10-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-1",
+      "question": "Does driving a direct contact-invite through the app's real UI (two browser contexts) produce a visible `invited` announcement in the group chat, confirming AC-PROD-1 at the assembled-system level? Provide (a) the test steps from invite-submission through announcement-visibility assertion, (b) the exact selector/text assertion used (matching S4's stable `data-testid`, not a generic 'any new message appeared' check), and (c) confirmation this is driven through `InviteMemberModal`'s real submit flow, not a fixture that bypasses the modal."
+    },
+    {
+      "question_id": "VQ-S10-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-3",
+      "question": "Does B's real join (through the app's own Welcome-processing flow, a second browser context) produce a visible `accepted` announcement, confirming AC-PROD-3 at the assembled-system level? Provide (a) the test steps from B's join through announcement-visibility assertion in A's view, (b) confirmation the join is driven through the app's real Welcome-acceptance UI (not a hand-constructed profile rumor), and (c) the exact assertion distinguishing an `accepted` announcement from an `invited` one (both now exist in the same chat, so the test must assert on the correct one)."
+    },
+    {
+      "question_id": "VQ-S10-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-3",
+      "question": "Does B declining through the app's real UI trigger the gift-wrapped decline send (confirming AC-DECLINE-3's send-side behavior is reachable and functioning end-to-end), observable indirectly via A subsequently seeing the `declined` announcement and B's removal? Provide (a) the test steps for B's decline action in the app UI, (b) confirmation the test does not attempt to inspect the gift-wrap's encrypted bytes directly (that is S5's unit-test territory) but instead asserts the OBSERVABLE downstream effect at A's client, and (c) the exact assertion used."
+    },
+    {
+      "question_id": "VQ-S10-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-9",
+      "question": "Does the full decline scenario, driven end-to-end through the app, result in B (a genuinely pending, not-yet-joined member) being accepted as the decline's valid subject — confirming AC-DECLINE-9's tree-gate is satisfied in the real assembled flow, not bypassed by test setup accidentally making B a full member before declining? Provide (a) confirmation the test's B is in the pending-member state (invited, not joined) at the moment of decline, and (b) the assertion that A's client actually processed the decline (via the observable `declined` post + removal), rather than the decline silently no-op'ing due to a test-setup mistake that would falsely still make the overall test 'pass' on an unrelated code path."
+    },
+    {
+      "question_id": "VQ-S10-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-10",
+      "question": "Does the decline scenario observably confirm A's DD-7 ordering effects at the UI level — specifically, that B is removed from the visible member list AND the `declined` announcement appears (both effects present, per DD-10 steps 1-2) — using a retrying assertion (`expect.poll`/`toBeVisible` with retry) rather than a single-shot check that could race the relay-propagated update? Provide (a) both assertions (member-list removal and announcement visibility) as independent checks, and (b) confirmation neither assertion is satisfied by a stale pre-decline DOM snapshot (e.g. via a `reload()`+`isVisible()` pattern flagged elsewhere in this project as racing hydration)."
+    },
+    {
+      "question_id": "VQ-S10-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-1",
+      "question": "For a non-admin viewer, does the spec assert the absence of both Edit and Delete affordances on at least one of the newly-visible `invite_lifecycle` announcements (invited/accepted/declined), confirming AC-IMMUT-1 at the UI level? Provide (a) the selector/assertion used to confirm ABSENCE (not merely that the test didn't click a button — an explicit query proving the affordance element does not exist or is not interactable), and (b) confirmation the viewing context in this assertion is genuinely a non-admin group member, distinct from the inviter/admin context used elsewhere in the same spec."
+    },
+    {
+      "question_id": "VQ-S10-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-3",
+      "question": "For an admin viewer, does the spec assert the moderation Delete affordance IS present on an `invite_lifecycle` announcement while Edit is NOT present, confirming AC-IMMUT-3 at the UI level? Provide (a) the selector/assertion for Delete-present, (b) the selector/assertion for Edit-absent (both required — a test only checking Delete-present could pass even if Edit were erroneously also shown), and (c) confirmation this admin-viewer assertion runs in the SAME spec against the SAME announcement message used for the non-admin AC-IMMUT-1 assertion, so the admin/non-admin contrast is genuinely exercised rather than tested against different messages that could differ for unrelated reasons."
+    },
+    {
+      "question_id": "VQ-S10-014",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "Implementation discovered that `resolveInviteLifecycleSubjectDisplay` falls back to a truncated npub for B's `invited` announcement even well after A's client has processed later events for B (the `accepted` announcement in the SAME chat correctly resolves to 'Bob') — i.e. the earlier `invited` row's subject display does not appear to retroactively re-resolve once A's profileMap gains B's nickname. Is this consistent with AC-RENDER-1's contract (resolve from CURRENT `profileMap` at render time, npub-fallback when unknown — no claim of retroactive backfill), and with the identical documented precedent in `groups-member-admitted-announcement.spec.ts` ('C's copy of B's display name may still be the truncated-npub fallback... since B's real signed profile has not necessarily round-tripped')? Or does this reveal a genuine gap — e.g. a rendered announcement never re-renders once profileMap updates, versus simply not yet having received B's profile at all by that point? Note: this is an OBSERVATION from the actual e2e run (test-results snapshot showed 'npub1pmwlnjwv...5qrn843v was invited' persisting to the end of the spec), not a constructed edge case — the examiner should confirm which of the two explanations holds before treating it as either a non-issue or a defect."
+    },
+    {
+      "question_id": "VQ-S10-015",
+      "phase": "post-impl",
+      "category": "BEST_PRACTICES",
+      "question": "During implementation, re-running this exact spec file twice in a row against the SAME strfry relay instance without wiping it between runs (`docker compose up -d --wait` once, then two sequential single-spec `run-e2e.mjs` invocations) reproduced a spurious 90s timeout on AC-PROD-3 (B's accept never propagated to A) — root-caused to relay-state contamination: `computeTestKeypairs()`'s per-spec-FILE identity salting (auth-helpers.ts) deduplicates identities ACROSS different spec files but does nothing to protect a SAME file re-run against an unwiped relay, so the second run's B/C had duplicate stale Welcomes/invitations queued alongside the fresh ones. A relay wipe (`docker compose down -v` + `up -d --wait`) before the THIRD run made all 8 tests pass cleanly with no changes to the spec. Since `make test-e2e-all` (the actual gate) always wipes the relay exactly once before running the full 60-test suite exactly once, does this hazard ever manifest in the real gate, or is it purely an artifact of ad hoc iterative dev-loop re-runs against a stale container that the examiner should be careful not to mistake for spec flakiness?"
+    }
+  ]
+}

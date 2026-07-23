@@ -19,6 +19,7 @@ import {
   loadPendingDirectInviteMarkers,
   clearPendingDirectInvitesForGroup,
   clearAllPendingDirectInvites,
+  consumePendingDirectInviteMarker,
 } from '@/src/lib/marmot/pendingDirectInviteStorage';
 
 const GROUP_A = 'group-a';
@@ -146,6 +147,61 @@ describe('pendingDirectInviteStorage — per-group clear (AC-MARKER-9 leave-fan-
 
     expect(await loadPendingDirectInviteMarkers(gShort)).toEqual(new Set());
     expect(await loadPendingDirectInviteMarkers(gLong)).toEqual(new Set([BOB]));
+  });
+});
+
+describe('pendingDirectInviteStorage — consumePendingDirectInviteMarker (epic: group-invite-lifecycle S3 gate-remediation, severity-4)', () => {
+  it('reports true and removes the marker when one existed', async () => {
+    await markPendingDirectInvite(GROUP_A, ALICE);
+
+    await expect(consumePendingDirectInviteMarker(GROUP_A, ALICE)).resolves.toBe(true);
+    expect(await loadPendingDirectInviteMarkers(GROUP_A)).toEqual(new Set());
+  });
+
+  it('reports false and is a no-op when no marker existed', async () => {
+    await expect(consumePendingDirectInviteMarker(GROUP_A, ALICE)).resolves.toBe(false);
+  });
+
+  it('leaves a sibling pubkey marker in the same group untouched', async () => {
+    await markPendingDirectInvite(GROUP_A, ALICE);
+    await markPendingDirectInvite(GROUP_A, BOB);
+
+    await consumePendingDirectInviteMarker(GROUP_A, ALICE);
+
+    expect(await loadPendingDirectInviteMarkers(GROUP_A)).toEqual(new Set([BOB]));
+  });
+
+  it('is case-insensitive on the pubkey end (mirrors mark/clear casing invariant)', async () => {
+    await markPendingDirectInvite(GROUP_A, ALICE.toUpperCase());
+
+    await expect(consumePendingDirectInviteMarker(GROUP_A, ALICE)).resolves.toBe(true);
+  });
+
+  it('two concurrent consume calls for the SAME key resolve to exactly one true (TOCTOU-safety, against the real fake-indexeddb fixture)', async () => {
+    await markPendingDirectInvite(GROUP_A, ALICE);
+
+    // No await between the two calls — both are in flight together, exactly
+    // the interleaved-dispatch scenario the severity-4 finding described.
+    const [first, second] = await Promise.all([
+      consumePendingDirectInviteMarker(GROUP_A, ALICE),
+      consumePendingDirectInviteMarker(GROUP_A, ALICE),
+    ]);
+
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect(await loadPendingDirectInviteMarkers(GROUP_A)).toEqual(new Set());
+  });
+
+  it('concurrent consume calls for DIFFERENT keys do not block each other — each still reports its own existence correctly', async () => {
+    await markPendingDirectInvite(GROUP_A, ALICE);
+    // BOB has no marker in GROUP_A.
+
+    const [aliceResult, bobResult] = await Promise.all([
+      consumePendingDirectInviteMarker(GROUP_A, ALICE),
+      consumePendingDirectInviteMarker(GROUP_A, BOB),
+    ]);
+
+    expect(aliceResult).toBe(true);
+    expect(bobResult).toBe(false);
   });
 });
 

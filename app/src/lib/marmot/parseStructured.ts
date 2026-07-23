@@ -22,6 +22,12 @@ export type StructuredContent =
   | { type: 'group_renamed'; name: string }
   | { type: 'call_notice'; event: 'started' | 'ended'; callId: string; initiator: string }
   | { type: 'member_admitted'; pubkey: string }
+  // AC-STRUCT-5: `pubkey` here is the subject/invitee (canonical 64-char
+  // lowercase hex), NOT the author of the message. Any renderer of this
+  // variant MUST resolve the displayed *author* from the message's
+  // protocol-level `senderPubkey` — NEVER from this payload's `pubkey`
+  // field — to prevent identity spoofing.
+  | { type: 'invite_lifecycle'; event: 'invited' | 'accepted' | 'declined'; pubkey: string }
   | null;
 
 export function parseStructured(content: string): StructuredContent {
@@ -70,6 +76,13 @@ export function parseStructured(content: string): StructuredContent {
     // scoped; hardening them uniformly is a separate follow-up.
     if (parsed?.type === 'member_admitted' && /^[0-9a-f]{64}$/.test(parsed.pubkey)) {
       return { type: 'member_admitted', pubkey: parsed.pubkey };
+    }
+    if (
+      parsed?.type === 'invite_lifecycle' &&
+      (parsed.event === 'invited' || parsed.event === 'accepted' || parsed.event === 'declined') &&
+      /^[0-9a-f]{64}$/.test(parsed.pubkey)
+    ) {
+      return { type: 'invite_lifecycle', event: parsed.event, pubkey: parsed.pubkey };
     }
   } catch {
     // Not JSON — plain text message

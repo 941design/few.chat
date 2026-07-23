@@ -8,9 +8,16 @@ type GroupChatProps = {
   threadId?: string;
   pubkey: string;
   profileMap: Record<string, MemberProfile>;
+  /**
+   * S7 (epic-group-invite-lifecycle): whether the current viewer is a group
+   * admin. Passed straight through to `ChatBox` so it can grant a
+   * moderation-only Delete on informative announcements. Optional —
+   * defaults to `false` via ChatBox when omitted.
+   */
+  isCurrentUserAdmin?: boolean;
 };
 
-export default function GroupChat({ threadId, pubkey, profileMap }: GroupChatProps) {
+export default function GroupChat({ threadId, pubkey, profileMap, isCurrentUserAdmin }: GroupChatProps) {
   const { messages, sendMessage, sendImageMessage, sendReaction, loading, handleDeleteMessage, handleEditMessage } = useChatStore();
 
   // Stable ref so the bridge callback always calls the latest sendReaction
@@ -70,6 +77,13 @@ export default function GroupChat({ threadId, pubkey, profileMap }: GroupChatPro
       // S6: group half of the MessageActionHandlers seam (built by S5 in ChatStoreContext).
       handleDeleteMessage={handleDeleteMessage}
       handleEditMessage={handleEditMessage}
+      isCurrentUserAdmin={isCurrentUserAdmin}
+      // Gate-remediation (S7, group-vs-DM scoping): GroupChat always renders a
+      // group thread, regardless of whether this viewer happens to be an
+      // admin — so this is unconditionally true, not derived from
+      // isCurrentUserAdmin. Gates the announcement-family suppression in
+      // canShowMessageActions to group threads only.
+      isGroupContext
     />
   );
 }

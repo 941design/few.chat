@@ -1,0 +1,28 @@
+{
+  "module_name": "e2e",
+  "purpose": "Conformance oracle: re-confirms, at the assembled-system/real-browser-UI level, AC-PROD-1, AC-PROD-3, AC-DECLINE-3, AC-DECLINE-9, AC-DECLINE-10, AC-IMMUT-1, and AC-IMMUT-3 — all already established at unit/property level by S2, S3, S5, S6, S7 and cross-cutting-checked by S9. Owns no production module; verifies the assembled system through the app's real UI, publish-through-the-app only. Precedented pattern for e2e-only stories (see epic-contact-pairing-code S6, epic-feature-request-message-edit-and-delete S7, both owning_module='e2e').",
+  "public_api": [],
+  "private_files": [
+    "app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "invite-producer",
+    "accept-producer",
+    "decline-b",
+    "decline-a",
+    "immutability-ui"
+  ],
+  "dependencies_forbidden": [
+    "direct import of parseStructured/profileHandler/welcomeSubscription internals to short-circuit a scenario (VQ-S10-003) — every scenario drives the real UI"
+  ],
+  "external_ports": [
+    "strfry relay (ws://localhost:7777, via docker-compose.e2e.yml)",
+    "blossom-mock (unused by this spec, but part of the shared e2e infra)"
+  ],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts"
+  ]
+}

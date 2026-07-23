@@ -1,0 +1,83 @@
+{
+  "story_id": "S4",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S4-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the subject-name resolution (`profileMap[payload.pubkey]`) a real lookup against the live profile map with a genuine truncated-npub fallback, rather than a stub always returning a fixed display name or always hitting the fallback branch regardless of whether a profile exists? Is the author resolution genuinely wired to `senderPubkey` (mirroring `resolveCancellerDisplay`) rather than a copy-pasted call that actually still reads `payload.pubkey` under a renamed variable?"
+    },
+    {
+      "question_id": "VQ-S4-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the `invite_lifecycle` render branch added to `renderStructuredMessage` in `ChatBox.tsx` near the `leave_intent`/`member_admitted` branches (per architecture.md's Module Map), with the presentational component `InviteLifecycleChatAnnouncement.tsx` modelled on `LeaveChatAnnouncement.tsx` kept separate from the branch-selection logic? Are the 3 new i18n keys added only to `i18n.ts` (per the project's translation convention: no hardcoded user-visible strings in components), with matching non-empty `en`/`de` entries?"
+    },
+    {
+      "question_id": "VQ-S4-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `render` (`ChatBox.tsx`'s invite_lifecycle branch + `InviteLifecycleChatAnnouncement.tsx`) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `parse` for the type shape, or into `invite-producer`/`accept-producer` for payload construction), and do they flow through the declared `InviteLifecycleContent` seam contract rather than a redeclared local shape?"
+    },
+    {
+      "question_id": "VQ-S4-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does `app/tests/unit/chat/ChatBox.test.tsx` cover AC-RENDER-1/2/3 with tests that distinguish: (a) a known-profile subject (asserts nickname, not npub), (b) an unknown-profile subject (asserts truncated npub fallback, not a blank/undefined render), (c) all three `event` values individually with distinct copy strings asserted (not just 'a string was rendered'), and (d) a snapshot or DOM query proving the absence of avatar/bubble/edit/delete/reaction affordances (an assertion that would fail if a generic message-row wrapper were reused unmodified)?"
+    },
+    {
+      "question_id": "VQ-S4-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed render branch jointly exercise AC-STRUCT-5 (S1's parse/attribution-boundary guarantee) end-to-end — i.e. is there a test in this story's suite constructing a message whose payload `pubkey` names B but whose transport `senderPubkey` is C, asserting the rendered author is C, not B? Per S1's notes, this is the render-time observable consequence S1 and S4 jointly exercise; confirm S4's test suite is where this end-to-end case actually lives (not silently dropped because each story assumed the other owned it)."
+    },
+    {
+      "question_id": "VQ-S4-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does the render branch defensively handle a `profileMap` lookup miss (undefined) without throwing — falling back to truncated npub as specified — and does it defensively handle an unrecognized `event` value reaching the render branch (should be impossible given S1's guard, but is there a safe default/no-crash path rather than an unguarded object-index into the copy-string map that could return `undefined` and render blank/literal-undefined text)?"
+    },
+    {
+      "question_id": "VQ-S4-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-RENDER-1",
+      "question": "Does rendering an `invite_lifecycle` message display the invitee (subject) name resolved from `profileMap[payload.pubkey]`'s nickname, falling back to a truncated npub when no profile is known? Provide (a) the resolution code (mirroring the `member_admitted` name-resolution precedent cited in the AC), (b) a test with a populated `profileMap` entry asserting the nickname renders, and a second test with no matching entry asserting a truncated-npub format (not raw hex, not blank), and (c) confirmation the truncation format matches the existing `member_admitted`/`LeaveChatAnnouncement` convention rather than a newly invented format."
+    },
+    {
+      "question_id": "VQ-S4-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-RENDER-2",
+      "question": "Does rendering an `invite_lifecycle` message select its copy string from `i18n.ts` keyed on `event`, with a distinct, non-empty string present for each of `invited`/`accepted`/`declined` in both `en` and `de`? Provide (a) the new `Copy` type keys and both locale objects' entries, (b) a test rendering each of the three `event` values and asserting the exact expected copy string (not just 'copy is non-empty'), for both locales via the language context, and (c) confirmation the three strings are genuinely distinct from each other (a copy-paste that gives all three the same string would be a silent AC violation this test must catch)."
+    },
+    {
+      "question_id": "VQ-S4-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-RENDER-3",
+      "question": "Does the `invite_lifecycle` presentational component render with a stable `data-testid`, no avatar, no message bubble, and no edit/delete/reaction affordances, consistent with the `LeaveChatAnnouncement` precedent? Provide (a) the component's JSX showing the absence of these elements by construction (not merely CSS-hidden), (b) a test querying the DOM for the stable `data-testid` and asserting the absence of avatar/bubble/action-button elements, and (c) confirmation the `data-testid` value is stable across renders (not derived from a changing timestamp or random id) so downstream e2e selectors (S10) remain valid."
+    }
+    ,
+    {
+      "question_id": "VQ-S4-010",
+      "phase": "post-impl",
+      "category": "BEST_PRACTICES",
+      "question": "`selectInviteLifecycleCopy`'s `default` branch (app/src/components/groups/InviteLifecycleChatAnnouncement.tsx) silently returns `memberDisplay` for any `event` value outside the 3-member enum, with no warning/log. Since this path is only reachable if S1's parse-side enum guard were ever weakened or bypassed, is silent fallback (vs. a dev-only console.warn) the right tradeoff, or would a future regression in the parse guard now render a subtly-wrong row (missing verb, e.g. just \"Alice\") with no signal that the enum contract was violated?"
+    },
+    {
+      "question_id": "VQ-S4-011",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The dev implementer's own return notes flagged that the ChatBox.tsx branch comment was reworded from a draft using the literal word \"senderPubkey\" to \"the message's protocol-level sender\", specifically to avoid tripping the new test's `not.toMatch(/senderPubkey/)` structural assertion on the extracted branch text. Does that renamed phrasing still clearly convey the AC-STRUCT-5 boundary to a future maintainer skimming the branch (i.e., is the safety property still legible without the literal token), or does optimizing the prose to satisfy a regex assertion risk quietly degrading the comment's usefulness over time as the branch is edited?"
+    },
+    {
+      "question_id": "VQ-S4-012",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The structural source-scan test extracts the ChatBox.tsx `invite_lifecycle` branch via the regex `/if \\(structured\\?\\.type === 'invite_lifecycle'[\\s\\S]*?\\n    \\}\\n/` (app/tests/unit/chat/inviteLifecycleAnnouncement.test.ts). Is this extraction robust to an unrelated future edit elsewhere in ChatBox.tsx (e.g. reindentation, or another branch's closing brace at the same 4-space indent appearing before this branch's own closing brace), or could the regex silently match the wrong span and pass/fail for the wrong reason? Worth a maintainer note if this regex is ever seen failing after an unrelated ChatBox.tsx change."
+    }
+  ]
+}

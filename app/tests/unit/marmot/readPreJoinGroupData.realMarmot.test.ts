@@ -164,16 +164,24 @@ describe('readPreJoinGroupData — real marmot-ts (unmocked)', () => {
     // 5. The real assertion: readPreJoinGroupData, exercising the REAL
     // getWelcome / getWelcomeKeyPackageRefs / readWelcomeMarmotGroupData call
     // chain (no mocks anywhere in this file), recovers the real
-    // { name, description, adminPubkeys } from the real Welcome — WITHOUT
-    // joining the group. The admin's real pubkey hex appears in adminPubkeys
-    // because MarmotClient seeds the creator as the sole initial admin.
+    // { name, description, adminPubkeys, groupId } from the real Welcome —
+    // WITHOUT joining the group. The admin's real pubkey hex appears in
+    // adminPubkeys because MarmotClient seeds the creator as the sole
+    // initial admin. AC-DECLINE-1: groupId is now also surfaced (via a real
+    // readWelcomeGroupInfo call, no mocking) and MUST equal the admin's own
+    // real MLS group id (group.idStr) — the same identifier the invitee will
+    // eventually see post-join (MarmotGroup.idStr), proving the pre-join
+    // surfaced groupId is not a placeholder but the genuine MLS group id.
     const data = await readPreJoinGroupData(unwrapped.rumor, inviteeClient);
     expect(data).not.toBeNull();
     expect(data).toEqual({
       name: 'Real Marmot Group',
       description: 'A real description for AC-DATA-1',
       adminPubkeys: expect.arrayContaining([admin.pubHex]),
+      groupId: group.idStr,
     });
     expect(data!.adminPubkeys).toContain(admin.pubHex);
+    expect(data!.groupId).toMatch(/^[0-9a-f]+$/);
+    expect(data!.groupId.length).toBeGreaterThan(0);
   });
 });

@@ -1,0 +1,27 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-22T17:50:00Z",
+  "files_created": [],
+  "files_modified": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/tests/unit/marmot/parseStructured.test.ts",
+    "app/tests/unit/marmot/parseStructured.contract.test.ts"
+  ],
+  "tests_added": {
+    "unit": 26
+  },
+  "test_counts": {
+    "baseline": 3831,
+    "final": 3857
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": ["parse"],
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "clean_run"
+  }
+}

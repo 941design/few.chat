@@ -1,0 +1,56 @@
+{
+  "module_name": "decline-a",
+  "purpose": "A-side receive/relay of the B->A gift-wrapped decline DM (DD-4/DD-7/DD-10). Adds an INVITE_DECLINE_KIND branch to the existing kind-1059 gift-wrap dispatch in welcomeSubscription.ts (slotted after the join-request 21059 branch, before the kind-444 Welcome guard), reusing unwrapGiftWrap's existing seal authentication. On an authenticated decline: defers until the referenced group's historical sync completes (onHistorySynced) without ever advancing the MLS key schedule early; verifies the lowercased seal author is currently a pending member of that group (isPendingMemberImpl); then executes, in order, (1) MLS Remove of the invitee reusing cancelPendingInvitationImpl but emitting a `declined` invite_lifecycle announcement instead of `invite_cancelled`, (2) clear the pending-direct-invite marker, (3) mark the gift wrap seen — never marking seen before step (1)/(2) complete, so a crash mid-flow safely reprocesses on next start and a replay after B is already removed is a clean no-op. Two genuinely distinct decline wraps for the same invitee/group are serialized per-(groupId,pubkey) to converge on exactly one Remove + one post.",
+  "public_api": [
+    {
+      "name": "subscribeToWelcomes",
+      "signature": "(pubkeyHex, marmotClient, ndk, signer, onGroupJoined, onJoinRequestReceived?, groupMemberPubkeys?, ownPrivateKeyHex?, onPairingAckReceived?, declineDeps?: DeclineReceiveDeps) => Promise<() => void>",
+      "description": "Existing export, extended with one new trailing optional param, declineDeps. When omitted, a decline-kind gift wrap is authenticated then dropped without side effects (mirrors the existing onJoinRequestReceived-omitted convention) — every prior caller/behavior is byte-for-byte unchanged."
+    },
+    {
+      "name": "DeclineReceiveDeps",
+      "signature": "type DeclineReceiveDeps = CancelInvitationDeps & { sendAnnouncement: (groupId: string, content: string) => Promise<void>; clearPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void> }",
+      "description": "NEW exported type. Extends cancelInvitationImpl.ts's (now-exported) Deps with the two capabilities the Remove machinery doesn't own: posting an application rumor into an ARBITRARY group by id (this is a background listener, not scoped to one open group's UI) and clearing the pending-direct-invite marker (owned by pendingDirectInviteStorage.ts, consumed here only via injection per architecture.md's boundary rule)."
+    },
+    {
+      "name": "cancelPendingInvitationImpl",
+      "signature": "(deps: Deps, groupId: string, pubkey: string, sendAnnouncement?: (content: string) => Promise<void>, announcementKind?: 'invite_cancelled' | 'declined' = 'invite_cancelled') => Promise<{ ok, error?, raceDetected?, announcementError? }>",
+      "description": "Existing export (cancelInvitationImpl.ts), extended with one new optional trailing param, announcementKind, defaulted to 'invite_cancelled' so the pre-existing admin-initiated Cancel-Invite/Remove-Member flow (epic invite-rescind-and-member-removal) is byte-for-byte unchanged. When 'declined', emits `{type:'invite_lifecycle', event:'declined', pubkey}` (no `by` field) instead of `{type:'invite_cancelled', pubkey, by}` — reusing the SAME Remove-commit-then-announce machinery (ADR-010)."
+    },
+    {
+      "name": "Deps, MarmotGroupLike",
+      "signature": "export type Deps = {...}; export type MarmotGroupLike = {...}",
+      "description": "Two previously-unexported cancelInvitationImpl.ts types now exported (add-only, no shape change) so welcomeSubscription.ts's DeclineReceiveDeps can extend Deps structurally instead of duplicating its field list."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/welcomeSubscription.ts (markGroupHistorySynced/waitForGroupHistorySync per-group sync gate; runSerializedDeclineProcessing per-(groupId,pubkey) chain; applyDecline orchestration helper — all module-private)"
+  ],
+  "owned_data": [
+    "the INVITE_DECLINE_KIND dispatch branch's position in the gift-wrap dispatch chain",
+    "the module-level historySyncedGroupIds/historySyncWaiters per-group sync-gate state (session-lifetime, not persisted)",
+    "the module-level declineProcessingChains per-(groupId,pubkey) serialization state (session-lifetime, not persisted)"
+  ],
+  "dependencies_allowed": [
+    "./cancelInvitationImpl (isPendingMemberImpl, cancelPendingInvitationImpl, Deps type — the declared decline-a -> Remove reuse seam)",
+    "@/src/lib/marmot/pendingDirectInviteStorage's clearPendingDirectInvite (consumed only via DeclineReceiveDeps injection at the MarmotContext.tsx composition root, never imported directly into welcomeSubscription.ts or cancelInvitationImpl.ts)"
+  ],
+  "dependencies_forbidden": [
+    "decline-b's PendingInvitation storage internals (this story only consumes the DeclineGiftWrapPayload seam contract S5 already exports from the same file — it does not read/write PendingInvitation entries)",
+    "parse (parseStructured.ts) at the production-code level — the `declined` content is hand-built via JSON.stringify to the exact InviteLifecycleContent shape, verified against parseStructured only in this story's own round-trip binding TEST, never imported by welcomeSubscription.ts or cancelInvitationImpl.ts themselves",
+    "render, i18n, invite-producer, accept-producer, immutability-ui, immutability-receive"
+  ],
+  "external_ports": [
+    "app/src/context/MarmotContext.tsx's startWelcomeSubscription call site and its declineDeps object construction (getGroup/loadMemberProfiles/getGroupMembers/getPubkeyLeafNodeIndexes/Proposals/persistGroup/getStoredGroup/reloadGroups/markBackupDirty/selfPubkeyHex mirror cancelPendingInvitation's own existing dep-building pattern; sendAnnouncement and clearPendingDirectInvite are the two new capabilities). Necessary extension beyond this story's literal three-file list (mirrors S5-decline-b/architecture.json's identical precedent): no other file can supply a real Remove/announce/marker-clear capability into the background welcomeSubscription listener. No new logic is added at this call site — only dependency wiring, following the file's established dynamic-import-at-the-boundary convention."
+  ],
+  "events_emitted": [
+    "an application rumor `{type:'invite_lifecycle', event:'declined', pubkey:bHex}` into the referenced group, at most once per invitee/group, only after a Remove has been committed for that invitee"
+  ],
+  "events_consumed": [
+    "INVITE_DECLINE_KIND (21063) NIP-59 gift-wrapped rumor, the DeclineGiftWrapPayload seam S5/decline-b defines and sends"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/welcomeSubscription.test.ts",
+    "app/tests/unit/marmot/cancelInvitationImpl.test.ts"
+  ]
+}

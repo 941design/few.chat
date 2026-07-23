@@ -36,6 +36,9 @@ import InviteCancelledChatAnnouncement from '@/src/components/groups/InviteCance
 import LeaveChatAnnouncement from '@/src/components/groups/LeaveChatAnnouncement';
 import GroupRenamedChatAnnouncement from '@/src/components/groups/GroupRenamedChatAnnouncement';
 import MemberAdmittedChatAnnouncement from '@/src/components/groups/MemberAdmittedChatAnnouncement';
+import InviteLifecycleChatAnnouncement, {
+  resolveInviteLifecycleSubjectDisplay,
+} from '@/src/components/groups/InviteLifecycleChatAnnouncement';
 import ImageAttachmentButton from '@/src/components/groups/ImageAttachmentButton';
 import ImageMessageBubble from '@/src/components/groups/ImageMessageBubble';
 import { ATTACHMENTS_ENABLED } from '@/src/config/features';
@@ -145,6 +148,27 @@ type ChatBoxProps = {
    * surface — gate off, never thread markers through.
    */
   allowMessageActions?: boolean;
+  /**
+   * S7 (epic-group-invite-lifecycle): whether the current viewer is a group
+   * admin. Threaded from the group page's `adminPubkeys` single source of
+   * truth (`pages/groups.tsx`'s `isAdmin`) via `GroupChat`. Defaults to
+   * `false` — the DM/ContactChat surface has no admin concept and never
+   * passes this. Used to grant a moderation-only Delete on informative
+   * announcements (AC-IMMUT-3); never grants Edit.
+   */
+  isCurrentUserAdmin?: boolean;
+  /**
+   * Gate-remediation (S7, group-vs-DM scoping): whether this ChatBox instance
+   * is rendering a GROUP thread. Defaults to `false` — the DM/ContactChat
+   * surface never passes this, so it safely falls back to DM behavior. Only
+   * `GroupChat` passes `true`, unconditionally (a non-admin group viewer is
+   * still inside a group). Gates the entire announcement-family suppression
+   * in `canShowMessageActions`: without it, a DM's own `call_notice` (or any
+   * other announcement-shaped message) stays author-deletable/editable
+   * exactly as before S7 — groups have admins and a shared, tamper-evident
+   * announcement history; 1:1 DMs have neither.
+   */
+  isGroupContext?: boolean;
 };
 
 export default function ChatBox({
@@ -164,6 +188,8 @@ export default function ChatBox({
   handleDeleteMessage,
   handleEditMessage,
   allowMessageActions = true,
+  isCurrentUserAdmin = false,
+  isGroupContext = false,
 }: ChatBoxProps) {
   // Attachments are being deprecated: ATTACHMENTS_ENABLED turns off every
   // compose-an-attachment entry point (button, drop, paste) on every surface.
@@ -505,6 +531,19 @@ export default function ChatBox({
         />
       );
     }
+    if (structured?.type === 'invite_lifecycle' && allowPollMessages) {
+      // Subject (invitee) resolves strictly from the payload pubkey. This
+      // variant's copy is subject-centric ("<name> was invited/joined/declined")
+      // and displays no author, so the message's protocol-level sender is
+      // never read here — there is no subject/author conflation path
+      // (AC-STRUCT-5).
+      const memberDisplay = resolveInviteLifecycleSubjectDisplay(
+        structured.pubkey,
+        profileMap,
+        (pk) => truncateNpub(pubkeyToNpub(pk)),
+      );
+      return <InviteLifecycleChatAnnouncement event={structured.event} memberDisplay={memberDisplay} />;
+    }
     if (structured?.type === 'leave_intent' && allowPollMessages) {
       // Prefer the name carried in the announcement itself (the leaver's own
       // display name), so the row reads "<name> left the group" even when we
@@ -625,7 +664,7 @@ export default function ChatBox({
               // the epic's other seam guards (e.g. ContactChat's own-message auth
               // checks), which all `.toLowerCase()` both sides before comparing.
               const isSelf = msg.senderPubkey.toLowerCase() === pubkey.toLowerCase();
-              const showActions = canShowMessageActions(msg, pubkey, allowMessageActions);
+              const showActions = canShowMessageActions(msg, pubkey, allowMessageActions, isCurrentUserAdmin, isGroupContext);
               const displayName = getDisplayName(msg.senderPubkey);
               const avatarImage = profileMap[msg.senderPubkey]?.avatar?.imageUrl;
               const avatarInitial = getAvatarInitial(msg.senderPubkey);

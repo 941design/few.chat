@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { webcrypto } from 'node:crypto';
 
@@ -43,11 +43,20 @@ vi.mock('@/src/lib/ndkClient', () => ({
   fetchEventsWithTimeout: (...args: unknown[]) => mockFetchEventsWithTimeout(...args),
 }));
 
-vi.mock('@nostr-dev-kit/ndk', () => ({
-  NDKRelaySet: {
-    fromRelayUrls: (_relays: string[], _ndk: unknown) => 'mock-relay-set',
-  },
-}));
+// S5's sendDeclineGiftWrap dynamically imports NDKEvent from this same
+// package, so the mock factory must preserve the real module (via
+// importOriginal) and only override NDKRelaySet — a full replacement would
+// make `const { NDKEvent } = await import('@nostr-dev-kit/ndk')` resolve to
+// `undefined`, and `new NDKEvent(...)` would throw "not a constructor".
+vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@nostr-dev-kit/ndk')>();
+  return {
+    ...actual,
+    NDKRelaySet: {
+      fromRelayUrls: (_relays: string[], _ndk: unknown) => 'mock-relay-set',
+    },
+  };
+});
 
 // EpochResolver is statically imported by welcomeSubscription.ts; mock it so the
 // test doesn't need a real MarmotGroup with event-emitter shape. ingestEvent is a
@@ -61,14 +70,25 @@ vi.mock('@/src/lib/marmot/epochResolver', () => ({
   },
 }));
 
-import { unwrapGiftWrap, subscribeToGroupMessages, subscribeToWelcomes } from '@/src/lib/marmot/welcomeSubscription';
+import {
+  unwrapGiftWrap,
+  subscribeToGroupMessages,
+  subscribeToWelcomes,
+  declinePendingInvitation,
+  INVITE_DECLINE_KIND,
+  type DeclineReceiveDeps,
+} from '@/src/lib/marmot/welcomeSubscription';
+import { parseStructured } from '@/src/lib/marmot/parseStructured';
+import { STORAGE_KEYS } from '@/src/types';
 import { generateSecretKey, getPublicKey, getEventHash, verifyEvent } from 'nostr-tools/pure';
 import { bytesToHex } from 'nostr-tools/utils';
 import { createRumor, createSeal, createWrap } from 'nostr-tools/nip59';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { encodeCard } from '@/src/lib/contactCard';
 import { sealAndWrap } from '@/src/lib/directMessages';
+import * as directMessagesModule from '@/src/lib/directMessages';
 import { hexToBytes } from '@/src/lib/nostrKeys';
+import { NDKEvent } from '@nostr-dev-kit/ndk';
 import { buildJoinRequestRumor, buildGiftWrap as buildJoinRequestGiftWrap } from '@/src/lib/marmot/joinRequestSender';
 import { saveInviteLink, clearAllInviteLinks } from '@/src/lib/marmot/inviteLinkStorage';
 import { loadPendingJoinRequests, clearAllPendingJoinRequests } from '@/src/lib/marmot/joinRequestStorage';
@@ -1476,5 +1496,1384 @@ describe('subscribeToGroupMessages — cross-instance dedup (shared per-group se
 
     unsub1();
     unsub2();
+  });
+});
+
+// ─── S5: gift-wrapped decline send (epic-group-invite-lifecycle) ───────────
+//
+// AC-DECLINE-3/4/5/6/13. Real NIP-59 crypto throughout (never mocked) so
+// these tests prove genuine seal + ephemeral-key behavior, not a stub —
+// mirrors the established pattern in tests/unit/dmProfile/send.test.ts:
+// `vi.spyOn(NDKEvent.prototype, 'publish')` to intercept the outbound relay
+// call, and `vi.spyOn(directMessagesModule, 'sealAndWrap')` (call-through,
+// never mocked) to inspect the exact pre-encryption rumor.
+
+/** Capture the single NDKEvent published during a test, via publish() spy. */
+function captureNextDeclinePublish(): { get: () => NDKEvent | undefined } {
+  let published: NDKEvent | undefined;
+  vi.spyOn(NDKEvent.prototype, 'publish').mockImplementation(async function (this: NDKEvent) {
+    published = this;
+    return new Set() as never;
+  });
+  return { get: () => published };
+}
+
+function rawDeclineEventOf(
+  event: NDKEvent,
+): { kind: number; pubkey: string; tags: string[][]; content: string } {
+  return (event as unknown as {
+    rawEvent: () => { kind: number; pubkey: string; tags: string[][]; content: string };
+  }).rawEvent();
+}
+
+describe('INVITE_DECLINE_KIND', () => {
+  it('is 21063, distinct from every other reserved sentinel kind in this codebase', () => {
+    expect(INVITE_DECLINE_KIND).toBe(21063);
+    const otherReservedKinds = [
+      444, 5, 7, 9, 13, 14, 21059, 21060, 21061, 21062, 20602,
+      25050, 25051, 25052, 25053, 25054, 25055, 10, 11, 12, 30078, 30051, 30, 0,
+    ];
+    expect(otherReservedKinds).not.toContain(INVITE_DECLINE_KIND);
+  });
+});
+
+describe('declinePendingInvitation — gift-wrapped decline send (S5)', () => {
+  type DeclineTestEntry = {
+    id: string;
+    inviterPubkeyHex: string;
+    receivedAt: number;
+    welcomeEventJson: string;
+    groupId: string;
+    authenticated: boolean;
+  };
+
+  function makeDeclineEntry(overrides: Partial<DeclineTestEntry> = {}): DeclineTestEntry {
+    return {
+      id: 'decline-inv-1',
+      inviterPubkeyHex: 'a'.repeat(64),
+      receivedAt: Date.now(),
+      welcomeEventJson: '{"kind":444}',
+      groupId: 'decline-group-abc',
+      authenticated: true,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    mockListPendingInvitations.mockReset().mockReturnValue([]);
+    mockRemovePendingInvitation.mockReset();
+    mockEnqueuePendingInvitation.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('AC-DECLINE-3: authenticated:true sends exactly one sealAndWrap call addressed to the inviter, inner rumor kind INVITE_DECLINE_KIND, content exactly {groupId, pubkey}', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex, groupId: 'group-xyz-123' });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    captureNextDeclinePublish();
+    const sealAndWrapSpy = vi.spyOn(directMessagesModule, 'sealAndWrap');
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    expect(sealAndWrapSpy).toHaveBeenCalledTimes(1);
+    const [rumorArg, recipientArg] = sealAndWrapSpy.mock.calls[0];
+    expect(recipientArg).toBe(inviter.pubHex);
+    expect((rumorArg as { kind: number }).kind).toBe(INVITE_DECLINE_KIND);
+    const content = JSON.parse((rumorArg as { content: string }).content);
+    expect(content).toEqual({ groupId: 'group-xyz-123', pubkey: self.pubHex });
+  });
+
+  it("AC-DECLINE-3 (ephemeral key): the published gift wrap's outer pubkey is neither the sender's real key nor the inviter's — proves the outer envelope hides the real sender", async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    const capture = captureNextDeclinePublish();
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    const published = capture.get();
+    expect(published).toBeDefined();
+    const rawWrap = rawDeclineEventOf(published!);
+    expect(rawWrap.kind).toBe(1059);
+    expect(rawWrap.pubkey).not.toBe(self.pubHex);
+    expect(rawWrap.pubkey).not.toBe(inviter.pubHex);
+  });
+
+  it('AC-DECLINE-4: authenticated:false skips the send entirely — sealAndWrap and publish are never called', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex, authenticated: false });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    vi.spyOn(NDKEvent.prototype, 'publish');
+    const sealAndWrapSpy = vi.spyOn(directMessagesModule, 'sealAndWrap');
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    expect(sealAndWrapSpy).not.toHaveBeenCalled();
+    expect(NDKEvent.prototype.publish).not.toHaveBeenCalled();
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('AC-DECLINE-4: sendKeys omitted also skips the send entirely, even when the entry is authenticated', async () => {
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex, authenticated: true });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    vi.spyOn(NDKEvent.prototype, 'publish');
+    const sealAndWrapSpy = vi.spyOn(directMessagesModule, 'sealAndWrap');
+
+    await declinePendingInvitation(entry.id);
+
+    expect(sealAndWrapSpy).not.toHaveBeenCalled();
+    expect(NDKEvent.prototype.publish).not.toHaveBeenCalled();
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('gate-remediation (severity 2): authenticated:true but groupId is empty (degraded pre-join read / legacy record) skips the send entirely — sealAndWrap and publish are never called — while local removal STILL happens', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex, authenticated: true, groupId: '' });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    vi.spyOn(NDKEvent.prototype, 'publish');
+    const sealAndWrapSpy = vi.spyOn(directMessagesModule, 'sealAndWrap');
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    expect(sealAndWrapSpy).not.toHaveBeenCalled();
+    expect(NDKEvent.prototype.publish).not.toHaveBeenCalled();
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('AC-DECLINE-5(a): authenticated:true, send succeeds -> removePendingInvitation is called', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    captureNextDeclinePublish();
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('AC-DECLINE-5(b): authenticated:true, the relay publish rejects -> removePendingInvitation is STILL called and no error propagates out of declinePendingInvitation', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    vi.spyOn(NDKEvent.prototype, 'publish').mockRejectedValue(new Error('relay offline'));
+
+    await expect(
+      declinePendingInvitation(entry.id, {
+        ndk: {} as never,
+        selfPubkeyHex: self.pubHex,
+        selfPrivateKeyHex: self.privHex,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('AC-DECLINE-5(b): authenticated:true, sealAndWrap itself throws -> removePendingInvitation is STILL called and no error propagates', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    vi.spyOn(directMessagesModule, 'sealAndWrap').mockRejectedValue(new Error('seal failed'));
+
+    await expect(
+      declinePendingInvitation(entry.id, {
+        ndk: {} as never,
+        selfPubkeyHex: self.pubHex,
+        selfPrivateKeyHex: self.privHex,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('AC-DECLINE-5(c): authenticated:false -> removePendingInvitation is still called (unconditional local cleanup)', async () => {
+    const entry = makeDeclineEntry({ authenticated: false });
+    mockListPendingInvitations.mockReturnValue([entry]);
+
+    await declinePendingInvitation(entry.id);
+
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith(entry.id);
+  });
+
+  it('AC-DECLINE-6: exactly one publish-shaped call fires (the single gift-wrap), and the only pendingInvitations interactions are the lookup + the unconditional removal — no group-channel or MLS-Add call, no accidental re-enqueue', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    captureNextDeclinePublish();
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    expect(NDKEvent.prototype.publish).toHaveBeenCalledTimes(1);
+    expect(mockListPendingInvitations).toHaveBeenCalledTimes(1);
+    expect(mockRemovePendingInvitation).toHaveBeenCalledTimes(1);
+    expect(mockEnqueuePendingInvitation).not.toHaveBeenCalled();
+  });
+
+  it('AC-DECLINE-13: the pre-encryption plaintext has EXACTLY the keys groupId and pubkey — no other field, no profile metadata (privacy-invariant-critical)', async () => {
+    const self = makeKeypair();
+    const inviter = makeKeypair();
+    const entry = makeDeclineEntry({ inviterPubkeyHex: inviter.pubHex, groupId: 'exact-group-id-999' });
+    mockListPendingInvitations.mockReturnValue([entry]);
+    captureNextDeclinePublish();
+    const sealAndWrapSpy = vi.spyOn(directMessagesModule, 'sealAndWrap');
+
+    await declinePendingInvitation(entry.id, {
+      ndk: {} as never,
+      selfPubkeyHex: self.pubHex,
+      selfPrivateKeyHex: self.privHex,
+    });
+
+    expect(sealAndWrapSpy).toHaveBeenCalledTimes(1);
+    const rumorArg = sealAndWrapSpy.mock.calls[0][0] as { content: string };
+    const parsedContent = JSON.parse(rumorArg.content);
+    // Inspecting the ACTUAL pre-encryption object, not a decryption round-trip
+    // (a round-trip-only check could miss an over-inclusive plaintext that
+    // decryption incidentally reconstructs only 2 of N fields from).
+    expect(Object.keys(parsedContent).sort()).toEqual(['groupId', 'pubkey']);
+    expect(parsedContent).toEqual({ groupId: 'exact-group-id-999', pubkey: self.pubHex });
+  });
+
+  it('entry-not-found: declinePendingInvitation(id, sendKeys) with no matching entry -> no send attempted, removePendingInvitation is still called (idempotent removal)', async () => {
+    mockListPendingInvitations.mockReturnValue([]);
+    vi.spyOn(NDKEvent.prototype, 'publish');
+    const sealAndWrapSpy = vi.spyOn(directMessagesModule, 'sealAndWrap');
+
+    await declinePendingInvitation('nonexistent-decline-id', {
+      ndk: {} as never,
+      selfPubkeyHex: 'a'.repeat(64),
+      selfPrivateKeyHex: 'b'.repeat(64),
+    });
+
+    expect(sealAndWrapSpy).not.toHaveBeenCalled();
+    expect(NDKEvent.prototype.publish).not.toHaveBeenCalled();
+    expect(mockRemovePendingInvitation).toHaveBeenCalledWith('nonexistent-decline-id');
+  });
+});
+
+// ─── S6: A-side decline RECEIVE (epic-group-invite-lifecycle) ──────────────
+//
+// AC-DECLINE-7/8/9/10/11/12. Real NIP-59 crypto for the gift wrap itself
+// (mirrors the S3 authenticated-unwrap describe block above); the Remove/
+// announce/marker-clear capability is injected via DeclineReceiveDeps, built
+// with the SAME shape convention as cancelInvitationImpl.test.ts's makeDeps()
+// — a stateful mock so ordering/serialization tests can observe genuine
+// tree-state mutation across a commit(), not a static fixture that would
+// make a missing serialization fix invisible.
+
+describe('subscribeToWelcomes — decline receive (S6)', () => {
+  let localStorageStore: Record<string, string> = {};
+
+  beforeEach(() => {
+    localStorageStore = {};
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => localStorageStore[key] ?? null,
+      setItem: (key: string, value: string) => { localStorageStore[key] = value; },
+      removeItem: (key: string) => { delete localStorageStore[key]; },
+    });
+    mockEnqueuePendingInvitation.mockReset();
+    mockCountPendingInvitations.mockReset().mockReturnValue(1);
+  });
+
+  function makeNdkWithEventCapture() {
+    let capturedHandler: ((event: unknown) => Promise<void>) | null = null;
+    const mockSubInstance = {
+      on: vi.fn((eventName: string, handler: (event: unknown) => Promise<void>) => {
+        if (eventName === 'event') capturedHandler = handler;
+      }),
+      stop: vi.fn(),
+    };
+    const mockNdk = { subscribe: vi.fn(() => mockSubInstance) };
+    const fireEvent = (ndkEvent: unknown): Promise<void> => {
+      if (!capturedHandler) throw new Error('Event handler not yet installed');
+      return capturedHandler(ndkEvent);
+    };
+    return { mockNdk, fireEvent };
+  }
+
+  /**
+   * Marks `groupId` as historical-synced THIS session (a real
+   * subscribeToGroupMessages call, mocked to report an immediate complete
+   * fetch) — the same mechanism AC-DECLINE-12's own dedicated deferral test
+   * exercises directly. Every decline test EXCEPT that one needs its
+   * referenced group pre-synced, since applyDecline unconditionally awaits
+   * waitForGroupHistorySync(groupId) before doing anything else — otherwise
+   * the fireEvent() call below would hang forever (this IS the epoch-safety
+   * guarantee AC-DECLINE-12 requires; it is not a test-only shortcut).
+   */
+  async function markGroupSyncedForTest(groupId: string): Promise<void> {
+    mockFetchEventsWithTimeout.mockReset();
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(), timedOut: false });
+    const ndk = { subscribe: vi.fn(() => ({ on: vi.fn(), stop: vi.fn() })) };
+    const unsub = await subscribeToGroupMessages(
+      groupId,
+      ['wss://r'],
+      { groupData: { nostrGroupId: new Uint8Array(32).fill(0x01) } } as never,
+      ndk as never,
+    );
+    unsub();
+  }
+
+  /**
+   * Genuine NIP-59 gift wrap carrying an INVITE_DECLINE_KIND rumor, for a
+   * group ALREADY marked historical-synced this session (see
+   * markGroupSyncedForTest) — the common case for every decline test except
+   * AC-DECLINE-12's own dedicated deferral test, which builds its wrap via
+   * buildGenuineWrap directly so its group stays deliberately unsynced.
+   */
+  async function buildDeclineWrap(params: {
+    invitee: { priv: Uint8Array; pubHex: string };
+    inviterPubHex: string;
+    groupId: string;
+  }) {
+    await markGroupSyncedForTest(params.groupId);
+    return buildGenuineWrap({
+      sender: params.invitee,
+      recipientPubHex: params.inviterPubHex,
+      kind: INVITE_DECLINE_KIND,
+      content: JSON.stringify({ groupId: params.groupId, pubkey: params.invitee.pubHex }),
+    });
+  }
+
+  /**
+   * A manually-resolved `{promise, resolve}` pair. Used in place of a fixed
+   * `setTimeout` to make cross-call interleaving in the decline-receive
+   * concurrency tests below deterministic: the test itself decides exactly
+   * when a gated async op is allowed to proceed, instead of hoping a wall-
+   * clock margin (e.g. "8ms after a 30ms delay") holds up under CI load.
+   */
+  function createDeferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  /**
+   * A stateful DeclineReceiveDeps fixture: `members` is a real mutable array
+   * mutated by `commit()` (removing the target pubkey), so a serialization
+   * regression (two concurrent declines both observing "still pending"
+   * before either's commit lands) is genuinely observable rather than
+   * masked by a static fixture.
+   */
+  function makeDeclineTestDeps(params: {
+    initialMembers: string[];
+    profiledPubkeys?: string[];
+    selfPubkeyHex: string;
+    commitShouldThrow?: boolean;
+    /**
+     * When provided, `commit()` awaits this promise (a manually-resolved
+     * Deferred — see `createDeferred`) after being invoked but BEFORE
+     * mutating `members`. The test drives interleaving explicitly by
+     * resolving it at the point it chooses, rather than via a fixed
+     * wall-clock delay. Pair with the returned `commitEntered` promise
+     * (resolves the instant commit() is first invoked) to know precisely
+     * when commit is parked awaiting this gate.
+     */
+    commitGate?: Promise<void>;
+  }) {
+    let members = [...params.initialMembers];
+    const callOrder: string[] = [];
+    // Tracks whichever pubkey cancelPendingInvitationImpl most recently asked
+    // for leaf indexes — it always does so for the target pubkey immediately
+    // before commit() — so the stub commit below knows exactly which member
+    // to drop, without hardcoding "the invitee" independent of member-list
+    // shape.
+    let lastQueriedPubkey: string | null = null;
+
+    // Resolves the instant commit() is FIRST invoked (idempotent on later
+    // invocations) — a deterministic "commit has been reached and is now
+    // parked awaiting commitGate" checkpoint for callers to await, instead
+    // of guessing how long the preceding history-sync/tree-gate awaits take.
+    const commitEnteredDeferred = createDeferred<void>();
+
+    const getGroupMembers = vi.fn(() => members);
+    const loadMemberProfiles = vi.fn(async () =>
+      (params.profiledPubkeys ?? []).map((pubkeyHex) => ({
+        pubkeyHex,
+        groupId: 'g',
+        nickname: 'x',
+        updatedAt: 0,
+      })),
+    );
+    const getPubkeyLeafNodeIndexes = vi.fn((_state: unknown, pubkey: string) => {
+      lastQueriedPubkey = pubkey;
+      return members.some((m) => m.toLowerCase() === pubkey.toLowerCase()) ? [0] : [];
+    });
+    const mockCommit = vi.fn(async (_opts: { extraProposals: Array<{ proposalType: number; remove?: { removed: number } }> }) => {
+      callOrder.push('commit');
+      commitEnteredDeferred.resolve();
+      if (params.commitGate) {
+        // Deterministic interleaving point: pauses here until the test
+        // explicitly releases the gate, instead of a wall-clock delay. This
+        // is the window in which a MISSING per-(groupId,pubkey)
+        // serialization fix would manifest (both calls observing "still
+        // pending" before either's commit mutates state) — now controlled
+        // by the test rather than dependent on incidental timing.
+        await params.commitGate;
+      }
+      if (params.commitShouldThrow) {
+        throw new Error('commit failed');
+      }
+      if (lastQueriedPubkey) {
+        const removed = lastQueriedPubkey;
+        members = members.filter((m) => m.toLowerCase() !== removed.toLowerCase());
+      }
+    });
+    const mockGroup = {
+      state: {},
+      groupData: { adminPubkeys: [params.selfPubkeyHex] },
+      commit: mockCommit,
+    };
+    const getGroup = vi.fn(async () => mockGroup);
+    const persistGroup = vi.fn().mockResolvedValue(undefined);
+    const reloadGroups = vi.fn().mockResolvedValue(undefined);
+    const markBackupDirty = vi.fn();
+    const sendAnnouncement = vi.fn(async (_groupId: string, _content: string) => {
+      callOrder.push('post');
+    });
+    const clearPendingDirectInvite = vi.fn(async (_groupId: string, _pubkey: string) => {
+      callOrder.push('marker-clear');
+    });
+
+    const deps: DeclineReceiveDeps = {
+      getGroup,
+      loadMemberProfiles,
+      getGroupMembers,
+      getPubkeyLeafNodeIndexes,
+      Proposals: { proposeUpdateMetadata: vi.fn((opts: object) => ({ type: 'meta', ...opts })) },
+      persistGroup,
+      getStoredGroup: () => ({ id: 'g', name: 'G', createdAt: 0, relays: [], memberPubkeys: members }),
+      reloadGroups,
+      markBackupDirty,
+      selfPubkeyHex: params.selfPubkeyHex,
+      sendAnnouncement,
+      clearPendingDirectInvite,
+    };
+
+    return {
+      deps,
+      mockCommit,
+      sendAnnouncement,
+      clearPendingDirectInvite,
+      getGroup,
+      callOrder,
+      getMembers: () => members,
+      commitEntered: commitEnteredDeferred.promise,
+    };
+  }
+
+  // welcomeSubscription.ts reads/writes STORAGE_KEYS.processedGiftWraps — the
+  // real key name, imported from the same source of truth the production
+  // code uses (never a hand-typed string literal duplicate).
+  const STORAGE_SEEN_KEY = STORAGE_KEYS.processedGiftWraps;
+
+  function seenIds(): string[] {
+    try {
+      return JSON.parse(localStorageStore[STORAGE_SEEN_KEY] ?? '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  // ── AC-DECLINE-7: routing ─────────────────────────────────────────────────
+
+  it('AC-DECLINE-7: a decline-kind rumor is routed to the decline branch, never to Welcome or join-request handling', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId: 'group-routing-1' });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const onJoinRequestReceived = vi.fn();
+    const mockMarmotClient = { joinGroupFromWelcome: vi.fn() };
+
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      mockMarmotClient as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      onJoinRequestReceived,
+      () => [invitee.pubHex],
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-routing-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockEnqueuePendingInvitation).not.toHaveBeenCalled();
+    expect(onJoinRequestReceived).not.toHaveBeenCalled();
+    expect(mockMarmotClient.joinGroupFromWelcome).not.toHaveBeenCalled();
+    // ...and it DID reach the decline machinery.
+    expect(deps.getGroup).toHaveBeenCalled();
+
+    unsub();
+  });
+
+  it('AC-DECLINE-7 (companion): a genuine kind-444 Welcome does NOT fall into the decline branch (declineDeps untouched)', async () => {
+    const sender = makeKeypair();
+    const recipient = makeKeypair();
+    const { wrap } = buildGenuineWrap({
+      sender,
+      recipientPubHex: recipient.pubHex,
+      kind: 444,
+      content: 'welcome-payload',
+    });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [sender.pubHex], selfPubkeyHex: recipient.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const mockMarmotClient = { joinGroupFromWelcome: vi.fn() };
+
+    const unsub = await subscribeToWelcomes(
+      recipient.pubHex,
+      mockMarmotClient as never,
+      mockNdk as never,
+      createPrivateKeySigner(recipient.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'welcome-not-decline-1', pubkey: wrap.pubkey, content: wrap.content });
+
+    expect(mockEnqueuePendingInvitation).toHaveBeenCalledTimes(1);
+    expect(deps.getGroup).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+
+    unsub();
+  });
+
+  // ── AC-DECLINE-8: seal authentication gates everything ──────────────────
+
+  it('AC-DECLINE-8: a decline whose seal fails authentication produces zero side effects (no Remove, no post, no marker clear)', async () => {
+    const attacker = makeKeypair();
+    const victim = makeKeypair();
+    const admin = makeKeypair();
+    // Genuinely-signed seal (attacker's real key), but the rumor forges a
+    // different claimed sender — the realistic AC-AUTH tamper shape used
+    // throughout this file, not merely malformed JSON.
+    const { wrap } = buildForgedRumorPubkeyWrap({
+      attacker,
+      claimedPubHex: victim.pubHex,
+      recipientPubHex: admin.pubHex,
+      kind: INVITE_DECLINE_KIND,
+      content: JSON.stringify({ groupId: 'group-auth-fail', pubkey: victim.pubHex }),
+    });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [attacker.pubHex, victim.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-auth-fail-1', pubkey: wrap.pubkey, content: wrap.content });
+
+    expect(deps.getGroup).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
+    expect(seenIds()).not.toContain('decline-auth-fail-1');
+
+    unsub();
+  });
+
+  // ── AC-DECLINE-9: tree-membership pending-member gate ────────────────────
+
+  it('AC-DECLINE-9: fires (Remove+post) when the seal author is a genuinely pending member (in-tree, no profile)', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-pending-fires';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex, admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-pending-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(deps.sendAnnouncement).toHaveBeenCalledTimes(1);
+    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(groupId, invitee.pubHex);
+    expect(seenIds()).toContain('decline-pending-1');
+
+    unsub();
+  });
+
+  it('AC-DECLINE-9: no-op when the seal author already joined (has a MemberProfile)', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId: 'group-already-joined' });
+    const { deps, mockCommit } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      profiledPubkeys: [invitee.pubHex], // has a profile -> confirmed member, not pending
+      selfPubkeyHex: admin.pubHex,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-already-joined-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
+
+    unsub();
+  });
+
+  it('AC-DECLINE-9: no-op when the seal author was never a member of the referenced group', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId: 'group-never-member' });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-never-member-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+
+    unsub();
+  });
+
+  it('AC-DECLINE-9: the tree-membership comparison is case-insensitive — an UPPERCASE-stored member list still matches the (always-lowercase) authenticated seal pubkey', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-mixed-case';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    // Member list stored with an UPPERCASE variant of the invitee's pubkey —
+    // isPendingMemberImpl's internal .toLowerCase() comparisons must still
+    // resolve this to "pending".
+    const { deps, mockCommit } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex.toUpperCase(), admin.pubHex],
+      selfPubkeyHex: admin.pubHex,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-mixed-case-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(deps.sendAnnouncement).toHaveBeenCalledTimes(1);
+
+    unsub();
+  });
+
+  // ── AC-DECLINE-10: DD-7 ordering ──────────────────────────────────────────
+
+  it('AC-DECLINE-10: performs Remove -> post -> marker-clear -> mark-seen, in that exact call order', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-ordering';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const { deps, callOrder } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex, admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-ordering-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(callOrder).toEqual(['commit', 'post', 'marker-clear']);
+    // mark-seen is a separate side channel (localStorage) — assert it landed
+    // AFTER the in-memory call-order sequence completed, by checking it's
+    // present only once the awaited fireEvent call has fully resolved.
+    expect(seenIds()).toContain('decline-ordering-1');
+
+    unsub();
+  });
+
+  it('AC-DECLINE-10: mark-seen has NOT happened while the sequence is still in flight (mid-flight snapshot, not merely end-state equality)', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-mid-flight';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const commitGate = createDeferred<void>();
+    const { deps, mockCommit, commitEntered } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      selfPubkeyHex: admin.pubHex,
+      commitGate: commitGate.promise,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    const pending = fireEvent({ id: 'decline-mid-flight-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+    // Deterministic checkpoint: resolves the instant commit() is invoked and
+    // parked awaiting `commitGate` — no wall-clock guess about how long the
+    // preceding history-sync/tree-gate awaits take.
+    await commitEntered;
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(seenIds()).not.toContain('decline-mid-flight-1');
+
+    // Release the gate: commit's mutation, the post, marker-clear, and
+    // mark-seen can now all proceed to completion.
+    commitGate.resolve();
+    await pending;
+    expect(seenIds()).toContain('decline-mid-flight-1');
+
+    unsub();
+  });
+
+  it('AC-DECLINE-10: an interruption BEFORE Remove completes (commit throws) leaves the gift wrap unmarked so it reprocesses on the next start', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-commit-throws';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const { deps, mockCommit } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      selfPubkeyHex: admin.pubHex,
+      commitShouldThrow: true,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-commit-throws-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
+    expect(seenIds()).not.toContain('decline-commit-throws-1');
+
+    unsub();
+  });
+
+  // ── AC-DECLINE-11: duplicate/replay after removal is a no-op ─────────────
+
+  it('AC-DECLINE-11: the SAME gift-wrap event re-delivered after the pre-existing top-level seen-guard already marked it is a pure no-op (no second Remove/post)', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-replay-same-wrap';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex, admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    const ndkEvent = { id: 'decline-replay-same-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content };
+    await fireEvent(ndkEvent);
+    await fireEvent(ndkEvent); // identical outer eventId — the SAME wrap, redelivered
+
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(deps.sendAnnouncement).toHaveBeenCalledTimes(1);
+
+    unsub();
+  });
+
+  it('AC-DECLINE-11: a decline for an invitee already removed by a PRIOR (distinct-id) decline is a clean no-op — corollary of the tree-gate, not a separate dedup mechanism', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-already-removed';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex, admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    // First decline: processed to completion, invitee Removed (tree state
+    // mutated by the stateful mock's commit()).
+    await fireEvent({ id: 'decline-already-removed-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+
+    // A SECOND, distinct-id delivery of the identical decline content,
+    // arriving strictly AFTER the first has fully completed.
+    await fireEvent({ id: 'decline-already-removed-2', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).toHaveBeenCalledTimes(1); // still just the one
+    expect(deps.sendAnnouncement).toHaveBeenCalledTimes(1); // no second post
+
+    unsub();
+  });
+
+  it('carry-forward (S5 review): TWO GENUINELY DISTINCT decline wraps from B, dispatched CONCURRENTLY, converge to exactly ONE Remove + ONE declined post', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-concurrent-double-decline';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    // A manually-gated commit deferred, not a fixed wall-clock delay: without
+    // per-(groupId,pubkey) serialization, both concurrent calls' tree-gate
+    // checks would read "still pending" before either commit's state
+    // mutation lands. Holding commit() open on `commitGate` until the test
+    // explicitly releases it makes that window deterministic — the FIRST
+    // decline is guaranteed to still be parked inside commit() (its
+    // serialization-chain entry still live) when the SECOND is dispatched.
+    const commitGate = createDeferred<void>();
+    const { deps, mockCommit, commitEntered } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      selfPubkeyHex: admin.pubHex,
+      commitGate: commitGate.promise,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    // B double-clicked Decline: two independently gift-wrapped (distinct
+    // outer relay event ids) deliveries of the same underlying decline,
+    // fired WITHOUT awaiting either before starting the next (genuine
+    // concurrency, not sequential redelivery).
+    const first = fireEvent({ id: 'decline-concurrent-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+    const second = fireEvent({ id: 'decline-concurrent-2', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+    // Deterministic checkpoint: at least one of the two has reached commit()
+    // and is now parked awaiting the gate — release it only now, so the
+    // sibling's tree-gate check (whichever one it is) had every opportunity
+    // to run first.
+    await commitEntered;
+    commitGate.resolve();
+    await Promise.all([first, second]);
+
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(deps.sendAnnouncement).toHaveBeenCalledTimes(1);
+    expect(deps.clearPendingDirectInvite).toHaveBeenCalledTimes(1);
+
+    unsub();
+  });
+
+  // ── Carry-forward (S5 review): empty/unknown groupId ─────────────────────
+
+  it('carry-forward (S5 review): an empty groupId is a clean no-op — no Remove, no post, no marker clear, no throw', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const { wrap } = buildGenuineWrap({
+      sender: invitee,
+      recipientPubHex: admin.pubHex,
+      kind: INVITE_DECLINE_KIND,
+      content: JSON.stringify({ groupId: '', pubkey: invitee.pubHex }),
+    });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex, admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await expect(
+      fireEvent({ id: 'decline-empty-groupid-1', pubkey: wrap.pubkey, content: wrap.content }),
+    ).resolves.toBeUndefined();
+
+    expect(deps.getGroup).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
+    // FIX B: an empty/unknown groupId is DEFINITIVE (this wrap can never
+    // resolve to a real group) — mark it seen so it isn't redecrypted and
+    // reprocessed on every app start.
+    expect(seenIds()).toContain('decline-empty-groupid-1');
+
+    unsub();
+  });
+
+  // ── Gate-remediation (post-review): FIX A / FIX B / FIX C ────────────────
+  //
+  // The unifying design: mark-gift-wrap-seen keys on TERMINAL vs RETRYABLE,
+  // not on "was anything applied". See DeclineOutcome's doc comment in
+  // welcomeSubscription.ts.
+
+  it('FIX A: Remove succeeds but the `declined` post throws — wrap IS marked seen, B IS removed, marker cleared, and it does NOT reprocess on redelivery (best-effort announcement)', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-post-fails';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    const { deps, mockCommit, getMembers } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      selfPubkeyHex: admin.pubHex,
+    });
+    // The Remove commits fine; only the best-effort `declined` post throws.
+    deps.sendAnnouncement = vi.fn(async () => {
+      throw new Error('relay unreachable');
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-post-fails-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(getMembers()).not.toContain(invitee.pubHex);
+    expect(deps.clearPendingDirectInvite).toHaveBeenCalledTimes(1);
+    expect(seenIds()).toContain('decline-post-fails-1');
+
+    // Redelivery of the identical (now-marked-seen) wrap must NOT reprocess
+    // — no second Remove attempt, no retry subsystem.
+    await fireEvent({ id: 'decline-post-fails-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+
+    unsub();
+  });
+
+  it('FIX B: a terminal no-op (B already joined) marks the gift wrap seen — closes the unbounded reprocessing churn', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId: 'group-terminal-noop-seen' });
+    const { deps, mockCommit } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      profiledPubkeys: [invitee.pubHex], // already joined -> confirmed, not pending
+      selfPubkeyHex: admin.pubHex,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-terminal-noop-seen-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(seenIds()).toContain('decline-terminal-noop-seen-1');
+
+    unsub();
+  });
+
+  it('FIX B: RE-INVITE REACTIVATION — a stale decline (terminal no-op on first arrival, while B was not pending) cannot spuriously Remove B after A later re-invites B to the SAME group', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-reinvite-reactivation';
+    const wrap = await buildDeclineWrap({ invitee, inviterPubHex: admin.pubHex, groupId });
+    // First arrival: B is already a CONFIRMED member (has a profile) — this
+    // decline has no effect the first time it is seen.
+    const { deps, mockCommit } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      profiledPubkeys: [invitee.pubHex],
+      selfPubkeyHex: admin.pubHex,
+    });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    // First arrival: terminal no-op — but, per FIX B, marked seen (unlike
+    // the pre-fix behavior, which left it unmarked and churnable).
+    await fireEvent({ id: 'decline-reinvite-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(seenIds()).toContain('decline-reinvite-1');
+
+    // A re-invites B to the SAME group: B goes back to "in-tree, no
+    // profile" (pending) — simulated by dropping B's profile.
+    deps.loadMemberProfiles = vi.fn(async () => []);
+
+    // The relay redelivers the IDENTICAL (already-marked-seen) decline wrap.
+    // If FIX B had not marked it seen at first arrival, this redelivery would
+    // now pass the tree-gate (B is freshly pending again) and spuriously
+    // Remove the just-re-invited B + post a false `declined`.
+    await fireEvent({ id: 'decline-reinvite-1', pubkey: wrap.wrap.pubkey, content: wrap.wrap.content });
+
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+
+    unsub();
+  });
+
+  it('FIX C: A does not hold the referenced group at all — terminal no-op immediately, marked seen, with NO dangling history-sync waiter (the fireEvent call resolves promptly instead of hanging)', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-a-does-not-hold';
+    // Deliberately built via buildGenuineWrap directly (NOT buildDeclineWrap)
+    // so this groupId is never historical-synced this session either — the
+    // whole point is that the FIX C existence guard must resolve BEFORE ever
+    // reaching the sync waiter. If it did not, this fireEvent would hang
+    // forever (the group is never going to sync) and the test would time out.
+    const { wrap } = buildGenuineWrap({
+      sender: invitee,
+      recipientPubHex: admin.pubHex,
+      kind: INVITE_DECLINE_KIND,
+      content: JSON.stringify({ groupId, pubkey: invitee.pubHex }),
+    });
+    const { deps, mockCommit } = makeDeclineTestDeps({
+      initialMembers: [invitee.pubHex, admin.pubHex],
+      selfPubkeyHex: admin.pubHex,
+    });
+    // A does not currently hold this group at all.
+    deps.getGroup = vi.fn(async () => null);
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    await fireEvent({ id: 'decline-a-not-holding-1', pubkey: wrap.pubkey, content: wrap.content });
+
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
+    expect(seenIds()).toContain('decline-a-not-holding-1');
+
+    unsub();
+  });
+
+  // ── AC-DECLINE-12: epoch-safe deferral until onHistorySynced ─────────────
+
+  it('AC-DECLINE-12: a decline for a not-yet-synced group defers (no Remove/post/mark-seen) until that group historical-syncs, then runs the full DD-7 sequence', async () => {
+    const invitee = makeKeypair();
+    const admin = makeKeypair();
+    const groupId = 'group-deferred-until-synced-unique';
+    // Deliberately built via buildGenuineWrap directly (NOT the
+    // auto-syncing buildDeclineWrap helper) — this test's whole point is
+    // that groupId has NOT been historical-synced yet.
+    const { wrap } = buildGenuineWrap({
+      sender: invitee,
+      recipientPubHex: admin.pubHex,
+      kind: INVITE_DECLINE_KIND,
+      content: JSON.stringify({ groupId, pubkey: invitee.pubHex }),
+    });
+    const { deps, mockCommit } = makeDeclineTestDeps({ initialMembers: [invitee.pubHex, admin.pubHex], selfPubkeyHex: admin.pubHex });
+
+    const { mockNdk, fireEvent } = makeNdkWithEventCapture();
+    const unsub = await subscribeToWelcomes(
+      admin.pubHex,
+      { joinGroupFromWelcome: vi.fn() } as never,
+      mockNdk as never,
+      createPrivateKeySigner(admin.privHex),
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    // Fire the decline BEFORE the referenced group has ever historical-synced
+    // this session. Deliberately NOT awaited to completion (it is pending on
+    // the sync gate) — awaiting it here would hang the test.
+    const pending = fireEvent({ id: 'decline-deferred-1', pubkey: wrap.pubkey, content: wrap.content });
+    // Let the handler run up to (and start awaiting) the sync gate.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // (c) genuinely queued, not fire-and-forgotten: still nothing has
+    // happened after several ticks with sync never having fired.
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(seenIds()).not.toContain('decline-deferred-1');
+
+    // Now the SAME group's historical sync completes (a real
+    // subscribeToGroupMessages call for this groupId, mocked to report an
+    // immediate, complete historical fetch).
+    mockFetchEventsWithTimeout.mockReset();
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(), timedOut: false });
+    const groupMockNdk = { subscribe: vi.fn(() => ({ on: vi.fn(), stop: vi.fn() })) };
+    const groupUnsub = await subscribeToGroupMessages(
+      groupId,
+      ['wss://r'],
+      { groupData: { nostrGroupId: new Uint8Array(32).fill(0x77) } } as never,
+      groupMockNdk as never,
+    );
+
+    // The deferred decline now resumes and completes the full DD-7 sequence.
+    await pending;
+
+    expect(mockCommit).toHaveBeenCalledTimes(1);
+    expect(deps.sendAnnouncement).toHaveBeenCalledTimes(1);
+    expect(deps.clearPendingDirectInvite).toHaveBeenCalledTimes(1);
+    expect(seenIds()).toContain('decline-deferred-1');
+
+    groupUnsub();
+    unsub();
+  });
+
+  // ── Round-trip binding: parseStructured recognizes the EXACT `declined`
+  //    shape cancelPendingInvitationImpl (reused by S6) emits ──────────────
+
+  it("round-trip binding: parseStructured recognizes the EXACT `declined` invite_lifecycle shape cancelPendingInvitationImpl emits", async () => {
+    const { cancelPendingInvitationImpl } = await import('@/src/lib/marmot/cancelInvitationImpl');
+    const invitee = 'b'.repeat(64);
+    const self = 'a'.repeat(64);
+    let emittedContent = '';
+    const mockCommit = vi.fn().mockResolvedValue(undefined);
+    const deps = {
+      getGroup: vi.fn().mockResolvedValue({
+        state: {},
+        groupData: { adminPubkeys: [self] },
+        commit: mockCommit,
+      }),
+      loadMemberProfiles: vi.fn().mockResolvedValue([]),
+      getGroupMembers: vi.fn().mockReturnValue([invitee, self]),
+      getPubkeyLeafNodeIndexes: vi.fn().mockReturnValue([0]),
+      Proposals: { proposeUpdateMetadata: vi.fn((opts: object) => ({ type: 'meta', ...opts })) },
+      persistGroup: vi.fn().mockResolvedValue(undefined),
+      getStoredGroup: vi.fn().mockReturnValue({ id: 'g', name: 'G', createdAt: 0, relays: [], memberPubkeys: [invitee, self] }),
+      reloadGroups: vi.fn().mockResolvedValue(undefined),
+      markBackupDirty: vi.fn(),
+      selfPubkeyHex: self,
+    };
+
+    await cancelPendingInvitationImpl(
+      deps,
+      'g',
+      invitee,
+      async (content) => { emittedContent = content; },
+      'declined',
+    );
+
+    const parsed = parseStructured(emittedContent);
+    expect(parsed).toEqual({ type: 'invite_lifecycle', event: 'declined', pubkey: invitee });
+  });
+
+  it("`declined` content is EXACTLY {type, event, pubkey} — no `by` field (unlike invite_cancelled)", async () => {
+    const { cancelPendingInvitationImpl } = await import('@/src/lib/marmot/cancelInvitationImpl');
+    const invitee = 'c'.repeat(64);
+    const self = 'd'.repeat(64);
+    let emittedContent = '';
+    const deps = {
+      getGroup: vi.fn().mockResolvedValue({
+        state: {},
+        groupData: { adminPubkeys: [self] },
+        commit: vi.fn().mockResolvedValue(undefined),
+      }),
+      loadMemberProfiles: vi.fn().mockResolvedValue([]),
+      getGroupMembers: vi.fn().mockReturnValue([invitee, self]),
+      getPubkeyLeafNodeIndexes: vi.fn().mockReturnValue([0]),
+      Proposals: { proposeUpdateMetadata: vi.fn((opts: object) => ({ type: 'meta', ...opts })) },
+      persistGroup: vi.fn().mockResolvedValue(undefined),
+      getStoredGroup: vi.fn().mockReturnValue({ id: 'g', name: 'G', createdAt: 0, relays: [], memberPubkeys: [invitee, self] }),
+      reloadGroups: vi.fn().mockResolvedValue(undefined),
+      markBackupDirty: vi.fn(),
+      selfPubkeyHex: self,
+    };
+
+    await cancelPendingInvitationImpl(
+      deps,
+      'g',
+      invitee,
+      async (content) => { emittedContent = content; },
+      'declined',
+    );
+
+    expect(Object.keys(JSON.parse(emittedContent)).sort()).toEqual(['event', 'pubkey', 'type']);
+  });
+
+  it('does NOT change invite_cancelled behavior (default announcementKind, byte-for-byte unchanged)', async () => {
+    const { cancelPendingInvitationImpl } = await import('@/src/lib/marmot/cancelInvitationImpl');
+    const invitee = 'e'.repeat(64);
+    const self = 'f'.repeat(64);
+    let emittedContent = '';
+    const deps = {
+      getGroup: vi.fn().mockResolvedValue({
+        state: {},
+        groupData: { adminPubkeys: [self] },
+        commit: vi.fn().mockResolvedValue(undefined),
+      }),
+      loadMemberProfiles: vi.fn().mockResolvedValue([]),
+      getGroupMembers: vi.fn().mockReturnValue([invitee, self]),
+      getPubkeyLeafNodeIndexes: vi.fn().mockReturnValue([0]),
+      Proposals: { proposeUpdateMetadata: vi.fn((opts: object) => ({ type: 'meta', ...opts })) },
+      persistGroup: vi.fn().mockResolvedValue(undefined),
+      getStoredGroup: vi.fn().mockReturnValue({ id: 'g', name: 'G', createdAt: 0, relays: [], memberPubkeys: [invitee, self] }),
+      reloadGroups: vi.fn().mockResolvedValue(undefined),
+      markBackupDirty: vi.fn(),
+      selfPubkeyHex: self,
+    };
+
+    // No 5th arg — the default must stay 'invite_cancelled'.
+    await cancelPendingInvitationImpl(deps, 'g', invitee, async (content) => { emittedContent = content; });
+
+    expect(JSON.parse(emittedContent)).toEqual({ type: 'invite_cancelled', pubkey: invitee, by: self });
   });
 });

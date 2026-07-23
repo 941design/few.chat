@@ -40,6 +40,16 @@ export interface HandlerDeps {
   recordRequestAnswered: (groupId: string, authorPubkey: string, timestamp: number) => Promise<void>;
   writeContactEntry: (pubkey: string, entry: { nickname: string; avatar: ProfileAvatar | null; updatedAt: string }) => void;
   setProfileVersion: (updater: (v: number) => number) => void;
+  /**
+   * epic: group-invite-lifecycle S3 gate-remediation (severity-4 finding,
+   * AC-PROD-3/4/5) — accept-producer's atomic compare-and-clear. See
+   * ProfileHandlerDeps.consumePendingDirectInviteMarker /
+   * ProfileHandlerDeps.sendAnnouncement (handlers/profileHandler.ts) for the
+   * full contract. Threaded through this registration seam rather than
+   * imported ad hoc into profileHandler.ts (architecture.md boundary rule).
+   */
+  consumePendingDirectInviteMarker: (groupId: string, pubkey: string) => Promise<boolean>;
+  sendAnnouncement: (content: string) => Promise<void>;
   // Profile request handler deps
   recordRequestEmitted: (groupId: string, targetPubkey: string, timestamp: number) => Promise<void>;
   /**
@@ -98,6 +108,8 @@ export function buildDispatcher(deps: HandlerDeps): Dispatcher {
       recordRequestAnswered: deps.recordRequestAnswered,
       writeContactEntry: deps.writeContactEntry,
       setProfileVersion: deps.setProfileVersion,
+      consumePendingDirectInviteMarker: deps.consumePendingDirectInviteMarker,
+      sendAnnouncement: deps.sendAnnouncement,
     }),
     createProfileRequestHandler({
       recordRequestEmitted: deps.recordRequestEmitted,

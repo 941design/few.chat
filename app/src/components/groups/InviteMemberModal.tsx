@@ -32,6 +32,7 @@ type InviteMemberModalProps = {
   isOpen: boolean;
   onClose: () => void;
   groupId: string;
+  sendAnnouncement?: (content: string) => Promise<void>;
 };
 
 export type ResolveInviteTargetResult =
@@ -85,6 +86,22 @@ export type PendingInviteMarkerDeps = {
 };
 
 /**
+ * Pure invite_lifecycle payload builder (S2, epic: group-invite-lifecycle,
+ * DD-8, AC-PROD-1/AC-PROD-2). Produces the JSON-stringified
+ * StructuredContent announcement fired after a direct invite's MLS Add
+ * succeeds. `pubkey` is canonicalized to lowercase hex (AC-STRUCT-1
+ * hex-guard contract in parseStructured.ts) — callers may pass an
+ * already-lowercased or mixed-case pubkeyHex.
+ */
+export function buildInvitedAnnouncementContent(inviteeHex: string): string {
+  return JSON.stringify({
+    type: 'invite_lifecycle',
+    event: 'invited',
+    pubkey: inviteeHex.toLowerCase(),
+  });
+}
+
+/**
  * Wraps submitInvite with pending-direct-invite marker bookkeeping (epic:
  * invite-rescind-and-member-removal S7). Ordering guarantee (AC-MARKER-1):
  * the marker write is fully awaited BEFORE submitInvite/inviteByNpub ever
@@ -112,12 +129,23 @@ export type PendingInviteMarkerDeps = {
  * calls inviteByNpub directly via a different call path and must never pick
  * up a marker write, which is exactly why this bookkeeping lives in a wrapper
  * here rather than inside submitInvite or inviteByNpub.
+ *
+ * S2 (epic: group-invite-lifecycle, DD-8, AC-PROD-1) extends this wrapper
+ * with an optional `sendAnnouncement` dependency: once submitInvite resolves
+ * with `ok: true` (the MLS Add succeeded), the invite_lifecycle 'invited'
+ * announcement is fired fire-and-forget — never awaited, and any rejection
+ * is swallowed so a relay/publish hiccup can never surface as a thrown error
+ * or flip this function's own successful result. This is deliberately the
+ * ONLY call site that fires it — inviteByNpub and approveJoinRequestImpl
+ * remain untouched, so the join-request/invite-link approval flow keeps
+ * emitting only its own separate member_admitted announcement.
  */
 export async function submitInviteWithMarker(
   pubkeyHex: string,
   groupId: string,
   inviteByNpub: (groupId: string, npub: string) => Promise<{ ok: boolean; error?: string }>,
   markerDeps: PendingInviteMarkerDeps,
+  sendAnnouncement?: (content: string) => Promise<void>,
 ): Promise<{ ok: boolean; error?: string }> {
   const canonicalPubkey = pubkeyHex.toLowerCase();
 
@@ -129,7 +157,9 @@ export async function submitInviteWithMarker(
 
   const result = await submitInvite(pubkeyHex, groupId, inviteByNpub);
 
-  if (!result.ok) {
+  if (result.ok) {
+    sendAnnouncement?.(buildInvitedAnnouncementContent(canonicalPubkey)).catch(() => {});
+  } else {
     try {
       await markerDeps.clearPendingDirectInvite(groupId, canonicalPubkey);
     } catch (err) {
@@ -226,7 +256,7 @@ export function getInviteReasonText(
   }
 }
 
-export default function InviteMemberModal({ isOpen, onClose, groupId }: InviteMemberModalProps) {
+export default function InviteMemberModal({ isOpen, onClose, groupId, sendAnnouncement }: InviteMemberModalProps) {
   const copy = useCopy();
   const { inviteByNpub, groups } = useMarmot();
   const { pubkeyHex: ownPubkeyHex } = useNostrIdentity();
@@ -254,10 +284,16 @@ export default function InviteMemberModal({ isOpen, onClose, groupId }: InviteMe
     setSuccess(false);
 
     try {
-      const result = await submitInviteWithMarker(selectedPubkeyHex, groupId, inviteByNpub, {
-        markPendingDirectInvite,
-        clearPendingDirectInvite,
-      });
+      const result = await submitInviteWithMarker(
+        selectedPubkeyHex,
+        groupId,
+        inviteByNpub,
+        {
+          markPendingDirectInvite,
+          clearPendingDirectInvite,
+        },
+        sendAnnouncement,
+      );
       if (result.ok) {
         setSuccess(true);
         setSelectedPubkeyHex('');

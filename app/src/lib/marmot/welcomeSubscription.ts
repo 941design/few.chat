@@ -20,7 +20,11 @@ import {
   getWelcome,
   getWelcomeKeyPackageRefs,
   readWelcomeMarmotGroupData,
+  readWelcomeGroupInfo,
 } from '@internet-privacy/marmot-ts';
+import { bytesToHex, hexToBytes } from '@/src/lib/nostrKeys';
+import { createRumor } from 'nostr-tools/nip59';
+import { sealAndWrap } from '@/src/lib/directMessages';
 import { EpochResolver } from './epochResolver';
 import { handleJoinRequest, JOIN_REQUEST_KIND } from './joinRequestHandler';
 import type { JoinRequestReceivedCallback } from './joinRequestHandler';
@@ -39,11 +43,285 @@ import type { OutboundJoinRequestRecord } from './outboundJoinRequests';
 import { handlePairingAck } from '@/src/lib/pairing/pairingAck';
 import { incrementPendingContact } from '@/src/lib/unreadStore';
 import { createLogger } from '@/src/lib/logger';
+import { isPendingMemberImpl, cancelPendingInvitationImpl, type Deps as CancelInvitationDeps } from './cancelInvitationImpl';
 
 const logger = createLogger('welcomeSubscription');
 
 /** NIP-59 seal kind — matches directMessages.ts's SEAL_KIND constant. */
 const SEAL_KIND = 13;
+
+// ── Decline DM channel (S5, creates_seam) ───────────────────────────────────
+//
+// INVITE_DECLINE_KIND is a fresh app-level inner rumor kind for the B→A
+// gift-wrapped decline DM. Exported so S6's receive-side branch imports this
+// SAME constant rather than redefining its own copy.
+//
+// Verified distinct from every existing `*_KIND` sentinel this codebase
+// checks or defines (repo-wide grep for `_KIND` immediately before
+// assignment): 444 (Welcome), 5 (delete signal), 7 (reaction), 9
+// (CHAT_MESSAGE_KIND, chatPersistence.ts), 13 (seal), 14 (CHAT_MESSAGE_KIND,
+// directMessages.ts), 21059 (JOIN_REQUEST_KIND / CALL_GIFT_WRAP_KIND), 21060
+// (PAIRING_ACK_KIND), 21061/21062 (DM_PROFILE_REQUEST_KIND /
+// DM_PROFILE_ANNOUNCE_KIND), 20602 (CARD_SIG_KIND_V2), 25050-25055
+// (call-signaling), 10/11/12 (POLL_*_KIND), 30 (PROFILE_REQUEST_KIND,
+// marmot/profileRequestSync.ts), 30051 (RELAY_LIST_KIND), 30078
+// (BACKUP_EVENT_KIND), 0 (PROFILE_RUMOR_KIND). Mirrors pairingAck.ts /
+// dmProfile/kinds.ts's module-load throw-on-collision pattern: fail loudly
+// at import time, not only in a test, if this constant is ever edited to
+// collide with a reserved sentinel.
+export const INVITE_DECLINE_KIND = 21063 as const;
+
+const INVITE_DECLINE_SENTINEL_KINDS = [
+  444, 5, 7, 9, 13, 14, 21059, 21060, 21061, 21062, 20602,
+  25050, 25051, 25052, 25053, 25054, 25055,
+  10, 11, 12, // POLL_OPEN_KIND / POLL_VOTE_KIND / POLL_CLOSE_KIND
+  30078, // BACKUP_EVENT_KIND
+  30051, // RELAY_LIST_KIND
+  30, // PROFILE_REQUEST_KIND (marmot/profileRequestSync.ts)
+  0, // PROFILE_RUMOR_KIND (marmot/profileSync.ts)
+] as const;
+
+if ((INVITE_DECLINE_SENTINEL_KINDS as readonly number[]).includes(INVITE_DECLINE_KIND)) {
+  throw new Error('welcomeSubscription: INVITE_DECLINE_KIND collides with a reserved sentinel kind');
+}
+
+/**
+ * The seam contract (stories.json#seams[1], consumed by S6). The EXACT and
+ * ONLY shape of a decline gift wrap's inner rumor plaintext content
+ * (AC-DECLINE-13) — no nickname, avatar, or other profile metadata.
+ */
+export type DeclineGiftWrapPayload = {
+  /** MLS group id (hex) — the group the declined invitation was for. */
+  groupId: string;
+  /** The declining invitee's own pubkey (hex). */
+  pubkey: string;
+};
+
+/** Explicit key/transport params for sending a decline gift wrap — never a module-level singleton. */
+export type DeclineSendKeys = {
+  ndk: import('@nostr-dev-kit/ndk').default;
+  selfPubkeyHex: string;
+  selfPrivateKeyHex: string;
+};
+
+// ── Decline DM channel — A-side receive (S6, decline-a) ─────────────────────
+//
+// Dependencies the receive-side dispatch branch needs to tree-gate, Remove,
+// post the `declined` announcement, and clear the pending-direct-invite
+// marker. Extends cancelInvitationImpl.ts's `Deps` (the SAME Remove
+// machinery, ADR-010) with the two extra capabilities that machinery doesn't
+// own: posting into an ARBITRARY group by id (this is a background listener,
+// not scoped to one open group's UI), and clearing the marker (owned by
+// pendingDirectInviteStorage.ts, consumed here only via injection per
+// architecture.md's boundary rule — never imported directly).
+export type DeclineReceiveDeps = CancelInvitationDeps & {
+  /** Posts `content` as an application rumor into `groupId`. */
+  sendAnnouncement: (groupId: string, content: string) => Promise<void>;
+  /** Clears the pending-direct-invite marker for (groupId, pubkey). */
+  clearPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void>;
+};
+
+// ── Per-group historical-sync gate (S6, DD-10/AC-DECLINE-12) ────────────────
+//
+// subscribeToWelcomes' single kind-1059 subscription and each group's
+// subscribeToGroupMessages historical-sync fetch are independent async flows
+// that can complete in either order at app start. sendApplicationRumor (the
+// Remove+post below) is only epoch-safe once a group's local MLS epoch is
+// caught up (see subscribeToGroupMessages' onHistorySynced comment) — so a
+// decline referencing a not-yet-synced group must defer until that SPECIFIC
+// group's sync completes. This is a bounded, per-groupId waiter list: each
+// entry is drained and removed the moment its group syncs (never more than
+// one entry per groupId, and it never grows across restarts — it lives only
+// for this session), NOT a new persistent/unbounded queue. A crash/restart
+// before a group ever syncs falls back to the gift wrap's own unmarked-seen
+// reprocessing (DD-7 guarantee #3) — see subscribeToWelcomes' decline branch.
+const historySyncedGroupIds = new Set<string>();
+const historySyncWaiters = new Map<string, Array<() => void>>();
+
+function markGroupHistorySynced(groupId: string): void {
+  historySyncedGroupIds.add(groupId);
+  const waiters = historySyncWaiters.get(groupId);
+  if (!waiters) return;
+  historySyncWaiters.delete(groupId);
+  for (const resolveWaiter of waiters) {
+    try {
+      resolveWaiter();
+    } catch (err) {
+      console.debug('[welcomeSubscription] history-sync waiter callback failed:', err);
+    }
+  }
+}
+
+/**
+ * Resolves once `groupId`'s historical kind-445 sync has completed —
+ * immediately if it already has by the time this is called. Used ONLY by the
+ * decline receive path (AC-DECLINE-12).
+ */
+function waitForGroupHistorySync(groupId: string): Promise<void> {
+  if (historySyncedGroupIds.has(groupId)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const list = historySyncWaiters.get(groupId) ?? [];
+    list.push(resolve);
+    historySyncWaiters.set(groupId, list);
+  });
+}
+
+// ── Per-(groupId,pubkey) serialization for decline processing (S6, DD-7) ────
+//
+// Two GENUINELY DISTINCT decline gift wraps for the SAME invitee/group (e.g.
+// B double-clicking Decline, producing two distinct-id wraps) can arrive and
+// begin dispatch concurrently. A naive check-then-act (both check
+// isPendingMemberImpl, see "still pending" because neither's Remove has
+// committed yet, then both call cancelPendingInvitationImpl) could open a
+// double-Remove/double-post window — the same class of bug
+// pendingDirectInviteStorage.ts's consumePendingDirectInviteMarker closes for
+// the accept-producer path (S3 gate-remediation). This mirrors that exact
+// per-key promise-chain pattern: a second call for the same key awaits the
+// first call's FULL completion (tree-gate through marker-clear) before
+// running its own tree-gate check, which by then correctly observes
+// "no longer pending" and no-ops.
+/**
+ * Gate-remediation (post-review): the mark-gift-wrap-seen decision keys on
+ * TERMINAL vs RETRYABLE, never on "was anything applied":
+ *
+ *   - 'applied'           — the Remove committed (the `declined` post is
+ *                            best-effort and may or may not have landed —
+ *                            see FIX A below). Mark seen.
+ *   - 'terminal-noop'     — the tree-gate says this wrap can NEVER have an
+ *                            effect (B not pending; A doesn't hold the
+ *                            group at all). Mark seen — reprocessing this
+ *                            SAME wrap again would reach the identical
+ *                            verdict forever, and — worse — leaving it
+ *                            unmarked lets it reactivate against a LATER,
+ *                            unrelated re-invite of the same pubkey to the
+ *                            same group (see the re-invite-reactivation
+ *                            regression test).
+ *   - 'retryable-failure' — the load-bearing MLS Remove commit itself threw.
+ *                            Do NOT mark seen — B is still pending, so a
+ *                            reprocess on next start can still succeed.
+ */
+type DeclineOutcome = 'applied' | 'terminal-noop' | 'retryable-failure';
+
+const declineProcessingChains = new Map<string, Promise<DeclineOutcome>>();
+
+async function runSerializedDeclineProcessing(
+  key: string,
+  fn: () => Promise<DeclineOutcome>,
+): Promise<DeclineOutcome> {
+  const prior = declineProcessingChains.get(key) ?? Promise.resolve<DeclineOutcome>('retryable-failure');
+  const run: Promise<DeclineOutcome> = prior.catch((): DeclineOutcome => 'retryable-failure').then(fn);
+  declineProcessingChains.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (declineProcessingChains.get(key) === run) {
+      declineProcessingChains.delete(key);
+    }
+  }
+}
+
+/**
+ * Applies an authenticated decline (AC-DECLINE-9/10/12): tree-gates on group
+ * existence and pending membership, defers until the referenced group's
+ * historical sync completes ONLY when there is something worth waiting for,
+ * then — on a pending match — runs DD-7's Remove+post (reusing
+ * cancelPendingInvitationImpl) followed by the marker-clear.
+ *
+ * Returns a {@link DeclineOutcome} so the caller can mark the gift wrap seen
+ * on the correct TERMINAL-vs-RETRYABLE distinction (see the type doc above)
+ * rather than on whether a Remove specifically happened:
+ *
+ *   - 'applied': the Remove committed. The `declined` announcement itself is
+ *     BEST-EFFORT — exactly like `invited` (S2) and `accepted` (S3), both
+ *     already fire-and-forget — so a failed post does NOT downgrade this to
+ *     retryable: the Remove is the durable, load-bearing action, and once it
+ *     has committed B is no longer pending, so a reprocess of this wrap
+ *     could never re-attempt the post anyway (the tree-gate below would
+ *     immediately terminal-no-op it). `cancelPendingInvitationImpl`'s
+ *     `announcementError` field is logged, never treated as a reason to
+ *     withhold mark-seen.
+ *   - 'terminal-noop': tree-gate says B is not (or never was) a pending
+ *     member of `groupId`, OR A does not currently hold `groupId` at all.
+ *     Definitive either way — this SPECIFIC gift wrap will never have an
+ *     effect, however many times it is reprocessed.
+ *   - 'retryable-failure': the MLS Remove commit itself threw. Leave
+ *     everything for reprocessing on next start — do not clear the marker,
+ *     do not mark seen (B is still genuinely pending, so a retry can still
+ *     succeed). This is the ONLY outcome that withholds mark-seen.
+ *
+ * `pubkeyLower` MUST be the AUTHENTICATED seal pubkey (unwrapResult.pubkey),
+ * lowercased — never the decline payload's self-claimed `pubkey` field,
+ * which this function never reads at all (mirrors the Welcome/join-request
+ * branches' senderPubkey-only trust discipline).
+ */
+async function applyDecline(
+  groupId: string,
+  pubkeyLower: string,
+  deps: DeclineReceiveDeps,
+): Promise<DeclineOutcome> {
+  // FIX C: guard group existence BEFORE deferring on historical sync.
+  // waitForGroupHistorySync(groupId) only ever resolves via
+  // markGroupHistorySynced(groupId), which subscribeToGroupMessages calls
+  // ONLY for a group this client actually subscribes to (i.e. A holds it).
+  // Awaiting the sync gate unconditionally — for a groupId A never joined,
+  // already left, or that is simply attacker-supplied garbage — would park
+  // this call (and its runSerializedDeclineProcessing chain entry) on a
+  // waiter that NEVER fires, permanently leaking one Map entry per distinct
+  // bogus groupId (attacker-amplifiable). Checking existence first, and only
+  // deferring when there is something worth waiting for, closes this.
+  const mlsGroupPreCheck = await deps.getGroup(groupId);
+  if (!mlsGroupPreCheck) {
+    // A does not currently hold this group at all — never joined it, or
+    // already left/was removed. Terminal: no defer, no waiter created.
+    return 'terminal-noop';
+  }
+
+  // AC-DECLINE-12 (DD-10): sendApplicationRumor is only epoch-safe once this
+  // group's local MLS epoch is caught up with historical commits. Deferred
+  // only now that the pre-check above has confirmed A actually holds the
+  // group (so this WILL eventually resolve via markGroupHistorySynced).
+  await waitForGroupHistorySync(groupId);
+
+  // AC-DECLINE-9 (DD-4): re-checked HERE (not cached from dispatch time) —
+  // this call may have just resumed after the history-sync await above, or
+  // after a sibling decline for the same key finished its own Remove via the
+  // serialization wrapper this function is always called through.
+  const isPending = await isPendingMemberImpl(deps, groupId, pubkeyLower);
+  if (!isPending) return 'terminal-noop'; // tree-gate says: never has an effect
+
+  const result = await cancelPendingInvitationImpl(
+    deps,
+    groupId,
+    pubkeyLower,
+    (content) => deps.sendAnnouncement(groupId, content),
+    'declined',
+  );
+
+  if (!result.ok) {
+    // Remove failed outright (e.g. the MLS commit threw) — RETRYABLE: leave
+    // everything for reprocessing on next start; do not clear the marker or
+    // mark seen.
+    return 'retryable-failure';
+  }
+
+  // FIX A: the Remove committed — that is the durable, load-bearing action.
+  // The `declined` post is best-effort (like invited/accepted); a failed
+  // post is logged but never downgrades this outcome to retryable — B is no
+  // longer pending either way, so reprocessing this wrap could never retry
+  // the post (the tree-gate above would immediately terminal-no-op it).
+  if (result.announcementError) {
+    logger.warn('dm:decline-announcement-failed', { reason: result.announcementError });
+  }
+
+  // (3) clear the pending-direct-invite marker for this invitee/group.
+  try {
+    await deps.clearPendingDirectInvite(groupId, pubkeyLower);
+  } catch (err) {
+    console.debug('[welcomeSubscription] decline marker-clear failed:', err);
+  }
+
+  return 'applied';
+}
 
 export type WelcomeReceivedCallback = (group: Group) => void | Promise<void>;
 
@@ -295,7 +573,7 @@ async function joinGroupFromWelcomeCore(
 export async function readPreJoinGroupData(
   welcomeRumor: UnwrappedRumor,
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
-): Promise<{ name: string; description: string; adminPubkeys: string[] } | null> {
+): Promise<{ name: string; description: string; adminPubkeys: string[]; groupId: string } | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const welcome = getWelcome(welcomeRumor as any);
@@ -313,10 +591,27 @@ export async function readPreJoinGroupData(
           ciphersuiteImpl,
         });
         if (groupData) {
+          // AC-DECLINE-1: surface the MLS groupId. readWelcomeMarmotGroupData
+          // is a convenience wrapper over readWelcomeGroupInfo that extracts
+          // ONLY the MarmotGroupData extension, discarding groupContext —
+          // call readWelcomeGroupInfo directly (same welcome/keyPackage/
+          // ciphersuite that just matched above) to recover groupContext.groupId.
+          // Side-effect-free per this function's doc comment — both calls
+          // bottom out in pure ts-mls derivations.
+          let groupId = '';
+          try {
+            const groupInfo = await readWelcomeGroupInfo({ welcome, keyPackage: stored, ciphersuiteImpl });
+            groupId = bytesToHex(groupInfo.groupContext.groupId);
+          } catch {
+            // Matched for MarmotGroupData above but groupContext read failed —
+            // degrade to '' rather than failing the whole pre-join read (name/
+            // description/adminPubkeys are still valid and useful on their own).
+          }
           return {
             name: groupData.name,
             description: groupData.description,
             adminPubkeys: groupData.adminPubkeys,
+            groupId,
           };
         }
       } catch {
@@ -419,6 +714,11 @@ export async function subscribeToWelcomes(
   groupMemberPubkeys?: (groupId: string) => string[],
   ownPrivateKeyHex?: string,
   onPairingAckReceived?: (result: { senderPubkeyHex: string }) => void,
+  // S6 (decline-a): omitted (rather than throwing) when the composition root
+  // hasn't wired the Remove/announce capability — the decline branch below
+  // then authenticates and drops without side effects, exactly like the
+  // join-request branch's `onJoinRequestReceived && groupMemberPubkeys` guard.
+  declineDeps?: DeclineReceiveDeps,
 ): Promise<() => void> {
   // Subscribe to kind 1059, NOT kind 444. marmot-ts wraps the kind 444 Welcome
   // rumor in a NIP-59 gift wrap (kind 1059) before publishing. The inner rumor
@@ -437,6 +737,21 @@ export async function subscribeToWelcomes(
   // relay), overwriting the MLS state back to the Welcome epoch and making
   // any commits ingested since then (e.g. "add member C") undecryptable.
   const SEEN_KEY = STORAGE_KEYS.processedGiftWraps;
+
+  // Small shared helper for the decline branch's two mark-seen call sites
+  // (a terminal no-op with no groupId to key on, and the tri-state
+  // DeclineOutcome check below) — both need the identical
+  // read-check-append-write shape the rest of this handler already repeats
+  // inline for Welcome/join-request/pairing-ack.
+  function markDeclineGiftWrapSeen(id: string): void {
+    try {
+      const seen = JSON.parse(localStorage.getItem(SEEN_KEY) || '[]') as string[];
+      if (!seen.includes(id)) {
+        seen.push(id);
+        localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+      }
+    } catch { /* ignore */ }
+  }
 
   sub.on('event', async (ndkEvent) => {
     const eventId = ndkEvent.id ?? '';
@@ -552,6 +867,77 @@ export async function subscribeToWelcomes(
         return;
       }
 
+      // AC-DECLINE-7: INVITE_DECLINE_KIND branch — slotted after the
+      // join-request branch above, before the kind-444 guard below, so a
+      // decline-kind rumor NEVER falls into either the Welcome or
+      // join-request handling.
+      if (welcomeRumor.kind === INVITE_DECLINE_KIND) {
+        if (!unwrapResult.authenticated) {
+          // AC-DECLINE-8: a decline whose seal fails authentication produces
+          // ZERO side effects — no Remove, no post, no marker clear. Matches
+          // this dispatch's existing convention for a rejected join request
+          // (dropped without marking seen).
+          console.debug('[welcomeSubscription] Dropping decline: seal authentication failed');
+          return;
+        }
+
+        let declinePayload: unknown;
+        try {
+          declinePayload = JSON.parse(welcomeRumor.content);
+        } catch {
+          console.debug('[welcomeSubscription] Dropping decline: content is not valid JSON');
+          return;
+        }
+        const groupId =
+          typeof declinePayload === 'object' &&
+          declinePayload !== null &&
+          typeof (declinePayload as { groupId?: unknown }).groupId === 'string'
+            ? (declinePayload as { groupId: string }).groupId
+            : '';
+        if (!groupId) {
+          // Carry-forward from S5 review, refined per FIX B: an
+          // empty/unknown groupId means A does not hold that group at all —
+          // clean no-op, never a throw. This is DEFINITIVE (this wrap's
+          // content can never resolve to a real group), so — same as any
+          // other terminal-no-op verdict below — mark it seen now, rather
+          // than leaving it to be redecrypted and reprocessed every app
+          // start. Only mark seen when declineDeps is actually wired: with
+          // no capability at all, this listener cannot act on ANY decline
+          // regardless of groupId, so bookkeeping is withheld exactly like
+          // every other branch below when its capability is unwired.
+          console.debug('[welcomeSubscription] Dropping decline: empty/missing groupId');
+          if (declineDeps) markDeclineGiftWrapSeen(eventId);
+          return;
+        }
+
+        if (declineDeps) {
+          // AC-AUTH/senderPubkey discipline: the declining identity is
+          // ALWAYS the authenticated seal pubkey, never the payload's
+          // self-claimed `pubkey` field (which applyDecline never reads).
+          const pubkeyLower = unwrapResult.pubkey.toLowerCase();
+          const chainKey = `${groupId}:${pubkeyLower}`;
+          try {
+            const outcome = await runSerializedDeclineProcessing(chainKey, () =>
+              applyDecline(groupId, pubkeyLower, declineDeps),
+            );
+            // Gate-remediation (post-review): mark-seen keys on TERMINAL vs
+            // RETRYABLE (see DeclineOutcome's doc comment), not on whether a
+            // Remove specifically happened. 'applied' and 'terminal-noop'
+            // are both definitive for THIS wrap; only 'retryable-failure'
+            // (the MLS Remove commit itself threw) withholds mark-seen, so
+            // the wrap reprocesses on next start while B is still pending.
+            if (outcome !== 'retryable-failure') {
+              markDeclineGiftWrapSeen(eventId);
+            }
+          } catch (err) {
+            logger.warn('dm:decline-processing-failed', {
+              reason: err instanceof Error ? err.message : 'unknown',
+            });
+          }
+        }
+        return;
+      }
+
       if (welcomeRumor.kind !== 444) {
         console.debug('[welcomeSubscription] Unwrapped event is not kind 444, got:', welcomeRumor.kind);
         return;
@@ -653,11 +1039,30 @@ export async function subscribeToWelcomes(
       // by. Only an AUTHENTICATED Welcome's welcomeRumor.id is the verified
       // canonical hash, safe to use so uncorrelated-but-legitimate re-invites
       // keep deduping the same way they always have.
+      // AC-DECLINE-1/2: surface groupId (pre-join, via readPreJoinGroupData)
+      // and persist the ALREADY-COMPUTED seal-authentication result
+      // (unwrapResult.authenticated) at enqueue time, so a later decline can
+      // send its gift wrap without re-parsing the Welcome and without
+      // re-deriving a trust decision this dispatch already made.
+      // readPreJoinGroupData never throws (returns null on any failure) —
+      // an unresolvable groupId degrades to '' rather than blocking enqueue.
+      let declineGroupId = '';
+      try {
+        const preJoinData = await readPreJoinGroupData(welcomeRumor, marmotClient);
+        declineGroupId = preJoinData?.groupId ?? '';
+      } catch (err) {
+        logger.warn('dm:decline-groupid-read-failed', {
+          reason: err instanceof Error ? err.message : 'unknown',
+        });
+      }
+
       const invitation: PendingInvitation = {
         id: unwrapResult.authenticated && welcomeRumor.id ? welcomeRumor.id : eventId,
         inviterPubkeyHex,
         receivedAt: Date.now(),
         welcomeEventJson: JSON.stringify(welcomeRumor),
+        groupId: declineGroupId,
+        authenticated: unwrapResult.authenticated,
       };
 
       enqueuePendingInvitation(invitation);
@@ -857,6 +1262,12 @@ export async function subscribeToGroupMessages(
   // (EOSE from relays). On timeout the local epoch may lag behind — publishing
   // an application rumor now would risk the MLS epoch divergence the surrounding
   // comment warns about.
+  if (historySyncComplete) {
+    // S6 (AC-DECLINE-12): unconditional on the caller-supplied onHistorySynced
+    // callback below — the decline receive path's deferral gate must resolve
+    // even when this subscribeToGroupMessages call omits that callback.
+    markGroupHistorySynced(groupId);
+  }
   if (onHistorySynced && historySyncComplete) {
     try {
       onHistorySynced();
@@ -942,11 +1353,89 @@ export async function acceptPendingInvitation(
 }
 
 /**
- * Decline a pending invitation: remove from queue, no network call.
+ * Builds and sends the B→A gift-wrapped decline DM (AC-DECLINE-3/13).
+ *
+ * Privacy invariant (CLAUDE.md, non-negotiable): the inner rumor's plaintext
+ * content is a fresh object literal rebuilt from exactly these two named
+ * fields — `{ groupId, pubkey }` — never a widened object that could carry
+ * nickname/avatar/profile metadata. `sealAndWrap` (`directMessages.ts`)
+ * reuses the audited `nostr-tools/nip59` `wrapEvent` helper: the seal (inner
+ * envelope) is signed with the caller's REAL private key so A's existing
+ * `unwrapGiftWrap` seal-authentication checks can verify sender identity,
+ * while the OUTER gift-wrap layer is always signed with a FRESH ephemeral
+ * key generated internally by `wrapEvent`/`createWrap` — never B's real
+ * identity key (sender hidden from relay operators).
+ */
+async function sendDeclineGiftWrap(
+  groupId: string,
+  inviterPubkeyHex: string,
+  keys: DeclineSendKeys,
+): Promise<void> {
+  const payload: DeclineGiftWrapPayload = {
+    groupId,
+    pubkey: keys.selfPubkeyHex,
+  };
+
+  const rumor = createRumor(
+    {
+      kind: INVITE_DECLINE_KIND,
+      content: JSON.stringify(payload),
+      tags: [['p', inviterPubkeyHex]],
+      created_at: Math.floor(Date.now() / 1000),
+      pubkey: keys.selfPubkeyHex,
+    },
+    hexToBytes(keys.selfPrivateKeyHex),
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wrap = await sealAndWrap(rumor as any, inviterPubkeyHex, keys.selfPrivateKeyHex);
+  const { NDKEvent } = await import('@nostr-dev-kit/ndk');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ndkEvent = new NDKEvent(keys.ndk, wrap as any);
+  await ndkEvent.publish();
+}
+
+/**
+ * Decline a pending invitation.
+ *
+ * AC-DECLINE-3/4/5/6/13: when `sendKeys` is provided AND the stored entry's
+ * `authenticated` flag is `true` AND the entry has a non-empty `groupId`,
+ * sends a NIP-59 gift-wrapped `INVITE_DECLINE_KIND` rumor addressed to the
+ * inviter with inner content EXACTLY `{ groupId, pubkey: selfHex }`
+ * (AC-DECLINE-3/13) — no group-channel publish, no MLS Add, ever occurs on
+ * this path (AC-DECLINE-6). An `authenticated: false` entry (or a
+ * missing/legacy value, which `pendingInvitations.ts` already normalizes to
+ * `false`) skips the send entirely — no publish call is attempted
+ * (AC-DECLINE-4). Gate-remediation (severity 2): an entry whose `groupId` is
+ * `''` (a degraded pre-join read, or a legacy record) is ALSO skipped for the
+ * send — the recipient (the inviter) can only ever classify such a decline
+ * as an empty-groupId no-op and mark it seen, so sending it is a pointless
+ * publish + decrypt round-trip with no observable effect. Local removal
+ * (`removePendingInvitation`) is UNCONDITIONAL — it runs in a `finally`
+ * block regardless of whether `sendKeys` was supplied, whether the entry was
+ * authenticated, whether `groupId` was present, or whether the send
+ * succeeded, failed, or threw (AC-DECLINE-5). A send failure is caught and
+ * logged, never rethrown or allowed to block local cleanup.
  *
  * AC-INVITE-6, AC-OBS-3
  */
-export async function declinePendingInvitation(id: string): Promise<void> {
-  removePendingInvitation(id);
-  logger.info('dm:walled-garden-invite-decline', { id: id.slice(0, 8) });
+export async function declinePendingInvitation(id: string, sendKeys?: DeclineSendKeys): Promise<void> {
+  try {
+    const entry = listPendingInvitations().find((inv) => inv.id === id);
+    if (entry && sendKeys && entry.authenticated && entry.groupId) {
+      try {
+        await sendDeclineGiftWrap(entry.groupId, entry.inviterPubkeyHex, sendKeys);
+        logger.info('dm:decline-sent', { id: id.slice(0, 8) });
+      } catch (err) {
+        // AC-DECLINE-5: a send failure must never block local removal below.
+        logger.warn('dm:decline-send-failed', {
+          id: id.slice(0, 8),
+          reason: err instanceof Error ? err.message : 'unknown',
+        });
+      }
+    }
+  } finally {
+    removePendingInvitation(id);
+    logger.info('dm:walled-garden-invite-decline', { id: id.slice(0, 8) });
+  }
 }

@@ -119,6 +119,47 @@ function makeDeps(mergeResult = true) {
     recordRequestAnswered: vi.fn(async () => {}),
     writeContactEntry: vi.fn(),
     setProfileVersion: vi.fn(),
+    // epic: group-invite-lifecycle S3 gate-remediation — default to "no
+    // pending marker", so every pre-existing test above (none of which
+    // concern the accept-producer) sees no accepted-post side effect.
+    consumePendingDirectInviteMarker: vi.fn(async () => false),
+    sendAnnouncement: vi.fn(async () => {}),
+  };
+}
+
+/**
+ * Marker-aware deps for the accept-producer (S3) test group below: a real
+ * Map-backed pending-marker store shared between consumePendingDirectInviteMarker
+ * (the atomic own-join get+clear) and clearPendingDirectInvite (the
+ * pre-existing relay-on-behalf clear), so the at-most-once guarantee
+ * (AC-PROD-5) is exercised through actual state transitions the SUT drives
+ * itself — not a mock whose boolean return is hardcoded per call.
+ *
+ * consumePendingDirectInviteMarker mirrors the real storage module's
+ * compare-and-clear contract: reading and deleting the SAME Map entry inside
+ * one synchronous (no-`await`-in-between) step, so two concurrently-invoked
+ * calls for the same key can never both observe `true` — exactly the
+ * TOCTOU-safety property the real IDB-backed implementation provides via its
+ * per-key promise chain (pendingDirectInviteStorage.ts).
+ */
+function makeMarkerAwareDeps(mergeResult = true) {
+  const pendingMarkers = new Map<string, boolean>();
+  const key = (groupId: string, pubkey: string) => `${groupId}:${pubkey}`;
+  return {
+    ...makeDeps(mergeResult),
+    pendingMarkers,
+    consumePendingDirectInviteMarker: vi.fn(async (groupId: string, pubkey: string) => {
+      const k = key(groupId, pubkey);
+      const existed = pendingMarkers.get(k) ?? false;
+      if (existed) {
+        pendingMarkers.delete(k);
+      }
+      return existed;
+    }),
+    clearPendingDirectInvite: vi.fn(async (groupId: string, pubkey: string) => {
+      pendingMarkers.delete(key(groupId, pubkey));
+    }),
+    sendAnnouncement: vi.fn(async () => {}),
   };
 }
 
@@ -317,5 +358,150 @@ describe('profileHandler', () => {
     await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
     expect(deps.writeContactEntry).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── accept-producer (epic: group-invite-lifecycle S3, DD-9) ────────────────
+// AC-PROD-3/4/5: `accepted` fires exactly once per invitee/group, gated on
+// the profile rumor's transport senderPubkey being B itself (a genuine
+// own-join) AND a pending-direct-invite marker having existed at arrival.
+
+describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
+  it('AC-PROD-3: own-join (senderPubkey === author) with a pending marker posts the accepted announcement exactly once, with the exact content', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    const handler = createProfileHandler(deps);
+    // B's OWN transport publish: rumorSenderPubkey === authorPubkey.
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const ctx = makeCtx();
+
+    await handler.handle(rumor, ctx);
+
+    expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
+    const content = deps.sendAnnouncement.mock.calls[0][0];
+    expect(JSON.parse(content)).toEqual({ type: 'invite_lifecycle', event: 'accepted', pubkey: AUTHOR_PUBKEY });
+  });
+
+  it('AC-PROD-4: third-member relay (senderPubkey !== author) never posts accepted, even with a pending marker set', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    const handler = createProfileHandler(deps);
+    // A naive implementation that only checks the payload's claimed identity
+    // (signedEvent.pubkey === AUTHOR_PUBKEY) would wrongly fire here — this
+    // is exactly the payload-vs-transport confusion AC-PROD-4 guards against.
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: PEER_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const ctx = makeCtx();
+
+    await handler.handle(rumor, ctx);
+
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    // The pre-existing marker-clear mechanism is unchanged: a relay still
+    // clears the marker (DD-9), it just must not be mistaken for a join.
+    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+  });
+
+  it('AC-PROD-5: duplicate/reconnect redelivery of B\'s own profile posts accepted exactly once, not zero and not two', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    const handler = createProfileHandler(deps);
+    const ctx = makeCtx();
+    const firstDelivery = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const secondDelivery = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+
+    // First delivery: marker existed → posts, and consumePendingDirectInviteMarker's
+    // atomic clear removes the marker from the shared backing store.
+    await handler.handle(firstDelivery, ctx);
+    // Second delivery (e.g. after a reconnect/resubscribe): the marker the
+    // first delivery consumed is gone, so consumePendingDirectInviteMarker now
+    // reports false — driven by real state, not a hardcoded per-call return value.
+    await handler.handle(secondDelivery, ctx);
+
+    expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
+  });
+
+  it('S3 gate-remediation (severity-4, at-most-once TOCTOU): two DISTINCT-id own-join profile rumors for the same B, dispatched CONCURRENTLY (both interleaved before either resolves), post accepted EXACTLY ONCE', async () => {
+    // Reproduces the finding: a naive hasPendingDirectInvite()-then-
+    // clearPendingDirectInvite() pair lets two interleaved own-join deliveries
+    // both observe the marker present before either clears it. This test
+    // exercises the REAL Map-backed marker fixture (makeMarkerAwareDeps) and
+    // fires both handle() calls WITHOUT awaiting between them, so they
+    // genuinely interleave at the event-loop level exactly like two
+    // back-to-back `applicationMessage` bus deliveries would (the dispatcher's
+    // listener is `async` and is not awaited by the emitter — see
+    // applicationRumorDispatcher.ts).
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    const handler = createProfileHandler(deps);
+    const ctx = makeCtx();
+    // Two DISTINCT rumor ids for the same B — the dispatcher's LRU dedup (keyed
+    // on rumor.id) must not be what prevents the double-post; only the atomic
+    // consume op may.
+    const rumorA = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const rumorB = { ...makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY }), id: 'distinct-rumor-id-2' };
+    expect(rumorA.id).not.toBe(rumorB.id);
+
+    // Fire both concurrently — no await between them — so both handle() calls
+    // are in flight together, exactly the interleaving the finding describes.
+    await Promise.all([handler.handle(rumorA, ctx), handler.handle(rumorB, ctx)]);
+
+    expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
+    expect(deps.pendingMarkers.has(`${GROUP_ID}:${AUTHOR_PUBKEY}`)).toBe(false);
+  });
+
+  it('never posts accepted on a generic marker removal where no marker existed in the first place (e.g. after a prior cancel/leave fan-out)', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    // No pendingMarkers entry set — simulates a pubkey with no pending
+    // direct-invite marker at all (cancel/leave already cleared it, or it
+    // was never invited via the direct-invite flow).
+    const handler = createProfileHandler(deps);
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const ctx = makeCtx();
+
+    await handler.handle(rumor, ctx);
+
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+  });
+
+  it('a sendAnnouncement failure is best-effort and does not abort the rest of handle()', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    deps.sendAnnouncement = vi.fn(async () => {
+      throw new Error('publish failed');
+    });
+    const handler = createProfileHandler(deps);
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const ctx = makeCtx();
+
+    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
+    expect(deps.writeContactEntry).toHaveBeenCalledOnce();
+  });
+
+  it('a consumePendingDirectInviteMarker failure is best-effort, fails closed (no accepted post), and does not abort the rest of handle()', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    deps.consumePendingDirectInviteMarker = vi.fn(async () => {
+      throw new Error('idb read failed');
+    });
+    const handler = createProfileHandler(deps);
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const ctx = makeCtx();
+
+    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
+  });
+
+  // ─── Round-trip seam binding (S2-review-established requirement): every
+  // producer's payload must bind to the REAL parseStructured guard, not just
+  // an assumed shape. ────────────────────────────────────────────────────────
+  it('round-trip: buildAcceptedAnnouncementContent output parses back through the real parseStructured guard to the exact InviteLifecycleContent shape', async () => {
+    const { parseStructured } = await import('@/src/lib/marmot/parseStructured');
+    const { buildAcceptedAnnouncementContent } = await import('@/src/lib/marmot/handlers/profileHandler');
+
+    const content = buildAcceptedAnnouncementContent(AUTHOR_PUBKEY);
+    const parsed = parseStructured(content);
+
+    expect(parsed).toEqual({ type: 'invite_lifecycle', event: 'accepted', pubkey: AUTHOR_PUBKEY });
   });
 });

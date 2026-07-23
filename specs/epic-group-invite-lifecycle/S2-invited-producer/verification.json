@@ -1,0 +1,69 @@
+{
+  "story_id": "S2",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S2-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the `invited` producer wired to a real MLS-Add-success signal (e.g. an awaited resolution of `inviteByKeyPackageEvent` or equivalent, or a callback fired only on confirmed Add) rather than fired unconditionally regardless of outcome, or gated on a hardcoded `true`/a mocked success flag left over from scaffolding? Does `sendApplicationRumor` get invoked with the real `inviteeHex` computed from the actual invite target, not a frozen test-fixture pubkey baked into production code?"
+    },
+    {
+      "question_id": "VQ-S2-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the `invited` producer wired at the direct-invite call site specifically (`InviteMemberModal.tsx` / `pages/groups.tsx`'s `submitInviteWithMarker` path), per architecture.md's Boundary Rules ('production is wired at the page level via the injected `sendAnnouncement` callback... NOT added inside `inviteByNpub`, DD-8')? Confirm the diff does not touch `inviteByNpub` or any shared helper the join-request/invite-link flow (`approveJoinRequestImpl`) also calls."
+    },
+    {
+      "question_id": "VQ-S2-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `invite-producer` (`InviteMemberModal.tsx` + its `pages/groups.tsx` call site) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `parse` to construct the payload, or into `accept-producer`/`decline-a`/`decline-b`), and do they flow through the declared `InviteLifecycleContent` seam contract rather than a direct import of internals?"
+    },
+    {
+      "question_id": "VQ-S2-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does `app/tests/unit/groups/InviteMemberModal.test.tsx` cover both AC-PROD-1 (post on Add success) and AC-PROD-2 (no post via the join-request reuse of `inviteByNpub`) with tests that would fail if the producer were wired to the wrong call site — i.e. does the AC-PROD-2 regression test actually invoke `approveJoinRequestImpl`'s code path (or a realistic stand-in for it) and assert the absence of an `invite_lifecycle` rumor, rather than merely asserting `InviteMemberModal` itself behaves correctly in isolation?"
+    },
+    {
+      "question_id": "VQ-S2-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed behavior match the spec's intent that a direct-invite MLS Add success posts exactly one `invited` announcement into the group, with no double-post if `sendApplicationRumor` is retried, and no post at all if the MLS Add itself fails (partial-failure safety)? Is this fire-and-forget as specified — i.e. does a rumor-send failure not roll back or block the already-committed MLS Add?"
+    },
+    {
+      "question_id": "VQ-S2-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Does the `invited` rumor's content contain only `{type:'invite_lifecycle', event:'invited', pubkey:<inviteeHex>}` — no nickname, avatar, or other profile metadata of the inviter or invitee — consistent with this project's non-negotiable privacy invariant (CLAUDE.md: profile information must never be broadcast, even over an encrypted group channel to non-recipient members who haven't yet joined)? Provide the exact payload construction and a test inspecting the rumor content shape, not just that a rumor was sent."
+    },
+    {
+      "question_id": "VQ-S2-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-1",
+      "question": "When a direct contact-invite (`submitInviteWithMarker` / `InviteMemberModal`) completes its MLS Add successfully, does the app send an application rumor with content `{type:'invite_lifecycle', event:'invited', pubkey:<inviteeHex>}` into the group? Provide (a) the production code path from Add-success to `sendApplicationRumor` call, (b) a test that drives a successful Add through the real modal submit handler (not a hand-constructed rumor bypassing the modal) and asserts the exact rumor content, and (c) confirmation the test does not stub `sendApplicationRumor` in a way that would pass even if the payload shape were wrong (e.g. asserting only that the mock was called, not with what arguments)."
+    },
+    {
+      "question_id": "VQ-S2-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-2",
+      "question": "Does approving a join-request via `approveJoinRequestImpl` (reusing `inviteByNpub`) produce NO `invite_lifecycle` `invited` message — only the pre-existing `member_admitted` announcement? Provide (a) confirmation via code reading that `inviteByNpub` itself was not touched to add the producer, (b) a regression test that exercises `approveJoinRequestImpl`'s real code path and asserts zero `invite_lifecycle` rumors were sent while the `member_admitted` announcement still fires, and (c) confirmation this test would have failed had the producer mistakenly been placed inside `inviteByNpub` instead of the direct-invite call site (i.e. it is state-discriminating between the two placements, not merely a smoke test of `InviteMemberModal`)."
+    },
+    {
+      "question_id": "VQ-S2-009",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "`app/pages/profile.tsx` has its own independent direct-invite surface (`handleAddToGroup` / `addToGroupWithMarker`, ~lines 497-650) that calls `inviteByNpub` directly with its own pending-marker bookkeeping — it does NOT render `InviteMemberModal` and does NOT call `submitInviteWithMarker`, so it never received the `invited` producer wired by this story. AC-PROD-1's wording scopes the producer specifically to `submitInviteWithMarker`/`InviteMemberModal` (which this story satisfies exactly), but from a product-behavior standpoint, both surfaces perform the identical action (A directly invites a known contact, committing an MLS Add synchronously via `inviteByNpub`). Is it intended that inviting the same contact from the profile page's 'Add to group' button silently produces no `invited` announcement while the group page's invite modal does? If not intentional, this is a spec gap (a second direct-invite call site AC-PROD-1 does not name) rather than an implementation defect in this story — recommend a backlog finding for a future story to either thread the same `sendAnnouncement`-bearing wrapper into `addToGroupWithMarker`, or fold `addToGroupWithMarker`'s logic into `submitInviteWithMarker` so there is only one direct-invite core to extend."
+    },
+    {
+      "question_id": "VQ-S2-010",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "The fire-and-forget send in `submitInviteWithMarker` (`sendAnnouncement?.(...).catch(() => {})`) swallows a publish failure completely silently — no `console.warn`, unlike the marker-write/marker-clear failure paths in the same function which both log via `console.warn` before continuing. Is silent swallowing acceptable here (the announcement is best-effort/informational and losing it has no correctness impact, mirroring `member_admitted`'s identical `void sendAnnouncementRef.current?.(...)` precedent in `pages/groups.tsx`, which also does not log), or should a `console.warn` be added for operator visibility into relay-publish failures on this path?"
+    }
+  ]
+}

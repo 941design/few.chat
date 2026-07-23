@@ -1,0 +1,100 @@
+{
+  "story_id": "S1",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S1-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the new `invite_lifecycle` guard branch in `parseStructured.ts` a real discriminator over the raw payload's `type`/`event`/`pubkey` fields, or does it degrade to a tautology (e.g. `event in ['invited','accepted','declined']` implemented as `typeof event === 'string'`, or a `pubkey` check that accepts any string of length 64 regardless of hex-ness)? Is the enum check and the `/^[0-9a-f]{64}$/` regex applied literally against the actual field values in every code path that can reach this branch, with no frozen `true`/short-circuit stand-in left over from scaffolding?"
+    },
+    {
+      "question_id": "VQ-S1-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the new `invite_lifecycle` union member and its guard live entirely inside `app/src/lib/marmot/parseStructured.ts` (the `parse` module), with no leakage of parsing logic into `ChatBox.tsx` or any React component, per architecture.md's Boundary Rules ('Domain must not import React components' and the inverse — no React-side re-implementation of the guard)? Is the guard structured as a rebuild-from-named-fields branch (DD-6) rather than a widened `as StructuredContent` cast anywhere in the diff?"
+    },
+    {
+      "question_id": "VQ-S1-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `parse` (`app/src/lib/marmot/parseStructured.ts`) be deleted and rewritten from only the `InviteLifecycleContent` seam contract (type/event/pubkey fields + the three invariants in `stories.json#seams[0].contract`) without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `render`, `invite-producer`, or `accept-producer` to know how the variant will be consumed), and do they flow through the declared seam contract in architecture.md rather than an ad hoc import?"
+    },
+    {
+      "question_id": "VQ-S1-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does `app/tests/unit/marmot/parseStructured.test.ts` exercise all five ACs (AC-STRUCT-1 through AC-STRUCT-5) with distinct, state-discriminating assertions — i.e. would a test asserting only 'parseStructured does not throw' pass regardless of correctness? Specifically: is there a dedicated case for each rejected `event` enum value individually (not just one 'invalid event' case), a case for each pubkey-malformation category (uppercase hex, non-hex chars, wrong length, non-string) individually, and a case proving extra/spoofed properties (`role`, `__proto__`) are stripped from the returned object rather than merely absent from the test's own assertions?"
+    },
+    {
+      "question_id": "VQ-S1-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed `invite_lifecycle` variant match the spec's intent of establishing a foundation type that S2/S3 (producers), S4 (render), S7/S8 (immutability) all build on without modification — i.e. is the union member's shape final as landed (no follow-up field additions anticipated by the implementer that would force S2-S8 to re-touch this file), and does the guard reject silently (fall through to plain-text) rather than throwing, so a malformed payload never crashes the render path?"
+    },
+    {
+      "question_id": "VQ-S1-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Is the `invite_lifecycle` guard fail-closed against adversarial input at the transport→parse trust boundary — i.e. does a payload with `type: 'invite_lifecycle'` but any additional or renamed property (`__proto__`, `constructor`, a spoofed `role: 'admin'`) get rebuilt into a plain `{type, event, pubkey}` object with no prototype-pollution vector, and does the canonical-hex `pubkey` guard reject case-folded or Unicode-homoglyph lookalikes of valid hex, not just obviously-wrong strings? Provide the specific test(s) exercising a spoofed-extra-property payload end-to-end through `parseStructured`, not just against an internal helper."
+    },
+    {
+      "question_id": "VQ-S1-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-STRUCT-1",
+      "question": "For a payload with `type: 'invite_lifecycle'`, a valid `event` in `{'invited','accepted','declined'}`, and a `pubkey` matching `/^[0-9a-f]{64}$/`, does `parseStructured` return an object containing exactly `{type, event, pubkey}` and nothing else? Provide (a) the guard branch code, (b) a test asserting `Object.keys(result)` (or equivalent) has exactly these three keys for a valid payload of each of the three `event` values, and (c) confirmation the test is not merely checking `result.event === expected` while ignoring extra keys that might have leaked through."
+    },
+    {
+      "question_id": "VQ-S1-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-STRUCT-2",
+      "question": "For a payload with `type: 'invite_lifecycle'` and an `event` value outside the three-member enum (e.g. `'pending'`, `''`, `undefined`, `'INVITED'` case-mismatched), does `parseStructured` return the plain-text fallback (not an `invite_lifecycle`-shaped object, and not `null`/throw if plain-text fallback is the existing convention)? Provide (a) the rejection branch, (b) a parameterized test covering at least `'pending'`, empty string, `undefined`, and a case-mismatched enum value individually, and (c) confirmation none of these cases silently produce a partially-populated `invite_lifecycle` object."
+    },
+    {
+      "question_id": "VQ-S1-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-STRUCT-3",
+      "question": "For a payload with `type: 'invite_lifecycle'`, a valid `event`, but a malformed `pubkey` (uppercase hex, embedded non-hex character, 63 or 65 characters, or a non-string value such as a number/null), does `parseStructured` reject and fall through to plain text? Provide (a) the hex-guard code showing it is exactly `/^[0-9a-f]{64}$/` (not a looser `typeof === 'string'` check flagged elsewhere in this codebase as a latent-throw pattern), (b) a parameterized test covering each malformation category independently, and (c) confirmation a non-string `pubkey` (e.g. `pubkey: 123`) does not throw inside the guard before the type check runs."
+    },
+    {
+      "question_id": "VQ-S1-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-STRUCT-4",
+      "question": "For an otherwise-valid `invite_lifecycle` payload carrying an extra property (e.g. `{type:'invite_lifecycle', event:'invited', pubkey:'<64hex>', role:'admin'}` or a `__proto__`-keyed extra field), does the object `parseStructured` returns contain only `type`/`event`/`pubkey` — i.e. is the return value constructed as `{type:'invite_lifecycle', event, pubkey}` from destructured named fields, never `{...rawPayload}` or `payload as StructuredContent`? Provide (a) the exact construction line, (b) a test asserting the spoofed extra property is absent from the returned object (not merely that the AC-visible fields are correct), and (c) confirmation this test would fail against a naive `{...payload, type:'invite_lifecycle'}` implementation (i.e. it is state-discriminating, not a false-green)."
+    },
+    {
+      "question_id": "VQ-S1-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-STRUCT-5",
+      "question": "Is it documented (in code comment or type-level API) and unit-tested that any renderer of the `invite_lifecycle` variant MUST resolve the displayed author from the message's protocol-level `senderPubkey`, never from `payload.pubkey`? Since S1 owns only the parse-boundary guarantee (not the render-time consumption, which is S4's job jointly exercising this AC) — provide (a) the doc-comment or type annotation on the `invite_lifecycle` union member stating the convention, (b) a unit test at the parse boundary proving `parseStructured`'s output keeps `pubkey` as a plain payload field with no coupling to any transport-level sender identity (i.e. the parser itself never reads or requires a `senderPubkey` argument, keeping the two values structurally distinct), and (c) confirmation this story's test suite does not itself attempt to fabricate the full forged-author render scenario (that is S4's joint-exercise responsibility per this story's `notes` field in stories.json)."
+    },
+    {
+      "question_id": "VQ-S1-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-STRUCT-1",
+      "question": "[Seam contract — FR-5, InviteLifecycleContent, consumed by S2/S3/S4/S7/S8] Does the exact contract in `stories.json#seams[0].contract` hold as landed: field `type` is the literal `'invite_lifecycle'`, field `event` is exactly the 3-member string union `'invited'|'accepted'|'declined'` (no 4th value ever accepted, no numeric/enum-index representation), and field `pubkey` is a string constrained to `/^[0-9a-f]{64}$/` (lowercase only, exactly 64 hex characters, the subject/invitee — not the author)? Provide (a) the TypeScript type declaration for the union member, (b) a test suite section that asserts membership is closed (a 4th `event` string value is rejected, confirming the enum is not accidentally left open via a loose `string` type at the boundary), and (c) confirmation every downstream consumer (S2's producer construction, S4's render lookup) imports this type rather than redeclaring an equivalent shape locally."
+    },
+    {
+      "question_id": "VQ-S1-013",
+      "phase": "post-impl",
+      "category": "TEST",
+      "ac_id": "AC-STRUCT-3",
+      "question": "The pubkey-malformation test (`app/tests/unit/marmot/parseStructured.test.ts`, 'returns null for invite_lifecycle with a non-canonical pubkey') originally wrapped the `toBeNull()` assertion INSIDE the `expect(() => {...}).not.toThrow()` callback, which raised a false-green concern (would an inner AssertionError be swallowed by the outer wrapper?). Verified directly during implementation (a throwaway vitest case confirmed an inner `AssertionError` correctly propagates and fails the outer `not.toThrow()` — no swallowing) and the test was then simplified to call `parseStructured` inside the throw-check and assert `toBeNull()` separately outside it, removing the ambiguity entirely. Confirm the landed version (result captured via a `let result` outside the callback, asserted after) reads unambiguously and still exercises both properties: (a) the parser itself never throws for a non-string pubkey, and (b) the malformed input returns null.",
+      "notes": "Self-resolved during implementation via a direct vitest experiment (documented above); the test was simplified accordingly. Retained as a post-impl question so the verification-examiner can independently confirm the simplified form still covers both properties, not just to re-litigate the already-verified vitest semantics."
+    },
+    {
+      "question_id": "VQ-S1-014",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "ac_id": "AC-STRUCT-1",
+      "question": "The new `invite_lifecycle` guard branch (parseStructured.ts lines 80-86) is the 9th sequential `if` inside the same `try` block, appended after `member_admitted`. Does adding a 9th discriminated branch to this single function still read as one cohesive strict/loose-guard inventory, or has the function crossed a size/complexity threshold (now 9 structured types in one flat if-chain) where a future story should consider a lookup-table or per-type-guard-function refactor? This is a design-quality question, not a correctness one — the current landing is spec-compliant either way — but worth flagging for the epic's later stories (S2-S8) which will read/extend this same function only implicitly (S1 is their only touch point on this file per stories.json's `files` list)."
+    }
+  ]
+}

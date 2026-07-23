@@ -1,0 +1,71 @@
+{
+  "story_id": "S9",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S9-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do the AC-CROSS-1 and AC-CROSS-2 property/interleaving tests genuinely generate and iterate over the declared spaces (duplicate-redelivery counts, crash-timing points, sync-timing points for AC-CROSS-1; apply-site x arrival-order combinations for AC-CROSS-2), rather than hand-picking one or two representative sequences and calling it a 'property test' in name only? Would a test that only exercises the zero-duplicates/no-crash/already-synced happy path (trivially satisfied by any correct-looking implementation) pass under this suite, or does the generator space genuinely include the adversarial timing points the AC names?"
+    },
+    {
+      "question_id": "VQ-S9-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story verify against the REAL, already-implemented S5 (decline-b)/S6 (decline-a)/S8 (immutability-receive) production code \u2014 with no mocks, stubs, or fakes standing in for any of the three modules' actual logic \u2014 consistent with its exemption from the one-module-per-story rule (an integration story is licensed to reach across modules to verify the assembled whole, never to re-implement logic another module owns)? Confirm no new production logic was added anywhere by this story (per its scope exclusion), only test/harness code."
+    },
+    {
+      "question_id": "VQ-S9-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could this integration story's verification surface be deleted and rewritten without modifying any file outside its `dependencies_allowed` list (the union of its owned ACs' `Spans modules:` set \u2014 decline-a, decline-b for AC-CROSS-1; immutability-receive for AC-CROSS-2, per acceptance-criteria.md and stories.json's `cross_cutting_acs`)? If not, which cross-module dependencies exist and do they flow through declared seam contracts (`DeclineGiftWrapPayload`, `InviteLifecycleContent`) in architecture.md, rather than reaching into internal implementation details of S5/S6/S8 that those stories' own contracts don't expose?"
+    },
+    {
+      "question_id": "VQ-S9-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Are the AC-CROSS-1 and AC-CROSS-2 tests structured as genuine property/interleaving tests (e.g. parameterized over the cartesian product of the named dimensions, or using a property-testing framework's generator/shrinking machinery) rather than a fixed enumerated list of a handful of manually-chosen cases mislabeled as covering 'the space'? Does the test harness simulate crash/restart (process-level or state-reset simulation) and out-of-order `onHistorySynced` firing as REAL asynchronous interleavings, not just sequential function calls in a convenient order that never actually exercises the hazard?"
+    },
+    {
+      "question_id": "VQ-S9-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does this story's verification match the spec's/architecture.md's framing that it establishes the property-level guarantees which S10's e2e pass then merely conformance-confirms for one representative interleaving \u2014 i.e. is this the PRIMARY search over the ordering/interleaving space (not deferred to S10, which explicitly excludes the combinatorial search per its own scope), and does it produce a durable, re-runnable test artifact (not a one-off manual exploration that leaves no regression protection)?"
+    },
+    {
+      "question_id": "VQ-S9-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Across the full AC-CROSS-1 interleaving space, is there NO interleaving that produces more than one `declined` post or more than one MLS Remove for the same invitee/group (double-removal or double-announcement would be an observable correctness/security regression, not just cosmetic), and across the full AC-CROSS-2 space, does the admin-carve-out gate hold uniformly \u2014 i.e. no apply-site x arrival-order combination exists where a non-admin-sourced delete/tombstone is honored, or where an edit-into-announcement (by target or by replacement content) slips through? Provide the specific assertion(s) that would fail if a single combination in either space violated the gate."
+    },
+    {
+      "question_id": "VQ-S9-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CROSS-1",
+      "question": "For any interleaving drawn from {zero-or-more duplicate redeliveries of a single decline gift wrap} x {zero-or-more crash/restart events, before or after DD-10 step 1} x {historical-sync completion before/during/after gift-wrap delivery}, does the system converge to AT MOST ONE `declined` post and AT MOST ONE MLS Remove per invitee/group, and to EXACTLY ONE of each whenever at least one delivered decline found the invitee still pending at some evaluation time? Provide (a) the generator/parameterization covering all three named dimensions against the real S5/S6 code, (b) the specific assertions checking both the 'at most one' bound (no interleaving ever produces two) and the 'exactly one when pending-at-some-point' floor (no interleaving ever produces zero when it shouldn't), and (c) confirmation crash/restart is simulated as a genuine interruption of the async flow (e.g. killing/reconstructing state mid-sequence), not merely omitted from the test."
+    },
+    {
+      "question_id": "VQ-S9-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CROSS-2",
+      "question": "For any apply site drawn from {direct `applyDeleteEditSignal`, buffered `resolvePendingSignalsForSlot`, TTL-expiry materialization, tombstone path} x any arrival order (signal-before-target, target-before-signal), does a delete/tombstone signal targeting a non-`image` `StructuredContent` message get honored if and only if the signal's sender is a current group admin at evaluation time, and is an edit signal whose target OR replacement content parses as non-`image` structured content always rejected regardless of apply site or arrival order? Provide (a) the generator/parameterization covering all four sites x both arrival orders against the real S8 code (8 combinations minimum for the delete/tombstone half, plus the edit-rejection half), (b) the specific admin/non-admin and edit-rejection assertions per combination, and (c) confirmation the buffered and TTL-expiry sites are genuinely exercised with signal-before-target ordering (the ordering these paths exist specifically to handle), not only signal-after-target which the direct path already covers trivially."
+    },
+    {
+      "question_id": "VQ-S9-009",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "ac_id": "AC-CROSS-1",
+      "question": "The story brief suggested vi.resetModules() + re-import as a technique to simulate an app restart resetting welcomeSubscription.ts's session-lifetime Maps (historySyncedGroupIds, declineProcessingChains). Implementation found this unnecessary: by inspection, applyDecline's only genuinely-throwing step is the MLS commit() call itself (modeled via commitBehavior: ['throw','succeed']); every step after a successful commit (sendAnnouncement, clearPendingDirectInvite) is internally try/caught and non-rethrowing, so a crash strictly between 'Remove commits' and 'mark-seen persists' cannot be injected as a distinguishable state via any black-box mock. Was the fallback (replay-after-restart via the tree-membership gate, i.e. deliver a second eventId against the same mutated members array without resetModules) actually load-bearing, or would a naive test (single delivery, no crash dimension at all) have passed equally well against a broken implementation? Verify the crash-before-commit scenario (commitBehavior: ['throw','succeed']) is the one doing real work: temporarily forcing commit to always succeed on first try should make the 'commitAttempts()===2' assertions in crossCuttingDeclineConvergence.test.ts fail, confirming they are load-bearing rather than vacuously true. EMPIRICALLY CONFIRMED during implementation: temporarily forcing commitBehavior to ['succeed'] only (removing the throw) on crossCuttingDeclineConvergence.test.ts made both the [crash-before-commit] and [concurrent double-click x crash-before-commit] tests fail (commitAttempts()===2 assertion), confirming the throw-then-succeed script is load-bearing, not vacuous. Change reverted immediately after the check; no production code was touched."
+    },
+    {
+      "question_id": "VQ-S9-010",
+      "phase": "post-impl",
+      "category": "TEST",
+      "ac_id": "AC-CROSS-2",
+      "question": "Implementation discovered that the TTL-expiry apply site's phase 2 (persistExpiredEntryEffect, chatPersistence.ts's sweepExpiredForThreadKeyLocked) structurally ONLY fires for targets with NO known row \u2014 it cannot evaluate a 'target-announcement' classification (the announcement-ness of a target that has not yet arrived) at expiry time, because there is nothing yet to classify. crossCuttingImmutabilityInvariance.test.ts therefore scopes its TTL-expiry it.each to the 'replacement-announcement' half of EDIT_TABLE only, with a comment explaining the target-announcement half's protection is enforced at the BUFFERED site instead (once the real target actually arrives). Is this structural-inapplicability judgment correct, or does it mask a genuine gap \u2014 e.g. could a target-announcement edit signal that ages past TTL with no known row, followed MUCH LATER by the real announcement target finally arriving, produce a materialized-then-overwritten row whose transient state (between TTL-materialization and the target's eventual arrival) is observable/exploitable in a way this file does not test? The buffered-site it.each (signal arrives, THEN target appends before TTL expiry) is not the identical interleaving as (signal ages past TTL with no known row, THEN target arrives) \u2014 confirm whether these two orderings are provably equivalent from the gate's point of view, or whether a fifth scenario is warranted."
+    }
+  ]
+}

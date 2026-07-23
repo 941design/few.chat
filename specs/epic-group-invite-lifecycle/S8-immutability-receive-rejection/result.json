@@ -1,0 +1,45 @@
+{
+  "story_id": "S8",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-22T22:40:00Z",
+  "files_created": [
+    "app/src/lib/marmot/announcementFamily.ts",
+    "app/tests/unit/marmot/chatPersistence.test.ts",
+    "specs/epic-group-invite-lifecycle/S8-immutability-receive-rejection/architecture.json",
+    "specs/epic-group-invite-lifecycle/S8-immutability-receive-rejection/result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/messageEdits/api.ts",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/messageEdits/messageActionUi.ts",
+    "app/src/context/ChatStoreContext.tsx",
+    "app/src/context/MarmotContext.tsx",
+    "app/pages/groups.tsx",
+    "app/tests/unit/messageEdits/api.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts"
+  ],
+  "tests_added": {
+    "unit": 36
+  },
+  "test_counts": {
+    "baseline": 4013,
+    "final": 4049
+  },
+  "mocks": [],
+  "remediation_rounds": 1,
+  "modules_touched": [
+    "immutability-receive"
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Two things made this harder than the AC list alone suggested. (1) Establishing a clean pre-S8 baseline was unexpectedly risky: messageEdits/api.ts, chatPersistence.ts, and messageActionUi.ts already carried substantial UNCOMMITTED work from S1-S7 (this epic's earlier stories were implemented but never committed), so a naive `git stash push` on just my own edits silently reverted those files all the way to the last git commit — erasing S7's uncommitted messageActionUi.ts implementation too, not just my S8 delta. Caught immediately (a stashed test failure referencing a signature S7 added), stash was popped back before any loss, and I switched to running the full suite live instead of diffing against a synthetic pre-story snapshot. (2) The admin-lookup the receive-side gate needs is only available live via an async MLS client call, but the two functions that needed to consult it (applyDeleteEditSignal/resolvePendingSignalsForSlot) are a FROZEN public seam called from ~10 existing call sites across DM and group, React and non-React code, none of which are in this story's declared scope. Threading a new required parameter through all of them was out of scope; the resolution was a settable module-level singleton (registerGroupAdminsProvider) registered once by MarmotContext.tsx as an explicitly pre-authorized composition-root touch — correct, but required reasoning through the full call graph before landing on the shape.",
+    "surprised_by": "Two things surfaced only through active adversarial self-testing (mutation checks on my own new code), not from the AC list itself. (1) The tombstone-application path's own independent re-check (chatPersistence.ts, added for AC-IMMUT-4/5's explicit 'both applyDeleteEditSignal AND the tombstone path must reject' wording) initially broke a legitimate case: a DM message that happens to be announcement-SHAPED content (e.g. a call_notice) is supposed to stay own-author-deletable per S7's existing DM/group carve-out, but tombstoneMessage's redundant check has no notion of thread type — it only sees raw content plus an admin list — so it re-applied the group-only announcement gate to a DM message and incorrectly rejected an own-author delete. Fixed by only passing the authorization object to tombstoneMessage for group threads. (2) Mutating the cap-eviction known-row branch's DELETE authorization line was silently masked by tombstoneMessage's own downstream recheck (genuine, intended redundancy for delete) — but the sibling EDIT-rejection line one branch over had NO such downstream backstop (updateMessageInPlace performs no independent gate check), and my first pass at that test genuinely didn't cover it. A mutation check caught the gap and a new test now closes it. General lesson: a defense-in-depth recheck has to replicate every SCOPING condition of the primary check (not just its authorization logic), and 'this branch is defended twice' does not imply its sibling branch is too — each needs its own coverage proof, not an inference from a neighboring line's redundancy.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "notes": " [POST: S9 cross-cutting enumeration surfaced a real AC-IMMUT-6 bypass (TTL-expiry×late-target); fixed via materializedFromEdit placeholder supersession in chatPersistence/api; adversarial re-review clean.]"
+}

@@ -1,0 +1,38 @@
+{
+  "story_id": "S2",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-22T18:15:00Z",
+  "files_created": [
+    "app/tests/unit/groups/InviteMemberModal.test.ts",
+    "specs/epic-group-invite-lifecycle/S2-invited-producer/architecture.json",
+    "specs/epic-group-invite-lifecycle/S2-invited-producer/result.json"
+  ],
+  "files_modified": [
+    "app/src/components/groups/InviteMemberModal.tsx",
+    "app/pages/groups.tsx",
+    "specs/epic-group-invite-lifecycle/S2-invited-producer/verification.json"
+  ],
+  "tests_added": {
+    "unit": 14
+  },
+  "test_counts": {
+    "baseline": 3858,
+    "final": 3872
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": ["invite-producer"],
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Confirming AC-PROD-1/DD-8's call-site boundary required more than reading the story's declared file list: a grep for 'InviteMemberModal' across the app turned up a second file, pages/profile.tsx, which does NOT render the component or call submitInviteWithMarker — the hit was a docstring cross-reference to a wholly separate hand-duplicated implementation (addToGroupWithMarker/handleAddToGroup) of the same direct-invite semantics. Verifying that this second surface was genuinely out of AC-PROD-1's wording (rather than a call site the story silently needed to cover) took an extra investigation pass before implementation could proceed with confidence.",
+    "surprised_by": "pages/profile.tsx's 'Add to group' action reimplements the exact same direct-invite flow (inviteByNpub + pending-marker bookkeeping) as InviteMemberModal.tsx's submitInviteWithMarker, in a fully separate function this story's producer wiring cannot reach. The same product action (A directly invites a known contact) will now emit the invited announcement from the group page's invite modal but silently not from the profile page's Add-to-group button. AC-PROD-1's wording scopes exactly to submitInviteWithMarker/InviteMemberModal, so this is not a defect in this story, but it is a real product-behavior inconsistency. Filed as VQ-S2-009 (post-impl, appended to verification.json) rather than fixed here, since profile.tsx is outside this story's declared file scope and duplicating/threading the producer there would be scope creep beyond S2's file list.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

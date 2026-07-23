@@ -216,6 +216,9 @@ export type Copy = {
     renameGroupError: string;
     renamedGroupAnnouncement: (actor: string, name: string) => string;
     admittedMemberAnnouncement: (admitter: string, member: string) => string;
+    inviteLifecycleInvited: (invitee: string) => string;
+    inviteLifecycleAccepted: (invitee: string) => string;
+    inviteLifecycleDeclined: (invitee: string) => string;
     makeAdminButton: string;
     makeAdminTitle: string;
     makeAdminBody: string;
@@ -886,6 +889,9 @@ const copy: Record<LanguageCode, Copy> = {
       renameGroupError: 'Failed to rename group. Please try again.',
       renamedGroupAnnouncement: (actor: string, name: string) => `${actor} renamed the group to “${name}”`,
       admittedMemberAnnouncement: (admitter: string, member: string) => `${admitter} admitted ${member}`,
+      inviteLifecycleInvited: (invitee: string) => `${invitee} was invited`,
+      inviteLifecycleAccepted: (invitee: string) => `${invitee} joined the group`,
+      inviteLifecycleDeclined: (invitee: string) => `${invitee} declined the invitation`,
       makeAdminButton: 'Make Admin',
       makeAdminTitle: 'Make Admin?',
       makeAdminBody: 'This cannot be undone. Admins can invite members, accept join requests, cancel invitations, and grant admin to others.',
@@ -1449,6 +1455,9 @@ const copy: Record<LanguageCode, Copy> = {
       renameGroupError: 'Gruppe konnte nicht umbenannt werden. Bitte erneut versuchen.',
       renamedGroupAnnouncement: (actor: string, name: string) => `${actor} hat die Gruppe in „${name}“ umbenannt`,
       admittedMemberAnnouncement: (admitter: string, member: string) => `${admitter} hat ${member} aufgenommen`,
+      inviteLifecycleInvited: (invitee: string) => `${invitee} wurde eingeladen`,
+      inviteLifecycleAccepted: (invitee: string) => `${invitee} ist der Gruppe beigetreten`,
+      inviteLifecycleDeclined: (invitee: string) => `${invitee} hat die Einladung abgelehnt`,
       makeAdminButton: 'Als Admin festlegen',
       makeAdminTitle: 'Als Admin festlegen?',
       makeAdminBody: 'Das kann nicht rückgängig gemacht werden. Admins können Mitglieder einladen, Beitrittsanfragen bestätigen, Einladungen zurückziehen und anderen Admin-Rechte erteilen.',

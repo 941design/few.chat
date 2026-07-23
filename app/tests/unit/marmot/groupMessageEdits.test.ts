@@ -96,7 +96,7 @@ const malloryPubHex = getPublicKey(malloryPrivBytes);
 
 // ── Module imports (after mocks) ────────────────────────────────────────────
 
-const { applyDeleteEditSignal, resolvePendingSignalsForSlot, clearAllMessageEditsState } = await import(
+const { applyDeleteEditSignal, resolvePendingSignalsForSlot, clearAllMessageEditsState, registerGroupAdminsProvider } = await import(
   '@/src/lib/messageEdits/api'
 );
 const { buildDeleteRumor, buildEditReplacementRumor, buildEditMarkedCompanionKind5, DELETE_EDIT_RUMOR_KIND } =
@@ -144,6 +144,7 @@ beforeEach(async () => {
   mockDispatcherRumor = null;
   await clearAllMessages();
   await clearAllMessageEditsState();
+  registerGroupAdminsProvider(null); // S8: fail-closed default unless a test opts in
 });
 
 // ─── createDeleteEditHandler: unconditional routing, no pre-gate ────────────
@@ -526,6 +527,106 @@ describe('group delete/edit send orchestration (S5 gate-remediation, finding 3: 
     expect(harness.getView()).toEqual([target]);
     const { messages } = await loadMessages(GROUP_ID);
     expect(messages.find((m) => m.id === target.id)?.tombstoned).toBeFalsy();
+  });
+
+  // ── S8 (epic-group-invite-lifecycle): admin moderation-delete carve-out ──
+
+  describe('S8: admin moderation-delete carve-out (completes AC-IMMUT-3 functional loop with the receive-side AC-IMMUT-5 gate)', () => {
+    const ANNOUNCEMENT_CONTENT = JSON.stringify({ type: 'member_admitted', pubkey: 'b'.repeat(64) });
+
+    it('an ADMIN can construct+send a delete of a PEER\'s informative-announcement message — sent rumor is signed with the ADMIN\'s own key', async () => {
+      // The peer (mallory, in this fixture's naming) authored the
+      // announcement; alice (the caller here) is a group admin moderating it.
+      // The receive-side gate (applyDeleteEditSignal, invoked internally by
+      // performGroupDeleteMessage's own durable-apply step) independently
+      // confirms alice's admin status via the registered provider — the
+      // send-side isCurrentUserAdmin flag alone does not bypass it.
+      registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_ID ? [alicePubHex] : []));
+      const target = makeGroupTarget({ id: 'admin-mod-1', content: ANNOUNCEMENT_CONTENT, senderPubkey: malloryPubHex });
+      await appendMessage(GROUP_ID, target);
+
+      const harness = makeHarness([target]);
+      const sent: unknown[] = [];
+      const group = { sendApplicationRumor: vi.fn(async (rumor: unknown) => { sent.push(rumor); }) };
+
+      await performGroupDeleteMessage('admin-mod-1', {
+        ...makeDeps(harness, 'admin-mod-1', group), // pubkey/privateKeyHex default to alice
+        isCurrentUserAdmin: true,
+      });
+
+      expect(harness.getView().find((m) => m.id === target.id)).toBeUndefined();
+      const { messages } = await loadMessages(GROUP_ID);
+      expect(messages.find((m) => m.id === target.id)?.tombstoned).toBe(true);
+
+      // The wire rumor is signed by the ADMIN (alice), never the original
+      // author (mallory) — the receive side authorizes on this self-asserted
+      // sender against the group's admin set (ADR-006), not on matching the
+      // target's original author.
+      expect(sent).toHaveLength(1);
+      const wireRumor = sent[0] as { pubkey: string };
+      expect(wireRumor.pubkey).toBe(alicePubHex);
+      expect(wireRumor.pubkey).not.toBe(malloryPubHex);
+    });
+
+    it('a NON-admin still cannot delete a peer\'s message even when it IS an announcement — own-message-only is preserved', async () => {
+      const target = makeGroupTarget({ id: 'admin-mod-2', content: ANNOUNCEMENT_CONTENT, senderPubkey: malloryPubHex });
+      await appendMessage(GROUP_ID, target);
+
+      const harness = makeHarness([target]);
+      const group = { sendApplicationRumor: vi.fn(async () => {}) };
+
+      await performGroupDeleteMessage('admin-mod-2', {
+        ...makeDeps(harness, 'admin-mod-2', group),
+        isCurrentUserAdmin: false,
+      });
+
+      expect(group.sendApplicationRumor).not.toHaveBeenCalled();
+      expect(harness.getView()).toEqual([target]);
+      const { messages } = await loadMessages(GROUP_ID);
+      expect(messages.find((m) => m.id === target.id)?.tombstoned).toBeFalsy();
+    });
+
+    it('an ADMIN still cannot delete a peer\'s ORDINARY (non-announcement) message — the carve-out grants moderation only, not blanket admin delete', async () => {
+      const target = makeGroupTarget({ id: 'admin-mod-3', content: 'just an ordinary peer message', senderPubkey: malloryPubHex });
+      await appendMessage(GROUP_ID, target);
+
+      const harness = makeHarness([target]);
+      const group = { sendApplicationRumor: vi.fn(async () => {}) };
+
+      await performGroupDeleteMessage('admin-mod-3', {
+        ...makeDeps(harness, 'admin-mod-3', group),
+        isCurrentUserAdmin: true,
+      });
+
+      expect(group.sendApplicationRumor).not.toHaveBeenCalled();
+      expect(harness.getView()).toEqual([target]);
+      const { messages } = await loadMessages(GROUP_ID);
+      expect(messages.find((m) => m.id === target.id)?.tombstoned).toBeFalsy();
+    });
+
+    it('regression: own-message delete of an announcement the caller BOTH authored AND administers still works via the ordinary own-author path (isCurrentUserAdmin omitted entirely, mirroring every pre-S8 call site)', async () => {
+      // AC-IMMUT-4/5 gates an announcement delete strictly on current-admin
+      // sourcing — NOT on authorship — so this scenario (alice both authored
+      // the announcement AND is a registered admin) still requires the
+      // receive-side admin provider to recognize her, exactly like the
+      // moderation-delete case above; it is not a separate "own-message"
+      // exemption for announcements.
+      registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_ID ? [alicePubHex] : []));
+      const target = makeGroupTarget({ id: 'admin-mod-4', content: ANNOUNCEMENT_CONTENT, senderPubkey: alicePubHex });
+      await appendMessage(GROUP_ID, target);
+
+      const harness = makeHarness([target]);
+      const group = { sendApplicationRumor: vi.fn(async () => {}) };
+
+      // isCurrentUserAdmin omitted entirely — mirrors every pre-S8 call site;
+      // isOwnMessage alone is enough to pass performGroupDeleteMessage's send
+      // guard (no isAdminModerationDelete branch needed here).
+      await performGroupDeleteMessage('admin-mod-4', makeDeps(harness, 'admin-mod-4', group));
+
+      expect(harness.getView().find((m) => m.id === target.id)).toBeUndefined();
+      const { messages } = await loadMessages(GROUP_ID);
+      expect(messages.find((m) => m.id === target.id)?.tombstoned).toBe(true);
+    });
   });
 
   it('S5 gate-remediation (finding 2): a chatVersion-bump race that re-adds the row DURING the publish window is corrected by the post-delete re-apply tail', async () => {

@@ -312,3 +312,73 @@ describe('subscribe — unsubscribe stops future notifications (AC-REACT-6)', ()
     expect(listener).toHaveBeenCalledTimes(1);  // still 1, not 2
   });
 });
+
+// ─── S5: groupId / authenticated fields (epic-group-invite-lifecycle) ─────
+//
+// AC-DECLINE-1: groupId persists and round-trips. AC-DECLINE-2: authenticated
+// persists and round-trips for BOTH true and false. Plus backward-compat
+// normalization for entries stored before these two fields existed.
+
+describe('groupId / authenticated fields — persistence (AC-DECLINE-1, AC-DECLINE-2)', () => {
+  it('AC-DECLINE-1: enqueuePendingInvitation with groupId set persists it and round-trips via listPendingInvitations()', () => {
+    const inv = makeInvite({ id: 'groupid-1', groupId: 'hex-group-abc123', authenticated: true });
+    enqueuePendingInvitation(inv);
+    const result = listPendingInvitations();
+    expect(result.find((i) => i.id === 'groupid-1')?.groupId).toBe('hex-group-abc123');
+  });
+
+  it('AC-DECLINE-2: authenticated:true round-trips as true (not coerced to false)', () => {
+    const inv = makeInvite({ id: 'auth-true-1', groupId: 'g1', authenticated: true });
+    enqueuePendingInvitation(inv);
+    const result = listPendingInvitations();
+    expect(result.find((i) => i.id === 'auth-true-1')?.authenticated).toBe(true);
+  });
+
+  it('AC-DECLINE-2: authenticated:false round-trips as false (not coerced to true)', () => {
+    const inv = makeInvite({ id: 'auth-false-1', groupId: 'g2', authenticated: false });
+    enqueuePendingInvitation(inv);
+    const result = listPendingInvitations();
+    expect(result.find((i) => i.id === 'auth-false-1')?.authenticated).toBe(false);
+  });
+});
+
+describe('groupId / authenticated fields — backward compatibility', () => {
+  it('a raw stored entry missing groupId/authenticated entirely reads back with groupId:\'\' and authenticated:false (not undefined, not thrown)', () => {
+    // Written directly to the mocked localStorage store, bypassing
+    // enqueuePendingInvitation, to simulate a pre-migration record.
+    store[PENDING_KEY] = JSON.stringify([
+      {
+        id: 'legacy-no-fields',
+        inviterPubkeyHex: ALICE,
+        receivedAt: 100,
+        welcomeEventJson: '{"kind":444}',
+        // groupId and authenticated are entirely absent
+      },
+    ]);
+
+    expect(() => listPendingInvitations()).not.toThrow();
+    const result = listPendingInvitations();
+    expect(result).toHaveLength(1);
+    expect(result[0].groupId).toBe('');
+    expect(result[0].authenticated).toBe(false);
+  });
+
+  it('a raw stored entry with authenticated as a non-boolean (string) normalizes to false', () => {
+    store[PENDING_KEY] = JSON.stringify([
+      {
+        id: 'legacy-string-authenticated',
+        inviterPubkeyHex: ALICE,
+        receivedAt: 100,
+        welcomeEventJson: '{"kind":444}',
+        groupId: 'some-group',
+        authenticated: 'true', // wrong type — must not be treated as truthy
+      },
+    ]);
+
+    const result = listPendingInvitations();
+    expect(result).toHaveLength(1);
+    expect(result[0].authenticated).toBe(false);
+    // groupId itself is a correctly-typed string and is preserved as-is.
+    expect(result[0].groupId).toBe('some-group');
+  });
+});

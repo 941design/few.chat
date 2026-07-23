@@ -1,0 +1,77 @@
+{
+  "created_at": "2026-07-22T15:02:53Z",
+  "focuses": ["similar-features", "architecture", "testing-and-conventions"],
+  "prior_learnings": [
+    {"id": "marmot-ts-0-5-1-drops", "note": "group inner-rumor pubkey is member-attested, not identity-bound (ADR-006 residual). Admin check on delete inherits this."},
+    {"id": "invitebynpub-commits-memberpubkeys-immediately", "note": "admission at invite time — underpins DD-3/DD-8/decline-Remove."},
+    {"id": "memberprofile-pubkeyhex-already-keyed-signed", "note": "MemberProfile.pubkeyHex keyed to signed author, not rumor sender — relevant to DD-9."},
+    {"id": "mls-resubscribe-can-permanently-drop-future", "note": "epoch-buffered rumor can be dropped on resubscribe — relevant to DD-10 deferral."},
+    {"id": "marmot-ts-commit-does-not-throw", "note": "commit() does not throw on same-epoch concurrent conflict — DD-7 crash-safety."},
+    {"id": "normalize-pubkey-casing-at-marker-key", "note": "lowercase pubkey at marker-key construction site — DD-4 seal pubkey compare."},
+    {"id": "marmot-ts-pre-join-groupcontext-groupid", "note": "MLS group id obtainable pre-join via readWelcomeGroupInfo groupContext.groupId (saved by explorer)."},
+    {"id": "mls-over-relay-playwright-e2e-must", "note": "gate on rendered readiness markers, not fixed timeouts (S5)."},
+    {"id": "closing-playwright-browsercontext-destroys", "note": "closing a context destroys the invitee KeyPackage secret — S5 decline actor must stay open."},
+    {"id": "kind-445-events-have-ephemeral-authors", "note": "never filter NDK subs by author (S5)."}
+  ],
+  "findings": {
+    "parser": {
+      "file": "app/src/lib/marmot/parseStructured.ts",
+      "union_line": "16-25",
+      "strict_hex_precedent": "member_admitted guard at 71-73 uses /^[0-9a-f]{64}$/ because pubkey feeds pubkeyToNpub which throws on bad hex",
+      "loose_guards_flagged_as_gap": "invite_cancelled (35-37), leave_intent (38-48) use loose typeof==='string' — known latent throw, do NOT copy",
+      "author_resolution": "resolveCancellerDisplay (8-14) resolves actor from MLS senderPubkey, never payload — mirror this",
+      "new_variant_rule": "invite_lifecycle must use strict canonical-hex guard; rebuild returned object from named fields only (DD-6)"
+    },
+    "rendering": {
+      "file": "app/src/components/chat/ChatBox.tsx",
+      "render_fn": "renderStructuredMessage ~472-598, flat if-chain on structured.type",
+      "gate_prop": "allowPollMessages gates all non-call_notice/non-image structured content (misleading name; comment not rename)",
+      "name_resolution": "profileMap[pubkey]?.nickname ?? truncateNpub(pubkeyToNpub(pubkey)); subject from structured.pubkey, author from msg.senderPubkey",
+      "component_precedent": "app/src/components/groups/{LeaveChatAnnouncement,InviteCancelledChatAnnouncement,MemberAdmittedChatAnnouncement}.tsx — muted Box, one Text, data-testid per state",
+      "new_component": "InviteLifecycleChatAnnouncement.tsx, data-testid e.g. invite-lifecycle-announcement"
+    },
+    "producers": {
+      "transport": "sendApplicationRumor (kind-9 CHAT_MESSAGE_KIND=9 at chatPersistence.ts:15)",
+      "wiring_pattern": "announcements NOT sent inside domain module; wired at page level via sendAnnouncementRef (pages/groups.tsx:259-263 ChatSendMessageCapture)",
+      "member_admitted_producer": "pages/groups.tsx:406-423 handleApproveRequest fire-and-forget on result.ok",
+      "invite_cancelled_producer": "cancelInvitationImpl.ts:124-131 via injected sendAnnouncement callback, wired at groups.tsx:309,359",
+      "direct_invite_emits_nothing_today": "InviteMemberModal submitInviteWithMarker/handleInvite (116-277) sends NO announcement; inviteByKeyPackageEvent (MarmotContext.tsx:1647) just commits Add. 'invited' producer is NEW wiring at page/modal call site, NOT inside inviteByNpub (DD-8)",
+      "admin_source": "groups.tsx:671-675 adminPubkeys = mlsGroup.groupData.adminPubkeys; isAdmin = some(pk.toLowerCase()===pubkeyHex.toLowerCase())"
+    },
+    "immutability": {
+      "canEditMessage": "messageActionUi.ts:64-67 already returns false for any structured message — edit-suppression FREE",
+      "canShowMessageActions": "messageActionUi.ts:44-51 does NOT check parseStructured — delete IS offered on own announcements today. DD-5 UI suppression is NEW",
+      "delete_authz": "applyDeleteEditSignal (messageEdits/api.ts:996-1074) authorizes by pubkeysMatch(rumor.pubkey, knownRow.senderPubkey) only — NO admin override exists; DD-5 receive-side carve-out is NEW",
+      "buffered_paths": "insertOrCollapsePending buffers unknown-target signals (1018-1030,1048-1060); resolvePendingSignalsForSlot (1114+) must be called on new-row append; PENDING_SIGNAL_TTL_MS=24h; TTL-expiry via sweepExpiredForThreadKeyLocked",
+      "handler": "deleteEditHandler.ts has no pre-gate (buffers unknown targets); doc comment states inner rumor pubkey is member-attested not identity-bound",
+      "tombstone": "chatPersistence.ts tombstone application is another apply site (DD-11)"
+    },
+    "decline_channel": {
+      "giftwrap_dispatch": "welcomeSubscription.ts:441-687 sequential branches: seen-guard -> pairing-ack -> unwrapGiftWrap -> join-request(21059,553) -> kind-444 guard(555) -> auto-accept -> enqueue. New INVITE_DECLINE_KIND branch slots after 553 before 555, reusing unwrapGiftWrap auth (seal pubkey, never self-claimed rumor.pubkey)",
+      "declinePendingInvitation": "welcomeSubscription.ts ~949-952 deletes localStorage only, no network",
+      "pending_invitation_storage": "app/src/lib/pendingInvitations.ts:32-41 fields: id, inviterPubkeyHex, receivedAt, welcomeEventJson. NO groupId, NO authenticated. Both NEW stored state at enqueue",
+      "groupid_prejoin": "readWelcomeGroupInfo groupContext.groupId IS available pre-join but readPreJoinGroupData discards it — surface it",
+      "cancel_reuse": "cancelInvitationImpl.ts:50-134 cancelPendingInvitationImpl gates on tree-membership only, emits invite_cancelled via injected sendAnnouncement; reuse for declined, operating on in-tree MLS leaf",
+      "is_pending_member": "isPendingMemberImpl = in-tree AND no MemberProfile (DD-4 liveness gate)",
+      "two_invite_surfaces": "pre-join Welcome queue (B declines here) vs in-tree MLS leaf (A Removes here) — B holds a leaf from invite-time Add but hasn't processed Welcome"
+    },
+    "accepted_gate": {
+      "profile_handler": "profileHandler.ts:34 — rumor.pubkey (transport) can be a RELAYER; genuine authorship = profilePayload.signedEvent.pubkey (signature-verified)",
+      "dd9_gate": "distinguish B own-join (transport senderPubkey===B) from third-member relay (transport senderPubkey===other). Signed author is B either way. Gate accepted on transport senderPubkey===B AND first pending->joined transition",
+      "send_injection": "handler has NO send dep today; registerHandlers.ts sendSelfProfile/handleIncomingProfileRequest shows injection pattern — thread send through, don't import ad hoc (module boundary)",
+      "epoch_safety": "onHistorySynced fires only on real EOSE; defer sends like profile-publish does (DD-10)"
+    },
+    "testing": {
+      "unit_framework": "vitest, tests/unit/**/*.test.ts; no jsdom/renderHook; pure-function extraction",
+      "parse_test_template": "app/tests/unit/marmot/parseStructured.contract.test.ts — extend RECOGNIZED array + it.each type-necessity rows",
+      "immutability_test_template": "app/tests/unit/chat/messageActionUi.test.ts — makeMsg() fixtures",
+      "decline_test_template": "app/tests/unit/marmot/cancelInvitationImpl.test.ts — makeDeps() DI, vi.mock @internet-privacy/marmot-ts",
+      "i18n_test_template": "app/tests/unit/cancelPendingInvitation.i18n.test.ts — getCopy('en'|'de')",
+      "i18n_pattern": "i18n.ts groups block; function-valued (name)=>string; en+de pair required; leftGroup precedent (211/881/1444)",
+      "e2e_bucket": "playwright.config.ts:31-38 filename glob groups-*/dm-* routes relay bucket; S5 MUST be named groups-*.spec.ts",
+      "e2e_template": "app/tests/e2e/groups-direct-invite-lifecycle.spec.ts — multi-context bootUser, publish-through-app, accept via own page",
+      "e2e_decline_trap": "phantom-peer-then-close unsafe for decline actor (needs live signer); settle-wait waitForTimeout(3s) ok ONLY after self-triggered commit, never for peer-observation (use expect.poll/toBeVisible)",
+      "gate": "make test-e2e-all is the 60-test definitive gate"
+    }
+  }
+}

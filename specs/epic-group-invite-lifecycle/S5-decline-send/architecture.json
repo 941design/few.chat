@@ -1,0 +1,66 @@
+{
+  "module_name": "decline-b",
+  "purpose": "B-side, auth-gated, gift-wrapped decline send. Surfaces the MLS groupId from readWelcomeGroupInfo's groupContext.groupId (currently discarded by readPreJoinGroupData) and persists it, plus a new authenticated boolean reflecting the Welcome's gift-wrap seal-authentication result at receipt, on the stored PendingInvitation at enqueue. declinePendingInvitation sends a NIP-59 gift-wrapped rumor of a fresh INVITE_DECLINE_KIND addressed to the inviter with ephemeral sender key and inner content {groupId, pubkey: selfHex} ONLY, when authenticated:true; skips the send entirely when authenticated:false. Local removal of the PendingInvitation is unconditional regardless of send outcome. No group-channel publish, no MLS Add of B, ever occurs on this path.",
+  "public_api": [
+    {
+      "name": "PendingInvitation",
+      "signature": "type PendingInvitation = { id: string; inviterPubkeyHex: string; receivedAt: number; welcomeEventJson: string; groupId: string; authenticated: boolean }",
+      "description": "Two NEW fields added to the existing type: groupId (MLS group id, hex, from readWelcomeGroupInfo's groupContext.groupId; '' when unavailable, including legacy pre-migration entries) and authenticated (whether the Welcome's gift-wrap seal was authenticated at receipt; legacy entries lacking the field normalize to false — fail-closed, AC-DECLINE-4). enqueuePendingInvitation/removePendingInvitation/listPendingInvitations signatures are unchanged; readRaw()'s validation+normalization is extended to backfill defaults for entries stored before this story landed."
+    },
+    {
+      "name": "INVITE_DECLINE_KIND",
+      "signature": "const INVITE_DECLINE_KIND = 21063",
+      "description": "NEW seam-defining constant (creates_seam: true, consumed by S6). Verified distinct from every existing *_KIND sentinel in app/src/lib (444 Welcome, 5/7/9/13/14 core kinds, 10/11/12 polls, 20602 CARD_SIG_KIND_V2, 21059 JOIN_REQUEST_KIND/CALL_GIFT_WRAP_KIND, 21060 PAIRING_ACK_KIND, 21061/21062 DM_PROFILE_*_KIND, 25050-25055 call-signaling, 30 PROFILE_REQUEST_KIND, 30051 RELAY_LIST_KIND, 30078 BACKUP_EVENT_KIND) via a module-load sentinel-collision throw, mirroring pairingAck.ts / dmProfile/kinds.ts's established pattern. Exported from welcomeSubscription.ts so S6 imports the SAME constant rather than redefining it."
+    },
+    {
+      "name": "DeclineGiftWrapPayload",
+      "signature": "type DeclineGiftWrapPayload = { groupId: string; pubkey: string }",
+      "description": "The seam contract type (stories.json#seams[1]). The EXACT and ONLY shape of the decline gift wrap's inner rumor plaintext content (AC-DECLINE-13) — no nickname, avatar, or other profile metadata. Exported so S6's receive branch can reference the same declared shape when parsing."
+    },
+    {
+      "name": "declinePendingInvitation",
+      "signature": "(id: string, sendKeys?: { ndk: NDK; selfPubkeyHex: string; selfPrivateKeyHex: string }) => Promise<void>",
+      "description": "Existing export, signature extended (backward-compatible: sendKeys is optional so any caller not yet updated still compiles, though the send capability is then unavailable). Looks up the entry BEFORE removal. When sendKeys is provided AND entry.authenticated is true, attempts the gift-wrap send (via the private sendDeclineGiftWrap helper); any send failure is caught and logged, never rethrown. Local removePendingInvitation(id) runs unconditionally in a finally block — independent of whether sendKeys was supplied, whether authenticated was true or false, and whether the send succeeded, failed, or threw (AC-DECLINE-5)."
+    },
+    {
+      "name": "readPreJoinGroupData",
+      "signature": "(welcomeRumor: UnwrappedRumor, marmotClient: MarmotClient) => Promise<{ name: string; description: string; adminPubkeys: string[]; groupId: string } | null>",
+      "description": "Existing export, return type extended with one new field: groupId (hex-encoded MLS groupContext.groupId, matching the same bytesToHex(groupContext.groupId) format MarmotGroup.idStr already uses post-join, so S6's isPendingMemberImpl lookups key consistently pre- and post-join). Obtained via an additional readWelcomeGroupInfo call alongside the existing readWelcomeMarmotGroupData call, using the same matched welcome/keyPackage/ciphersuiteImpl per candidate ref. Side-effect-free per the function's existing doc comment (both calls bottom out in pure ts-mls joinGroup derivations). Existing callers (readPreJoinGroupName, getInvitationGroupData in MarmotContext.tsx) are unaffected — an added field on an already-widely-typed return object is not a breaking structural change for their narrower consuming type annotations."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/welcomeSubscription.ts (new private sendDeclineGiftWrap helper, INVITE_DECLINE_SENTINEL_KINDS collision guard)"
+  ],
+  "owned_data": [
+    "PendingInvitation.groupId",
+    "PendingInvitation.authenticated"
+  ],
+  "dependencies_allowed": [
+    "nostr-tools/nip59 (createRumor — building the unsigned inner rumor, matching dmProfile/send.ts's precedent)",
+    "nostr-tools/utils (hexToBytes)",
+    "@/src/lib/directMessages (sealAndWrap — the audited NIP-59 wrap helper already imported project-wide for this exact purpose; internally generates the ephemeral gift-wrap outer key)",
+    "@/src/lib/nostrKeys (bytesToHex — hex-encoding groupContext.groupId to match MarmotGroup.idStr's format)",
+    "@nostr-dev-kit/ndk (NDKEvent — publishing the constructed gift wrap)",
+    "@internet-privacy/marmot-ts (readWelcomeGroupInfo — already imports getWelcome/getWelcomeKeyPackageRefs/readWelcomeMarmotGroupData from this package in this file)"
+  ],
+  "dependencies_forbidden": [
+    "decline-a (this story never reads welcomeSubscription.ts's INVITE_DECLINE_KIND receive-dispatch branch — that is S6's own addition, not yet landed; this story only DEFINES and exports the constant)",
+    "parse (does not import parseStructured.ts; the decline gift wrap's inner content is a hand-built {groupId, pubkey} object literal, never an InviteLifecycleContent)",
+    "render, i18n, immutability-ui, immutability-receive"
+  ],
+  "external_ports": [
+    "app/src/context/MarmotContext.tsx's declinePendingInvitation useCallback call site — necessary extension beyond this story's literal four-file list (mirrors S3-accepted-producer/architecture.json's identical precedent for the same reason): no other file in the codebase can supply a real ndk/selfPubkeyHex/selfPrivateKeyHex triple for a non-optional send. Without this minimal, mechanical wiring change (threading already-in-scope privateKeyHex/pubkeyHex/getNdk() values through as the new optional sendKeys argument), the decline send would be structurally correct but never actually invoked from the running app, leaving a PRIVACY-INVARIANT-CRITICAL send path dead in production despite green unit tests. No new logic is added at this call site — only argument threading."
+  ],
+  "events_emitted": [
+    "INVITE_DECLINE_KIND (21063) NIP-59 gift-wrapped rumor, addressed to inviterPubkeyHex, at most once per declinePendingInvitation call, ONLY when authenticated:true"
+  ],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/welcomeSubscription.test.ts",
+    "app/tests/unit/pendingInvitations.test.ts"
+  ],
+  "seam": {
+    "cross_story": true,
+    "consumed_by": ["S6"]
+  }
+}

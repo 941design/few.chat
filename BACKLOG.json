@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-21T08:14:19Z",
+  "updated_at": "2026-07-22T22:39:10Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -231,6 +231,11 @@
       "path": "specs/epic-pending-contact-notification/",
       "status": "DONE",
       "next_action": "completed 2026-07-21"
+    },
+    {
+      "path": "specs/epic-group-invite-lifecycle/",
+      "status": "DONE",
+      "next_action": "completed 2026-07-23"
     }
   ],
   "findings": [

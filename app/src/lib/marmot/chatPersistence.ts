@@ -10,6 +10,7 @@ import { parseDirectPayload, directConversationId } from '@/src/lib/directMessag
 import type { RoledAttachments } from '@/src/lib/media/imageMessage';
 import * as walledGarden from '@/src/lib/walledGarden';
 import { clearDirectMessageContact } from '@/src/lib/unreadStore';
+import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
 
 /** MLS application-message kind discriminator for chat messages. */
 export const CHAT_MESSAGE_KIND = 9;
@@ -44,6 +45,30 @@ export interface ChatMessage {
    * `MessagePatch` for how this is used by the AC-STORE-3 clobber-guard.
    */
   rev?: number;
+  /**
+   * True ONLY on a row fabricated by `messageEdits/api.ts`'s TTL-expiry
+   * materialize-on-expiry path (`persistExpiredEntryEffect`'s no-known-row
+   * edit branch) — a pre-emptive edit signal whose real target had never
+   * been seen when its buffering window expired. Such a row is a
+   * placeholder built from the edit's OWN replacement content, not a real
+   * message that ever arrived over the wire.
+   *
+   * S9 gate-remediation (epic-group-invite-lifecycle, AC-IMMUT-6 defeated at
+   * this ordering): `appendMessage`'s insert-if-absent dedup previously
+   * treated this placeholder exactly like any other stored row, so a real
+   * message later arriving at the same id — including a group
+   * announcement — silently no-op'd and the fabricated edit content stood
+   * forever. `appendMessage` now overwrites a row flagged here (and ONLY a
+   * row flagged here) when a fresh, unflagged message targets the same id,
+   * so a genuine arrival always supersedes a placeholder. Absent/false for
+   * every real message row, including one that has since been legitimately
+   * edited/tombstoned (`edited`/`tombstoned` already cover that case) — this
+   * flag is not cleared by `updateMessageInPlace`/`tombstoneMessage`
+   * (neither touches it), so it keeps identifying the row's ORIGIN as
+   * fabricated until a genuine `appendMessage` for the same id replaces it
+   * outright.
+   */
+  materializedFromEdit?: boolean;
 }
 
 function storageKey(groupId: string): string {
@@ -315,19 +340,70 @@ export async function loadMessages(
 
 /**
  * Append a single message to the group's persisted log. Deduplicates by id
- * (insert-if-absent; never overwrites an existing row). This is the
- * AC-STORE-3 substrate for the append path: because a re-delivered original
- * message rumor carries the same id as any already-stored row, the
+ * (insert-if-absent for a REAL existing row; never overwrites one). This is
+ * the AC-STORE-3 substrate for the append path: because a re-delivered
+ * original message rumor carries the same id as any already-stored row, the
  * dedup-by-id no-op below structurally prevents it from clobbering an
  * already edited/tombstoned row. See `updateMessageInPlace` for the
  * explicit rev-based clobber-guard that protects the update-in-place path.
+ *
+ * S9 gate-remediation (epic-group-invite-lifecycle) carve-out: the ONE
+ * exception to insert-if-absent is a row flagged `materializedFromEdit` —
+ * a placeholder fabricated by `messageEdits/api.ts`'s TTL-expiry
+ * materialize-on-expiry path for a pre-emptive edit signal whose real
+ * target had never arrived (see that field's doc comment on `ChatMessage`)
+ * — AND ONLY when the arriving `message.content` is itself a group
+ * informative announcement (`isInformativeAnnouncementContent`, the single
+ * shared predicate from `announcementFamily.ts`). Such a row is not a real
+ * message that ever arrived over the wire, so a genuine ANNOUNCEMENT now
+ * arriving at the same id REPLACES it outright (in place, same array
+ * index, so ordering is unaffected) instead of silently no-op'ing. Without
+ * this, a group announcement arriving after a pre-emptive edit had already
+ * fabricated its slot would be permanently suppressed, defeating
+ * AC-IMMUT-6 announcement immutability at that one ordering.
+ *
+ * An arriving ORDINARY message (not an announcement) at a
+ * `materializedFromEdit` slot is NOT superseded — the placeholder (and any
+ * edit/tombstone already applied to it) stands, and this call is a no-op,
+ * exactly like the insert-if-absent case below. This was gate-remediated
+ * (severity 4) after the broader "any fresh message supersedes" rule was
+ * found to revert an already-applied edit / resurrect an already-tombstoned
+ * message when the real ordinary original finally arrived after its own
+ * edit/delete signal had already materialized and been acted on: the
+ * pending-signal entry is consumed at expiry and slot dedupe prevents
+ * re-application, so an unconditional overwrite here would have been a
+ * silent, permanent loss of the applied edit/delete. Placeholders only
+ * ever hold ordinary content (an announcement replacement is already
+ * rejected at materialize time by the AC-IMMUT-7 check), so gating on the
+ * ARRIVAL's announcement-ness is the correct discriminator — it does not
+ * need to inspect the placeholder itself. A row that is NOT flagged
+ * `materializedFromEdit` — every ordinary original, and any row already
+ * confirmed real by a prior genuine `appendMessage` — keeps the original
+ * insert-if-absent behavior unchanged.
  */
 export function appendMessage(groupId: string, message: ChatMessage): Promise<void> {
   const key = storageKey(groupId);
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(async () => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
-    if (existing.some((m) => m.id === message.id)) return;
+    const existingIndex = existing.findIndex((m) => m.id === message.id);
+    if (existingIndex !== -1) {
+      // Only a real group announcement supersedes a materialized-from-edit
+      // placeholder; an ordinary arrival never clobbers it (see doc comment).
+      if (
+        !existing[existingIndex].materializedFromEdit ||
+        !isInformativeAnnouncementContent(message.content)
+      ) {
+        return; // real row already present, or arrival isn't an announcement — never clobber
+      }
+      const replaced = existing.slice();
+      replaced[existingIndex] = message;
+      await set(key, replaced);
+      if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
+        (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
+      }
+      return;
+    }
     await set(key, [...existing, message]);
     // Dev-only hook: notify E2E tests when a message is written to IDB.
     if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
@@ -430,6 +506,56 @@ export interface MessagePatch {
  * (`storageKey(groupId)`) as `appendMessage` / `removeMessages`, so
  * concurrent writes to a thread never race.
  */
+/**
+ * The actual guarded merge, factored out of `updateMessageInPlace` (S8,
+ * epic-group-invite-lifecycle) so `tombstoneMessage`'s own authorization
+ * branch can perform its read-check-write atomically inside the SAME
+ * per-key queue turn, without re-entering `updateMessageInPlace`'s own
+ * queueing (which would enqueue a second turn onto a key whose turn is
+ * already in flight). Returns `null` when the write is rejected (row
+ * missing, clobber-guard, or rev floor) — the caller writes nothing in
+ * that case; otherwise returns the full updated-rows array to persist.
+ */
+function mergePatchCore(existing: ChatMessage[], id: string, patch: MessagePatch): ChatMessage[] | null {
+  const index = existing.findIndex((m) => m.id === id);
+  if (index === -1) return null; // nothing to update
+
+  const target = existing[index];
+
+  // Sanitize the incoming rev: well-formed means a finite number >= 0.
+  // Anything else (NaN, negative, non-number) is treated as "no signal"
+  // (incomingRev = 0) for both guards below, and is never persisted.
+  const rawRev = patch.rev;
+  const revIsWellFormed =
+    typeof rawRev === 'number' && Number.isFinite(rawRev) && rawRev >= 0;
+  const incomingRev = revIsWellFormed ? (rawRev as number) : 0;
+  const isRealSignal = incomingRev >= 1;
+
+  // Guard 1 — AC-STORE-3 clobber-guard: a non-real-signal write must not
+  // clobber an already edited/tombstoned slot.
+  if (!isRealSignal && (target.tombstoned === true || target.edited === true)) {
+    return null;
+  }
+
+  // Guard 2 — monotonic-rev floor: a write can never regress a slot's
+  // rev clock. Equal revs pass through; S3 owns equal-rev tie
+  // resolution (see `MessagePatch`).
+  const storedRev = target.rev ?? 0;
+  if (incomingRev < storedRev) {
+    return null;
+  }
+
+  // Never persist a malformed rev; strip it so the merge below leaves
+  // the stored rev untouched instead of writing NaN/negative to storage.
+  const sanitizedPatch: MessagePatch = revIsWellFormed ? patch : { ...patch, rev: undefined };
+  const cleanPatch = stripUndefinedValues(sanitizedPatch);
+
+  const updatedRow: ChatMessage = { ...target, ...cleanPatch };
+  const updatedRows = existing.slice();
+  updatedRows[index] = updatedRow;
+  return updatedRows;
+}
+
 export function updateMessageInPlace(
   groupId: string,
   id: string,
@@ -439,42 +565,8 @@ export function updateMessageInPlace(
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(async () => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
-    const index = existing.findIndex((m) => m.id === id);
-    if (index === -1) return; // nothing to update
-
-    const target = existing[index];
-
-    // Sanitize the incoming rev: well-formed means a finite number >= 0.
-    // Anything else (NaN, negative, non-number) is treated as "no signal"
-    // (incomingRev = 0) for both guards below, and is never persisted.
-    const rawRev = patch.rev;
-    const revIsWellFormed =
-      typeof rawRev === 'number' && Number.isFinite(rawRev) && rawRev >= 0;
-    const incomingRev = revIsWellFormed ? (rawRev as number) : 0;
-    const isRealSignal = incomingRev >= 1;
-
-    // Guard 1 — AC-STORE-3 clobber-guard: a non-real-signal write must not
-    // clobber an already edited/tombstoned slot.
-    if (!isRealSignal && (target.tombstoned === true || target.edited === true)) {
-      return;
-    }
-
-    // Guard 2 — monotonic-rev floor: a write can never regress a slot's
-    // rev clock. Equal revs pass through; S3 owns equal-rev tie
-    // resolution (see `MessagePatch`).
-    const storedRev = target.rev ?? 0;
-    if (incomingRev < storedRev) {
-      return;
-    }
-
-    // Never persist a malformed rev; strip it so the merge below leaves
-    // the stored rev untouched instead of writing NaN/negative to storage.
-    const sanitizedPatch: MessagePatch = revIsWellFormed ? patch : { ...patch, rev: undefined };
-    const cleanPatch = stripUndefinedValues(sanitizedPatch);
-
-    const updatedRow: ChatMessage = { ...target, ...cleanPatch };
-    const updatedRows = existing.slice();
-    updatedRows[index] = updatedRow;
+    const updatedRows = mergePatchCore(existing, id, patch);
+    if (updatedRows === null) return;
     await set(key, updatedRows);
   });
   const settled = next.catch(() => {});
@@ -483,6 +575,29 @@ export function updateMessageInPlace(
     if (appendQueues.get(key) === settled) appendQueues.delete(key);
   });
   return next;
+}
+
+/**
+ * S8 (epic-group-invite-lifecycle, DD-11/AC-IMMUT-4/5): the data this
+ * function needs to independently re-verify the announcement-immutability
+ * gate, alongside `messageEdits/api.ts`'s own gate — the acceptance criteria
+ * explicitly name BOTH `applyDeleteEditSignal` and this tombstone-
+ * application path as apply sites that must each reject on their own
+ * (defense-in-depth: this module is the last write boundary before a
+ * tombstone lands in storage, so it never simply trusts a caller's prior
+ * decision).
+ */
+export interface TombstoneAuthorization {
+  /** The delete/tombstone signal's own sender pubkey (ADR-006 self-asserted, member-attested, not identity-bound). */
+  senderPubkeyHex: string;
+  /**
+   * The group's CURRENT admin pubkeys, already resolved by the caller
+   * (fail-closed to `[]` for a DM thread or an unavailable admin-lookup
+   * provider — see `messageEdits/api.ts`'s `groupAdminsFor`). Consulted only
+   * when the target row's OWN current content is an informative
+   * announcement; ignored for an ordinary message.
+   */
+  adminPubkeysHex: string[];
 }
 
 /**
@@ -499,14 +614,74 @@ export function updateMessageInPlace(
  * corrupt the revision clock with a non-finite/negative value.
  *
  * Applies identically to text and image-shaped rows (AC-IMG-1) — there is
- * no attachment-specific branch; the same `updateMessageInPlace` call path
- * flips the flag regardless of the row's shape.
+ * no attachment-specific branch; the same underlying merge flips the flag
+ * regardless of the row's shape.
+ *
+ * `authorization` (S8): when supplied, this call independently re-derives
+ * "is the target row's CURRENT content an informative announcement" from
+ * storage truth (via the shared `isInformativeAnnouncementContent`
+ * predicate — the SAME family definition S7's UI gate and S8's
+ * `messageEdits/api.ts` gate both consume, never re-implemented here) and,
+ * if so, applies the tombstone ONLY when `authorization.senderPubkeyHex` is
+ * present (case-insensitively) in `authorization.adminPubkeysHex`
+ * (AC-IMMUT-4/5). For an ordinary (non-announcement) target, `authorization`
+ * is not consulted — the caller's own own-message-authorship check is the
+ * sole gate, exactly as before this story. Read-check-write runs inside the
+ * SAME per-key queue turn as the eventual write (never a separate,
+ * unqueued pre-read), so a concurrent edit/tombstone on the same slot can
+ * never race this decision.
+ *
+ * `authorization` is optional purely for call-site/test convenience with an
+ * already-known-ordinary target; `messageEdits/api.ts` (this function's
+ * sole production caller) always supplies it.
+ *
+ * @returns `true` iff the tombstone was actually written; `false` for any
+ * rejection (malformed rev, missing row, clobber/rev-floor guard, or —
+ * new in S8 — an unauthorized signal against an announcement target).
  */
-export function tombstoneMessage(groupId: string, id: string, rev: number): Promise<void> {
+export function tombstoneMessage(
+  groupId: string,
+  id: string,
+  rev: number,
+  authorization?: TombstoneAuthorization,
+): Promise<boolean> {
   if (typeof rev !== 'number' || !Number.isFinite(rev) || rev < 1) {
-    return Promise.resolve();
+    return Promise.resolve(false);
   }
-  return updateMessageInPlace(groupId, id, { tombstoned: true, rev });
+
+  const key = storageKey(groupId);
+  const prev = appendQueues.get(key) ?? Promise.resolve();
+  const next = prev.then(async (): Promise<boolean> => {
+    const existing = (await get<ChatMessage[]>(key)) ?? [];
+
+    if (authorization) {
+      const target = existing.find((m) => m.id === id);
+      if (target && isInformativeAnnouncementContent(target.content)) {
+        const senderIsAdmin = authorization.adminPubkeysHex.some(
+          (a) => typeof a === 'string' && a.toLowerCase() === authorization.senderPubkeyHex.toLowerCase(),
+        );
+        if (!senderIsAdmin) {
+          // AC-IMMUT-4: reject — the row's stored content/state is left
+          // byte-for-byte unchanged, no write at all.
+          return false;
+        }
+      }
+    }
+
+    const updatedRows = mergePatchCore(existing, id, { tombstoned: true, rev });
+    if (updatedRows === null) return false;
+    await set(key, updatedRows);
+    return true;
+  });
+  const settled = next.then(
+    () => {},
+    () => {},
+  );
+  appendQueues.set(key, settled);
+  settled.then(() => {
+    if (appendQueues.get(key) === settled) appendQueues.delete(key);
+  });
+  return next;
 }
 
 /**

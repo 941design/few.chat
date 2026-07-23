@@ -1,0 +1,57 @@
+{
+  "story_id": "S6",
+  "status": "done",
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "decline-a"
+  ],
+  "files_created": [
+    "specs/epic-group-invite-lifecycle/S6-decline-receive/architecture.json",
+    "specs/epic-group-invite-lifecycle/S6-decline-receive/result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/cancelInvitationImpl.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/welcomeSubscription.test.ts",
+    "specs/epic-group-invite-lifecycle/S6-decline-receive/verification.json"
+  ],
+  "tests_added": {
+    "unit": 18
+  },
+  "test_counts": {
+    "baseline": 3923,
+    "final": 3941
+  },
+  "mocks": [],
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "AC-DECLINE-12's deferral gate turned out to require real cross-mechanism plumbing: subscribeToWelcomes (kind-1059, once per identity) and subscribeToGroupMessages (kind-445, once per group) are independent async flows in the SAME module with no existing signal between them, so I had to add a module-level per-groupId sync-completion Set/waiter-Map purely to let a decline defer until ITS specific group's historical sync completes, then thread that same signal through every OTHER decline test's setup (since applyDecline unconditionally awaits the sync gate, an un-synced groupId hangs the test forever) — a non-obvious cross-cutting test-fixture requirement that only became visible after the first full test run hung/failed. Getting a reliable (non-flaky) test for the two-genuinely-concurrent-declines regression also took real thought: a static mock member-list can't distinguish serialized from unserialized behavior, so the deps fixture needed to be genuinely stateful (commit() mutates a real array) with a deterministic macrotask-level delay, not a microtask-count guess.",
+    "surprised_by": "A same-story TypeScript check surfaced a real generic-inference mismatch: MarmotContext.tsx's init() closes over a freshly-constructed `client` (typed with its inferred mediaFactory generics), and passing its `.groups.get()` result into the existing sendRumorSafe(group: MarmotGroupType, ...) helper does not typecheck — every other Deps-building callback in the file sidesteps this by reading clientRef.current (typed MarmotClient<undefined,undefined>) instead of the local `client` const, a convention that isn't documented anywhere and that I only found by comparing against cancelPendingInvitation's own dep-building callback.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "notes": {
+    "baseline_capture_caveat": "Step 0's lint/typecheck baseline was captured by `git stash`-ing only the three S6-touched files (welcomeSubscription.ts, cancelInvitationImpl.ts, MarmotContext.tsx) rather than the whole working tree, since this epic's prior stories (S1-S5) are ALSO uncommitted in the same working tree with no per-story commit boundary to diff against. That partial stash reverted those 3 files to their last COMMITTED state while leaving OTHER already-uncommitted epic files (registerHandlers.ts, pendingInvitations.ts) in place, producing 2 spurious cross-file typecheck errors (a HandlerDeps/PendingInvitation shape mismatch) that reflect S3/S5's own uncommitted work being temporarily out of sync with a reverted MarmotContext.tsx/welcomeSubscription.ts, NOT real pre-existing project debt and NOT anything S6 introduced. Recorded here for the lead's awareness; the FINAL state (S6's diff applied) typechecks clean (0 errors) via `cd app && npx tsc --noEmit -p tsconfig.json`. `next lint` has no ESLint config in this repo at all (prompts to scaffold one interactively) — lint baseline is NO_LINT, unrelated to S6.",
+    "baseline": {
+      "tests": "make test-unit: 209 files, 3923 passed + 1 skipped (captured with S6's source edits already applied, before S6's new tests were added — no pre-existing test failures)",
+      "lint": "NO_LINT (no ESLint config present in app/; `next lint` prompts to scaffold one)",
+      "typecheck": "clean in the actual pre-S6 working tree (inferred: S6's diff is purely additive — new optional trailing params, a new dispatch branch, new exported types — and touches no code path S1-S5 already typechecked; the 2 errors surfaced by an imprecise partial-file-stash baseline capture are a stash-methodology artifact, not real debt — see baseline_capture_caveat)"
+    },
+    "final": {
+      "tests": "make test-unit: 209 files, 3941 passed + 1 skipped (+18 tests, all new; zero previously-passing tests now failing)",
+      "typecheck": "clean — `cd app && npx tsc --noEmit -p tsconfig.json` produces zero output",
+      "lint": "NO_LINT (unchanged)"
+    },
+    "dd7_ordering_implementation": "welcomeSubscription.ts's new INVITE_DECLINE_KIND dispatch branch (slotted after the join-request 21059 branch, before the kind-444 guard) authenticates the seal first (AC-DECLINE-8), extracts ONLY `groupId` from the decline payload (never trusting the payload's self-claimed `pubkey` field — the actor is always unwrapResult.pubkey, lowercased), then calls a new module-private `applyDecline(groupId, pubkeyLower, deps)` helper wrapped in a per-(groupId,pubkey) serialization chain (`runSerializedDeclineProcessing`, mirroring pendingDirectInviteStorage.ts's consumePendingDirectInviteMarker chain pattern). `applyDecline` awaits `waitForGroupHistorySync(groupId)` (DD-10 deferral, see below), re-checks `isPendingMemberImpl` (DD-4, re-checked post-defer rather than cached from dispatch time), then calls `cancelPendingInvitationImpl(deps, groupId, pubkeyLower, sendAnnouncement, 'declined')` — a NEW optional 5th param on the existing S9(invite-rescind epic)/ADR-010 Remove-machinery function, defaulted to 'invite_cancelled' so the pre-existing admin Cancel-Invite/Remove-Member flow is byte-for-byte unchanged. That single call performs steps (1) Remove-commit and (2) post SEQUENTIALLY inside its own existing body (already-established ordering, unmodified). On `{ok:true}`, applyDecline then runs step (3) `clearPendingDirectInvite(groupId, pubkeyLower)` (best-effort, caught), and returns true, on which the dispatch marks the gift wrap seen (step 4) — the ONLY point localStorage's processedGiftWraps key is touched for this branch. A Remove-commit failure (`{ok:false}`) short-circuits before step 2/3, and mark-seen never happens, so the whole sequence reprocesses on next start (verified via a dedicated commit-throws test).",
+    "deferral_mechanism": "Two NEW module-level singletons in welcomeSubscription.ts: `historySyncedGroupIds: Set<string>` and `historySyncWaiters: Map<string, Array<() => void>>`. `subscribeToGroupMessages`'s existing historical-sync-complete check now ALSO calls `markGroupHistorySynced(groupId)` unconditionally (regardless of whether the caller supplied its own onHistorySynced callback), which resolves any pending waiters for that groupId and adds it to the synced set. `applyDecline` awaits `waitForGroupHistorySync(groupId)`, which resolves immediately if already synced or registers a one-shot resolver otherwise. This is explicitly NOT a new unbounded queue: each groupId has at most one waiter-list entry, drained and removed the moment its group syncs; a group that never syncs this session simply leaves its decline(s) pending in-memory for that session's lifetime, falling back to the pre-existing unmarked-gift-wrap reprocessing on next app start (DD-7 guarantee #3) if the process exits first.",
+    "converging_two_genuine_declines": "Per-(groupId, lowercased-pubkey) serialization via `runSerializedDeclineProcessing`, a promise-chain map identical in structure to pendingDirectInviteStorage.ts's consumePendingDirectInviteMarker chain: a second decline for the same key awaits the FIRST call's entire applyDecline (sync-wait through marker-clear) before its own tree-gate check even begins, so it always observes the post-Remove state and no-ops. Verified by a dedicated adversarial test with a STATEFUL mock (commit() mutates a real shared member-list array, gated by a real 30ms macrotask delay so the race window is deterministically observable regardless of NIP-59 crypto timing) firing two DISTINCT-outer-eventId gift wraps concurrently (Promise.all, no await between the two fireEvent calls) and asserting exactly one commit/post/marker-clear.",
+    "architecture_doc_gap_observed": "architecture.md's Order-Sensitive Composition section lists decline-a/decline-b/cancelInvitationImpl.ts as the flow's participating modules but does not explicitly name pendingDirectInviteStorage.ts, despite DD-10 guarantee #1 explicitly requiring a marker-clear step. Not a conflict for this story (the marker-clear capability is consumed via injection at the MarmotContext.tsx composition root, matching this codebase's established boundary-rule convention — never a direct import into welcomeSubscription.ts/cancelInvitationImpl.ts), but flagged here as a minor spec-completeness observation for whoever next revises architecture.md, not escalated as a blocking finding.",
+    "external_port_extension": "app/src/context/MarmotContext.tsx (startWelcomeSubscription's declineDeps param + its construction at the init() call site) is an authorized external-port extension beyond S6's literal three-file scope list, per the story's own explicit carve-out — mirrors S3-accepted-producer's and S5-decline-b's identical prior precedent (no other file can supply a real Remove/announce/marker-clear capability into the background listener)."
+  },
+  "final_outcome": "accepted"
+}

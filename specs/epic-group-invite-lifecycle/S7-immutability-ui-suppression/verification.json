@@ -1,0 +1,82 @@
+{
+  "story_id": "S7",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S7-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the 'is an informative announcement' predicate (`parseStructured(content) non-null AND type !== 'image'`) evaluated against the real parsed content of each message at render time, rather than a stub that always returns true/false, or one that switches on a hardcoded list of message IDs instead of genuinely calling `parseStructured`? Does the admin-viewer check read the actual current admin-membership state (not a frozen boolean prop that never reflects a real admin/non-admin viewer)?"
+    },
+    {
+      "question_id": "VQ-S7-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the predicate introduced at the `canShowMessageActions` chokepoint in `messageActionUi.ts` (per architecture.md's Module Map: `immutability-ui` owns 'the is informative announcement predicate'), with `ChatBox.tsx`'s call site consuming it rather than reimplementing the type-check inline? Is the predicate generic over any `parseStructured` result (not hardcoded to check for `invite_lifecycle` specifically), so it correctly covers the whole pre-existing announcement family without per-type special-casing?"
+    },
+    {
+      "question_id": "VQ-S7-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `immutability-ui` (`messageActionUi.ts` + its `ChatBox.tsx` call site) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `parse` to call `parseStructured`, or into `immutability-receive` to duplicate the admin-check logic instead of each module independently deriving admin status from the same source), and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S7-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does `app/tests/unit/messageEdits/messageActionUi.test.ts` exercise the predicate against the FULL informative-announcement family (`invite_lifecycle`, `member_admitted`, `leave_intent`, `invite_cancelled`, `call_notice`, polls) individually, not only the new `invite_lifecycle` variant — i.e. would a regression that special-cased only `invite_lifecycle` (breaking suppression for the pre-existing types) be caught? Does it separately cover AC-IMMUT-2 (image messages remain deletable by their author) and AC-IMMUT-3 (admin sees Delete, never Edit) as distinct cases from the non-admin suppression case?"
+    },
+    {
+      "question_id": "VQ-S7-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed UI-suppression behavior match the spec's intent that informative announcements are immutable historical facts for ordinary viewers, with only a moderation-delete carve-out for admins (never an edit carve-out, since editing an announcement's content would fabricate a false historical record) — and does this hold uniformly across the whole non-image announcement family rather than being invite_lifecycle-specific?"
+    },
+    {
+      "question_id": "VQ-S7-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Is the admin-viewer determination for the moderation-Delete carve-out sourced from the actual current group admin-membership state (not a client-supplied/spoofable flag that a malicious client could set to see a Delete button it has no right to)? Note this is a UI-layer permission gate only — does the story's scope correctly rely on S8's receive-side rejection as the actual enforcement boundary (i.e. does this story avoid claiming that hiding the button alone is a security control, consistent with the UI/receive-side split in architecture.md)?"
+    },
+    {
+      "question_id": "VQ-S7-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-1",
+      "question": "For a non-admin viewer, are both Edit and Delete suppressed for any message whose content parses (via `parseStructured`) to a non-`image` `StructuredContent` — across the whole informative-announcement family, not only `invite_lifecycle`? Provide (a) the predicate and its call site in `canShowMessageActions`, (b) a parameterized test iterating over each of the six named family members (`invite_lifecycle`, `member_admitted`, `leave_intent`, `invite_cancelled`, `call_notice`, polls) individually asserting both affordances are absent for a non-admin viewer, and (c) confirmation the test is not a single case that happens to only exercise `invite_lifecycle`."
+    },
+    {
+      "question_id": "VQ-S7-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-2",
+      "question": "For any viewer, does an `image`-type structured message authored by that viewer remain deletable — i.e. does the announcement-family suppression in AC-IMMUT-1 NOT extend to `image`? Provide (a) the predicate's `type !== 'image'` exclusion, (b) a test asserting an author-owned `image` message still shows Delete for both an admin and a non-admin author, and (c) confirmation this test would fail if the predicate were accidentally written as 'non-null parseStructured result' without the `!== 'image'` exclusion (i.e. it is state-discriminating against that specific regression)."
+    },
+    {
+      "question_id": "VQ-S7-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-3",
+      "question": "For a group-admin viewer, is a Delete affordance (moderation delete) shown on an informative-announcement-family message, while Edit is NOT shown? Provide (a) the admin-branch logic in `canShowMessageActions` showing Delete is conditionally re-enabled for admins while Edit remains unconditionally suppressed for this family, (b) a test asserting an admin viewer sees Delete but not Edit on an announcement message, and (c) confirmation this is tested as a distinct case from the non-admin case (AC-IMMUT-1), not inferred from it, so a regression that accidentally also re-enabled Edit for admins would be caught."
+    },
+    {
+      "question_id": "VQ-S7-010",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "`isCurrentUserAdmin` is threaded as a new optional prop through three layers (`pages/groups.tsx`'s existing `isAdmin` single source of truth -> `GroupChat.tsx` -> `ChatBox.tsx` -> `canShowMessageActions`), following the pre-existing `isCurrentUserAdmin` prop-threading convention already used for `MemberList.tsx`. Is `isAdmin` in `groups.tsx` recomputed on every render from `mlsGroup?.groupData?.adminPubkeys` (not memoized against a stale snapshot), so a mid-session admin promotion/demotion is reflected in the moderation-Delete affordance without requiring a reload?"
+    },
+    {
+      "question_id": "VQ-S7-011",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "`ChatBox.tsx`'s `isCurrentUserAdmin` prop defaults to `false` and `ContactChat.tsx` (the DM surface) never passes it, since a 1:1 DM has no admin concept. Because `canShowMessageActions`'s new predicate is generic and applies at the shared `ChatBox` chokepoint regardless of surface, this means any non-`image` structured message on the DM surface (e.g. a `call_notice` for a 1:1 call) becomes permanently non-deletable by either party — not just non-editable. Is this an accepted, intentional consequence of applying the family-wide predicate at the one shared chokepoint (rather than scoping the predicate to group-only messages), consistent with the acceptance criteria's phrasing ('for any message... the whole informative-announcement family'), or does it warrant a narrower predicate that excludes DM-surface messages?"
+    },
+    {
+      "question_id": "VQ-S7-012",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The parameterized family test in `messageActionUi.test.ts` uses `describe.each(ANNOUNCEMENT_FAMILY)` over six variants (invite_lifecycle, member_admitted, leave_intent, invite_cancelled, call_notice, poll_open) with a fixed OTHER-authored and SELF-authored fixture per variant. Does this correctly exercise both the peer-authored and self-authored cases for every family member for both the non-admin-suppression and admin-carve-out branches, and is `poll_close` (the sixth `StructuredContent` variant besides `poll_open`, `image`, and `group_renamed`) intentionally omitted as redundant coverage of the same `type !== 'image'` predicate branch rather than an oversight?"
+    }
+  ]
+}

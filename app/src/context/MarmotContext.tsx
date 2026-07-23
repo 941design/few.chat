@@ -36,7 +36,7 @@ import { recordRequestEmitted, recordRequestAnswered, loadProfileRequestMemo, cl
 import { handleIncomingProfileRequest, notifyProfileObserved, sweepStaleProfiles } from '@/src/lib/marmot/profileRequestRunner';
 import { incrementUnread, markAsRead, initUnreadCounts, initJoinRequestCounts, clearUnreadGroup, incrementJoinRequest, decrementJoinRequest, purgeStrangerDmCounters, clearInviteExpiries } from '@/src/lib/unreadStore';
 import { isActiveView, getActiveGroupId } from '@/src/lib/activeViewStore';
-import { appendMessage, loadMessages, purgeStrangerDmThreads } from '@/src/lib/marmot/chatPersistence';
+import { appendMessage, loadMessages, purgeStrangerDmThreads, CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import { purgeStrangerContacts } from '@/src/lib/contacts';
 import { purgeStrangerDmReactions } from '@/src/lib/reactions/api';
 import { loadKnownPeers, rememberKnownPeers, knownPeersMigrationComplete, markKnownPeersMigrationComplete } from '@/src/lib/knownPeers';
@@ -44,7 +44,7 @@ import { MAINTAINER_PUBKEYS_HEX } from '@/src/config/maintainer';
 import { buildDispatcher } from '@/src/lib/marmot/registerHandlers';
 import { clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { applyInboundRumor } from '@/src/lib/reactions/api';
-import { applyDeleteEditSignal, resolvePendingSignalsForSlot } from '@/src/lib/messageEdits/api';
+import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider } from '@/src/lib/messageEdits/api';
 import { savePoll, saveVote, getPoll, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
@@ -62,6 +62,9 @@ async function startWelcomeSubscription(
   groupMemberPubkeys?: (groupId: string) => string[],
   ownPrivateKeyHex?: string,
   onPairingAckReceived?: (result: { senderPubkeyHex: string }) => void,
+  // S6 (decline-a, authorized external-port extension): the Remove/announce
+  // capability the decline receive branch needs — see the call site below.
+  declineDeps?: import('@/src/lib/marmot/welcomeSubscription').DeclineReceiveDeps,
 ): Promise<() => void> {
   const { subscribeToWelcomes } = await import('@/src/lib/marmot/welcomeSubscription');
   return subscribeToWelcomes(
@@ -74,6 +77,7 @@ async function startWelcomeSubscription(
     groupMemberPubkeys,
     ownPrivateKeyHex,
     onPairingAckReceived,
+    declineDeps,
   );
 }
 import { DEFAULT_RELAYS } from '@/src/types';
@@ -1089,6 +1093,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         // Stop any previous welcome subscription before starting a new one
         welcomeSubRef.current?.();
         welcomeSubRef.current = null;
+        // S6 (decline-a): resolve the marmot-ts primitives the declineDeps
+        // object below needs, mirroring cancelPendingInvitation's own
+        // dynamic-import-at-the-boundary convention.
+        const { getGroupMembers, getPubkeyLeafNodeIndexes, Proposals } =
+          await import('@internet-privacy/marmot-ts');
         startWelcomeSubscription(
           pubkeyHex!,
           client,
@@ -1157,6 +1166,56 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // contacts-live-updates). The bell is already rung separately at
             // welcomeSubscription.ts's dispatch site (incrementPendingContact).
             setContactsRevision((n) => n + 1);
+          },
+          // S6 (decline-a): the Remove/announce capability the receive-side
+          // decline branch needs. Mirrors cancelPendingInvitation's own
+          // dep-building (same underlying Deps shape, imported dynamically at
+          // the boundary per this file's convention) plus the two extras that
+          // machinery doesn't own: posting into an ARBITRARY group by id (this
+          // is a background listener, not scoped to one open group's UI — the
+          // sendAnnouncement below mirrors the accepted-producer dispatcher's
+          // build+local-echo+sendRumorSafe shape near line ~1496), and the
+          // marker-clear (pendingDirectInviteStorage.ts, consumed here only
+          // via injection per architecture.md's boundary rule).
+          {
+            // clientRef.current (NOT the local `client` const above, whose
+            // type carries this init() call's inferred mediaFactory generics)
+            // — mirrors every other Deps-building callback in this file
+            // (cancelPendingInvitation, isPendingMember, etc.), all of which
+            // read clientRef.current specifically so `.groups.get()` returns
+            // the generic-erased MarmotGroupType sendRumorSafe expects.
+            getGroup: (id: string) => clientRef.current?.groups.get(id).catch(() => null) ?? Promise.resolve(null),
+            loadMemberProfiles,
+            getGroupMembers,
+            getPubkeyLeafNodeIndexes,
+            Proposals,
+            persistGroup,
+            // groupsRef.current (not the closure `groups`, which is captured
+            // once at this init() run and would go stale) — same rationale as
+            // every other long-lived callback installed inside this effect.
+            getStoredGroup: (id: string) => groupsRef.current.find((g) => g.id === id),
+            reloadGroups,
+            markBackupDirty,
+            selfPubkeyHex: pubkeyHex ?? '',
+            sendAnnouncement: async (groupId: string, content: string) => {
+              const groupClient = clientRef.current;
+              if (!groupClient) return;
+              const mlsGroupForAnnouncement = await groupClient.groups.get(groupId).catch(() => null);
+              if (!mlsGroupForAnnouncement) return;
+              const rumor = buildRumor(CHAT_MESSAGE_KIND, content, pubkeyHex ?? '');
+              await appendMessage(groupId, {
+                id: rumor.id,
+                content,
+                senderPubkey: pubkeyHex ?? '',
+                groupId,
+                createdAt: rumor.created_at * 1000,
+              }).catch((err: unknown) => {
+                console.warn(`[Marmot] decline-producer local echo appendMessage failed for ${groupId}:`, err);
+              });
+              setChatVersion((v) => v + 1);
+              await sendRumorSafe(mlsGroupForAnnouncement, rumor as any, { softFail: true });
+            },
+            clearPendingDirectInvite,
           },
         ).then((unsub) => {
           if (cancelled) {
@@ -1463,6 +1522,50 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // Profile
             mergeMemberProfile,
             clearPendingDirectInvite,
+            // epic: group-invite-lifecycle S3 gate-remediation (severity-4 finding,
+            // AC-PROD-3/4/5) — accept-producer's own-join path's atomic
+            // compare-and-clear. Real (non-optional) dynamic import, mirroring
+            // getPendingDirectInvites' pattern elsewhere in this file, so the
+            // accept-producer gate is never silently un-wired in production. Replaces
+            // the former hasPendingDirectInvite/clearPendingDirectInvite pair on this
+            // path — see pendingDirectInviteStorage.ts's consumePendingDirectInviteMarker
+            // doc comment for why the get-then-clear pair was TOCTOU-unsafe.
+            consumePendingDirectInviteMarker: async (groupId: string, pubkey: string) => {
+              const { consumePendingDirectInviteMarker } = await import('@/src/lib/marmot/pendingDirectInviteStorage');
+              return consumePendingDirectInviteMarker(groupId, pubkey.toLowerCase());
+            },
+            // epic: group-invite-lifecycle S3 (DD-9, AC-PROD-3) — publishes the
+            // 'accepted' announcement into the group this dispatcher instance is
+            // bound to, mirroring sendSelfProfile's build+sendRumorSafe shape below.
+            //
+            // S3 gate-remediation (severity-3 finding): unlike `invited` (sent via
+            // ChatSendMessageCapture's ref onto ChatStoreContext's sendMessage, which
+            // does an optimistic local echo — see ChatStoreContext.tsx's sendMessage),
+            // this background-dispatcher send bypasses that echo. marmot-ts's
+            // ingest() skips self-sent application messages entirely via its
+            // internal #sentEventIds self-echo guard (see marmot-group.js — "Track
+            // this event ID so ingest() can skip the self-echo"; mirrored on our side
+            // by chatHandler.ts's own-send-guard comment), so this group's
+            // applicationMessage bus NEVER redelivers an own-authored rumor back to
+            // its sender — there is no later point at which A would otherwise see
+            // their own `accepted` announcement. appendMessage+setChatVersion here
+            // mirrors chatHandler.ts's inbound-append shape exactly, using the same
+            // canonical rumor.id chatHandler would key on, so a same-account other
+            // device that DOES receive the real relay copy dedupes onto this same id.
+            sendAnnouncement: async (content: string) => {
+              const rumor = buildRumor(CHAT_MESSAGE_KIND, content, pubkeyHex ?? '');
+              await appendMessage(group.id, {
+                id: rumor.id,
+                content,
+                senderPubkey: pubkeyHex ?? '',
+                groupId: group.id,
+                createdAt: rumor.created_at * 1000,
+              }).catch((err: unknown) => {
+                console.warn(`[Marmot] accepted-producer local echo appendMessage failed for ${group.id}:`, err);
+              });
+              setChatVersion((v) => v + 1);
+              await sendRumorSafe(mlsGroup, rumor as any, { softFail: true });
+            },
             notifyProfileObserved,
             recordRequestAnswered,
             writeContactEntry: (pubkey: string, entry: { nickname: string; avatar: import('@/src/types').ProfileAvatar | null; updatedAt: string }) => {
@@ -1789,6 +1892,25 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // S8 (epic-group-invite-lifecycle, DD-11 composition-root wiring):
+  // registers the live admin-lookup provider messageEdits/api.ts's
+  // receive-side gate consults at apply time (`groupAdminsFor`), for EVERY
+  // groupId, not just the currently-open one — mirrors `getGroup`'s own
+  // `client.groups.get(groupId)` shape. Registered once on mount and
+  // cleared on unmount so a torn-down MarmotContext never leaves a stale
+  // provider consulted by a later session. Fail-closed inside the provider
+  // itself is api.ts's concern (`groupAdminsFor` swallows a throw/reject to
+  // `[]`) — this closure only needs to surface the live adminPubkeys.
+  useEffect(() => {
+    registerGroupAdminsProvider(async (groupId: string): Promise<string[]> => {
+      const client = clientRef.current;
+      if (!client) return [];
+      const mlsGroup = await client.groups.get(groupId).catch(() => null);
+      return mlsGroup?.groupData?.adminPubkeys ?? [];
+    });
+    return () => registerGroupAdminsProvider(null);
+  }, []);
+
   const getClient = useCallback((): MarmotClientType | null => {
     return clientRef.current;
   }, []);
@@ -1914,11 +2036,21 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     });
   }, [reloadGroups, markBackupDirty]);
 
-  // S2: Decline a pending invitation — removes from queue, no network call.
+  // S2/S5: Decline a pending invitation — removes from queue unconditionally;
+  // additionally sends an auth-gated gift-wrapped decline DM to the inviter
+  // (AC-DECLINE-3/4) when the local identity is available. sendKeys is
+  // omitted (rather than throwing) when privateKeyHex/pubkeyHex aren't
+  // hydrated yet — declinePendingInvitation degrades to local-removal-only
+  // in that case, matching every other best-effort send path in this file.
   const declinePendingInvitation = useCallback(async (id: string): Promise<void> => {
     const { declinePendingInvitation: doDecline } = await import('@/src/lib/marmot/welcomeSubscription');
-    await doDecline(id);
-  }, []);
+    const ndk = privateKeyHex && pubkeyHex ? (await import('@/src/lib/ndkClient')).getNdk() : null;
+    if (ndk && privateKeyHex && pubkeyHex) {
+      await doDecline(id, { ndk, selfPubkeyHex: pubkeyHex, selfPrivateKeyHex: privateKeyHex });
+    } else {
+      await doDecline(id);
+    }
+  }, [privateKeyHex, pubkeyHex]);
 
   // S1 (inline-invitation-cards): reads a stored invitation's pre-join group
   // data (name/description/admins) without joining, for card preview. Never

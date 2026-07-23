@@ -24,6 +24,28 @@
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
 import { filterVisibleMessages } from '@/src/lib/marmot/chatPersistence';
 import { parseStructured } from '@/src/lib/marmot/parseStructured';
+import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
+
+/**
+ * S7 (epic-group-invite-lifecycle): true iff `message.content` parses (via
+ * `parseStructured`) to a non-null, non-`image` StructuredContent — i.e. the
+ * message belongs to the "informative-announcement" family (invite_lifecycle,
+ * member_admitted, leave_intent, invite_cancelled, group_renamed, call_notice,
+ * polls). Generic over ANY parseStructured result — this is the load-bearing
+ * family identifier; it holds even for announcement types added after this
+ * story lands, with no per-type special-casing.
+ *
+ * S8 gate-consistency note: this is now a thin wrapper over the shared
+ * `isInformativeAnnouncementContent` (`lib/marmot/announcementFamily.ts`) —
+ * the SAME content-level predicate S8's receive-side gate
+ * (`messageEdits/api.ts`, `marmot/chatPersistence.ts`) imports and calls
+ * directly. Extracted so the UI-suppression family definition (this
+ * function) and the receive-side enforcement family definition can never
+ * silently diverge into two parallel implementations.
+ */
+export function isInformativeAnnouncement(message: ChatMessage): boolean {
+  return isInformativeAnnouncementContent(message.content);
+}
 
 /**
  * AC-AUTH-1 / AC-TIME-1: the edit/delete action menu is shown only on the
@@ -40,13 +62,43 @@ import { parseStructured } from '@/src/lib/marmot/parseStructured';
  * Pubkey comparison is case-insensitive to match the epic's other seam
  * guards (e.g. `ContactChat`'s own-message auth checks), which all
  * `.toLowerCase()` both sides before comparing.
+ *
+ * AC-IMMUT-1/2/3 (S7, DD-5): for the WHOLE informative-announcement family
+ * (every `StructuredContent` variant except `image` — see
+ * `isInformativeAnnouncement`), ordinary authorship is ignored entirely —
+ * but ONLY inside a group thread. A non-admin viewer gets no actions at
+ * all on a GROUP announcement — even one they authored themselves (this
+ * closes a pre-existing gap: before this predicate existed, an own
+ * announcement was actions-visible via the bare authorship check below).
+ * An admin viewer gets the action affordance on any group announcement
+ * regardless of who authored it, but this is a moderation-only Delete:
+ * `canEditMessage` already returns `false` for any structured message, so
+ * Edit stays suppressed for everyone, admin included. `image` messages are
+ * NOT part of the family — they keep the ordinary own-message authorship
+ * rule below, for every viewer.
+ *
+ * Gate-remediation (S7, group-vs-DM scoping): the family-wide suppression
+ * above is a GROUP-chat concept only — groups have admins and a shared
+ * announcement history that must stay tamper-evident; 1:1 DMs have neither.
+ * `isGroupContext` (default `false`, matching the DM surface which never
+ * passes it) gates the whole announcement-family branch: when `false`, an
+ * announcement message is judged by the ordinary own-message authorship
+ * rule below, same as any other message — restoring the pre-S7 behavior
+ * where a DM's own `call_notice` (or any other announcement-shaped
+ * message) stays author-deletable/editable-per-`canEditMessage`. Only the
+ * GROUP call path (`GroupChat.tsx`, unconditionally — an admin viewer is
+ * still inside a group even when `isCurrentUserAdmin` is `false`) passes
+ * `isGroupContext={true}`.
  */
 export function canShowMessageActions(
   message: ChatMessage,
   currentUserPubkey: string,
   allowMessageActions: boolean = true,
+  isCurrentUserAdmin: boolean = false,
+  isGroupContext: boolean = false,
 ): boolean {
   if (!allowMessageActions) return false;
+  if (isGroupContext && isInformativeAnnouncement(message)) return isCurrentUserAdmin;
   return message.senderPubkey.toLowerCase() === currentUserPubkey.toLowerCase();
 }
 

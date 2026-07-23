@@ -1,0 +1,34 @@
+{
+  "module_name": "parse",
+  "purpose": "Add the invite_lifecycle StructuredContent union member and its strict, fail-closed parse guard to app/src/lib/marmot/parseStructured.ts, establishing (and unit-testing) the parse-boundary guarantee that the payload's subject pubkey and the protocol-level senderPubkey are kept as two distinct, never-conflated values so downstream renderers (S4) resolve the announcement's author from senderPubkey only.",
+  "public_api": [
+    {
+      "name": "StructuredContent (union member addition)",
+      "signature": "| { type: 'invite_lifecycle'; event: 'invited' | 'accepted' | 'declined'; pubkey: string }",
+      "description": "New discriminated-union member. `pubkey` is the subject/invitee's canonical 64-char lowercase-hex pubkey — never an author/attribution field. Matches the InviteLifecycleContent seam contract in stories.json#seams[0]."
+    },
+    {
+      "name": "parseStructured",
+      "signature": "function parseStructured(content: string): StructuredContent",
+      "description": "Existing exported function, extended with one new strict guard branch. Unchanged signature. Returns the invite_lifecycle variant only when type === 'invite_lifecycle', event is exactly one of the 3-member enum, and pubkey matches /^[0-9a-f]{64}$/; otherwise falls through (eventually returning null for unrecognized/malformed content). The returned object is rebuilt from named fields only ({ type: 'invite_lifecycle', event, pubkey }) — never a widened `as StructuredContent` cast — so extra/spoofed properties never pass through."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "the invite_lifecycle StructuredContent union member",
+    "the invite_lifecycle strict parse guard branch"
+  ],
+  "dependencies_allowed": [],
+  "dependencies_forbidden": [
+    "React components (app/src/components/**)",
+    "invite-producer (InviteMemberModal.tsx, pages/groups.tsx)",
+    "accept-producer (profileHandler.ts, registerHandlers.ts)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/parseStructured.test.ts",
+    "app/tests/unit/marmot/parseStructured.contract.test.ts"
+  ]
+}

@@ -8,13 +8,13 @@ import type { MemberProfile } from '@/src/types';
 // Use `any` (not `unknown`) for marmot-ts opaque types so the impl can accept
 // strongly-typed callables from the boundary without contravariance fights.
 // The decoupling intent is preserved: the impl never reaches into these shapes.
-type MarmotGroupLike = {
+export type MarmotGroupLike = {
   state: any;
   groupData?: { adminPubkeys?: string[] } | null;
   commit: (opts: { extraProposals: any[] }) => Promise<unknown>;
 };
 
-type Deps = {
+export type Deps = {
   getGroup: (groupId: string) => Promise<MarmotGroupLike | null>;
   loadMemberProfiles: (groupId: string) => Promise<MemberProfile[]>;
   getGroupMembers: (state: any) => string[];
@@ -52,6 +52,12 @@ export async function cancelPendingInvitationImpl(
   groupId: string,
   pubkey: string,
   sendAnnouncement?: (content: string) => Promise<void>,
+  // epic: group-invite-lifecycle S6 (AC-DECLINE-10) — reuses this SAME Remove
+  // machinery for the receive-side decline flow, which must emit a `declined`
+  // invite_lifecycle announcement instead of `invite_cancelled`. Defaulted so
+  // every existing caller (the admin-initiated Cancel-Invite/Remove-Member UI
+  // flow, epic invite-rescind-and-member-removal) is byte-for-byte unchanged.
+  announcementKind: 'invite_cancelled' | 'declined' = 'invite_cancelled',
 ): Promise<{ ok: boolean; error?: string; raceDetected?: boolean; announcementError?: string }> {
   const mlsGroup = await deps.getGroup(groupId);
   if (!mlsGroup) return { ok: false, error: 'group_not_found' };
@@ -122,7 +128,12 @@ export async function cancelPendingInvitationImpl(
   deps.markBackupDirty(true);
 
   if (sendAnnouncement) {
-    const content = JSON.stringify({ type: 'invite_cancelled', pubkey, by: deps.selfPubkeyHex });
+    // AC-DECLINE-10: the `declined` shape is EXACTLY {type, event, pubkey} —
+    // no `by` field (unlike invite_cancelled), per the InviteLifecycleContent
+    // seam contract (stories.json#seams[0]) S1 established.
+    const content = announcementKind === 'declined'
+      ? JSON.stringify({ type: 'invite_lifecycle', event: 'declined', pubkey })
+      : JSON.stringify({ type: 'invite_cancelled', pubkey, by: deps.selfPubkeyHex });
     try {
       await sendAnnouncement(content);
     } catch (err) {

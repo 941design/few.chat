@@ -31,6 +31,7 @@ const RECOGNIZED: Case[] = [
   { type: 'group_renamed', required: { name: 'Book Club' } },
   { type: 'call_notice', required: { event: 'started', callId: 'c1', initiator: 'i1' } },
   { type: 'member_admitted', required: { pubkey: HEX64 } },
+  { type: 'invite_lifecycle', required: { event: 'invited', pubkey: HEX64 } },
 ];
 
 function validPayload(c: Case): Record<string, unknown> {
@@ -110,6 +111,10 @@ describe('parseStructured — required fields are each individually necessary', 
     ['call_notice rejects a non-string callId', { type: 'call_notice', event: 'started', callId: 99, initiator: 'i1' }],
     ['call_notice rejects an unknown event', { type: 'call_notice', event: 'paused', callId: 'c1', initiator: 'i1' }],
     ['image rejects a missing version', { type: 'image', caption: 'hi' }],
+    ['invite_lifecycle rejects an out-of-enum event', { type: 'invite_lifecycle', event: 'pending', pubkey: HEX64 }],
+    ['invite_lifecycle rejects an uppercase-hex pubkey', { type: 'invite_lifecycle', event: 'invited', pubkey: HEX64.toUpperCase() }],
+    ['invite_lifecycle rejects a wrong-length pubkey', { type: 'invite_lifecycle', event: 'invited', pubkey: HEX64.slice(0, 63) }],
+    ['invite_lifecycle rejects a non-string pubkey', { type: 'invite_lifecycle', event: 'invited', pubkey: 42 }],
   ])('%s', (_label, payload) => {
     const result = parseStructured(JSON.stringify(payload));
     // Either null, or (for cases where a foreign guard could match) not the

@@ -1,0 +1,513 @@
+{
+  "epic_name": "group-invite-lifecycle",
+  "created_at": "2026-07-22T17:20:00Z",
+  "total_stories": 10,
+  "stories": [
+    {
+      "id": "S1",
+      "name": "invite-lifecycle-parse-and-author",
+      "title": "invite_lifecycle StructuredContent type, strict parse guard, senderPubkey author resolution",
+      "description": "Adds the `{ type: 'invite_lifecycle'; event: 'invited'|'accepted'|'declined'; pubkey: string }` variant to the `StructuredContent` union in app/src/lib/marmot/parseStructured.ts, with a strict fail-closed guard branch (enum-checked `event`, canonical `/^[0-9a-f]{64}$/`-checked `pubkey`, object rebuilt from named fields only per DD-6 — never a widened `as StructuredContent` cast). Establishes the author-resolution convention (render from protocol `senderPubkey`, never payload `pubkey`) that S4/S7/S8 rely on. Foundation story: every other story either constructs, renders, or type-guards against this variant.",
+      "owning_module": "parse",
+      "files": [
+        "app/src/lib/marmot/parseStructured.ts",
+        "app/tests/unit/marmot/parseStructured.test.ts",
+        "app/tests/unit/marmot/parseStructured.contract.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-STRUCT-1",
+        "AC-STRUCT-2",
+        "AC-STRUCT-3",
+        "AC-STRUCT-4",
+        "AC-STRUCT-5"
+      ],
+      "scope": {
+        "includes": [
+          "the invite_lifecycle union member and its strict parse guard (AC-STRUCT-1)",
+          "reject event values outside the 3-member enum, falling through to plain text (AC-STRUCT-2)",
+          "reject non-canonical-hex pubkey (case, length, non-hex, non-string), falling through to plain text (AC-STRUCT-3)",
+          "rebuild the returned object from named fields only so extra/spoofed properties never pass through (AC-STRUCT-4)",
+          "document (and unit-test) that any renderer of this variant MUST resolve the displayed author from senderPubkey, never payload.pubkey (AC-STRUCT-5) — the render-time consumption of this convention is S4's job; this story owns the guarantee that senderPubkey and payload.pubkey are kept as two distinct, never-conflated values coming out of the parse boundary"
+        ],
+        "excludes": [
+          "the render branch and presentational component (S4)",
+          "the producers that construct invite_lifecycle payloads (S2, S3)",
+          "the immutability predicates that consume parseStructured's generic non-null/type!=='image' result (S7, S8)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": true,
+      "consumes_seams": [],
+      "notes": "AC-STRUCT-5 is a parse/attribution-boundary guarantee (senderPubkey vs payload.pubkey never conflated); its render-time observable consequence (an actual forged message rendering as C, not B) is jointly exercised by S4's rendering test. Both stories reference AC-STRUCT-5: S1 unit-tests the boundary in isolation (mocked dispatcher-attributed senderPubkey), S4 exercises it end-to-end through the real render path. Not duplicated in S4's acceptance_criteria list — S4 covers it structurally via its own RENDER-* ACs plus this shared convention, not as a separately counted AC."
+    },
+    {
+      "id": "S2",
+      "name": "invited-producer",
+      "title": "invited producer at the direct-invite call site (DD-8)",
+      "description": "After a successful MLS Add via the direct contact-invite flow (submitInviteWithMarker / InviteMemberModal.tsx), sends an application rumor `{type:'invite_lifecycle', event:'invited', pubkey: inviteeHex}` into the group via sendApplicationRumor, fire-and-forget. Placed at the direct-invite call site specifically — NOT inside inviteByNpub, which the out-of-scope join-request/invite-link flow (approveJoinRequestImpl) also calls — so the join-request flow's existing member_admitted announcement is left untouched and no double-announce occurs.",
+      "owning_module": "invite-producer",
+      "files": [
+        "app/src/components/groups/InviteMemberModal.tsx",
+        "app/pages/groups.tsx",
+        "app/tests/unit/groups/InviteMemberModal.test.tsx"
+      ],
+      "acceptance_criteria": [
+        "AC-PROD-1",
+        "AC-PROD-2"
+      ],
+      "scope": {
+        "includes": [
+          "post invited on MLS Add success at the direct-invite call site (AC-PROD-1)",
+          "regression test proving approveJoinRequestImpl's reuse of inviteByNpub does NOT emit invite_lifecycle (AC-PROD-2)"
+        ],
+        "excludes": [
+          "the accepted producer (S3)",
+          "the invite_lifecycle type/guard itself (S1)",
+          "rendering the resulting message (S4)"
+        ]
+      },
+      "complexity": "low",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "InviteLifecycleContent"
+      ]
+    },
+    {
+      "id": "S3",
+      "name": "accepted-producer",
+      "title": "accepted producer gated on B's genuine own-join (DD-9)",
+      "description": "Threads a send capability into profileHandler.ts via registerHandlers.ts (the handler has no send dep today), and exposes a get-then-clear check on the profile-handling seam reporting whether a pending marker existed for the arriving profile's pubkey AND the profile rumor's transport senderPubkey equals that pubkey (a genuine own-join, not a third-member relay of B's cached profile). On that first true transition per invitee per group, posts `{type:'invite_lifecycle', event:'accepted', pubkey:B}`.",
+      "owning_module": "accept-producer",
+      "files": [
+        "app/src/lib/marmot/handlers/profileHandler.ts",
+        "app/src/lib/marmot/registerHandlers.ts",
+        "app/tests/unit/marmot/profileHandler.test.ts",
+        "app/src/context/MarmotContext.tsx",
+        "app/src/lib/marmot/pendingDirectInviteStorage.ts",
+        "app/tests/unit/marmot/pendingDirectInviteStorage.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-PROD-3",
+        "AC-PROD-4",
+        "AC-PROD-5"
+      ],
+      "scope": {
+        "includes": [
+          "post accepted on B's own-authored first-join profile rumor (AC-PROD-3)",
+          "never post accepted when the arriving profile was relayed by a third member (senderPubkey != B) (AC-PROD-4)",
+          "at-most-once per invitee per group even across duplicate/reconnect delivery of B's own profile rumor (AC-PROD-5)"
+        ],
+        "excludes": [
+          "the invited producer (S2)",
+          "the invite_lifecycle type/guard itself (S1)",
+          "rendering the resulting message (S4)",
+          "changing the pre-existing profile-arrival marker-clearing mechanism (unchanged, out of scope per spec.md)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "InviteLifecycleContent"
+      ]
+    },
+    {
+      "id": "S4",
+      "name": "invite-lifecycle-render",
+      "title": "Inline rendering, i18n copy, and presentational component",
+      "description": "Adds an invite_lifecycle branch to renderStructuredMessage (ChatBox.tsx, near the leave_intent/member_admitted branches) resolving the invitee (subject) name from profileMap[payload.pubkey] with truncated-npub fallback, and the author from the protocol-verified senderPubkey (mirroring resolveCancellerDisplay) — never from payload.pubkey. Renders via a new small presentational component InviteLifecycleChatAnnouncement.tsx modelled on LeaveChatAnnouncement.tsx (muted background, one line, no avatar/bubble/action affordances, stable data-testid). Adds three new Copy keys (one per enum value) to i18n.ts with matching en/de entries.",
+      "owning_module": "render",
+      "files": [
+        "app/src/components/chat/ChatBox.tsx",
+        "app/src/components/groups/InviteLifecycleChatAnnouncement.tsx",
+        "app/src/lib/i18n.ts",
+        "app/tests/unit/chat/inviteLifecycleAnnouncement.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-RENDER-1",
+        "AC-RENDER-2",
+        "AC-RENDER-3"
+      ],
+      "scope": {
+        "includes": [
+          "subject name resolution from profileMap[payload.pubkey], truncated-npub fallback (AC-RENDER-1)",
+          "copy string selection keyed on event, with distinct non-empty en+de strings for all three enum values (AC-RENDER-2)",
+          "stable data-testid, no avatar/bubble/edit/delete/reaction affordances (AC-RENDER-3)"
+        ],
+        "excludes": [
+          "the invite_lifecycle type/guard (S1)",
+          "the producers that create these messages (S2, S3)",
+          "immutability suppression of edit/delete affordances (S7) — this story only ensures the presentational component itself never renders such affordances by construction"
+        ]
+      },
+      "complexity": "medium",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "InviteLifecycleContent"
+      ],
+      "notes": "This story's owning_module is 'render' per architecture.md's Module Map, but it also touches i18n.ts ('i18n' module, 'Owned data: 3 new Copy keys'). Judgment call: acceptance-criteria.md defines no i18n-only AC (AC-RENDER-2 is a single AC requiring both the copy keys to exist AND the render-time selection logic — the i18n keys have no independently testable behavior of their own outside that render context, unlike e.g. a prior epic's AC-LOCALE-1/2 pair which stood alone). Spinning up a separate i18n-owning story would leave it with zero standalone AC (Design Principle 2), so i18n.ts is treated as a tightly-coupled implementation input to this story rather than its own module-owning story. Flagged for visibility, not hidden."
+    },
+    {
+      "id": "S5",
+      "name": "decline-send",
+      "title": "B-side gift-wrapped decline send (auth-gated), groupId + authenticated persistence",
+      "description": "Surfaces the MLS groupId from readWelcomeGroupInfo's groupContext.groupId (currently discarded by readPreJoinGroupData) and persists it, plus a new authenticated boolean reflecting whether the Welcome's gift-wrap seal was authenticated at receipt, on the stored PendingInvitation at enqueue time. declinePendingInvitation sends a NIP-59 gift-wrapped rumor of a new dedicated inner kind INVITE_DECLINE_KIND=21063 (distinct from 444/21059/21060/21061/21062 — verified against the existing sentinel-collision list in dmProfile/kinds.ts and pairingAck.ts) addressed to inviterPubkeyHex with ephemeral sender key and inner content `{groupId, pubkey: selfHex}` ONLY, when authenticated:true; skips the send entirely when authenticated:false. Local removal of the PendingInvitation is unconditional regardless of send outcome. No group-channel publish, no MLS Add of B ever occurs on this path.",
+      "owning_module": "decline-b",
+      "files": [
+        "app/src/lib/marmot/welcomeSubscription.ts",
+        "app/src/lib/pendingInvitations.ts",
+        "app/tests/unit/marmot/welcomeSubscription.test.ts",
+        "app/tests/unit/pendingInvitations.test.ts",
+        "app/src/context/MarmotContext.tsx",
+        "app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-DECLINE-1",
+        "AC-DECLINE-2",
+        "AC-DECLINE-3",
+        "AC-DECLINE-4",
+        "AC-DECLINE-5",
+        "AC-DECLINE-6",
+        "AC-DECLINE-13"
+      ],
+      "scope": {
+        "includes": [
+          "persist groupId on PendingInvitation at enqueue (AC-DECLINE-1)",
+          "persist authenticated boolean at enqueue (AC-DECLINE-2)",
+          "gift-wrapped decline send with exact inner content shape when authenticated:true (AC-DECLINE-3)",
+          "no send at all when authenticated:false (AC-DECLINE-4)",
+          "unconditional local removal regardless of send success/failure (AC-DECLINE-5)",
+          "no group-channel publish, no MLS Add, on the decline path (AC-DECLINE-6)",
+          "inner rumor plaintext contains only groupId+pubkey, verified pre-encryption (AC-DECLINE-13)"
+        ],
+        "excludes": [
+          "A's receive-side handling of the decline gift wrap (S6)",
+          "INVITE_DECLINE_KIND's numeric distinctness from the receive-side dispatch branch ordering (S6 owns the dispatch branch itself; this story only owns picking and exporting the constant)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": true,
+      "consumes_seams": [],
+      "notes": "INVITE_DECLINE_KIND is assigned 21063 — the next free slot after the existing ephemeral-range sentinels in this codebase (444 Welcome, 21059 join-request, 21060 pairing-ack, 21061/21062 DM-profile request/announce). Verified via grep across app/src/lib for existing *_KIND constants before assignment."
+    },
+    {
+      "id": "S6",
+      "name": "decline-receive",
+      "title": "A-side decline receive: authenticate, defer, tree-gate, Remove + declined post (DD-4/DD-7/DD-10)",
+      "description": "Adds an INVITE_DECLINE_KIND branch to the existing kind-1059 gift-wrap subscription dispatch in welcomeSubscription.ts (slotted after the join-request 21059 branch, before the kind-444 Welcome guard), reusing unwrapGiftWrap's existing seal authentication. On an authenticated decline: defers until the referenced group's historical sync completes (onHistorySynced) without advancing the MLS key schedule early; verifies the lowercased seal author is currently a pending member of that group (isPendingMemberImpl); then executes, in order, (1) MLS Remove of the invitee reusing cancelPendingInvitationImpl but emitting a declined invite_lifecycle announcement instead of invite_cancelled, (2) clear the pending-direct-invite marker, (3) mark the gift wrap seen — never marking seen before step (1)/(2) complete, so a crash mid-flow safely reprocesses on next start and a replay after B is already removed is a clean no-op.",
+      "owning_module": "decline-a",
+      "files": [
+        "app/src/lib/marmot/welcomeSubscription.ts",
+        "app/src/lib/marmot/cancelInvitationImpl.ts",
+        "app/tests/unit/marmot/welcomeSubscription.test.ts",
+        "app/src/context/MarmotContext.tsx"
+      ],
+      "acceptance_criteria": [
+        "AC-DECLINE-7",
+        "AC-DECLINE-8",
+        "AC-DECLINE-9",
+        "AC-DECLINE-10",
+        "AC-DECLINE-11",
+        "AC-DECLINE-12"
+      ],
+      "scope": {
+        "includes": [
+          "INVITE_DECLINE_KIND numerically distinct from 444/21059/pairing-ack, routed to its own branch (AC-DECLINE-7)",
+          "seal authentication before any evaluation (AC-DECLINE-8)",
+          "tree-membership pending-member gate, lowercased comparison (AC-DECLINE-9)",
+          "DD-7 ordering: Remove, post, marker-clear, THEN mark-seen (AC-DECLINE-10)",
+          "duplicate/replayed decline after removal is a clean no-op (AC-DECLINE-11)",
+          "epoch-safe deferral until onHistorySynced, then DD-7 ordering (AC-DECLINE-12)"
+        ],
+        "excludes": [
+          "B's send side and the stored groupId/authenticated fields it depends on (S5 — this story consumes that contract)",
+          "posting invited/accepted (S2/S3) — this story only posts declined",
+          "the ordering/interleaving property proof across the full generator space (S9's AC-CROSS-1 — this story's own unit tests cover DD-7/DD-10's individual mechanics, not the combinatorial property)"
+        ]
+      },
+      "complexity": "high",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "DeclineGiftWrapPayload"
+      ]
+    },
+    {
+      "id": "S7",
+      "name": "immutability-ui-suppression",
+      "title": "UI suppression of Edit/Delete for the announcement family, with admin carve-out",
+      "description": "Introduces an 'is an informative announcement' predicate (parseStructured(content) non-null AND type !== 'image') at the canShowMessageActions chokepoint (messageActionUi.ts) and its ChatBox.tsx call site. For a non-admin viewer, suppresses both Edit and Delete on any message matching the predicate — the whole announcement family (invite_lifecycle, member_admitted, leave_intent, invite_cancelled, call_notice, polls), not only invite_lifecycle. For a group-admin viewer, shows a moderation Delete but never an Edit. image-type messages remain fully deletable by their author regardless.",
+      "owning_module": "immutability-ui",
+      "files": [
+        "app/src/lib/messageEdits/messageActionUi.ts",
+        "app/src/components/chat/ChatBox.tsx",
+        "app/src/components/groups/GroupChat.tsx",
+        "app/pages/groups.tsx",
+        "app/tests/unit/chat/messageActionUi.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-IMMUT-1",
+        "AC-IMMUT-2",
+        "AC-IMMUT-3"
+      ],
+      "scope": {
+        "includes": [
+          "non-admin: both Edit and Delete suppressed for the whole non-image announcement family (AC-IMMUT-1)",
+          "image messages remain deletable by their author (AC-IMMUT-2)",
+          "admin: moderation Delete shown, Edit never shown (AC-IMMUT-3)"
+        ],
+        "excludes": [
+          "receive-side rejection of edit/delete signals (S8)",
+          "the invite_lifecycle type itself (S1) — this story's predicate is generic over any parseStructured result, pre-existing announcement types included"
+        ]
+      },
+      "complexity": "medium",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": true,
+      "consumes_seams": [
+        "InviteLifecycleContent"
+      ],
+      "notes": "AC-IMMUT-1/2/3 apply to the whole informative-announcement family, not just invite_lifecycle, so this story's tests exercise the predicate against pre-existing variants (member_admitted, leave_intent, etc.) as well as the new invite_lifecycle variant from S1. Weak dependency on S1: the predicate itself is type-agnostic (parseStructured(content) non-null && type!=='image'), so it does not require invite_lifecycle to exist to be correct, but S1 landing first keeps the full family in scope for this story's tests."
+    },
+    {
+      "id": "S8",
+      "name": "immutability-receive-rejection",
+      "title": "Receive-side rejection of non-admin edit/delete signals at every apply site (DD-11)",
+      "description": "At every edit/delete apply site — applyDeleteEditSignal (messageEdits/api.ts), the tombstone-application path in chatPersistence.ts, AND the deferred/buffered resolution paths (resolvePendingSignalsForSlot, TTL-expiry materialization) — rejects a delete/tombstone signal targeting a non-image StructuredContent message UNLESS the signal's senderPubkey is a current group admin, in which case it is honored. Rejects an edit signal targeting a non-image StructuredContent message unconditionally (never honored, admin or not). Additionally rejects an edit whose replacement content parses as a non-image StructuredContent, regardless of the edit's target type, preventing fabrication of an immutable row via edit.",
+      "owning_module": "immutability-receive",
+      "files": [
+        "app/src/lib/messageEdits/api.ts",
+        "app/src/lib/marmot/chatPersistence.ts",
+        "app/tests/unit/messageEdits/api.test.ts",
+        "app/tests/unit/marmot/chatPersistence.test.ts",
+        "app/src/context/ChatStoreContext.tsx",
+        "app/src/lib/marmot/announcementFamily.ts",
+        "app/src/lib/messageEdits/messageActionUi.ts",
+        "app/src/context/MarmotContext.tsx",
+        "app/pages/groups.tsx",
+        "app/tests/unit/marmot/groupMessageEdits.test.ts",
+        "app/tests/unit/chatPersistence-editDelete.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-IMMUT-4",
+        "AC-IMMUT-5",
+        "AC-IMMUT-6",
+        "AC-IMMUT-7"
+      ],
+      "scope": {
+        "includes": [
+          "reject non-admin-sourced delete/tombstone against an announcement at applyDeleteEditSignal and the tombstone path (AC-IMMUT-4)",
+          "honor admin-sourced delete/tombstone against an announcement at both sites (AC-IMMUT-5)",
+          "reject any edit targeting an announcement, admin or not (AC-IMMUT-6)",
+          "reject any edit whose replacement content parses as non-image structured content, regardless of target (AC-IMMUT-7)",
+          "apply all of the above at the buffered/deferred resolution paths too, not only the direct known-row branch (DD-11)",
+          "SEND-side admin carve-out: performGroupDeleteMessage (ChatStoreContext) must let a group admin construct+send a delete of a PEER announcement (moderation), so S7 admin Delete button is functional end-to-end; own-message-only remains for non-admins and non-announcements (completes AC-IMMUT-3 functional loop with AC-IMMUT-5 receive-side)"
+        ],
+        "excludes": [
+          "the UI suppression predicate (S7)",
+          "the ordering/apply-site-permutation property proof (S9's AC-CROSS-2 — this story's own unit tests cover each apply site individually, not the combinatorial arrival-order space)"
+        ]
+      },
+      "complexity": "high",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "InviteLifecycleContent"
+      ]
+    },
+    {
+      "id": "S9",
+      "name": "cross-cutting-invariant-verification",
+      "title": "Order-sensitive whole-flow property verification (decline lifecycle + immutability apply-site gate)",
+      "description": "FR-A7 integration story, triggered by architecture.md's '## Order-Sensitive Composition' signal. Verifies two whole-flow property guarantees that no single story's own unit tests establish: (1) AC-CROSS-1 — across the space of {duplicate decline redeliveries} x {crash/restart timing relative to DD-10 step 1} x {historical-sync completion timing}, the system converges to at most one declined post and at most one Remove per invitee/group, and to exactly one of each whenever the invitee was still pending at some evaluation time; (2) AC-CROSS-2 — across every apply site (direct, buffered, TTL-expiry, tombstone) x every signal/target arrival order, the announcement-immutability gate and its admin carve-out hold uniformly, and edit-into-announcement is rejected regardless of apply site or arrival order. Verifies against the real, already-implemented decline-b/decline-a/immutability-receive code (S5, S6, S8) — no mocks. Adds no new production logic.",
+      "acceptance_criteria": [
+        "AC-CROSS-1",
+        "AC-CROSS-2"
+      ],
+      "scope": {
+        "includes": [
+          "property/interleaving test over the decline lifecycle's redelivery x crash-timing x sync-timing space (AC-CROSS-1)",
+          "property/interleaving test over the immutability apply-site x arrival-order space (AC-CROSS-2)"
+        ],
+        "excludes": [
+          "any new production code — this story verifies existing S5/S6/S8 behavior, it does not implement",
+          "the e2e conformance-oracle pass (S10), which confirms the assembled system agrees with what this story already established at the unit/property level"
+        ]
+      },
+      "complexity": "high",
+      "status": "done",
+      "is_integration_story": true,
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "DeclineGiftWrapPayload",
+        "InviteLifecycleContent"
+      ]
+    },
+    {
+      "id": "S10",
+      "name": "e2e-invite-lifecycle-scenarios",
+      "title": "End-to-end groups spec: invited/accepted/declined through the app UI",
+      "description": "Authors a new e2e spec file app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts (relay bucket, Docker) — deliberately NOT named groups-direct-invite-lifecycle.spec.ts, which already exists for the unrelated epic-invite-rescind-and-member-removal's Cancel-Invite/Remove-Member marker lifecycle. Drives, through two-or-more real browser contexts publishing via the app's own UI: (a) a direct invite producing a visible invited announcement, (b) B accepting (joining) producing a visible accepted announcement, (c) B declining producing a visible declined announcement plus B's removal from the member list, and (d) for a non-admin viewer, absence of Edit/Delete on these announcements versus presence of the admin moderation Delete. This is a conformance oracle re-confirming, at the assembled-system/UI level, ACs already established at the unit/property level by S2, S3, S5, S6, S7 (AC-PROD-1/3, AC-DECLINE-3/9/10) and S9 (AC-CROSS-1) — not the primary search over the ordering/interleaving space. Runs last: every other story is real and un-mocked by this point. Pass gate is the full 60-test suite (make test-e2e-all).",
+      "owning_module": "e2e",
+      "files": [
+        "app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts"
+      ],
+      "acceptance_criteria": [
+        "AC-PROD-1",
+        "AC-PROD-3",
+        "AC-DECLINE-3",
+        "AC-DECLINE-9",
+        "AC-DECLINE-10",
+        "AC-IMMUT-1",
+        "AC-IMMUT-3"
+      ],
+      "scope": {
+        "includes": [
+          "invite -> invited announcement visible in group chat (AC-PROD-1 e2e confirmation)",
+          "accept -> accepted announcement visible (AC-PROD-3 e2e confirmation)",
+          "decline -> declined announcement + B removed from member list (AC-DECLINE-3/9/10 e2e confirmation)",
+          "non-admin: no Edit/Delete affordance on these announcements (AC-IMMUT-1 e2e confirmation)",
+          "admin: moderation Delete affordance present, no Edit (AC-IMMUT-3 e2e confirmation)"
+        ],
+        "excludes": [
+          "receive-side forgery/UI-bypass cases (AC-IMMUT-4 through AC-IMMUT-7, AC-CROSS-2) — unit-test territory per acceptance-criteria.md's Manual Validation section, since the publish-through-the-app rule means the app cannot itself emit a UI-bypassing edit/delete signal",
+          "the combinatorial ordering/interleaving property search (S9) — this story asserts only what the app-driven UI can observe, for one representative interleaving per scenario"
+        ]
+      },
+      "complexity": "high",
+      "status": "done",
+      "lighter_path": false,
+      "creates_seam": false,
+      "consumes_seams": [
+        "InviteLifecycleContent",
+        "DeclineGiftWrapPayload"
+      ],
+      "notes": "owning_module 'e2e' is not a row in architecture.md's Module Map — it follows this codebase's established convention for e2e-only stories that verify an assembled system rather than own a production module (see epic-contact-pairing-code S6, epic-feature-request-message-edit-and-delete S7, both owning_module='e2e'). AC-PROD-1/3, AC-DECLINE-3/9/10, AC-IMMUT-1/3 are duplicated here against their primary-owning stories (S2/S3/S5/S6/S7) by explicit design of acceptance-criteria.md's own Manual Validation section, which frames S5's (this epic's spec.md S5, now S10) e2e coverage as an intentional secondary conformance-oracle confirmation, not exclusive ownership — this is a documented exception to the general one-story-per-AC default, not an oversight."
+    }
+  ],
+  "story_order": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9",
+    "S10"
+  ],
+  "dependency_notes": "Foundation-first: S1 (parse module) has no dependencies and must land first — S2, S3, S4, S7, S8 all import the invite_lifecycle type or the senderPubkey-authorship convention it establishes. S2 (invited-producer) and S3 (accepted-producer) are independent of each other (different call sites, different triggers) and depend only on S1; sequenced S2 before S3 for narrative clarity (invite precedes accept in the lifecycle), not a hard dependency. S4 (render+i18n) depends on S1 for the type shape but is independent of S2/S3/S5/S6 (it renders whatever message arrives, real or test-constructed). S5 (decline-send) is independent of S1-S4 (B-side, no group-channel post) but must land before S6, since S6 consumes the DeclineGiftWrapPayload contract (groupId + authenticated-gated send) S5 defines. S6 (decline-receive) depends on S1 (posts the declined announcement) and S5 (consumes its DM contract). S7 (immutability-ui) and S8 (immutability-receive) are independent of each other and of S2-S6 (their predicates are generic over any parseStructured result, not invite_lifecycle-specific), but are sequenced after S1 so their tests can exercise the new variant as part of the announcement family. S9 (the FR-A7 integration story) is placed after S5, S6, and S8 per its cross_cutting_acs union {S5, S6, S8} (AC-CROSS-1 spans decline-b/decline-a = S5/S6; AC-CROSS-2 spans immutability-receive = S8) — it verifies property guarantees over their already-real code, adding no production logic. S10 (e2e) runs last, after every other story including S9, per acceptance-criteria.md's Manual Validation framing of e2e as a conformance oracle confirming what S9's property tests already established, and because it needs the full assembled system (all producers, the decline channel, and immutability) real and un-mocked. No temporary mocks are introduced anywhere in this epic: sequential implementation (Module Ownership principle 5) means every consumer is ordered after its producer, so each story's dependencies are already real by the time it is built.",
+  "mock_resolution_plan": "No temporary mocks are introduced by this epic (see dependency_notes) — nothing to resolve.",
+  "seams": [
+    {
+      "data": "the invite_lifecycle StructuredContent variant (type/event/pubkey) and the senderPubkey-vs-payload.pubkey author-resolution convention",
+      "source": {
+        "story": "S1",
+        "artifact": "parseStructured.ts's invite_lifecycle union member + strict guard branch"
+      },
+      "destination": {
+        "story": "S2",
+        "artifact": "InviteMemberModal.tsx's invited-producer payload construction"
+      },
+      "intermediaries": [
+        {
+          "story": "S3",
+          "artifact": "profileHandler.ts's accepted-producer payload construction"
+        },
+        {
+          "story": "S4",
+          "artifact": "ChatBox.tsx's renderStructuredMessage invite_lifecycle branch"
+        },
+        {
+          "story": "S7",
+          "artifact": "messageActionUi.ts's is-informative-announcement predicate"
+        },
+        {
+          "story": "S8",
+          "artifact": "messageEdits/api.ts's non-image structured-content target/replacement-content check"
+        }
+      ],
+      "contract": {
+        "type_name": "InviteLifecycleContent",
+        "fields": [
+          {
+            "name": "type",
+            "type": "'invite_lifecycle'"
+          },
+          {
+            "name": "event",
+            "type": "'invited' | 'accepted' | 'declined'"
+          },
+          {
+            "name": "pubkey",
+            "type": "string (canonical 64-char lowercase hex, the subject/invitee)"
+          }
+        ],
+        "invariants": [
+          "parseStructured returns this shape only when event is exactly one of the three enum values and pubkey matches /^[0-9a-f]{64}$/",
+          "the returned object contains exactly these three fields, rebuilt from named fields — never a widened cast that could pass extra properties through",
+          "the rendered/attributed author of a message carrying this content is always resolved from the message's protocol-level senderPubkey, never from this payload's pubkey field"
+        ]
+      }
+    },
+    {
+      "data": "the B->A gift-wrapped decline DM's inner rumor payload",
+      "source": {
+        "story": "S5",
+        "artifact": "welcomeSubscription.ts's declinePendingInvitation gift-wrap send (INVITE_DECLINE_KIND=21063)"
+      },
+      "destination": {
+        "story": "S6",
+        "artifact": "welcomeSubscription.ts's INVITE_DECLINE_KIND receive branch"
+      },
+      "contract": {
+        "type_name": "DeclineGiftWrapPayload",
+        "fields": [
+          {
+            "name": "groupId",
+            "type": "string (MLS group id, from readWelcomeGroupInfo's groupContext.groupId)"
+          },
+          {
+            "name": "pubkey",
+            "type": "string (selfHex, the declining invitee's own pubkey)"
+          }
+        ],
+        "invariants": [
+          "contains only these two fields — no nickname, avatar, or other profile metadata, verified pre-encryption",
+          "sent only when the stored PendingInvitation's authenticated flag is true; never sent otherwise",
+          "on receipt, MUST be authenticated via the existing NIP-59 seal-authentication checks before any further evaluation",
+          "on receipt, is accepted only when the lowercased seal-author pubkey is currently a pending member (in-tree, no MemberProfile) of the referenced groupId — otherwise a no-op"
+        ]
+      }
+    }
+  ],
+  "cross_cutting_acs": [
+    {
+      "ac_id": "AC-CROSS-1",
+      "spanned_by": [
+        "S5",
+        "S6"
+      ]
+    },
+    {
+      "ac_id": "AC-CROSS-2",
+      "spanned_by": [
+        "S8"
+      ]
+    }
+  ]
+}

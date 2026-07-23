@@ -134,6 +134,105 @@ describe('parseStructured', () => {
   });
 });
 
+describe('parseStructured — invite_lifecycle', () => {
+  // Same canonical 64-char lowercase-hex pubkey shape as member_admitted's
+  // VALID_HEX_PUBKEY above (scoped to that describe block, so re-declared here).
+  const VALID_HEX_PUBKEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+  // AC-STRUCT-1 / VQ-S1-012 (seam contract closed enum, one happy path per member)
+  it.each(['invited', 'accepted', 'declined'] as const)(
+    'returns invite_lifecycle variant containing exactly {type, event, pubkey} for event=%s',
+    (event) => {
+      const result = parseStructured(
+        `{"type":"invite_lifecycle","event":"${event}","pubkey":"${VALID_HEX_PUBKEY}"}`,
+      );
+      expect(result).toEqual({ type: 'invite_lifecycle', event, pubkey: VALID_HEX_PUBKEY });
+      expect(Object.keys(result as object).sort()).toEqual(['event', 'pubkey', 'type']);
+    },
+  );
+
+  // AC-STRUCT-2: every out-of-enum event value falls through to plain text,
+  // individually — not just one collapsed "invalid event" case.
+  it.each<[string, string | undefined]>([
+    ['out-of-enum value "pending"', 'pending'],
+    ['empty string', ''],
+    ['missing entirely', undefined],
+    ['case-mismatched ("Invited")', 'Invited'],
+    ['near-miss prefix ("invite")', 'invite'],
+  ])('returns null for invite_lifecycle with an out-of-enum event (%s)', (_label, event) => {
+    const payload: Record<string, unknown> = { type: 'invite_lifecycle', pubkey: VALID_HEX_PUBKEY };
+    if (event !== undefined) payload.event = event;
+    const result = parseStructured(JSON.stringify(payload));
+    expect(result).toBeNull();
+  });
+
+  // AC-STRUCT-3: every pubkey-malformation category rejected individually,
+  // including a non-string value (must not throw before/inside the guard).
+  it.each<[string, unknown]>([
+    ['too short', 'x'],
+    ['short hex', 'aabb'],
+    ['63 hex chars', 'a'.repeat(63)],
+    ['65 hex chars', 'a'.repeat(65)],
+    ['uppercase hex', 'A'.repeat(64)],
+    ['non-hex chars', 'g'.repeat(64)],
+    ['empty', ''],
+    ['numeric pubkey', 42],
+    ['null pubkey', null],
+  ])('returns null for invite_lifecycle with a non-canonical pubkey (%s)', (_label, pubkey) => {
+    // Calling parseStructured itself (not just the assertion) must not throw —
+    // a non-string pubkey (e.g. 42, null) must fail the regex match via safe
+    // ToString coercion, never crash the parser.
+    let result: unknown;
+    expect(() => {
+      result = parseStructured(JSON.stringify({ type: 'invite_lifecycle', event: 'invited', pubkey }));
+    }).not.toThrow();
+    expect(result).toBeNull();
+  });
+
+  it('returns null for invite_lifecycle missing pubkey entirely', () => {
+    const result = parseStructured('{"type":"invite_lifecycle","event":"invited"}');
+    expect(result).toBeNull();
+  });
+
+  // AC-STRUCT-4: the object is rebuilt from named fields only, so a spoofed
+  // extra property (role, __proto__, or even a forged senderPubkey) is dropped
+  // — never passed through via a widened `{...payload}` / `as StructuredContent`
+  // cast. Distinguishes a correct implementation from a naive spread, which
+  // would let `role`/`senderPubkey` leak into the returned object.
+  it('drops any extra/spoofed properties — object rebuilt from named fields only (AC-STRUCT-4)', () => {
+    const result = parseStructured(
+      `{"type":"invite_lifecycle","event":"invited","pubkey":"${VALID_HEX_PUBKEY}","role":"admin","senderPubkey":"forgedSenderPk","__proto__":{"polluted":true}}`,
+    );
+    expect(result).toEqual({ type: 'invite_lifecycle', event: 'invited', pubkey: VALID_HEX_PUBKEY });
+    expect(result).not.toHaveProperty('role');
+    expect(result).not.toHaveProperty('senderPubkey');
+    expect(Object.keys(result as object).sort()).toEqual(['event', 'pubkey', 'type']);
+    // The prototype-pollution attempt must not have escaped onto the plain
+    // object parseStructured constructs.
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect((result as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  // AC-STRUCT-5 (parse-boundary half — S1's owned guarantee): parseStructured's
+  // signature takes only `content: string`. There is no `senderPubkey` parameter
+  // and the returned object never carries one, so the payload's `pubkey`
+  // (subject/invitee) and the protocol-level `senderPubkey` (author, supplied by
+  // the transport/dispatcher, never by this parser) are structurally two
+  // distinct values that cannot be conflated at this boundary. The render-time
+  // consumption of this convention — resolving the displayed author from
+  // msg.senderPubkey, never payload.pubkey — is exercised end-to-end by S4.
+  it('keeps payload.pubkey (subject) and any transport-level sender identity structurally distinct (AC-STRUCT-5)', () => {
+    const result = parseStructured(
+      `{"type":"invite_lifecycle","event":"invited","pubkey":"${VALID_HEX_PUBKEY}"}`,
+    );
+    expect(result).toEqual({ type: 'invite_lifecycle', event: 'invited', pubkey: VALID_HEX_PUBKEY });
+    // parseStructured has no channel to accept or emit a sender identity: the
+    // returned object exposes only the three named fields above.
+    expect(result).not.toHaveProperty('senderPubkey');
+    expect(parseStructured.length).toBe(1); // arity: (content: string) only
+  });
+});
+
 describe('resolveCancellerDisplay — trust boundary', () => {
   const truncate = (pk: string) => pk.slice(0, 8) + '…';
 

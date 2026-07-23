@@ -1,0 +1,45 @@
+{
+  "story_id": "S4",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-22T19:25:00Z",
+  "files_created": [
+    "app/src/components/groups/InviteLifecycleChatAnnouncement.tsx",
+    "app/tests/unit/chat/inviteLifecycleAnnouncement.test.ts",
+    "specs/epic-group-invite-lifecycle/S4-invite-lifecycle-render/architecture.json",
+    "specs/epic-group-invite-lifecycle/S4-invite-lifecycle-render/result.json"
+  ],
+  "files_modified": [
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/lib/i18n.ts",
+    "specs/epic-group-invite-lifecycle/S4-invite-lifecycle-render/verification.json"
+  ],
+  "tests_added": {
+    "unit": 20
+  },
+  "test_counts": {
+    "baseline": 3887,
+    "final": 3907
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": ["render"],
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "No friction on the architecture/design side — the exploration.json findings (exact ChatBox.tsx anchors, component precedent, i18n pattern) were precise enough to write architecture.json and the stub component directly. The one wrinkle, absorbed from the delegated dev spawn: its first draft of the ChatBox.tsx branch comment used the literal word 'senderPubkey' to document the AC-STRUCT-5 boundary, which would have tripped the story's own structural test asserting the branch text contains no 'senderPubkey' token at all. The dev caught and reworded it before submission (to 'the message's protocol-level sender'). Worth naming for future stories in this epic: when a spec bans a literal token/substring inside freshly-authored code via a source-scan test, an explanatory comment sitting in that same code is just as exposed to the ban as the code it explains, and needs phrasing chosen with that in mind from the start.",
+    "surprised_by": "",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [
+      {
+        "agent": "dev",
+        "spawn_index": 1,
+        "note": "Reworded the invite_lifecycle branch comment away from the literal token 'senderPubkey' to 'the message's protocol-level sender' to avoid colliding with this story's own structural test (`not.toMatch(/senderPubkey/)` on the extracted branch text) — self-caught before submission, not a defect."
+      }
+    ],
+    "lead_clarifications": []
+  }
+}

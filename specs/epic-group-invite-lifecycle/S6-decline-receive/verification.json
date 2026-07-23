@@ -1,0 +1,103 @@
+{
+  "story_id": "S6",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S6-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the tree-membership pending-member gate (`isPendingMemberImpl`) evaluated against real, current tree state at the moment of decline evaluation (not a snapshot cached at gift-wrap-arrival time that could be stale by the time deferred processing runs after `onHistorySynced`)? Is the 'mark seen' step a genuine persisted side effect (not a no-op stub) that, if it silently failed to persist, would be caught by a test rather than passing regardless?"
+    },
+    {
+      "question_id": "VQ-S6-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the new `INVITE_DECLINE_KIND` branch slotted into the existing kind-1059 gift-wrap dispatch in `welcomeSubscription.ts` after the join-request 21059 branch and before the kind-444 Welcome guard (per architecture.md's declared seam ordering), reusing `unwrapGiftWrap`'s existing seal authentication rather than a parallel re-implementation? Does the Remove reuse `cancelPendingInvitationImpl` (ADR-010's admin eviction path) rather than a new, separately-maintained removal code path?"
+    },
+    {
+      "question_id": "VQ-S6-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `decline-a` (`welcomeSubscription.ts`'s gift-wrap dispatch + `cancelInvitationImpl.ts`'s Remove reuse) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `decline-b`'s `PendingInvitation` shape, or `parse`/`invite-producer`'s rumor-posting helper to emit the `declined` announcement), and do they flow through the declared `DeclineGiftWrapPayload` seam contract and `InviteLifecycleContent` seam contract respectively?"
+    },
+    {
+      "question_id": "VQ-S6-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does `app/tests/unit/marmot/welcomeSubscription.test.ts` cover AC-DECLINE-7 through AC-DECLINE-12 with tests that individually exercise: (a) kind-routing distinctness (a decline-kind rumor never falls into the Welcome or join-request branches), (b) seal-authentication-fails rejection, (c) pending-member-gate rejection (spoofed non-pending sender), (d) the exact DD-7 step ordering (Remove, post, marker-clear, THEN mark-seen — with a test that would catch a mark-seen-too-early reordering), (e) a duplicate/replayed decline after removal being a no-op, and (f) deferral until `onHistorySynced` for an unsynced group? Confirm ordering is asserted via call-order spies, not just end-state equality (which could pass under a wrong order that happens to converge to the same final state in the untested case)."
+    },
+    {
+      "question_id": "VQ-S6-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed receive-side behavior match the spec's intent that A's client is resilient to every observed real-world timing hazard — app crash between steps, duplicate delivery, and out-of-order sync completion — converging to the same at-most-once outcome regardless of which hazard occurs, per architecture.md's Order-Sensitive Composition section (whole-flow guarantee 1: at-most-once `declined` post; guarantee 2: epoch-safe deferral; guarantee 3: no lost decline across crash)?"
+    },
+    {
+      "question_id": "VQ-S6-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Does A authenticate a received decline gift wrap's inner seal (existing NIP-59 unwrap checks) BEFORE any other evaluation, and does a gift wrap that fails seal authentication produce zero side effects (no Remove, no post, no marker clear, no mark-seen)? Separately: is the pending-member comparison performed on the LOWERCASED seal-author pubkey (case-insensitive), and does a decline purportedly from a non-pending or already-removed pubkey (spoofed by a third party, or referencing an invitee who already joined) produce zero side effects rather than a partial Remove or an erroneous post? Per ADR-006, confirm no code path claims cryptographic identity-binding beyond the self-asserted seal author."
+    },
+    {
+      "question_id": "VQ-S6-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-7",
+      "question": "Is `INVITE_DECLINE_KIND` numerically distinct from kind-444 (Welcome), kind-21059 (join-request), and the pairing-ack kind, and does the gift-wrap dispatch route a rumor of `INVITE_DECLINE_KIND` to the decline-handling branch, never to the Welcome or join-request branches? Provide (a) the dispatch's routing conditional (switch/if-chain) showing the new branch's position, (b) a test sending a decline-kind rumor and asserting it does NOT trigger Welcome-processing or join-request-processing side effects, and (c) a companion test sending a 21059/444-kind rumor and asserting it does NOT fall into the new decline branch (bidirectional routing correctness, not just one direction)."
+    },
+    {
+      "question_id": "VQ-S6-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-8",
+      "question": "Does A authenticate a received decline gift wrap's inner seal (existing NIP-59 unwrap checks) before evaluating it further, and does a gift wrap that fails seal authentication produce no Remove, no `declined` post, and no marker clear? Provide (a) the code ordering showing authentication precedes every other check, (b) a test with a tampered/unauthenticatable gift wrap asserting zero side effects across all three (Remove, post, marker-clear), and (c) confirmation the test's tampering is realistic (e.g. a mismatched seal signature), not merely a malformed-JSON case that would fail for unrelated parsing reasons."
+    },
+    {
+      "question_id": "VQ-S6-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-9",
+      "question": "Does A accept a decline only when the gift wrap's inner-seal author, lowercased, is currently a pending member (in-tree, no `MemberProfile`) of the referenced group — and is the decline a no-op (no Remove, no post, no marker clear) when the lowercased seal author is NOT a pending member (spoofed by a third party, or the invitee has already joined/been removed)? Provide (a) the `isPendingMemberImpl` gate call and its lowercasing, (b) a test with a seal author that is a full member (already joined) asserting no-op, a test with a seal author never in the tree asserting no-op, and a test with mixed-case pubkey input asserting the lowercased comparison still matches a genuinely-pending member, and (c) confirmation these are three distinct test cases, not one conflated assertion."
+    },
+    {
+      "question_id": "VQ-S6-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-10",
+      "question": "On accepting a valid decline, does A perform, in order: (1) MLS Remove of the invitee, (2) posting the group `declined` `invite_lifecycle` message, (3) clearing the pending-direct-invite marker, (4) marking the gift wrap seen/processed — and does A NOT mark the gift wrap seen before step (2) has completed? Provide (a) the sequential code structure (await-chained, not fire-and-forget in parallel), (b) a test using call-order spies on all four operations asserting the exact sequence 1→2→3→4, and (c) a dedicated test that simulates a failure/interruption between step (2) and step (4) and asserts the gift wrap is NOT marked seen, so a crash there causes reprocessing rather than a silently-dropped decline."
+    },
+    {
+      "question_id": "VQ-S6-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-11",
+      "question": "Is a duplicate or replayed decline gift wrap received after the referenced invitee is no longer a pending member (already removed via a prior decline) a no-op that does NOT produce a second `declined` message for that invitee/group? Provide (a) the code path showing the pending-member gate (AC-DECLINE-9) is what makes replay-after-removal safe (i.e. this AC is a corollary of AC-DECLINE-9, not a separately-implemented dedup mechanism), (b) a test that processes a decline to completion (invitee removed), then re-delivers the identical gift wrap and asserts zero additional Remove calls and zero additional `declined` posts, and (c) confirmation the replay test uses the SAME gift-wrap payload (not a fresh synthetic one), so it genuinely exercises redelivery rather than a distinct decline."
+    },
+    {
+      "question_id": "VQ-S6-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DECLINE-12",
+      "question": "Is a decline gift wrap referencing a group that has not yet completed historical sync deferred — its Remove and `declined` post withheld, and NOT marked seen/processed — until that group's sync completes (`onHistorySynced`), after which DD-7's ordering (AC-DECLINE-10) executes? Provide (a) the deferral/queueing mechanism keyed on sync-completion state, confirmed to be bounded by the existing gift-wrap reprocessing loop rather than a new unbounded queue (per architecture.md), (b) a test delivering a decline BEFORE `onHistorySynced` fires, asserting no Remove/post/mark-seen occur yet, then firing `onHistorySynced` and asserting the full DD-7 sequence THEN executes, and (c) confirmation the deferred decline is not silently dropped if `onHistorySynced` never fires within the test's observation window (i.e. it is genuinely queued, not fire-and-forgotten)."
+    },
+    {
+      "question_id": "VQ-S6-013",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The implementation tracks per-group historical-sync completion via two module-level singletons in welcomeSubscription.ts (`historySyncedGroupIds: Set<string>`, `historySyncWaiters: Map<string, Array<() => void>>`) and serializes decline processing per `${groupId}:${pubkeyLower}` via a third module-level `Map<string, Promise<boolean>>` (`declineProcessingChains`). All three are process-lifetime state shared across every group/session the app ever touches in one page load — never explicitly capped or evicted except by `historySyncWaiters`/`declineProcessingChains` self-clearing their own entries once drained. Is this bounded-enough for a real user with many groups over a long-lived session (each entry is O(1) per group/invitee-pair and cleared on completion, so steady-state size tracks 'currently in-flight' rather than 'ever seen'), or should `historySyncedGroupIds` itself be capped/evicted (mirroring the existing `GROUP_SEEN_IDS_CAP`/LRU pattern for `seenIdsByGroup` in the same file) given it is the one Set that grows monotonically for the lifetime of the session (one entry per group ever synced, never removed)?"
+    },
+    {
+      "question_id": "VQ-S6-014",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "`applyDecline` treats `cancelPendingInvitationImpl`'s `{ ok: true, announcementError }` outcome (the Remove committed, but the `sendAnnouncement` callback itself threw) identically to a clean `{ ok: true }` — it still runs the marker-clear and lets the caller mark the gift wrap seen, on the deliberate reasoning that the Remove (the primary/security-relevant effect) succeeded and the announcement is best-effort (mirroring `classifyRemovalResult`'s existing `announcementWarning` treatment for the admin-initiated Cancel-Invite/Remove-Member flow in `pages/groups.tsx`). Is this the intended posture for the receive-side decline flow specifically — i.e., is it acceptable that a transient relay-publish failure for the `declined` post is silently absorbed (B is genuinely Removed and the marker is cleared, but the group may never see a `declined` announcement for that invitee, with no retry since the gift wrap is marked seen) — or should an announcement failure on THIS path instead withhold mark-seen so the whole decline (including a fresh announcement attempt) reprocesses on next start?"
+    },
+    {
+      "question_id": "VQ-S6-015",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The two adversarial-timing tests (mid-flight mark-seen snapshot, and the two-genuinely-concurrent-declines convergence test) both depend on a mocked `commit()` inserting a real 30ms macrotask-level delay (`commitYieldBeforeMutate`) to make the race window reliably observable regardless of real NIP-59 crypto timing, rather than asserting against a manually-gated/deterministic promise. Is a fixed-duration delay (as opposed to an externally-controlled gate promise) an acceptable degree of timing-assumption for these two specific tests given the codebase's existing convention for concurrency tests elsewhere (`profileHandler.test.ts`'s `Promise.all([handler.handle(a), handler.handle(b)])` with no injected delay at all, relying on real async interleaving) — or would a manually-resolved gate be preferred here for stronger determinism, given these two tests are the ones specifically guarding the S3-lesson-derived double-Remove/double-post regression?"
+    }
+  ]
+}

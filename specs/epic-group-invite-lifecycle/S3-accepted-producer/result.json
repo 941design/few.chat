@@ -1,0 +1,37 @@
+{
+  "story_id": "S3",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-22T19:10:00Z",
+  "files_created": [
+    "specs/epic-group-invite-lifecycle/S3-accepted-producer/architecture.json",
+    "specs/epic-group-invite-lifecycle/S3-accepted-producer/result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "specs/epic-group-invite-lifecycle/S3-accepted-producer/verification.json"
+  ],
+  "tests_added": {
+    "unit": 7
+  },
+  "test_counts": {
+    "baseline": 3873,
+    "final": 3880
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": ["accept-producer"],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "S3's stories.json file list names only profileHandler.ts, registerHandlers.ts, and the test — but a real (non-optional) send capability for a background dispatcher handler can only be wired at MarmotContext.tsx's buildDispatcher call site, the same composition root that already supplies the precedented sendSelfProfile closure (mlsGroup/signer/pubkeyHex are only in scope there, per-group, inside the subscription loop). Threading the capability 'through the registration seam' (architecture.md's own phrasing) necessarily terminates one hop further out than the story's literal file list implies. This is a recurring shape for any handler-injection producer story in this codebase (profileRequestHandler's sendSelfProfile/handleIncomingProfileRequest already required the identical extra hop), so story file-lists for this DI pattern should either enumerate the composition-root call site or explicitly carve it out, rather than leaving the architect to infer it mid-implementation.",
+    "surprised_by": "",
+    "scope": "meta",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

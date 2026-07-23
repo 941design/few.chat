@@ -38,6 +38,26 @@ export type PendingInvitation = {
   receivedAt: number;
   /** JSON.stringify of the kind-444 rumor — replayed into joinGroupFromWelcome on accept */
   welcomeEventJson: string;
+  /**
+   * MLS group id (hex), surfaced pre-join via `readWelcomeGroupInfo`'s
+   * `groupContext.groupId` (AC-DECLINE-1) — the same hex encoding
+   * `MarmotGroup.idStr` uses post-join, so a decline gift wrap's `groupId`
+   * field lines up with what the receive side looks up by. Empty string when
+   * unavailable (e.g. the pre-join read failed, or — for entries stored
+   * before this field existed — a legacy record normalized by `readRaw`
+   * below).
+   */
+  groupId: string;
+  /**
+   * Whether the Welcome's gift-wrap seal was authenticated at receipt
+   * (AC-DECLINE-2) — the same `authenticated` result `unwrapGiftWrap`
+   * already computes. Declining an invitation gates the gift-wrapped decline
+   * send on this flag (AC-DECLINE-4): `false` (or missing, for a legacy
+   * entry stored before this field existed) MUST NEVER trigger a send —
+   * fail-closed, so an invitation whose inviter identity was never
+   * cryptographically verified can't receive an addressed decline DM.
+   */
+  authenticated: boolean;
 };
 
 // ─── Module-level listener store (for useSyncExternalStore) ──────────────────
@@ -77,15 +97,34 @@ function readRaw(): PendingInvitation[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (v): v is PendingInvitation =>
-        v !== null &&
-        typeof v === 'object' &&
-        typeof v.id === 'string' &&
-        typeof v.inviterPubkeyHex === 'string' &&
-        typeof v.receivedAt === 'number' &&
-        typeof v.welcomeEventJson === 'string',
-    );
+    return parsed
+      .filter(
+        (v): v is Record<string, unknown> =>
+          v !== null &&
+          typeof v === 'object' &&
+          typeof (v as Record<string, unknown>).id === 'string' &&
+          typeof (v as Record<string, unknown>).inviterPubkeyHex === 'string' &&
+          typeof (v as Record<string, unknown>).receivedAt === 'number' &&
+          typeof (v as Record<string, unknown>).welcomeEventJson === 'string',
+      )
+      .map(
+        (v): PendingInvitation => ({
+          id: v.id as string,
+          inviterPubkeyHex: v.inviterPubkeyHex as string,
+          receivedAt: v.receivedAt as number,
+          welcomeEventJson: v.welcomeEventJson as string,
+          // Backward-compat (AC-DECLINE-1/2): entries persisted before this
+          // story landed lack these two fields entirely. `groupId` defaults
+          // to '' (a decline send with an empty groupId is a no-op the
+          // receive side can't act on, which is an acceptable degrade for a
+          // pre-migration entry). `authenticated` defaults to `false` —
+          // fail-closed, so a legacy entry can NEVER trigger a decline
+          // gift-wrap send (AC-DECLINE-4), matching the same guarantee a
+          // freshly-enqueued unauthenticated Welcome gets.
+          groupId: typeof v.groupId === 'string' ? v.groupId : '',
+          authenticated: typeof v.authenticated === 'boolean' ? v.authenticated : false,
+        }),
+      );
   } catch {
     return [];
   }

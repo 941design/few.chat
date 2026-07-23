@@ -41,6 +41,7 @@ import {
   resolvePendingSignalsForSlot,
   type MessageEditsThreadKey,
 } from '@/src/lib/messageEdits/api';
+import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
 import {
   buildDeleteRumor,
   buildEditReplacementRumor,
@@ -172,6 +173,16 @@ export interface GroupSendDeps {
   resolveAuthoritativeGroupRev: (targetMessageId: string, fallbackRev: number | undefined) => Promise<number>;
   getSnapshot: () => ChatMessage | undefined;
   setMessages: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
+  /**
+   * S8 (epic-group-invite-lifecycle): whether the CURRENT user is a group
+   * admin — the send-side half of the AC-IMMUT-3/AC-IMMUT-5 moderation-
+   * delete loop. Consulted ONLY by `performGroupDeleteMessage`, and only
+   * when the target is an informative announcement authored by a PEER
+   * (S7's admin "Delete" button click). Defaults to `false` (non-admin) so
+   * every existing call site that doesn't thread this through keeps its
+   * pre-S8 own-message-only behavior unchanged.
+   */
+  isCurrentUserAdmin?: boolean;
 }
 
 /**
@@ -200,15 +211,38 @@ export interface GroupSendDeps {
  *
  * Extracted (S5 gate-remediation, finding 3) from the ChatStoreProvider
  * closure so it is directly testable — see `GroupSendDeps` above.
+ *
+ * S8 (epic-group-invite-lifecycle) admin carve-out: own-message authorship
+ * is no longer the ONLY way past the guard below. A group admin
+ * (`deps.isCurrentUserAdmin`) may also construct+send a delete targeting a
+ * PEER's message when — and only when — that message is an informative
+ * announcement (the shared `isInformativeAnnouncementContent` predicate,
+ * the SAME family definition S7's UI gate and S8's receive-side gate both
+ * consume). This is the send-side half of S7's admin "Delete" button
+ * (AC-IMMUT-3): the rumor below is always signed with the ADMIN's OWN
+ * `privateKeyHex`, so its published `pubkey` is the admin's, never the
+ * original author's — the receive side (`messageEdits/api.ts`'s
+ * `authorizeDeleteAgainstTarget`) authorizes it by checking that pubkey
+ * against the group's CURRENT admin set, per ADR-006's self-asserted
+ * `senderPubkey` convention (AC-IMMUT-5). A non-admin, or a peer message
+ * that is NOT an announcement, still falls through to the own-message-only
+ * rule — the carve-out grants nothing beyond moderation of the
+ * announcement family.
  */
 export async function performGroupDeleteMessage(messageId: string, deps: GroupSendDeps): Promise<void> {
   const { group, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
   const snapshot = getSnapshot();
   if (!snapshot) return;
 
+  const isOwnMessage = snapshot.senderPubkey.toLowerCase() === pubkey.toLowerCase();
+  const isAdminModerationDelete =
+    !isOwnMessage && (deps.isCurrentUserAdmin ?? false) && isInformativeAnnouncementContent(snapshot.content);
+
   // Own-message auth guard — fail-closed (mirrors S4's identical
-  // handler-seam backstop; AC-AUTH-1 affordance-hiding is S6's).
-  if (snapshot.senderPubkey.toLowerCase() !== pubkey.toLowerCase()) return;
+  // handler-seam backstop; AC-AUTH-1 affordance-hiding is S6's) — UNLESS
+  // this is an authorized admin moderation-delete of a peer's announcement
+  // (S8, AC-IMMUT-3/5).
+  if (!isOwnMessage && !isAdminModerationDelete) return;
 
   setMessages((prev) => applyOptimisticDeleteView(prev, messageId));
 
@@ -388,6 +422,15 @@ interface ChatStoreProviderProps {
   chatVersion?: number;
   /** Bumped by MarmotContext when a kind-7 reaction is persisted to IDB (story-06, AC-38) */
   reactionsVersion?: number;
+  /**
+   * S8 (epic-group-invite-lifecycle): whether the current user is a group
+   * admin, threaded into `performGroupDeleteMessage`'s admin
+   * moderation-delete carve-out (see `GroupSendDeps.isCurrentUserAdmin`).
+   * Mirrors `GroupChat`/`MemberList`'s existing `isCurrentUserAdmin` prop
+   * naming (S7). Defaults to `false` — the pre-S8 own-message-only
+   * behavior is unchanged for a caller that omits this prop.
+   */
+  isCurrentUserAdmin?: boolean;
   children: React.ReactNode;
 }
 
@@ -399,6 +442,7 @@ export function ChatStoreProvider({
   signer,
   chatVersion,
   reactionsVersion,
+  isCurrentUserAdmin,
   children,
 }: ChatStoreProviderProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -772,9 +816,10 @@ export function ChatStoreProvider({
         resolveAuthoritativeGroupRev,
         getSnapshot: () => messagesRef.current.find((m) => m.id === messageId),
         setMessages,
+        isCurrentUserAdmin,
       });
     },
-    [groupId, group, privateKeyHex, pubkey, resolveAuthoritativeGroupRev],
+    [groupId, group, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, isCurrentUserAdmin],
   );
 
   /**

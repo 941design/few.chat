@@ -1,0 +1,38 @@
+{
+  "module_name": "immutability-ui",
+  "purpose": "Suppress Edit/Delete affordances for the whole non-image informative-announcement family for non-admin viewers, while granting group-admin viewers a moderation-only Delete (never Edit), at the single canShowMessageActions chokepoint and its ChatBox.tsx call site.",
+  "public_api": [
+    {
+      "name": "isInformativeAnnouncement",
+      "signature": "(message: ChatMessage) => boolean",
+      "description": "True iff parseStructured(message.content) is non-null AND its type !== 'image'. Generic over any parseStructured result — the load-bearing family identifier (per S1/S4 convention: family membership anchors at parseStructured, not at render/testid)."
+    },
+    {
+      "name": "canShowMessageActions",
+      "signature": "(message: ChatMessage, currentUserPubkey: string, allowMessageActions?: boolean, isCurrentUserAdmin?: boolean) => boolean",
+      "description": "Extended (backward-compatible, new optional 4th param defaulting to false) chokepoint gating both Edit and Delete render. For an informative-announcement message: returns isCurrentUserAdmin (ignoring authorship — ordinary members lose delete on their OWN announcements per the confirmed product decision). For any other message (plain text, or image): unchanged own-message-authorship check."
+    },
+    {
+      "name": "canEditMessage",
+      "signature": "(message: ChatMessage) => boolean",
+      "description": "UNCHANGED. Already returns false for any structured/non-plain-text message (pre-existing S6 behavior), so Edit is already suppressed for the whole family including for the admin carve-out — no code change needed here, verified by pre-existing + new tests."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "the 'is informative announcement' predicate (pure function, no persisted state)"
+  ],
+  "dependencies_allowed": [
+    "parse (parseStructured, via messageActionUi.ts, pre-existing import)",
+    "groups.tsx's existing adminPubkeys/isAdmin single-source-of-truth (prop-threaded through GroupChat.tsx -> ChatBox.tsx -> canShowMessageActions, same pattern already used for GroupMembersList's isCurrentUserAdmin prop at groups.tsx:813)"
+  ],
+  "dependencies_forbidden": [
+    "immutability-receive (messageEdits/api.ts, chatPersistence.ts) — this module does not import or duplicate the receive-side admin-check; each module independently derives admin status from the same source per architecture.md's boundary rules"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/chat/messageActionUi.test.ts"
+  ]
+}

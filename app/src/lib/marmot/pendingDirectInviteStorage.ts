@@ -25,7 +25,7 @@
  * AC-MARKER-2), not this store's.
  */
 
-import { createStore, set, del, entries, clear } from 'idb-keyval';
+import { createStore, get, set, del, entries, clear } from 'idb-keyval';
 
 // ---------------------------------------------------------------------------
 // IDB store
@@ -98,6 +98,62 @@ export async function loadPendingDirectInviteMarkers(
     .filter(([key]) => key.startsWith(prefix))
     .map(([key]) => key.slice(prefix.length));
   return new Set(pubkeys);
+}
+
+// ---------------------------------------------------------------------------
+// Atomic compare-and-clear (epic: group-invite-lifecycle S3 gate-remediation,
+// severity-4 finding) — additive to the get/clear pair above, never a
+// replacement for it. hasPendingDirectInvite()-then-clearPendingDirectInvite()
+// is two independent async calls with an await gap between them: two
+// interleaved own-join deliveries for the same (groupId, pubkey) can both
+// observe the marker present before either clears it. This export collapses
+// the check and the clear into one logical step per key.
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-key promise chain used ONLY to serialize concurrent
+ * consumePendingDirectInviteMarker calls for the SAME key. Each call awaits
+ * the previous in-flight call for that key (if any) before doing its own
+ * get+del, so a second interleaved call's read only ever happens after the
+ * first call's delete has completed — without requiring the underlying store
+ * to expose real cross-call transactions (the idb-keyval Map-backed test
+ * fixture used by profileHandler.test.ts doesn't). A prior call's rejection
+ * is swallowed before chaining so one failed consume never wedges the next.
+ */
+const consumeChains = new Map<string, Promise<boolean>>();
+
+/**
+ * Atomically consumes the pending-direct-invite marker for (groupId, pubkey):
+ * reports whether it existed AND removes it, as a single step no other
+ * consumePendingDirectInviteMarker call for the same key can observe
+ * mid-way through. Consumed ONLY by the accept-producer's own-join path
+ * (profileHandler.ts) — clearPendingDirectInvite above is untouched and
+ * remains the sole clearing mechanism for the relay-on-behalf path, which
+ * must keep clearing the marker without ever gating a post on its existence.
+ */
+export async function consumePendingDirectInviteMarker(
+  groupId: string,
+  pubkey: string,
+): Promise<boolean> {
+  const key = markerKey(groupId, pubkey);
+  const prior = consumeChains.get(key) ?? Promise.resolve(false);
+  const run: Promise<boolean> = prior.catch(() => false).then(async () => {
+    const existed = (await get(key, pendingInviteMarkerStore)) !== undefined;
+    if (existed) {
+      await del(key, pendingInviteMarkerStore);
+    }
+    return existed;
+  });
+  consumeChains.set(key, run);
+  try {
+    return await run;
+  } finally {
+    // Only clear the chain slot if nothing newer has replaced it while we
+    // were awaiting — otherwise we'd tear down a subsequent call's link.
+    if (consumeChains.get(key) === run) {
+      consumeChains.delete(key);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,95 @@
+{
+  "story_id": "S8",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S8-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the admin-check at each apply site (`applyDeleteEditSignal`, the tombstone path, the buffered/deferred resolution paths) a real lookup against current group-admin membership state, rather than a stub that always returns true (which would silently disable AC-IMMUT-4's rejection for every signal) or always false (which would silently break AC-IMMUT-5's admin carve-out)? Is the non-image `StructuredContent` check a genuine call to `parseStructured` against the actual target/replacement content, not a hardcoded content-type flag set elsewhere that could drift out of sync with what `parseStructured` would actually determine?"
+    },
+    {
+      "question_id": "VQ-S8-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the receive-side gate implemented once and applied at every apply site — `applyDeleteEditSignal` (`app/src/lib/messageEdits/api.ts`), the tombstone-application path (`app/src/lib/marmot/chatPersistence.ts`), and the buffered/deferred resolution paths (`resolvePendingSignalsForSlot`, TTL-expiry materialization) — via a single shared gate function, rather than four independently-written copies that could silently diverge (per DD-11 and architecture.md's Order-Sensitive Composition guarantee 1: 'the gate holds at EVERY apply site')?"
+    },
+    {
+      "question_id": "VQ-S8-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `immutability-receive` (`messageEdits/api.ts` + `chatPersistence.ts`'s tombstone path) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `parse` for the non-image check, or into `immutability-ui` to share the admin-check helper rather than duplicating it), and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S8-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do `app/tests/unit/messageEdits/api.test.ts` and `app/tests/unit/marmot/chatPersistence.test.ts` cover AC-IMMUT-4 through AC-IMMUT-7 at ALL FOUR apply sites individually (direct `applyDeleteEditSignal`, tombstone path, buffered `resolvePendingSignalsForSlot`, TTL-expiry materialization) — i.e. is there a parameterized or per-site test suite, rather than only the direct known-row branch tested and the other three sites assumed-correct-by-similarity? Would a regression that fixed the gate at the direct site but left the buffered/TTL-expiry paths unguarded be caught?"
+    },
+    {
+      "question_id": "VQ-S8-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed receive-side rejection match the spec's intent that immutability is enforced at the data layer regardless of which UI path a signal is delivered through or which arrival order (signal-before-target vs target-before-signal) occurs — i.e. is this the actual enforcement boundary, with S7's UI suppression understood as a convenience/UX layer only, not the security boundary?"
+    },
+    {
+      "question_id": "VQ-S8-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Does every apply site fail closed — i.e. reject a delete/tombstone/edit signal by default and only honor delete/tombstone when the sender is affirmatively confirmed as a current admin — rather than fail open on an ambiguous or errored admin-lookup (e.g. an exception during the admin check being swallowed and treated as 'admin: true')? Is the admin-sourced-ness check performed on the signal's own `senderPubkey` (per ADR-006's self-asserted convention, consistently with S6/S7), not on some other identity field that could be independently spoofed?"
+    },
+    {
+      "question_id": "VQ-S8-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-4",
+      "question": "Is a delete or tombstone signal targeting a message whose content parses as a non-`image` `StructuredContent`, whose signal sender is NOT a current group admin, rejected at BOTH `applyDeleteEditSignal` and the tombstone-application path — leaving the target message's stored content and state unchanged? Provide (a) the rejection branch at each of the two named sites, (b) a test per site asserting the message's persisted content is byte-for-byte unchanged after a rejected signal (not merely that a boolean 'applied' flag is false), and (c) confirmation the sender used in the test is a genuine non-admin (present in the group, just not in the admin set), not merely an unrecognized/absent pubkey which could pass for unrelated reasons."
+    },
+    {
+      "question_id": "VQ-S8-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-5",
+      "question": "Is a delete or tombstone signal targeting a non-`image` `StructuredContent` message, whose signal sender IS a current group admin, honored (applied) at both `applyDeleteEditSignal` and the tombstone-application path? Provide (a) the admin carve-out branch at each site, (b) a test per site asserting the message IS deleted/tombstoned when sent by a genuine admin, and (c) confirmation this test uses a DIFFERENT sender identity than AC-IMMUT-4's test (both cases in the same suite, admin vs non-admin, so the boundary itself is exercised rather than only one side)."
+    },
+    {
+      "question_id": "VQ-S8-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-6",
+      "question": "Is an edit signal targeting a message that parses as a non-`image` `StructuredContent` rejected at EVERY apply site regardless of whether the signal's sender is a group admin — i.e. is Edit never honored against any informative announcement, admin or not? Provide (a) the unconditional-rejection branch (no admin carve-out reachable for edit, unlike delete), (b) a test with an ADMIN sender attempting an edit against an announcement, asserting rejection (this is the case most likely to be missed, since delete's admin carve-out could be mistakenly copy-pasted onto edit), and (c) confirmation this admin-sender edit-rejection test exists at all four apply sites, not just the direct one."
+    },
+    {
+      "question_id": "VQ-S8-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IMMUT-7",
+      "question": "Is an edit signal whose REPLACEMENT content parses (via `parseStructured`) as a non-`image` `StructuredContent` rejected regardless of the edit's target message type — preventing fabrication of an immutable announcement row via edit? Provide (a) the replacement-content check (distinct from the target-content check in AC-IMMUT-6), (b) a test editing an ORDINARY plain-text message with replacement content that parses as e.g. `invite_lifecycle`-shaped JSON, asserting the edit is rejected despite the TARGET being a mutable ordinary message, and (c) confirmation this test is distinguishable from AC-IMMUT-6's test (target-is-announcement vs replacement-is-announcement are two different attack shapes, both must be independently covered)."
+    },
+    {
+      "question_id": "VQ-S8-011",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The admin-lookup the receive-side gate needs (`groupAdminsFor` in `messageEdits/api.ts`) is implemented as a settable module-level singleton (`registerGroupAdminsProvider`), registered exactly once by `MarmotContext.tsx` in a mount-time `useEffect` reading `clientRef.current.groups.get(groupId).groupData.adminPubkeys`. Is there any window at app startup, account switch, or MarmotContext remount where a delete/tombstone signal could be processed BEFORE this effect has registered the provider (in which case `groupAdminsFor` fail-closes to `[]`, silently denying AC-IMMUT-5's admin carve-out for that signal until the effect runs)? If such a window exists, is it narrow enough (a signal arriving in the same tick as mount) that the existing TTL-buffer/retry-on-reconnect machinery would naturally re-resolve it, or could a genuine admin delete be permanently lost?"
+    },
+    {
+      "question_id": "VQ-S8-012",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "`chatPersistence.ts`'s `tombstoneMessage` independently re-derives the announcement-immutability gate from the row's own current content, but has no notion of DM-vs-group thread type — during implementation this caused a real regression (a DM's own announcement-shaped message incorrectly lost its own-author-delete right) that was caught by a new test and fixed by only passing the `authorization` object to `tombstoneMessage` for group threads (`isGroupThreadKey(threadKey)` at the `applyToKnownSlotCore` call site). Is there a DIRECT unit test in `chatPersistence.test.ts` itself (not only the indirect coverage via `api.test.ts`'s DM-carve-out test) proving that calling `tombstoneMessage` WITHOUT an `authorization` argument against announcement-shaped content still unconditionally applies — i.e. that `tombstoneMessage`'s own code has no implicit DM/group awareness and the carve-out is entirely the CALLER's responsibility (api.ts) to enforce by omitting the argument?"
+    },
+    {
+      "question_id": "VQ-S8-013",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "AC-IMMUT-4/5 gate an announcement delete strictly on CURRENT-ADMIN sourcing, with no authorship carve-out at all — meaning even the announcement's own author (who, per DD-9/S3, is typically the same principal who triggered the admin action that produced the announcement) must ALSO be a currently-registered admin to delete their own posted announcement; ordinary own-authorship is not consulted for an announcement target the way it is for an ordinary message. Was this exhaustive (authorship-irrelevant) reading of AC-IMMUT-4/5's text the intended product behavior, or should an announcement's own author retain a delete right independent of current admin status (e.g. an admin who is later demoted but wants to retract their own past announcement)? The implementation took the literal/exhaustive reading; if that is not the intended behavior, `authorizeDeleteAgainstTarget` (`messageEdits/api.ts`) and `resolveKnownRowAgainstStores`/`persistExpiredEntryEffect`'s equivalent branches would need an explicit authorship OR-admin condition instead of admin-only."
+    },
+    {
+      "question_id": "VQ-S8-014",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "The cap-eviction known-row branch of `persistExpiredEntryEffect` (reached only via `evictOldestPendingIfOverCap`, per its own doc comment — distinct from the ordinary TTL-expiry sweep, which only ever calls it with `knownRow: undefined`) is a narrow, rarely-hit path. A mutation check performed during implementation confirmed the new test (`api.test.ts`'s parameterized 'cap-eviction known-row branch' test) DOES route through this exact branch (verified via a temporary debug log inside `persistExpiredEntryEffect` showing `hasKnownRow: true` for both the admin and non-admin cases) — but forcing `persistExpiredEntryEffect`'s own `authorized` decision to `true` for the DELETE case did NOT make the mutated build pass its (deliberately failing) assertion, because `tombstoneMessage`'s independent defense-in-depth re-check (chatPersistence.ts) caught the bypass downstream and still rejected it — the two gates are genuinely redundant for delete, exactly as AC-IMMUT-4/5 requires. Is the SAME true for the AC-IMMUT-6 edit-rejection line in this same knownRow branch (`if (entry.kind === 'edit') { authorized = false; }`)? Unlike delete, an edit is applied via `updateMessageInPlace`, which has NO independent announcement/admin re-check — so a mutation of THIS specific line would not be masked by any downstream defense-in-depth the way the delete line's mutation was. Was this edit-specific mutation actually tried and confirmed to fail the test (i.e. is the edit half of this narrow branch genuinely covered, not just the delete half)?"
+    }
+  ]
+}

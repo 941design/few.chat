@@ -1,0 +1,55 @@
+{
+  "module_name": "accept-producer",
+  "purpose": "Emit the invite_lifecycle 'accepted' announcement exactly once per invitee/group, gated on B's genuine own-join (DD-9): the arriving profile rumor's transport senderPubkey must equal the signed author AND a pending-direct-invite marker must have existed for that author at arrival. A third-member relay of B's cached profile (senderPubkey != author) or a repeat delivery after the marker is already cleared must never (re-)fire the post.",
+  "public_api": [
+    {
+      "name": "createProfileHandler",
+      "signature": "(deps: ProfileHandlerDeps) => RumorHandler",
+      "description": "Unchanged export shape. ProfileHandlerDeps gains two fields (hasPendingDirectInvite, sendAnnouncement) consumed additively by the accept-producer gate; the pre-existing merge/clear/notify/writeContactEntry behavior is untouched."
+    },
+    {
+      "name": "buildAcceptedAnnouncementContent",
+      "signature": "(pubkeyHex: string) => string",
+      "description": "Pure builder for the JSON.stringify'd {type:'invite_lifecycle', event:'accepted', pubkey} content, canonicalizing pubkey to lowercase hex. Mirrors S2's buildInvitedAnnouncementContent precedent; constructs the InviteLifecycleContent shape directly rather than importing parseStructured.ts (no cross-module import into 'parse')."
+    },
+    {
+      "name": "ProfileHandlerDeps.hasPendingDirectInvite",
+      "signature": "(groupId: string, pubkey: string) => Promise<boolean>",
+      "description": "Read-only 'get' half of the get-then-clear seam: reports whether a pending-direct-invite marker exists for (groupId, pubkey) at the moment of the call, WITHOUT clearing it. Must be called before the pre-existing (unchanged) clearPendingDirectInvite call in handle() so it observes pre-clear state."
+    },
+    {
+      "name": "ProfileHandlerDeps.sendAnnouncement",
+      "signature": "(content: string) => Promise<void>",
+      "description": "Fire capability injected via registerHandlers.ts's registration seam (architecture.md: 'thread it through the registration seam — do not import a sender ad hoc'). Publishes the given content as a kind-9 (CHAT_MESSAGE_KIND) application rumor into the group this handler instance is bound to. Real implementation lives at the MarmotContext.tsx composition root (mirrors the existing sendSelfProfile closure's build+sendRumorSafe shape) — required (non-optional) so the no-op path is unreachable in production, not merely assumed-wired."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/profileHandler.ts"
+  ],
+  "owned_data": [
+    "the pending→joined transition detector (transport senderPubkey === signed author AND a pending marker existed at arrival)"
+  ],
+  "dependencies_allowed": [],
+  "dependencies_forbidden": [
+    "parse (does not import parseStructured.ts; constructs the InviteLifecycleContent shape directly, matching S2's precedent)",
+    "decline-a",
+    "decline-b",
+    "render",
+    "i18n",
+    "immutability-ui",
+    "immutability-receive"
+  ],
+  "external_ports": [
+    "registerHandlers.ts's HandlerDeps.hasPendingDirectInvite / HandlerDeps.sendAnnouncement — new required fields threaded through buildDispatcher() into createProfileHandler()",
+    "MarmotContext.tsx's buildDispatcher({...}) call site — the sole real production wiring of the two new capabilities (necessary extension beyond this story's literal three-file list; see retrospective/return message: no other file in the codebase can supply mlsGroup/signer access for a real, non-optional send closure, matching the existing sendSelfProfile precedent at the same call site)"
+  ],
+  "events_emitted": [
+    "invite_lifecycle {event:'accepted', pubkey:B} application rumor (kind 9), at most once per (groupId, B)"
+  ],
+  "events_consumed": [
+    "PROFILE_RUMOR_KIND (kind 0) application rumor, via the existing profileHandler dispatch — no new inbound event type"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/profileHandler.test.ts"
+  ]
+}

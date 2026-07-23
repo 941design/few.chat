@@ -1,0 +1,30 @@
+{
+  "story_id": "S7",
+  "status": "done",
+  "completed_at": "2026-07-22T21:35:00Z",
+  "files_created": [],
+  "files_modified": [
+    "app/src/lib/messageEdits/messageActionUi.ts",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/components/groups/GroupChat.tsx",
+    "app/pages/groups.tsx",
+    "app/tests/unit/chat/messageActionUi.test.ts"
+  ],
+  "tests_added": {
+    "unit": 44
+  },
+  "test_counts": {
+    "baseline": 3946,
+    "final": 3990
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "immutability-ui"
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine, mechanical prop-threading change with a complete pre-written spec (the predicate + admin carve-out logic and its exact call sites were fully determined by architecture.md and acceptance-criteria.md before any code was written); no ambiguity, no debugging cycles, dev implemented on the first pass and all tests passed green."
+  },
+  "final_outcome": "accepted"
+}

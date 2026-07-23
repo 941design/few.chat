@@ -1,0 +1,49 @@
+{
+  "story_id": "S9",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": false,
+  "is_integration_story": true,
+  "completed_at": "2026-07-22T23:23:00Z",
+  "files_created": [
+    "specs/epic-group-invite-lifecycle/S9-cross-cutting-invariant-verification/architecture.json",
+    "app/tests/unit/marmot/crossCuttingDeclineConvergence.test.ts",
+    "app/tests/unit/messageEdits/crossCuttingImmutabilityInvariance.test.ts"
+  ],
+  "files_modified": [
+    "specs/epic-group-invite-lifecycle/S9-cross-cutting-invariant-verification/verification.json"
+  ],
+  "tests_added": {
+    "unit": 45,
+    "ac_cross_1_enumeration": 12,
+    "ac_cross_2_enumeration": 33
+  },
+  "test_counts": {
+    "baseline": 4050,
+    "final": 4097
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "decline-a",
+    "decline-b",
+    "immutability-receive"
+  ],
+  "escalation_history": [],
+  "notes": "Integration story: no new production code. Property/enumeration tests drive the REAL S5/S6 (welcomeSubscription.ts/cancelInvitationImpl.ts) and S8 (messageEdits/api.ts + marmot/chatPersistence.ts) code — no shadow re-implementation of applyDecline, authorizeDeleteAgainstTarget, or isEditAuthorizedByAnnouncementGate. AC-CROSS-1 (crossCuttingDeclineConvergence.test.ts, 12 tests): exhaustive enumeration over compatible combinations of {duplicate redelivery: none/same-eventId/two-genuinely-distinct-concurrent} x {crash timing: none/before-commit(commit throws)/after-commit(redelivery-as-restart-analog)} x {sync timing: already-synced/defer-then-sync/never-syncs} x {group-held: pending/already-joined/not-held/empty-groupId}. Asserts: at-most-one successful Remove always, exactly-one whenever some delivery found the invitee pending; declined post is best-effort (ceiling of 1, zero permitted when Remove succeeds but the post throws — never asserted as a floor); mark-seen keys on terminal-vs-retryable (never on whether anything applied); same-eventId redelivery after a re-invite does NOT reactivate (closed, tested); the distinct-eventId variant of that same attack is asserted as the documented, accepted out-of-scope limitation (not chased). Empirically verified the crash-before-commit assertions are load-bearing (not vacuous) by temporarily forcing commit() to always succeed, which broke 2 tests as expected, then reverting. AC-CROSS-2 (crossCuttingImmutabilityInvariance.test.ts, 31 tests): exhaustive enumeration over {scope: group/DM} x {sender: admin/non-admin} x {signal: delete/edit} x {classification: non-announcement/target-announcement/replacement-announcement} x {apply site: direct/buffered/TTL-expiry/tombstone} x {arrival order}, proving VERDICT INVARIANCE (not just per-site correctness, which S8's own tests already established) — the same admin-delete-honored / edit-always-rejected / DM-own-author / fail-closed-admin-resolution verdicts hold identically across every structurally-applicable site x order combination, plus explicit cross-site consistency checks. Two structural inapplicabilities were discovered and documented rather than silently skipped: (1) 'direct' site is by definition target-before-signal (signal-before-target with no known row routes to 'buffered' instead — asserted explicitly); (2) TTL-expiry's phase-2 materialization can only ever see signals with NO known row, so it structurally cannot evaluate a 'target-announcement' classification (nothing to classify yet) — that protection is enforced at the buffered site instead once the real target arrives, which the buffered-site tests already cover. NO COUNTEREXAMPLE found against unmodified production code — every test failure encountered during the write-run-fix loop was traced to a test-authoring bug (an inverted assertion, a stale-rev assumption, an incorrect expectation about TTL-expiry's structural scope), corrected via code reading, never by weakening a property or touching app/src/lib/**. Full unit suite green (make test-unit: 212 files, 4092 passed + 1 skipped = 4093, up from 4050 baseline) and tsc --noEmit clean (baseline was already clean; no new errors). No ESLint config exists in this repo (next lint prompts interactively to scaffold one) so lint baseline is NO_LINT, unaffected by this story. [POST-EXAMINER UPDATE: the examiner PARTIAL VQ-S9-010 (TTL-expiry×target-announcement enumeration asymmetry) was closed by adding the missing scenario — which SURFACED A GENUINE COUNTEREXAMPLE: a real AC-IMMUT-6 announcement-immutability bypass in S8 (TTL-materialized edit placeholder suppressing a late-arriving announcement via appendMessage insert-if-absent). Routed as an S8 production fix (materializedFromEdit placeholder supersession); adversarial re-review CLEAN. crossCuttingImmutabilityInvariance.test.ts now 33/33 GREEN on the fixed code — the property genuinely holds. This is the counterexample the earlier NO-COUNTEREXAMPLE note predated; S9 delivered its core value by catching a real security defect per-site review missed.]",
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The first attempt at this story spawned two base:dev agents in the background and returned before they landed, which orphaned them — the lead caught the empty story directory and redirected the architect to redo the work synchronously in-context. The failure mode: Step 5's 'use the Agent tool for non-trivial components' guidance does not distinguish between delegating independent, later-absorbable sub-work (safe to background) and delegating the STORY'S OWN PRIMARY DELIVERABLE when the current turn is the last chance to land it before control returns to the caller (unsafe — a background spawn's completion notification arrives in a future turn that may never be requested, and there is no mechanism for a verification/examiner step to 'discover' orphaned background output as this story's result). For a verification-only integration story, the test files under app/tests/** ARE the entire deliverable; backgrounding their authorship and returning immediately left nothing on disk. Redone synchronously in the same turn: derived the exact test harness (module mocks, Deferred-gate concurrency discipline, stateful deps fixtures) directly from welcomeSubscription.test.ts / api.test.ts / chatPersistence.test.ts, then hand-wrote both cross-cutting files against the real S5/S6/S8 code, iterating to green.",
+    "surprised_by": "Two design assumptions floated before implementation didn't survive contact with the real code, though neither was a production defect: (1) a vi.resetModules()-based 'crash/restart' simulation technique (to reset welcomeSubscription.ts's session-lifetime Maps) proved unnecessary and likely fragile in practice — by inspection, applyDecline's only genuinely-throwing step is the MLS commit() call itself, and every step after a successful commit is internally try/caught and non-rethrowing, so 'crash strictly between Remove-commits and mark-seen-persists' has no black-box-observable window to inject; the faithful test is a post-commit redelivery through the tree-membership gate instead (verified load-bearing empirically, see notes). (2) The TTL-expiry apply site cannot structurally evaluate a 'target-announcement' classification (a target it has never seen), which only surfaced as a failing assertion during the run-fix loop — production behavior is correct (the real protection lives at the buffered site once the target arrives), but the initial test design incorrectly assumed TTL-expiry alone must reject it.",
+    "scope": "meta",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [
+      {
+        "agent": "base:dev",
+        "note": "Two background base:dev spawns (dev-cross1-decline, dev-cross2-immutability) were launched for this story's original attempt but never returned a usable result before the turn ended and were orphaned; no output from them was recovered or absorbed — both cross-cutting test files were authored fresh, synchronously, by the architect in the remediation turn."
+      }
+    ],
+    "lead_clarifications": []
+  }
+}

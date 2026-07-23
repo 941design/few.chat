@@ -1,0 +1,35 @@
+{
+  "story_id": "S10",
+  "status": "done",
+  "remediation_rounds": 0,
+  "files_created": [
+    "app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts",
+    "specs/epic-group-invite-lifecycle/S10-e2e-invite-lifecycle-scenarios/architecture.json",
+    "specs/epic-group-invite-lifecycle/S10-e2e-invite-lifecycle-scenarios/result.json"
+  ],
+  "files_modified": [
+    "specs/epic-group-invite-lifecycle/S10-e2e-invite-lifecycle-scenarios/verification.json"
+  ],
+  "tests_added": {
+    "e2e": 8
+  },
+  "test_counts": {
+    "baseline": 4097,
+    "final": 4097
+  },
+  "mocks": [],
+  "modules_touched": [
+    "e2e"
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Two self-inflicted detours cost most of the iteration time. (1) An optional 'bonus' test I added beyond the required ACs (admin's moderation Delete actually removing the announcement) initially failed because its final assertion checked the COUNT of ALL rows matching the 'was invited' phrase rather than the specific message id just deleted — by that point in the spec, C's own separate 'invited' announcement (from the decline scenario) also matches that phrase, so the broad recount could never reach 0. Fixed by scoping the assertion to the specific `msg-${msgId}` row. (2) Re-running the same spec file twice back-to-back against the same already-up strfry relay (to smoke-test the fix) reproduced a 90s timeout on B's accept propagating to A — this looked exactly like a product regression but was actually relay-state contamination: this project's identity salting (`computeTestKeypairs()`) is keyed on spec FILE NAME, which prevents cross-file contamination but does nothing to prevent the same file's own re-run against an unwiped relay from reusing identical derived keypairs and colliding with the prior run's leftover Welcomes/invitations. Wiping the relay (`docker compose down -v` + `up -d --wait`) before a third run confirmed all 8 tests pass cleanly with zero code changes — the failure was purely an artifact of my own iterative dev-loop methodology, not a defect in the spec or the product. Neither detour reflects a gap in the story's own spec/AC/architecture docs, which were unusually complete and let the actual scenario-authoring go smoothly (all 5 real AC-mapped scenarios passed on the very first run).",
+    "surprised_by": "B's 'invited' announcement subject continued rendering as a truncated npub (never updating to 'Bob') even after A's client had clearly learned Bob's nickname by then (the later 'accepted' announcement in the same chat correctly shows 'Bob'). This is consistent with AC-RENDER-1's contract and an identical documented precedent in groups-member-admitted-announcement.spec.ts, so it's very likely expected behavior (no retroactive re-resolution once a message renders, or the two announcements resolve at different points in profileMap propagation) rather than a defect — flagged as a post-impl verification question (VQ-S10-014) for the examiner to confirm rather than asserted as a finding here.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "final_outcome": "accepted"
+}

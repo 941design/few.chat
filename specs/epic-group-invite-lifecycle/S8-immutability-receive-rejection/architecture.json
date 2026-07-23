@@ -1,0 +1,61 @@
+{
+  "module_name": "immutability-receive",
+  "purpose": "Enforce the announcement-immutability gate + admin carve-out at EVERY edit/delete signal apply site (direct known-row, buffered/deferred resolution, TTL-expiry materialization, tombstone-application) per DD-11, and complete the send-side admin moderation-delete carve-out that makes S7's admin Delete button functional end-to-end.",
+  "public_api": [
+    {
+      "name": "registerGroupAdminsProvider",
+      "signature": "(provider: ((groupId: string) => Promise<string[]> | string[]) | null) => void",
+      "description": "Composition-root registration hook (new S8 export). Registers the live group-admin lookup the receive-side gate consults at apply time. Settable singleton, not a threaded parameter — see api.ts's module doc comment for why. Registered once by MarmotContext.tsx; fail-closed to [] on unregistered/DM-thread/throwing provider."
+    },
+    {
+      "name": "applyDeleteEditSignal",
+      "signature": "(thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor) => Promise<ChangeResult>",
+      "description": "UNCHANGED signature (frozen seam). Internally now consults the announcement-immutability gate at its direct known-row branch for both delete and edit classifications before applying."
+    },
+    {
+      "name": "resolvePendingSignalsForSlot",
+      "signature": "(thread: MessageEditsThreadKey, slotId: string, originalAuthorPubkeyHex: string) => Promise<ChangeResult>",
+      "description": "UNCHANGED signature. Internally now routes through the gate-aware resolveKnownRowAgainstStores for both the pending-signal buffer and delete-marker store."
+    },
+    {
+      "name": "tombstoneMessage",
+      "signature": "(groupId: string, id: string, rev: number, authorization?: TombstoneAuthorization) => Promise<boolean>",
+      "description": "chatPersistence.ts. Return type changed void -> boolean (true iff applied). New optional 4th param independently re-verifies the announcement/admin gate against the row's CURRENT content — defense-in-depth alongside api.ts's own gate, per AC-IMMUT-4/5 naming both as apply sites. Omitted by non-group (DM) callers, or by any test wanting pre-S8 unconditional behavior."
+    },
+    {
+      "name": "isInformativeAnnouncementContent",
+      "signature": "(content: string) => boolean",
+      "description": "New shared module (lib/marmot/announcementFamily.ts). The ONE family-definition function S7's isInformativeAnnouncement (messageActionUi.ts, now a thin wrapper) and S8's gate (api.ts, chatPersistence.ts) both import and call — never re-implemented in parallel."
+    },
+    {
+      "name": "performGroupDeleteMessage (GroupSendDeps.isCurrentUserAdmin)",
+      "signature": "(messageId: string, deps: GroupSendDeps) => Promise<void>",
+      "description": "ChatStoreContext.tsx. New optional isCurrentUserAdmin field on GroupSendDeps. When true and the target is a PEER's informative announcement, the own-message-only send guard is relaxed so an admin can construct+send a delete signed with their OWN key. Non-admins and non-announcement peer messages are unaffected."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/announcementFamily.ts"
+  ],
+  "owned_data": [
+    "the receive-side announcement-immutability gate (authorizeDeleteAgainstTarget, isEditAuthorizedByAnnouncementGate)",
+    "the admin-lookup provider singleton (groupAdminsProvider)"
+  ],
+  "dependencies_allowed": [
+    "parse (parseStructured, consumed indirectly via lib/marmot/announcementFamily.ts)",
+    "immutability-ui's shared family predicate (S7's messageActionUi.ts now delegates to the SAME lib/marmot/announcementFamily.ts this story introduces — one definition, two consumers)",
+    "MarmotContext.tsx composition-root wiring (registerGroupAdminsProvider registration) — authorized external port per architecture.md's send-capability-injection precedent (S3)"
+  ],
+  "dependencies_forbidden": [
+    "immutability-ui (messageActionUi.ts's canShowMessageActions/UI suppression logic) — this story never imports or duplicates the UI-layer gate; each layer independently enforces from the same shared content predicate"
+  ],
+  "external_ports": [
+    "registerGroupAdminsProvider — a settable module-level singleton consulted by applyDeleteEditSignal/resolvePendingSignalsForSlot's internal gate, registered once by MarmotContext.tsx (composition root) rather than threaded as a function parameter through this module's many existing call sites (DM + group, React + non-React)."
+  ],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/messageEdits/api.test.ts",
+    "app/tests/unit/marmot/chatPersistence.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts"
+  ]
+}

@@ -1,0 +1,258 @@
+{
+  "epic": "group-invite-lifecycle",
+  "concepts": [
+    {
+      "id": "invite-lifecycle-parse-guard",
+      "name": "invite_lifecycle StructuredContent union member + strict fail-closed parse guard",
+      "owning_module": "parse",
+      "type": "validation_rule",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "invite-lifecycle-render-branch",
+      "name": "Inline announcement render branch + InviteLifecycleChatAnnouncement presentational component",
+      "owning_module": "render",
+      "type": "public_contract",
+      "added_by_story": "S4"
+    },
+    {
+      "id": "invite-lifecycle-i18n-copy",
+      "name": "en/de Copy keys keyed on the invited/accepted/declined enum",
+      "owning_module": "i18n",
+      "type": "naming_scheme",
+      "added_by_story": "S4"
+    },
+    {
+      "id": "invited-producer-direct-invite-only-gate",
+      "name": "invited fires only on the direct contact-invite path, never on the join-request/invite-link flow (DD-8)",
+      "owning_module": "invite-producer",
+      "type": "invariant",
+      "added_by_story": "S2"
+    },
+    {
+      "id": "accepted-producer-genuine-join-gate",
+      "name": "accepted fires only on B's genuine own-join (profile senderPubkey === B), at most once per invitee/group (DD-9)",
+      "owning_module": "accept-producer",
+      "type": "invariant",
+      "added_by_story": "S3"
+    },
+    {
+      "id": "decline-b-auth-gated-send",
+      "name": "Decline DM send is authenticated-gated; groupId + authenticated persisted on PendingInvitation at enqueue; no group-channel publish, no MLS Add, on the decline path",
+      "owning_module": "decline-b",
+      "type": "invariant",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "decline-a-tree-gate-and-crash-safe-ordering",
+      "name": "DD-4 tree-membership pending-member gate + DD-7 crash-safe Remove/post/clear/mark-seen ordering + DD-10 epoch-safe deferral until historical sync",
+      "owning_module": "decline-a",
+      "type": "invariant",
+      "added_by_story": "S6"
+    },
+    {
+      "id": "immutability-ui-suppression-predicate",
+      "name": "Is-informative-announcement predicate (parseStructured non-null AND type !== 'image') gating Edit/Delete UI affordances, with admin moderation-delete carve-out",
+      "owning_module": "immutability-ui",
+      "type": "validation_rule",
+      "added_by_story": "S7"
+    },
+    {
+      "id": "immutability-receive-gate",
+      "name": "Receive-side rejection of non-admin edit/delete signals targeting announcements at every apply site (direct, buffered, TTL-expiry, tombstone), with admin carve-out; edit-into-announcement always rejected",
+      "owning_module": "immutability-receive",
+      "type": "invariant",
+      "added_by_story": "S8"
+    }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "title": "invite_lifecycle StructuredContent variant + strict fail-closed parse guard",
+      "surfaces_touched": [
+        {"module": "parse", "file": "app/src/lib/marmot/parseStructured.ts", "change": "Added invite_lifecycle union member + strict fail-closed guard (enum event, canonical-hex pubkey, rebuilt from named fields per DD-6) + AC-STRUCT-5 author-resolution doc comment."},
+        {"module": "parse", "file": "app/tests/unit/marmot/parseStructured.test.ts", "change": "invite_lifecycle describe block: closed-enum, per-category pubkey malformation, non-string no-throw, exact-3-key, prototype-pollution/extra-field drop."},
+        {"module": "parse", "file": "app/tests/unit/marmot/parseStructured.contract.test.ts", "change": "Extended RECOGNIZED table with invite_lifecycle for discriminator-integrity and required-field-necessity."}
+      ],
+      "seam_contract": "transport → parse: parseStructured(content). invite_lifecycle branch strict/fail-closed (total .test() coercion, closed 3-value event enum, canonical /^[0-9a-f]{64}$/ pubkey, fresh {type,event,pubkey} literal). Consumed by S2/S3/S4/S7/S8. Author attribution NOT carried here: payload pubkey is subject; renderers resolve author from MLS senderPubkey (AC-STRUCT-5).",
+      "reviewer_verdict": "clean-plus-note",
+      "findings": [
+        {"category": "convention_drift", "caught_via": "direct_inspection", "severity": 3, "file": "app/src/lib/marmot/parseStructured.ts", "line": 41, "note": "Pre-existing: mixed strict (member_admitted, invite_lifecycle canonical-hex) vs loose (invite_cancelled, leave_intent typeof string) subject-pubkey validation. Documented as scoped-out at L66-76. Not an S1 defect; standing item for a future uniform-hardening follow-up."}
+      ]
+    }
+  ],
+    ,
+    {
+      "id": "S2",
+      "title": "invited invite_lifecycle producer — fires only on the direct-invite success path (DD-8)",
+      "surfaces_touched": [
+        {"module": "invite-producer", "file": "app/src/components/groups/InviteMemberModal.tsx", "change": "Pure buildInvitedAnnouncementContent(inviteeHex) builder (lowercases pubkey); submitInviteWithMarker gained optional sendAnnouncement param, fires invited payload fire-and-forget inside result.ok branch only."},
+        {"module": "invite-producer", "file": "app/pages/groups.tsx", "change": "Page-level sendAnnouncement wired into InviteMemberModal via sendAnnouncementRef; handleApproveRequest unchanged — still only member_admitted (DD-8)."},
+        {"module": "invite-producer", "file": "app/tests/unit/groups/InviteMemberModal.test.ts", "change": "15 tests: builder exact-keys/lowercase/no-metadata, success-gated fire, no-fire on ok:false/invalid, fire-and-forget tolerance, backward-compat, AC-PROD-2 source-scan regression, + round-trip parseStructured binding test (gate-remediation)."}
+      ],
+      "seam_contract": "invite-producer -> parse. Emits {type:'invite_lifecycle',event:'invited',pubkey:<lowercase-hex>} over group MLS channel, fire-and-forget, only on submitInvite ok:true. Success-gate==validation-gate (resolveInviteTarget hex check), so emitted pubkey always satisfies S1 guard; now bound structurally by a round-trip test. DD-8: confined to submitInviteWithMarker; join-request flow keeps only member_admitted.",
+      "reviewer_verdict": "clean-after-remediation",
+      "findings": [
+        {"category": "contract_mismatch", "caught_via": "ledger", "severity": 5, "file": "app/src/components/groups/InviteMemberModal.tsx", "line": 96, "note": "Producer<->parser wire shape was bound by convention only; RESOLVED by adding a round-trip parseStructured test binding S2 output to S1 guard. Systemic note carried forward: member_admitted (groups.tsx) shares the unguarded inline-construction pattern (pre-existing, backlog follow-up); S3 accepted/declined producers must add their own round-trip binding."},
+        {"category": "inference", "caught_via": "direct_inspection", "severity": 2, "file": "app/src/components/groups/InviteMemberModal.tsx", "line": 161, "note": "UNACTIONED (below threshold, unreachable): fire-and-forget .catch swallows rejections but not synchronous throws; unreachable while the injected sender is async. Recorded as load-bearing assumption."}
+      ]
+    }
+  ],
+    ,
+    {
+      "id": "S3",
+      "title": "accepted invite_lifecycle producer — genuine own-join gate (DD-9), TOCTOU-hardened + optimistic-echo remediated",
+      "surfaces_touched": [
+        {"module": "accept-producer", "file": "app/src/lib/marmot/pendingDirectInviteStorage.ts", "change": "Added consumePendingDirectInviteMarker (atomic delete-returning-existed, per-key serialized); additive, store stays exclusive owner of marker shape."},
+        {"module": "accept-producer", "file": "app/src/lib/marmot/handlers/profileHandler.ts", "change": "own-join branch (signedEvent && rumor.pubkey===authorPubkey) consumes marker atomically and gates accepted on the boolean; relay-on-behalf branch retains unchanged clearPendingDirectInvite."},
+        {"module": "accept-producer", "file": "app/src/context/MarmotContext.tsx", "change": "Wired consume dep; sendAnnouncement optimistic-appends accepted to A's timeline (canonical rumor.id, chatHandler inbound shape) before sendRumorSafe(softFail) — marmot-ts skips self-echo so no loopback; id-dedupe idempotent."},
+        {"module": "accept-producer", "file": "app/src/lib/marmot/registerHandlers.ts", "change": "Threads consume dep into createProfileHandler."},
+        {"module": "accept-producer", "file": "app/tests/unit/marmot/profileHandler.test.ts", "change": "9 accept tests + concurrency regression (two distinct-id own-join via Promise.all → exactly one sendAnnouncement) + round-trip parseStructured binding."},
+        {"module": "accept-producer", "file": "app/tests/unit/marmot/pendingDirectInviteStorage.test.ts", "change": "New — 5 tests incl. same-key concurrent consume exactly-one-true against fake-indexeddb."}
+      ],
+      "seam_contract": "accept-producer -> parse + marker-store(atomic-consume). accepted emitted iff signedEvent present AND rumor.pubkey===signedEvent.pubkey AND consumePendingDirectInviteMarker()===true. At-most-once structurally guaranteed under concurrent distinct-id dispatch (single per-key-serialized atomic op). A sees its own accepted via optimistic append (no marmot-ts self-loopback). Round-trip bound to S1 guard.",
+      "reviewer_verdict": "accepted",
+      "findings": [
+        {"category": "guarantee_violated", "caught_via": "ledger", "severity": 4, "file": "app/src/lib/marmot/handlers/profileHandler.ts", "line": 89, "note": "RESOLVED+VERIFIED: TOCTOU double-post closed by atomic per-key-serialized consume; own-join gates on boolean, relay path unchanged."},
+        {"category": "forked_validation", "caught_via": "ledger", "severity": 3, "file": "app/src/context/MarmotContext.tsx", "line": 1478, "note": "RESOLVED+VERIFIED: marmot-ts skips self-sent messages (no loopback) — A would not have seen its own accepted; fixed by optimistic append (canonical id dedupe, awaited before publish)."},
+        {"category": "best_practices", "caught_via": "direct_inspection", "severity": 2, "file": "app/src/context/MarmotContext.tsx", "line": 1508, "note": "UNACTIONED (informational): optimistic echo persists if softFail publish fails — standard optimistic-send tradeoff, consistent with invited path."},
+        {"category": "contract_mismatch", "caught_via": "ledger", "severity": 2, "file": "app/pages/groups.tsx", "line": 416, "note": "UNACTIONED (out of epic scope, backlog nit): pre-existing member_admitted producer still lacks a round-trip parseStructured binding. Both invite_lifecycle producers ARE bound."}
+      ]
+    }
+  ],
+    ,
+    {
+      "id": "S4",
+      "title": "invite_lifecycle render branch + affordance-free component + en/de copy",
+      "surfaces_touched": [
+        {"module": "render", "file": "app/src/components/groups/InviteLifecycleChatAnnouncement.tsx", "change": "NEW affordance-free component (data-testid invite-lifecycle-announcement) + pure helpers resolveInviteLifecycleSubjectDisplay (subject from payload pubkey; no senderPubkey param) + selectInviteLifecycleCopy (event-keyed; safe default)."},
+        {"module": "render", "file": "app/src/components/chat/ChatBox.tsx", "change": "invite_lifecycle branch resolves memberDisplay strictly from structured.pubkey, never senderPubkey (AC-STRUCT-5 render-side); gated on allowPollMessages like siblings."},
+        {"module": "i18n", "file": "app/src/lib/i18n.ts", "change": "3 function-valued Copy keys invited/accepted/declined, en+de, subject-centric."},
+        {"module": "render", "file": "app/tests/unit/chat/inviteLifecycleAnnouncement.test.ts", "change": "20 tests: en+de exact/distinct, both helpers incl. AC-STRUCT-5, source-scan structural assertions. Branch-span regex hardened to anchor on return JSX (gate-remediation) so it can't silently truncate."}
+      ],
+      "seam_contract": "render -> parse. Subject from payload structured.pubkey only; branch+component structurally exclude senderPubkey (subject-centric, no author). Family membership for S7/S8 immutability anchors at parseStructured (context-independent), NOT this component's identity — immutability holds even when render degrades to plain text under allowPollMessages=false.",
+      "reviewer_verdict": "clean-after-remediation",
+      "findings": [
+        {"category": "convention_drift", "caught_via": "direct_inspection", "severity": 3, "file": "app/tests/unit/chat/inviteLifecycleAnnouncement.test.ts", "line": 197, "note": "RESOLVED: brittle branch-span regex could silently truncate and false-green the senderPubkey-absence assertion (sole guard on ChatBox call-site AC-STRUCT-5); hardened to anchor span end on the return JSX."},
+        {"category": "best_practices", "caught_via": "direct_inspection", "severity": 2, "file": "app/src/components/groups/InviteLifecycleChatAnnouncement.tsx", "line": 101, "note": "UNACTIONED (safe, non-blocking): selectInviteLifecycleCopy default returns bare subject name for out-of-enum event — unreachable given S1 guard; non-corrupting degradation."}
+      ]
+    }
+  ],
+    ,
+    {
+      "id": "S5",
+      "title": "decline-b — auth-gated NIP-59 gift-wrapped decline DM + PendingInvitation groupId/authenticated (privacy-critical seam for S6)",
+      "surfaces_touched": [
+        {"module": "decline-b", "file": "app/src/lib/pendingInvitations.ts", "change": "PendingInvitation gains groupId:string + authenticated:boolean; readRaw normalizes legacy fail-closed (groupId→'', authenticated→false). Store stays localStorage lp_pendingInvitations_v1."},
+        {"module": "decline-b", "file": "app/src/lib/marmot/welcomeSubscription.ts", "change": "Exports INVITE_DECLINE_KIND=21063 (module-load throw-on-collision) + DeclineGiftWrapPayload. readPreJoinGroupData surfaces bytesToHex(groupContext.groupId). Enqueue persists groupId+authenticated. sendDeclineGiftWrap inner {groupId,pubkey:selfHex} only, seal signed w/ B key, outer ephemeral. declinePendingInvitation gated on entry && sendKeys && entry.authenticated; unconditional removePendingInvitation in finally; send failure caught not rethrown."},
+        {"module": "decline-b", "file": "app/src/context/MarmotContext.tsx", "change": "Threads privateKeyHex/pubkeyHex/getNdk into the decline call site (composition-root)."},
+        {"module": "decline-b", "file": "app/tests/unit/{pendingInvitations,welcomeSubscription}.test.ts + readPreJoinGroupData.realMarmot.test.ts", "change": "18 tests + real-marmot test asserts data.groupId===group.idStr (locks S6 seam encoding)."}
+      ],
+      "seam_contract": "decline-b -> decline-a (S6). B sends NIP-59 gift wrap of INVITE_DECLINE_KIND=21063 to authenticated inviter (unwrapResult.pubkey), inner plaintext EXACTLY {groupId,pubkey:selfHex}. groupId=bytesToHex(groupContext.groupId)==mlsGroup.idStr (proven vs real lib) so A's tree gate finds the right group. Fail-closed: only when authenticated===true (legacy/missing→false). Privacy: seal signed w/ B key (A authenticates decliner), outer ephemeral (B hidden), zero profile metadata. Local removal unconditional (finally). S6 imports INVITE_DECLINE_KIND/DeclineGiftWrapPayload; 21063 fail-loud at import.",
+      "reviewer_verdict": "accepted",
+      "findings": [
+        {"category": "guarantee_violated", "caught_via": "ledger", "severity": 2, "file": "app/src/lib/marmot/welcomeSubscription.ts", "line": 1100, "note": "CARRY-FORWARD TO S6 (not S5 defect): double-invocation declinePendingInvitation → two decline wraps to A; S6 must dedupe two genuine sends from one B, not only relay redelivery."},
+        {"category": "guarantee_violated", "caught_via": "direct_inspection", "severity": 2, "file": "app/src/lib/marmot/welcomeSubscription.ts", "line": 738, "note": "CARRY-FORWARD TO S6 (not S5 defect): authenticated=true + groupId='' (groupContext read failed) → S6 must treat empty/unknown groupId as clean no-op (fail-safe; documented)."}
+      ],
+      "privacy_verification": "Leak-free: inner plaintext exactly {groupId,pubkey}; seal encrypted+addressed to A signed by B (allowed channel); outer wrap ephemeral (sender hidden); no profile metadata. Fail-closed send gate verified. Target is seal-verified inviter, never self-claimed rumor.pubkey."
+    }
+  ],
+    ,
+    {
+      "id": "S6",
+      "title": "decline-a — receive/authenticate/defer/tree-gate/DD-7-ordered Remove+declined+clear+mark-seen (remediated: tri-state DeclineOutcome)",
+      "surfaces_touched": [
+        {"module": "decline-a", "file": "app/src/lib/marmot/welcomeSubscription.ts", "change": "INVITE_DECLINE_KIND dispatch branch; seal-auth-before-eval; tri-state DeclineOutcome (applied|terminal-noop|retryable-failure); getGroup pre-check before waitForGroupHistorySync (FIX C); dispatch marks seen iff outcome!==retryable-failure; announcementError logged not gating (FIX A); per-(groupId,pubkey) serialization; empty-groupId terminal no-op."},
+        {"module": "decline-a", "file": "app/src/lib/marmot/cancelInvitationImpl.ts", "change": "Defaulted announcementKind param (invite_cancelled|declined); invite_cancelled byte-for-byte unchanged; declined emits {type,event:'declined',pubkey}."},
+        {"module": "decline-a", "file": "app/src/context/MarmotContext.tsx", "change": "DeclineReceiveDeps wiring; declined post optimistic-appends to A's timeline (S3-consistent buildRumor+appendMessage canonical id+setChatVersion before sendRumorSafe softFail) so A sees its own declined."},
+        {"module": "decline-a", "file": "app/tests/unit/marmot/welcomeSubscription.test.ts", "change": "18+5 tests: DD-7 exact order, crash-before-Remove reprocess, defer-until-sync, declined round-trip binding, re-invite-reactivation regression, post-failure pinning, group-not-held terminal no-op (no dangling waiter). Concurrency tests use deterministic Deferred gates."},
+        {"module": "decline-a", "file": "specs/epic-group-invite-lifecycle/spec.md", "change": "Known Limitations: declined post best-effort; no invite-instance binding (late distinct-eventId decline after re-invite could Remove a re-invited B)."}
+      ],
+      "seam_contract": "decline-a consumes S5 decline gift wrap (21063, groupId==idStr). Mark-seen pivots TERMINAL-vs-RETRYABLE: applied (Remove committed; declined post best-effort like invited/accepted) + terminal-noop (B not/never pending / A doesn't hold groupId / empty groupId) both mark seen; only retryable-failure (Remove commit threw) withholds → reprocess. Seen-guard first in handler closes re-invite reactivation on same-eventId redelivery. getGroup pre-check precedes defer (no dangling waiter). Serialized per (groupId,pubkey); seal-authenticated before eval.",
+      "reviewer_verdict": "accepted",
+      "findings": [
+        {"category": "guarantee_violated", "caught_via": "ledger", "severity": 5, "file": "app/src/lib/marmot/welcomeSubscription.ts", "line": 238, "note": "RESOLVED+VERIFIED (FIX A): post-failure no longer a hidden DD-7 violation; declined post explicitly best-effort (like invited/accepted), announcementError logged, mark-seen keyed on Remove not post; overstated comment removed; pinned by test."},
+        {"category": "guarantee_violated", "caught_via": "ledger", "severity": 5, "file": "app/src/lib/marmot/welcomeSubscription.ts", "line": 228, "note": "RESOLVED+VERIFIED (FIX B): terminal-noop marked seen at first arrival; seen-guard drops later same-eventId redelivery → closes re-invite reactivation + no-op churn. Distinct-eventId late decline documented as out-of-scope limitation."},
+        {"category": "correctness", "caught_via": "direct_inspection", "severity": 3, "file": "app/src/lib/marmot/welcomeSubscription.ts", "line": 221, "note": "RESOLVED+VERIFIED (FIX C): getGroup pre-check before waitForGroupHistorySync → group-not-held is terminal-noop, no dangling waiter/chain entry."},
+        {"category": "efficiency", "caught_via": "direct_inspection", "severity": 2, "file": "app/src/lib/marmot/welcomeSubscription.ts", "line": 762, "note": "NON-FINDING (pre-existing, not S6): unauthenticated/malformed declines return unmarked → per-session re-decrypt churn; dispatch-wide convention (unauth Welcomes/join-requests same). Backlog note for the whole dispatch, not an S6 fix."}
+      ]
+    }
+  ],
+    ,
+    {
+      "id": "S7",
+      "title": "immutability-ui — parse-anchored announcement suppression predicate, group-scoped, admin Delete carve-out (affordance only)",
+      "surfaces_touched": [
+        {"module": "immutability-ui", "file": "app/src/lib/messageEdits/messageActionUi.ts", "change": "New isInformativeAnnouncement(message) = parseStructured(content) non-null AND type!=='image' (parse-anchored, generic). canShowMessageActions gained isCurrentUserAdmin + isGroupContext (default false); suppression fires ONLY when isGroupContext && isInformativeAnnouncement, returning isCurrentUserAdmin. canEditMessage unchanged (structured→false for all). DM (isGroupContext false) restores pre-S7 own-authorship."},
+        {"module": "immutability-ui", "file": "app/src/components/chat/ChatBox.tsx", "change": "isGroupContext + isCurrentUserAdmin props threaded into canShowMessageActions (sole caller)."},
+        {"module": "immutability-ui", "file": "app/src/components/groups/GroupChat.tsx", "change": "Passes isGroupContext=true unconditionally + isCurrentUserAdmin."},
+        {"module": "immutability-ui", "file": "app/pages/groups.tsx", "change": "isAdmin from adminPubkeys (case-insensitive) threaded to GroupChat."},
+        {"module": "immutability-ui", "file": "app/tests/unit/chat/messageActionUi.test.ts", "change": "104 tests: predicate over full family, group-vs-DM scoping, admin/non-admin, no-regression on ordinary/image."}
+      ],
+      "seam_contract": "immutability-ui consumes the parse seam: family = parseStructured(content) non-null AND type!=='image', context-independent (holds under render degradation), NOT keyed on render/testid. Suppression GROUP-scoped (isGroupContext default false=DM=no suppression; caller set = ContactChat[false] + GroupChat[true], verified complete). Admin carve-out = Delete-affordance-only (Edit suppressed for all). PEER-announcement admin Delete shown but functional only when S8 lands send-side (performGroupDeleteMessage) + receive-side (AC-IMMUT-5). S8's receive gate MUST reuse the SAME exported isInformativeAnnouncement (no re-impl / duplicated_invariant).",
+      "reviewer_verdict": "accepted",
+      "findings": [
+        {"category": "guarantee_violated", "caught_via": "ledger", "severity": 3, "file": "app/src/lib/messageEdits/messageActionUi.ts", "line": 93, "note": "TRACKED S7->S8 dependency (not S7 defect): admin Delete affordance on PEER announcements shown but non-functional until S8 send-side carve-out + AC-IMMUT-5 receive-side land. AC-IMMUT-3 functionally satisfied only then. Epic ships together; gate at epic-ship."}
+      ]
+    }
+  ],
+    ,
+    {
+      "id": "S8",
+      "title": "immutability-receive — receive-side announcement gate at all 4 apply sites + admin carve-out (send+receive), single shared family predicate (closes immutability loop)",
+      "surfaces_touched": [
+        {"module": "immutability-receive", "file": "app/src/lib/marmot/announcementFamily.ts", "change": "NEW single shared isInformativeAnnouncementContent(content) — the ONE family definition; imported by messageActionUi/api/chatPersistence (no cycle)."},
+        {"module": "immutability-receive", "file": "app/src/lib/messageEdits/messageActionUi.ts", "change": "S7 predicate delegates to the shared one (no fork)."},
+        {"module": "immutability-receive", "file": "app/src/lib/messageEdits/api.ts", "change": "Group-scoped announcement gate at direct/buffered/TTL-expiry/cap-eviction: delete honored iff sender is current admin, any edit (target OR replacement) rejected. registerGroupAdminsProvider singleton + per-groupId groupAdminsFor, fail-closed []."},
+        {"module": "immutability-receive", "file": "app/src/lib/marmot/chatPersistence.ts", "change": "tombstone defense-in-depth: independent re-derivation of announcement+admin gate, only when authorization supplied (group threads); DM keeps own-author. void->boolean."},
+        {"module": "immutability-receive", "file": "app/src/context/ChatStoreContext.tsx", "change": "performGroupDeleteMessage admin carve-out: admin may delete a PEER announcement only; non-admin + non-announcement stay own-message-only; delete built with senderPubkey=admin."},
+        {"module": "immutability-receive", "file": "app/src/context/MarmotContext.tsx", "change": "Registers admin provider reading client.groups.get(groupId).groupData.adminPubkeys (per-groupId)."},
+        {"module": "immutability-receive", "file": "app/pages/groups.tsx", "change": "isAdmin threaded to send side."},
+        {"module": "immutability-receive", "file": "app/tests/unit/messageEdits/{api,chatPersistence,groupMessageEdits}.test.ts", "change": "36 tests across all 4 apply sites × AC-IMMUT-4/5/6/7 + send-side carve-out."}
+      ],
+      "seam_contract": "immutability-receive keys on the SAME parse-anchored predicate as S7 (single-sourced announcementFamily.ts, no fork). Group-scoped (isGroupThreadKey). Delete/tombstone of a group announcement honored IFF sender is a CURRENT admin (live adminPubkeys, per-groupId provider, fail-closed []); any edit of a group announcement (target OR replacement) rejected regardless of sender. Gate at ALL apply sites (direct, buffered, TTL-expiry/cap-eviction, tombstone) and both arrival orders; deferred-then-materialized signals gated at materialization. Send-side admin carve-out is announcement-only. ADR-006: admin authorized on self-asserted senderPubkey. Classification immutable → caller decision and storage re-derivation always agree.",
+      "reviewer_verdict": "clean-after-s9-surfaced-fix",
+      "findings": [
+        {"category": "guarantee_violated", "caught_via": "s9_property_enumeration", "severity": 9, "status": "resolved_verified", "file": "app/src/lib/marmot/chatPersistence.ts", "line": 367, "note": "SECURITY (AC-IMMUT-6/DD-11 announcement-immutability bypass at TTL-expiry×late-target ordering). A pre-emptive ordinary edit targeting an unknown id fabricated a placeholder ChatMessage via appendMessage; insert-if-absent then made a later REAL announcement at that id silently no-op, permanently replacing it with attacker content. NOT enumerated by the S8 per-apply-site review (missed the cross-arrival interaction between a gated signal's fabricated-row side effect and the storage dedup primitive). Caught by S9's crossCuttingImmutabilityInvariance enumeration (VQ-S9-010). FIXED: ChatMessage.materializedFromEdit flag marks TTL-materialized placeholders; appendMessage overwrites ONLY a flagged placeholder in-place when a fresh unflagged genuine message arrives at the same id; real rows never clobbered. Verified adversarially: single-source flag setter (api.ts), no real path sets it, placeholders can never be announcements (AC-IMMUT-7 rejection precedes fabrication), overwrite content hash-id-bound, dedup floor preserved, delete path uses content-free markers (no masquerade), no flag leakage. Both admin and non-admin covered. New regression: chatPersistence-editDelete.test.ts."}
+      ],
+      "resolved_carryforwards": ["S7->S8 duplicated-invariant CLOSED (single source)", "S7->S8 admin carve-out send+receive CLOSED (AC-IMMUT-3 functional)", "S7->S8 all-apply-sites DD-11 CLOSED", "S7->S8 ADR-006 admin binding CLOSED", "S9-surfaced TTL-expiry×late-target immutability bypass CLOSED (materializedFromEdit supersession)"],
+      "accepted_residuals": ["Self-healing provider startup window (bounded, non-permanent)", "Non-admin author cannot self-delete own group announcement (confirmed DD-5 product decision)"]
+    }
+  ],
+    ,
+    {
+      "id": "S9",
+      "title": "cross-cutting integration — AC-CROSS-1 decline-convergence + AC-CROSS-2 immutability-invariance whole-flow property proofs (test-only)",
+      "is_integration_story": true,
+      "spans_modules": ["decline-a", "decline-b", "immutability-receive"],
+      "surfaces_touched": [
+        {"module": "decline-a/decline-b", "file": "app/tests/unit/marmot/crossCuttingDeclineConvergence.test.ts", "change": "AC-CROSS-1: 12 scenarios driving real welcomeSubscription/cancelInvitationImpl across redelivery × crash-timing × sync-timing × group-held. Asserts at-most-one Remove, best-effort declined post as CEILING, mark-seen⟺terminal, same-eventId no-reactivation, group-not-held no-leak; distinct-eventId-after-re-invite tested as documented out-of-scope. Crash injection empirically load-bearing."},
+        {"module": "immutability-receive", "file": "app/tests/unit/messageEdits/crossCuttingImmutabilityInvariance.test.ts", "change": "AC-CROSS-2: 33 cases driving real messageEdits/api + chatPersistence. Verdict invariance across apply-site × arrival-order × sender-admin × classification; cross-site consistency; fail-closed admin; DM own-author scoping. VQ-S9-010 (TTL-expiry × late announcement target) CAUGHT the S8 AC-IMMUT-6 bypass."}
+      ],
+      "seam_contract": "Whole-flow property proof spanning the epic's two order-sensitive subsystems. AC-CROSS-1 pins the decline convergence pivot (terminal-vs-retryable mark-seen). AC-CROSS-2 pins immutability verdict invariance across all apply sites AND the cross-arrival storage-primitive interaction. Test-only.",
+      "reviewer_verdict": "clean",
+      "caught_defects": ["Surfaced the S8 TTL-expiry×late-target AC-IMMUT-6 immutability bypass (VQ-S9-010); fixed (materializedFromEdit overwrite) and re-tested GREEN."],
+      "findings": [],
+      "residual_notes": ["Enumeration complete vs accumulated model. distinct-eventId-decline-after-re-invite is an explicitly-tested documented bound. delete-materialize×late-target covered via buffered-site delete table (masquerade-free content-free marker) rather than a named TTL-marker scenario — symmetric explicitness is nice-to-have, not a gap."]
+    }
+  ],
+    ,
+    {
+      "id": "S10",
+      "title": "e2e conformance oracle — full invite lifecycle through the assembled app UI (test-only)",
+      "is_integration_story": true,
+      "spans_modules": ["invite-producer", "accept-producer", "decline-b", "decline-a", "immutability-ui", "immutability-receive"],
+      "surfaces_touched": [
+        {"module": "e2e", "file": "app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts", "change": "8 tests, relay bucket. 3 real browser contexts (A admin / B accepter / C decliner): invite→invited, accept→accepted (A live), invite→decline→declined + C evicted (C live signer through decline), non-admin no edit/delete, admin moderation Delete (no Edit) + functional admin peer-delete (S8 carve-out). Publish-through-the-app; peer-observation via retrying toBeVisible."}
+      ],
+      "seam_contract": "Conformance oracle: confirms the assembled system agrees through its own UI with what S9's property proofs established. Covers 7 e2e-observable ACs (AC-PROD-1/3, AC-DECLINE-3/9/10, AC-IMMUT-1/3). Test-only.",
+      "reviewer_verdict": "clean",
+      "findings": [],
+      "confirms_stories": ["S2", "S3", "S5", "S6", "S7", "S8"]
+    }
+  ],
+  "reviewer_state": {
+    "last_story_reviewed": "S10",
+    "model_at": "2026-07-22T17:20:00Z"
+  }
+}

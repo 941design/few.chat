@@ -327,6 +327,126 @@ describe('AC-STORE-3 clobber-guard — rev=0/absent MUST NOT overwrite an edited
   });
 });
 
+// ── S9 gate-remediation: a real ANNOUNCEMENT arrival supersedes a
+//    materialize-on-expiry placeholder (AC-IMMUT-6 defeated at this ordering
+//    — see messageEdits/api.ts's ChatMessage.materializedFromEdit doc
+//    comment). Severity-4 gate-remediation round (this file) narrowed the
+//    supersession to announcement arrivals only — an ordinary arrival must
+//    NOT clobber the placeholder (see the second describe block below) ────
+
+const ANNOUNCEMENT_CONTENT = JSON.stringify({ type: 'member_admitted', pubkey: 'b'.repeat(64) });
+
+describe('appendMessage — a row flagged materializedFromEdit is a placeholder, not a real message: a genuine ANNOUNCEMENT arrival at the same id OVERWRITES it (S9 gate-remediation, narrowed to announcements)', () => {
+  it('a fresh, unflagged appendMessage carrying announcement content REPLACES a materializedFromEdit row outright, in place', async () => {
+    // Simulates messageEdits/api.ts's TTL-expiry materialize-on-expiry
+    // fabricating a placeholder row for an edit whose real target never
+    // arrived in time (persistExpiredEntryEffect's no-known-row edit branch).
+    await appendMessage('group-materialize-super', makeMsg({
+      id: 'b'.repeat(64),
+      content: 'fabricated edit content',
+      rev: 42,
+      materializedFromEdit: true,
+    }));
+
+    // The real message is a group announcement — the ordinary ingest path
+    // never sets materializedFromEdit.
+    await appendMessage('group-materialize-super', makeMsg({
+      id: 'b'.repeat(64),
+      content: ANNOUNCEMENT_CONTENT,
+      senderPubkey: 'real-author-pubkey',
+    }));
+
+    const { messages } = await loadMessages('group-materialize-super');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe(ANNOUNCEMENT_CONTENT);
+    expect(messages[0].senderPubkey).toBe('real-author-pubkey');
+    // The placeholder's rev/flag do not survive — the real row fully
+    // replaces it (a fresh, unedited/untombstoned original).
+    expect(messages[0].materializedFromEdit).toBeFalsy();
+    expect(messages[0].rev).toBeUndefined();
+  });
+
+  it('preserves array position/ordering when the placeholder is superseded by an announcement (mirrors AC-EDIT-2 for update-in-place)', async () => {
+    await appendMessage('group-materialize-order', makeMsg({ id: 'a'.repeat(64), content: 'A' }));
+    await appendMessage('group-materialize-order', makeMsg({ id: 'b'.repeat(64), content: 'fabricated', materializedFromEdit: true }));
+    await appendMessage('group-materialize-order', makeMsg({ id: 'c'.repeat(64), content: 'C' }));
+
+    await appendMessage('group-materialize-order', makeMsg({ id: 'b'.repeat(64), content: ANNOUNCEMENT_CONTENT }));
+
+    const { messages } = await loadMessages('group-materialize-order');
+    expect(messages.map((m) => m.content)).toEqual(['A', ANNOUNCEMENT_CONTENT, 'C']);
+  });
+
+  it('a REAL row (materializedFromEdit absent) is never overwritten by a later appendMessage — the S8 dedup floor is unchanged', async () => {
+    await appendMessage('group-materialize-noop', makeMsg({ id: 'a'.repeat(64), content: 'orig, never fabricated' }));
+
+    await appendMessage('group-materialize-noop', makeMsg({ id: 'a'.repeat(64), content: 'attempted clobber' }));
+
+    const { messages } = await loadMessages('group-materialize-noop');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe('orig, never fabricated');
+  });
+});
+
+// ── Severity-4 gate-remediation regression: an ORDINARY (non-announcement)
+//    real-original arrival must NOT supersede a materializedFromEdit
+//    placeholder. Pre-fix, an unconditional overwrite here reverted an
+//    already-applied edit / resurrected an already-tombstoned message
+//    permanently (the pending-signal entry is consumed at TTL expiry and
+//    slot dedupe prevents re-application) — restoring the pre-S9
+//    insert-if-absent behavior for the ordinary case. ─────────────────────
+
+describe('appendMessage — an ORDINARY real-original arrival must NOT supersede a materializedFromEdit placeholder (severity-4 gate-remediation)', () => {
+  it('ordinary edit materializes a placeholder, then a real ordinary original arrives later — the materialized/edited row is PRESERVED, not overwritten', async () => {
+    // 1. TTL-expiry materializes an ordinary (non-announcement) placeholder
+    // for an edit whose real target never arrived in time.
+    await appendMessage('group-ordinary-preserve', makeMsg({
+      id: 'd'.repeat(64),
+      content: 'edited placeholder content',
+      rev: 7,
+      edited: true,
+      materializedFromEdit: true,
+    }));
+
+    // 2. The REAL original (ordinary content, not an announcement) finally
+    // arrives — e.g. a delayed/re-delivered rumor.
+    await appendMessage('group-ordinary-preserve', makeMsg({
+      id: 'd'.repeat(64),
+      content: 'the real ordinary original',
+      senderPubkey: 'late-original-author',
+    }));
+
+    const { messages } = await loadMessages('group-ordinary-preserve');
+    expect(messages).toHaveLength(1);
+    // The placeholder/edit stands — the late ordinary arrival is a no-op.
+    expect(messages[0].content).toBe('edited placeholder content');
+    expect(messages[0].edited).toBe(true);
+    expect(messages[0].materializedFromEdit).toBe(true);
+  });
+
+  it('ordinary edit materializes a placeholder, it is then tombstoned, and a real ordinary original arriving later does NOT resurrect it', async () => {
+    await appendMessage('group-ordinary-preserve-ts', makeMsg({
+      id: 'e'.repeat(64),
+      content: 'edited placeholder content',
+      rev: 7,
+      edited: true,
+      materializedFromEdit: true,
+    }));
+    await tombstoneMessage('group-ordinary-preserve-ts', 'e'.repeat(64), 8);
+
+    await appendMessage('group-ordinary-preserve-ts', makeMsg({
+      id: 'e'.repeat(64),
+      content: 'the real ordinary original',
+      senderPubkey: 'late-original-author',
+    }));
+
+    const { messages } = await loadMessages('group-ordinary-preserve-ts');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].tombstoned).toBe(true);
+    expect(messages[0].content).not.toBe('the real ordinary original');
+  });
+});
+
 // ── Gate-remediation round: hardened clobber-guard, monotonic-rev floor, merge
 //    semantics, tombstoneMessage rev validation, and queue serialization ────────
 

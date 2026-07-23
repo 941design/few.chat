@@ -1,0 +1,43 @@
+{
+  "story_id": "S5",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-22T20:10:00Z",
+  "files_created": [
+    "specs/epic-group-invite-lifecycle/S5-decline-send/architecture.json",
+    "specs/epic-group-invite-lifecycle/S5-decline-send/result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/pendingInvitations.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/pendingInvitations.test.ts",
+    "app/tests/unit/marmot/welcomeSubscription.test.ts",
+    "app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts",
+    "specs/epic-group-invite-lifecycle/S5-decline-send/verification.json"
+  ],
+  "tests_added": {
+    "unit": 18
+  },
+  "test_counts": {
+    "baseline": 3907,
+    "final": 3924
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "decline-b"
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Two pieces of non-obvious marmot-ts internals had to be reverse-engineered from node_modules .d.ts/.js source (no doc coverage in-repo): (1) readWelcomeMarmotGroupData is a convenience wrapper over readWelcomeGroupInfo that decodes ONLY the MarmotGroupData extension and discards groupContext entirely, so surfacing groupId required an ADDITIONAL readWelcomeGroupInfo call per candidate key-package ref rather than extending the existing call; (2) confirming the correct hex-encoding for groupContext.groupId (Uint8Array) required tracing MarmotGroup's own idStr getter (bytesToHex(this.id) from applesauce-core/helpers/event) to guarantee pre-join and post-join group-id strings would match byte-for-byte — verified end-to-end with a real, unmocked MLS group/Welcome round-trip rather than trusting the encoding by inspection alone. Separately, this story's stories.json file list (welcomeSubscription.ts, pendingInvitations.ts, two test files) omits MarmotContext.tsx, but a real (non-optional) ndk/privateKeyHex/pubkeyHex triple for the decline send can only be sourced at that composition root — the identical shape S3-accepted-producer's retrospective already flagged for its own send-capability wiring. This is now the second story in this epic hitting the same file-list gap for the same reason (composition-root wiring for a background/non-component send path), reinforcing that DI-producer stories in this codebase should have their file list either include the composition root or explicitly carve it out up front.",
+    "surprised_by": "The full unit suite's pre-existing app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts used an exact `.toEqual({name, description, adminPubkeys})` assertion against readPreJoinGroupData's return value, so extending that return type with `groupId` (required by AC-DECLINE-1) broke it — an out-of-story-file-list test needed a one-line update. Turned this into a net positive: extended that same real-crypto (never-mocked) test to also assert the new groupId equals the admin's genuine group.idStr, which is stronger end-to-end evidence than a mocked unit test could give for VQ-S5-007's 'not a placeholder' concern.",
+    "scope": "meta",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [
+      { "agent": "dev", "note": "base:dev reported a clean, friction-free test-writing pass (skipped retrospective) — the pre-briefed NDKEvent mock gotcha and established send.test.ts spy pattern transferred without adaptation surprises; no additional POV to fold in." }
+    ],
+    "lead_clarifications": []
+  }
+}

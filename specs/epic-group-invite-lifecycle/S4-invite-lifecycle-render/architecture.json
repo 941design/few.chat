@@ -1,0 +1,48 @@
+{
+  "module_name": "render",
+  "purpose": "Render the invite_lifecycle StructuredContent variant (S1) inline in group chat: subject-name resolution, event-keyed i18n copy, and a presentational announcement component with no edit/delete/reaction affordances.",
+  "public_api": [
+    {
+      "name": "InviteLifecycleChatAnnouncement",
+      "signature": "function InviteLifecycleChatAnnouncement(props: { event: 'invited' | 'accepted' | 'declined'; memberDisplay: string }): JSX.Element",
+      "description": "Presentational component (default export) rendering the muted one-line announcement box for an invite_lifecycle event, modelled on LeaveChatAnnouncement/InviteCancelledChatAnnouncement. Stable data-testid='invite-lifecycle-announcement'."
+    },
+    {
+      "name": "resolveInviteLifecycleSubjectDisplay",
+      "signature": "function resolveInviteLifecycleSubjectDisplay(pubkey: string, profileMap: Record<string, { nickname?: string }>, truncate: (pubkey: string) => string): string",
+      "description": "Pure helper (named export) resolving the invitee's display name from profileMap[pubkey].nickname, falling back to truncate(pubkey). Called with structured.pubkey only, never msg.senderPubkey — this variant's copy is subject-centric and displays no author, so there is no conflation path (AC-STRUCT-5). Exported so it is directly unit-testable without jsdom, mirroring the JoinRequestCard.tsx precedent of exporting pure helpers from a .tsx file."
+    },
+    {
+      "name": "selectInviteLifecycleCopy",
+      "signature": "function selectInviteLifecycleCopy(copy: Copy, event: 'invited' | 'accepted' | 'declined', memberDisplay: string): string",
+      "description": "Pure helper (named export) selecting the event-keyed i18n string from copy.groups.inviteLifecycle{Invited,Accepted,Declined}. Defensive default branch (unreachable given S1's enum guard) returns memberDisplay rather than undefined/blank text (VQ-S4-006)."
+    }
+  ],
+  "private_files": [
+    "app/src/components/groups/InviteLifecycleChatAnnouncement.tsx"
+  ],
+  "owned_data": [
+    "the invite_lifecycle render branch in ChatBox.tsx's renderStructuredMessage",
+    "InviteLifecycleChatAnnouncement.tsx's stable data-testid",
+    "3 new i18n Copy keys: groups.inviteLifecycleInvited/Accepted/Declined (i18n.ts is architecture.md's separate 'i18n' module, but per stories.json S4 notes is treated as a tightly-coupled implementation input to this story rather than its own module-owning story, since AC-RENDER-2 has no standalone-testable behavior outside the render context)"
+  ],
+  "dependencies_allowed": [
+    "parse (app/src/lib/marmot/parseStructured.ts) — reads the already-frozen StructuredContent['invite_lifecycle'] union member and reuses the generic profileMap-lookup-with-fallback shape already established by resolveCancellerDisplay (not imported directly; the equivalent inline pattern is reused per the codebase's existing per-branch convention)",
+    "i18n (app/src/lib/i18n.ts) — new Copy keys, per S4's notes carve-out",
+    "@chakra-ui/react, @/src/context/LanguageContext (useCopy), @/src/lib/nostrKeys (truncateNpub, pubkeyToNpub) — same as every existing announcement component precedent"
+  ],
+  "dependencies_forbidden": [
+    "invite-producer (InviteMemberModal.tsx / pages/groups.tsx) — S2's concern",
+    "accept-producer (profileHandler.ts / registerHandlers.ts) — S3's concern",
+    "decline-a / decline-b (welcomeSubscription.ts) — S5/S6's concern",
+    "immutability-ui / immutability-receive (messageActionUi.ts, messageEdits/api.ts, chatPersistence.ts) — S7/S8's concern; this story only ensures the presentational component never renders edit/delete/reaction affordances by construction"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [
+    "InviteLifecycleContent (the seam frozen by S1: { type: 'invite_lifecycle'; event: 'invited'|'accepted'|'declined'; pubkey: string }), consumed via parseStructured's return value already wired into ChatBox.tsx's renderStructuredMessage"
+  ],
+  "test_targets": [
+    "app/tests/unit/chat/inviteLifecycleAnnouncement.test.ts (i18n key trio + pure-helper unit tests + ChatBox.tsx/component source-scan structural assertions — no jsdom, per exploration.json's testing conventions; renamed from the story's stubbed .test.tsx since a component-render test is infeasible in this repo)"
+  ]
+}

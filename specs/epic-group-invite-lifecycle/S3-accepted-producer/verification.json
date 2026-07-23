@@ -1,0 +1,82 @@
+{
+  "story_id": "S3",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-22T18:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S3-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the pending→joined transition detector in `profileHandler.ts` a real check against actual tree/marker state (a genuine 'was this pubkey pending, and did this profile rumor's transport `senderPubkey` equal it' evaluation), rather than a stub that always returns true on any profile arrival, or one that ignores `senderPubkey` entirely and only checks the payload's claimed identity? Is the injected send capability from `registerHandlers.ts` a real dependency (would silently no-op if un-injected, and is that no-op path actually unreachable in production, not merely 'assumed to always be wired')?"
+    },
+    {
+      "question_id": "VQ-S3-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the send capability threaded into `profileHandler.ts` via the `registerHandlers.ts` registration seam (per architecture.md: 'thread it through the registration seam — do not import a sender ad hoc'), rather than `profileHandler.ts` importing a sender module directly? Does `profileHandler.ts` remain free of React imports, and is the pending→joined detector's logic contained within the `accept-producer` module rather than duplicated inline at the registration call site?"
+    },
+    {
+      "question_id": "VQ-S3-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `accept-producer` (`profileHandler.ts` + its `registerHandlers.ts` send injection) be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist (e.g. does it reach into `parse` to construct the `accepted` payload, or into `decline-a`/`decline-b`'s pending-member bookkeeping), and do they flow through the declared `InviteLifecycleContent` seam contract?"
+    },
+    {
+      "question_id": "VQ-S3-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does `app/tests/unit/marmot/profileHandler.test.ts` cover AC-PROD-3/4/5 with tests that distinguish the three scenarios by `senderPubkey` and repetition, specifically: (a) a case where `senderPubkey === B` and it is B's first pending→joined transition (expect a post), (b) a case where `senderPubkey !== B` for a profile rumor naming B — a third-member relay (expect no post), and (c) a case where B's own-authored profile rumor is delivered twice for the same invitee/group (expect exactly one post, not zero and not two)? Confirm none of these tests mock the transition-detector itself in a way that hardcodes the expected boolean result."
+    },
+    {
+      "question_id": "VQ-S3-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the landed behavior match the spec's intent that A's client — not B's, not a third member's — is the sole poster of the `accepted` announcement, triggered only by B's own genuine first-join, and that this holds even when multiple members of the group each independently run this handler (no coordination protocol needed because each member's own local state independently converges on the same at-most-once-per-invitee outcome via the first-transition-only gate)?"
+    },
+    {
+      "question_id": "VQ-S3-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Since ADR-006 establishes `senderPubkey` as member-attested (self-asserted), not cryptographically identity-bound, does the accept-producer correctly avoid over-claiming cryptographic enforcement in any comment/doc, while still using `senderPubkey` as the best-available distinguishing signal per architecture.md's seam definition? Does the `accepted` rumor's content contain only `{type:'invite_lifecycle', event:'accepted', pubkey:B}` — no profile metadata — consistent with the project's privacy invariant?"
+    },
+    {
+      "question_id": "VQ-S3-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-3",
+      "question": "When a profile rumor for invitee B arrives in the group with transport `senderPubkey === B`, and this is the first pending→joined transition recorded for B in that group, does A's client post `{type:'invite_lifecycle', event:'accepted', pubkey:B}`? Provide (a) the transition-detection code path (pending-check + senderPubkey comparison + first-transition marking), (b) a test simulating a genuine first-join profile rumor and asserting the exact posted rumor content, and (c) confirmation the test drives this through the real `profileHandler` dispatch, not a hand-called internal function that bypasses the senderPubkey check."
+    },
+    {
+      "question_id": "VQ-S3-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-4",
+      "question": "When a profile rumor naming B arrives with transport `senderPubkey !== B` (a third member relaying B's cached profile, B never having processed the Welcome), does A's client NOT post an `accepted` message for B? Provide (a) the senderPubkey-mismatch rejection branch, (b) a test constructing a profile rumor whose payload claims identity B but whose transport sender is a distinct member C, asserting zero `accepted` posts, and (c) confirmation this test would fail against a naive implementation that only checks the payload's claimed pubkey (i.e. it is state-discriminating against the payload-vs-transport confusion this AC exists to prevent)."
+    },
+    {
+      "question_id": "VQ-S3-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PROD-5",
+      "question": "Does A never post more than one `accepted` message for the same invitee in the same group, even when B's own-authored profile rumor (`senderPubkey === B`) is received more than once (e.g. across a reconnect/resubscribe)? Provide (a) the first-transition marker/persistence mechanism preventing re-post, (b) a test delivering B's own-authored profile rumor twice (simulating reconnect) and asserting exactly one `accepted` post total, and (c) confirmation the marker survives a simulated reconnect (re-subscription), not just a same-process double-call, so the guarantee holds across the actual scenario AC-PROD-5 describes."
+    },
+    {
+      "question_id": "VQ-S3-010",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The real send capability (ProfileHandlerDeps.sendAnnouncement / HandlerDeps.sendAnnouncement) can only be wired to a real mlsGroup+signer at MarmotContext.tsx's buildDispatcher({...}) call site — the same composition root that already supplies the precedented sendSelfProfile closure. Since MarmotContext.tsx is not literally named in stories.json's S3 file list, was this the correct scope call, i.e. is there any OTHER file in the codebase capable of supplying a real (non-optional) send closure for this seam, or does architecture.md's 'thread it through the registration seam' guidance necessarily terminate at this one call site? Confirm no other call site constructs a HandlerDeps object that would also need updating."
+    },
+    {
+      "question_id": "VQ-S3-011",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "profileHandler.test.ts's AC-PROD-5 duplicate-delivery test and the relay test both rely on a Map-backed makeMarkerAwareDeps() fixture (shared pendingMarkers Map between hasPendingDirectInvite and clearPendingDirectInvite) rather than a hardcoded per-call boolean return, specifically so the at-most-once guarantee is derived from real state transitions the SUT itself drives. Does this fixture actually exercise the transition (i.e. would the AC-PROD-5 test fail if isFirstGenuineOwnJoin were computed AFTER the clearPendingDirectInvite call instead of before)? Recommend manually verifying by transposing the order in a scratch copy."
+    },
+    {
+      "question_id": "VQ-S3-012",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "DD-9 documents that A's pending marker clears on ANY arrival of B's signed profile, including a third-member relay — meaning if a relay arrives BEFORE B's own genuine join (clearing the marker first), the subsequent genuine own-join will find hasPendingDirectInvite() already false and will NOT post 'accepted', since this story deliberately reuses the same marker the pre-existing clear mechanism already owns (Non-Goal: 'do not change the profile-arrival marker-clearing mechanism itself') rather than introducing separate transition-tracking state. Is this relay-before-real-join ordering gap an accepted, unavoidable consequence of DD-9's marker reuse (consistent with this spec's other documented 'Acceptable' Known Limitations), or does it warrant a follow-up finding?"
+    }
+  ]
+}
