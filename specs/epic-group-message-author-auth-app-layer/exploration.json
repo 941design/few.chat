@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-07-23T00:00:00Z",
+  "focuses": ["dispatch-and-attribution", "system-messages-and-chat-store", "testing-and-conventions"],
+  "key_files": {
+    "dispatcher": "app/src/lib/marmot/applicationRumorDispatcher.ts (DispatcherContext L25-29 per-group; handle(rumor,ctx) L33; listener L82-104: deserialize->seen LRU->fan-out)",
+    "wiring": "app/src/context/MarmotContext.tsx L1501-1612 (dispatcherCtx + buildDispatcher().subscribe); dev seam __fewTest L777-786; enqueueLeave L712-775; fireAutoCommit dynamic import L753",
+    "chatHandler": "app/src/lib/marmot/handlers/chatHandler.ts L86 senderPubkey=rumor.pubkey (ATTRIBUTION, high blast radius); L108 own-send guard (non-attr, keep); L92 appendMessage (ingest gate goes BEFORE this); L60 hasEditMarkerTag routes to applyDeleteEditSignal",
+    "parseStructured": "app/src/lib/marmot/parseStructured.ts enum L16-31; resolveCancellerDisplay L8-14 (senderPubkey convention); AC-STRUCT-5 L25-29; member_admitted 64hex guard L66-79",
+    "leave": "handlers/leaveHandler.ts L27 enqueueLeave(payload.pubkey) HOLE; leaveSync.ts parseLeaveIntent no sender cross-check",
+    "poll": "handlers/pollHandler.ts open L40 creatorPubkey=payload (self-asserted, not admin-gated); close L96 authorize creatorPubkey==rumor.pubkey; L100-102 tally from payload NOT recomputed; kinds 10/11/12",
+    "reactions_2nd_hop": "app/src/lib/reactions/api.ts applyInboundRumor L301-431 attributes reaction add/REMOVE on rumor.pubkey (L361/379/396/423); called by reactionHandler.ts:43; no sender param",
+    "edits_2nd_hop": "app/src/lib/messageEdits/api.ts applyDeleteEditSignal L1292-1393 authorizes on rumor.pubkey (own-author edit + admin-gated delete via isAdminPubkey); called by chatHandler.ts:61 + deleteEditHandler.ts:80; no ctx/sender param",
+    "tombstone_3rd_hop": "app/src/lib/marmot/chatPersistence.ts tombstoneMessage L642-669, TombstoneAuthorization L590-601 fed rumor.pubkey from edits module",
+    "admin_provider": "GroupAdminsProvider in messageEdits/api.ts L548-575 (registerGroupAdminsProvider/groupAdminsFor/isAdminPubkey); registered MarmotContext.tsx L1904-1912 from mlsGroup.groupData.adminPubkeys, fail-closed []; reactive groupDataVersion (bump L1443)",
+    "roster": "getGroupMembers(mlsGroup.state) / getLiveMemberPubkeys MarmotContext.tsx L1882-1893 (live MLS state read)",
+    "profile_envelope": "profileSync.ts parseProfilePayload L124-152 verifyEvent(nostr-tools) inner signed kind-0, NOT group-bound (relay-on-behalf intentional), keyed to signedEvent.pubkey; profileHandler.ts L74 authorPubkey; L75 payloadToMemberProfile(rumor.pubkey) legacy fallback; profileRequestHandler.ts L39-56 target-driven auto-reply",
+    "profileRequest": "handlers/profileRequestHandler.ts no rumor.pubkey reads; routes on payload.targetPubkey==selfPubkeyHex",
+    "joinRequest_OUT": "app/src/lib/marmot/joinRequestHandler.ts kind 21059 DIFFERENT transport (pre-membership, not ApplicationRumor, not via dispatcher); L93/97/105 rumor.pubkey - OUT OF SCOPE",
+    "tests": "vitest app/tests/unit/marmot/*.test.ts; handler-level pattern leaveHandler.test.ts L93-103 (handle direct with hand-built rumor + vi.fn deps); dispatcher test L1-284; static-scan precedent themes/zodBoundary.test.ts",
+    "e2e": "app/tests/e2e groups-*/dm-* (48 relay, docker) + 12 fast; make test-e2e-all=60; second context browser.newContext + addInitScript identity; dev seam usage groups-profile-request.spec.ts L394-428 (page.evaluate pure fn, not raw WS); two-peer groups-dispatch-isolation.spec.ts L100-140",
+    "i18n": "app/src/lib/i18n.ts Copy type + en(L613)/de(L1179); TS build enforces completeness; useCopy()",
+    "make": "Makefile test=test-unit+test-e2e-all; test-unit=vitest; no lint/typecheck target; platform stamp via make"
+  },
+  "signature_change_editlist": [
+    "applicationRumorDispatcher.ts L33 interface + L99 call site",
+    "handlers/{chatHandler,deleteEditHandler,leaveHandler,pollHandler(x3),profileHandler,profileRequestHandler,reactionHandler}.ts wrappers + inner fns",
+    "registerHandlers.ts constructions (deps-vs-arg decision: sender is arg, deps unchanged)",
+    "app/tests/unit/marmot/{applicationRumorDispatcher,chatHandler,leaveHandler,pollHandler,profileHandler,profileRequestHandler,reactionHandler,registerHandlers,groupMessageEdits,groupReactions}.test.ts",
+    "SECOND-HOP (separate signature decision): reactions/api.ts applyInboundRumor, messageEdits/api.ts applyDeleteEditSignal + their callers"
+  ],
+  "resolved_decisions": {
+    "seam_signature": "handle(rumor, ctx, sender: {pubkey, authenticity}); sender is a sibling arg, NOT on DispatcherContext (per-message vs per-group)",
+    "drop_ordering": "resolve sender after deserialize, BEFORE markSeen and fan-out (avoid poisoning dedup LRU)",
+    "second_hop": "IN SCOPE - thread sender into applyInboundRumor + applyDeleteEditSignal; authorize there on sender",
+    "leave_gate": "IN SCOPE - payload.pubkey === sender.pubkey (AC-FORCE-3)",
+    "poll": "bind creatorPubkey to sender at open; authorize close on sender; recompute tally ALWAYS from stored votes",
+    "call_notice": "actor = sender (stop reading structured.initiator)",
+    "poll_open_creator": "bind to sender (was self-asserted)",
+    "admin_roster": "reuse GroupAdminsProvider + live-roster accessor via injected deps; reactive groupDataVersion",
+    "member_admitted": "likely legacy/no producer - defensive ingest rule only",
+    "profiles_roster_exempt": "true (context-free, relay-on-behalf); shared verifier per-kind binding policy, group-binding opt-in per kind",
+    "joinRequest": "OUT OF SCOPE (different transport)",
+    "leave_autocommit_recheck": "OUT OF SCOPE (enqueue-time gate suffices for readiness)",
+    "static_ban": "vitest source-scan scoped to handlers/ only + targeted assertions for the 2 second-hop modules",
+    "ingest_gate": "chatHandler before appendMessage; async provider lookup acceptable (handle returns Promise)"
+  }
+}

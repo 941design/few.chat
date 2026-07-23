@@ -1,0 +1,41 @@
+{
+  "epic_name": "group-message-author-auth-app-layer",
+  "status": "in_progress",
+  "phase": "IMPLEMENTATION",
+  "created_at": "2026-07-23T00:00:00Z",
+  "updated_at": "2026-07-23T20:57:34Z",
+  "pre_existing_dirty_files": [
+    ".serena/project.yml",
+    "docs/adr/ADR-006-accept-group-member-attested-authorization-for-mls-application-message-mutations.md",
+    "docs/adr/ADR-012-implement-spec-mandated-sender-binding-in-fork-plus-signed-enum-meta-events.md",
+    "specs/epic-group-message-author-auth-app-layer/acceptance-criteria.md",
+    "specs/epic-group-message-author-auth-app-layer/spec.md",
+    "specs/group-message-author-authentication-spec-request.md"
+  ],
+  "completed_stories": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5"
+  ],
+  "escalated_stories": [],
+  "phase_history": [
+    {
+      "phase": "SPEC_VALIDATED",
+      "timestamp": "2026-07-23T00:00:00Z",
+      "trigger": "validation_passed"
+    }
+  ],
+  "plugin_sha": "f5e4524c7b9618d99914da272f8e8e9745ed9057",
+  "consumer_sha": "f4d4818f4e04de6171c24dbed84689139c945e9a",
+  "models": {
+    "lead": "sonnet",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "ownership_ledger_path": "ownership-ledger.json",
+  "reviewer_agent_id": "abdbb66ce54a4fad9",
+  "stage2_reviewer": "fable",
+  "stage2_reviewer_note": "Codex unavailable this session (shell exec fault); user authorized Fable as Stage-2 independent reviewer 2026-07-23"
+}

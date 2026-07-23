@@ -55,7 +55,7 @@
  * "MLS-authenticated" — it is not.
  */
 
-import type { ApplicationRumor, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
 import { DELETE_EDIT_RUMOR_KIND } from '@/src/lib/messageEdits/rumor';
 
@@ -63,7 +63,7 @@ import { DELETE_EDIT_RUMOR_KIND } from '@/src/lib/messageEdits/rumor';
 const KIND: 5 = DELETE_EDIT_RUMOR_KIND as 5;
 
 export interface DeleteEditHandlerDeps {
-  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor) => Promise<ChangeResult>;
+  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<ChangeResult>;
   /**
    * Reused, not duplicated: the SAME setter chatHandler.ts already receives
    * via HandlerDeps (architecture.md seam #3's explicit 'reuse setChatVersion'
@@ -74,10 +74,10 @@ export interface DeleteEditHandlerDeps {
   setChatVersion: (updater: (v: number) => number) => void;
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: DeleteEditHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: DeleteEditHandlerDeps): Promise<void> {
   const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
 
-  const result = await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor).catch((err: unknown) => {
+  const result = await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender).catch((err: unknown) => {
     console.warn('[dispatcher.5] applyDeleteEditSignal failed:', err);
     return null;
   });
@@ -99,6 +99,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Del
 export function createDeleteEditHandler(deps: DeleteEditHandlerDeps): RumorHandler<5> {
   return {
     kind: KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext) => handle(rumor, ctx, deps),
+    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
   };
 }

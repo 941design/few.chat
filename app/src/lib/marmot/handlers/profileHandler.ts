@@ -14,7 +14,7 @@
 
 import { PROFILE_RUMOR_KIND, parseProfilePayload, payloadToMemberProfile } from '@/src/lib/marmot/profileSync';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
-import type { ApplicationRumor, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 
 export interface ProfileHandlerDeps {
   mergeMemberProfile: (groupId: string, profile: MemberProfile) => Promise<boolean>;
@@ -65,14 +65,14 @@ export function buildAcceptedAnnouncementContent(pubkeyHex: string): string {
   });
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: ProfileHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileHandlerDeps): Promise<void> {
   const profilePayload = parseProfilePayload(rumor.content);
   if (!profilePayload) return;
 
   // sig verified by parseProfilePayload. For relay-on-behalf the MLS sender is
   // the relayer, not the author — signedEvent.pubkey is authoritative.
-  const authorPubkey = profilePayload.signedEvent?.pubkey ?? rumor.pubkey;
-  const memberProfile = payloadToMemberProfile(rumor.pubkey, profilePayload);
+  const authorPubkey = profilePayload.signedEvent?.pubkey ?? sender.pubkey;
+  const memberProfile = payloadToMemberProfile(sender.pubkey, profilePayload);
 
   // Write to IDB first, THEN bump profileVersion so GroupDetailView re-reads
   // after the write has landed (avoids stale-read race).
@@ -98,7 +98,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Pro
   // signed-but-not-own-join delivery) is UNCHANGED: it still clears the
   // marker via the pre-existing clearPendingDirectInvite, it just never gates
   // a post on the marker's existence.
-  const isOwnJoin = Boolean(profilePayload.signedEvent && rumor.pubkey === authorPubkey);
+  const isOwnJoin = Boolean(profilePayload.signedEvent && sender.pubkey === authorPubkey);
   let isFirstGenuineOwnJoin = false;
   if (isOwnJoin) {
     try {
@@ -162,6 +162,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Pro
 export function createProfileHandler(deps: ProfileHandlerDeps): RumorHandler {
   return {
     kind: PROFILE_RUMOR_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext) => handle(rumor, ctx, deps),
+    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
   };
 }

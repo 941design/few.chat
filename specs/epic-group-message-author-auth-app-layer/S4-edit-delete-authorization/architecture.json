@@ -1,0 +1,38 @@
+{
+  "module_name": "Edits (2nd hop)",
+  "purpose": "AC-EDIT-7: applyDeleteEditSignal (messageEdits/api.ts) rejects an edit/delete whose signal's authenticated sender (sender.pubkey, dispatcher-resolved) differs from the target message's stored authenticated sender (ChatMessage.senderPubkey, populated from the authenticated sender by S2's chatHandler.ts field-swap) — no tombstone written, no edit applied — unless the separate admin-delete path (GroupAdminsProvider, pre-existing from epic-group-invite-lifecycle's DD-11/AC-IMMUT-4/5) is satisfied. Verified this AC-EDIT-7 comparison was ALREADY correctly in place before this story (S2's mechanical field-swap plus the pre-existing S8/DD-11 admin carve-out already implement it byte-for-byte); this story is a hardening + test-completeness pass, not a logic rewrite. Also verifies (test-only, per scope) that chatPersistence.ts's TombstoneAuthorization re-check inherits the same authenticated value from this module for the third hop — confirmed: TombstoneAuthorization.senderPubkeyHex is populated exclusively from applyToKnownSlotCore's `incoming.senderPubkeyHex` (itself `sender?.pubkey ?? rumor.pubkey`), and chatPersistence.ts never reads rumor.pubkey or any forgeable field independently.",
+  "public_api": [
+    {
+      "name": "applyDeleteEditSignal",
+      "signature": "applyDeleteEditSignal(thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender?: AuthenticatedSender): Promise<ChangeResult>",
+      "description": "Unchanged public surface (S2 already threaded the optional `sender` parameter). DELETE path: authorizeDeleteAgainstTarget(threadKey, knownRow.content, senderPubkey, knownRow.senderPubkey) — own-author for an ordinary message, current-admin-via-provider for a GROUP-thread informative-announcement message. EDIT path: pubkeysMatch(senderPubkey, knownRow.senderPubkey) — own-author only, no admin carve-out ever (AC-IMMUT-6, pre-existing). Both paths derive senderPubkey as `sender?.pubkey ?? rumor.pubkey`, never independently reading rumor.pubkey as the compared value."
+    },
+    {
+      "name": "resolvePendingSignalsForSlot",
+      "signature": "resolvePendingSignalsForSlot(thread: MessageEditsThreadKey, slotId: string, originalAuthorPubkeyHex: string): Promise<ChangeResult>",
+      "description": "Unchanged (pre-existing seam, not in this story's scope)."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/messageEdits/api.ts (no logic change; test-coverage-only story)",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts (no change — S2 already threads `sender`; trust-model comment at lines 29-56 preserved verbatim)",
+    "app/src/lib/marmot/chatPersistence.ts (no change — tombstoneMessage's TombstoneAuthorization already receives only the caller-supplied authenticated senderPubkeyHex, verified by new test-only coverage)"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender type — pre-existing S1 seam)",
+    "app/src/lib/marmot/chatPersistence.ts (appendMessage, loadMessages, tombstoneMessage, updateMessageInPlace, ChatMessage, TombstoneAuthorization — pre-existing)",
+    "GroupAdminsProvider (registered by MarmotContext.tsx, consumed via messageEdits/api.ts's groupAdminsFor — pre-existing DD-11 seam, reused unmodified)"
+  ],
+  "dependencies_forbidden": [
+    "no new admin-check logic parallel to GroupAdminsProvider (VQ-S4-002)",
+    "no edit-path admin carve-out (AC-IMMUT-6 — edit is own-author-only, always)",
+    "no re-threading of the second-hop sender signature (already done in S2, explicitly excluded from this story's scope)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/groupMessageEdits.test.ts"
+  ]
+}

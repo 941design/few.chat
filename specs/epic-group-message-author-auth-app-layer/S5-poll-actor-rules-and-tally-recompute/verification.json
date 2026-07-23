@@ -1,0 +1,90 @@
+{
+  "story_id": "S5",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S5-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the tally-recompute path a genuine aggregation over currently-stored `PollVote` rows (a green-field read, per architecture.md) rather than a pass-through that merely relabels the close message's `results`/`totalVoters` fields under a different variable name? Demonstrate with a test where the close message's claimed counts and the stored votes diverge and the displayed tally follows the stored votes."
+    },
+    {
+      "question_id": "VQ-S5-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "On `poll_open`, is `creatorPubkey` bound to `sender.pubkey` unconditionally, with any `creatorPubkey` value present in the payload fully discarded (not read as a fallback, default, or merge input anywhere in pollHandler.ts or pollSync.ts)?"
+    },
+    {
+      "question_id": "VQ-S5-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Poll` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S5-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/pollHandler.test.ts cover, as handler-unit tests: poll_open binding creatorPubkey to sender regardless of payload; poll_vote keyed to sender.pubkey under `poll:voter`; poll_close accepted only from the stored creator and rejected otherwise (poll not marked closed, no tally shown); and tally recompute from stored PollVote rows on an accepted close, including a case with a forged `results` field in the close payload?"
+    },
+    {
+      "question_id": "VQ-S5-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the implementation match the per-type actor rule table in architecture.md exactly for poll_open/poll_vote/poll_close (no additional undocumented authorization condition added, e.g. no admin override on poll_close beyond the stored-creator check)?"
+    },
+    {
+      "question_id": "VQ-S5-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "On a poll_close whose sender != stored creatorPubkey, is rejection fully fail-closed — the poll is not marked closed, no tally (forged or otherwise) is persisted or displayed, and a subsequent legitimate close from the true creator still succeeds (the rejected attempt leaves no residual closed-state)?"
+    },
+    {
+      "question_id": "VQ-S5-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-POLL-1",
+      "question": "Show the production code and handler-unit test(s) proving AC-POLL-1: on poll_open, stored creatorPubkey equals sender.pubkey, and any creatorPubkey value present in the payload is ignored — assert against the stored value, not the handler's return value alone."
+    },
+    {
+      "question_id": "VQ-S5-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-POLL-2",
+      "question": "Show the production code and handler-unit test(s) proving AC-POLL-2: a poll_vote is recorded keyed to sender.pubkey as the voter (the poll:voter key), never to any voter-identifying field carried in the payload — construct a payload with a divergent voter-identifying field and confirm it is not used."
+    },
+    {
+      "question_id": "VQ-S5-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-POLL-3",
+      "question": "Show the production code and handler-unit test(s) proving AC-POLL-3: a poll_close whose sender.pubkey != the poll's stored creatorPubkey is rejected — the poll is not marked closed and no tally is displayed from that message."
+    },
+    {
+      "question_id": "VQ-S5-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-POLL-4",
+      "question": "Show the production code and handler-unit test(s) proving AC-POLL-4: on accepting a poll_close from the authenticated creator, the displayed tally is recomputed from stored PollVote rows, never taken from the close message's results/totalVoters fields — construct a close message with forged results/totalVoters and confirm the displayed tally matches only the stored votes."
+    },
+    {
+      "question_id": "VQ-S5-011",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "handleClose's tally recompute reads pollPersistence.loadVotes via a direct import in pollHandler.ts rather than a new field on PollHandlerDeps threaded through registerHandlers.ts/MarmotContext.tsx (which are outside this story's declared scope.includes: pollHandler.ts, pollSync.ts, pollHandler.test.ts). Confirm this is a same-module accessor, not a cross-module boundary violation — architecture.md's module map lists 'poll store' (pollPersistence.ts) as owned by the same 'Poll' module as pollHandler.ts and pollSync.ts, one row, one owner — and confirm no other handler in app/src/lib/marmot/handlers/ establishes a competing precedent of a value-level persistence import that this deviates from undetected (all other handlers inject every persistence read/write via their deps bag; this is pollHandler.ts's one intentional, commented exception, scoped to a single accessor)."
+    },
+    {
+      "question_id": "VQ-S5-012",
+      "phase": "post-impl",
+      "category": "TEST",
+      "ac_id": "AC-POLL-4",
+      "question": "computeTally counts a vote's responses array entry-by-entry (vote.responses.includes(option.id)) rather than assuming a single-element array. For a multiplechoice poll where one voter selects two options, does the recomputed tally correctly count that voter once per selected option (not zero, not double-counted as two voters)? Verified: a 'multiplechoice: a voter selecting two options...' test was added to pollHandler.test.ts (a voter selecting {A,B} contributes 1 to each option's count while totalVoters stays at the number of voter rows, 2, not 3) — this closed what was initially an unverified gap identified during this same post-impl pass, not left open."
+    },
+    {
+      "question_id": "VQ-S5-013",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "Remediation round 1 (coordinator override of VQ-S5-011): loadVotes is now threaded through PollHandlerDeps and injected exactly like getPoll/savePoll/saveVote — the direct-import design from VQ-S5-011 was overruled on the grounds that getPoll is an equally same-module poll-store read yet IS injected, so the direct import for loadVotes was an unprincipled inconsistency rather than a principled exception. registerHandlers.ts (HandlerDeps interface + pollDeps pass-through, mirroring getPoll at both sites) and MarmotContext.tsx (pollPersistence import + PollHandlerDeps construction, mirroring getPoll) were extended under explicit coordinator authorization of the scope expansion. Confirm: (a) pollHandler.test.ts no longer imports or calls the real pollPersistence.saveVote/loadVotes — AC-POLL-4 tests inject a loadVotes vi.fn() spy via the deps bag (makeDeps' new `votes` parameter) exactly as getPoll/savePoll are injected, exercising the injected path rather than real (mocked-idb-keyval) storage; (b) the registerHandlers.ts and MarmotContext.tsx diffs are minimal and mirror getPoll's existing wiring at each site with no unrelated changes; (c) production behavior is unchanged (MarmotContext.tsx still ultimately supplies pollPersistence.loadVotes as the real implementation, just via the deps bag instead of a direct import) — the fix is structural (consistency, testability of the accessor itself via deps override) not behavioral."
+    }
+  ]
+}

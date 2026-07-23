@@ -1,0 +1,78 @@
+{
+  "story_id": "S6",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S6-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the ingest gate a real pre-`appendMessage` short-circuit — does a rejected announcement genuinely never reach `deps.appendMessage`, `setChatVersion`, unread-increment, or notification code paths — rather than the row being appended and merely hidden/filtered at render time (which would be a vacuous 'rejection' that still bumps chat version and unread count)?"
+    },
+    {
+      "question_id": "VQ-S6-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Do the admin-actor gate and the ingest-time roster check both run inside chatHandler.ts strictly before `deps.appendMessage` is called (matching architecture.md's explicit 'hidden coupling' call-out that this touches chat persistence, unread counts, and notification invariants together), and do both checks reuse the existing injected `GroupAdminsProvider` + live-roster accessor (`getGroupMembers`) via `deps` rather than instantiating a new provider or duplicating the roster lookup?"
+    },
+    {
+      "question_id": "VQ-S6-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Chat store` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S6-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/chatHandler.test.ts cover, per announcement type: group_renamed/invite_lifecycle('accepted')/member_admitted rejected for a non-admin actor (no row, no version bump, no unread, no notification) and accepted for an admin actor; invite_lifecycle('invited'/'declined') and invite_cancelled rendering unconditionally regardless of roster membership; call_notice's displayed actor sourced from sender.pubkey even when the payload's `initiator` diverges; and is there an integrated-e2e test proving the ingest-time, non-retroactive roster-gate persistence for member_admitted / invite_lifecycle('accepted') (announcement stays visible after the admitted member later leaves)?"
+    },
+    {
+      "question_id": "VQ-S6-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Is the admission roster-gate outcome (member_admitted, invite_lifecycle('accepted')) persisted as a flag checked once at first ingest, with no code path re-evaluating it on a later groupDataVersion bump — confirm by tracing what a leave-triggered groupDataVersion bump actually touches, and that it does not re-run the roster check against the now-stale row?"
+    },
+    {
+      "question_id": "VQ-S6-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "If the roster/admin lookup itself fails or returns an indeterminate result (e.g. GroupAdminsProvider not yet populated, async lookup pending), does the ingest gate fail closed (reject the announcement) rather than defaulting to accept?"
+    },
+    {
+      "question_id": "VQ-S6-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ANNOUNCE-1",
+      "question": "Show the production code (chatHandler.ts, before deps.appendMessage) and handler-unit test(s) proving AC-ANNOUNCE-1: an announcement rejected by its actor rule (non-admin actor for an admin-gated type, or failed ingest-time roster check for an admission-subject type) produces no chat row, no setChatVersion bump, no unread increment, and no notification."
+    },
+    {
+      "question_id": "VQ-S6-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ANNOUNCE-2",
+      "question": "Show the production code and handler-unit test(s) proving AC-ANNOUNCE-2: invite_lifecycle('invited'), invite_lifecycle('declined'), and invite_cancelled from an admin/creator actor render (subject shown as unverified claim) even when the subject is absent from the current roster — never roster-gated by design."
+    },
+    {
+      "question_id": "VQ-S6-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ANNOUNCE-3",
+      "question": "Show the production code and the integrated-e2e test proving AC-ANNOUNCE-3: for member_admitted and invite_lifecycle('accepted'), roster membership is checked once at first ingest and persisted; a legitimate, already-accepted announcement remains visible in chat history after the admitted member later leaves the group, with the leave's groupDataVersion bump not retracting the row."
+    },
+    {
+      "question_id": "VQ-S6-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ANNOUNCE-4",
+      "question": "Show the production code and handler-unit test(s) proving AC-ANNOUNCE-4: a call_notice announcement's displayed actor is sender.pubkey; construct a payload whose `initiator` field diverges from sender.pubkey and confirm `initiator` is not rendered as the actor (parseStructured.ts no longer reads it for this purpose)."
+    },
+    {
+      "question_id": "VQ-S6-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ANNOUNCE-5",
+      "question": "Show the production code and handler-unit test(s) proving AC-ANNOUNCE-5: a group_renamed announcement is accepted (rendered, display-only) only when sender.pubkey is a current group admin per GroupAdminsProvider; confirm a non-admin sender's group_renamed is rejected and that the group name shown elsewhere in the UI still derives from the MLS metadata commit, not this announcement."
+    }
+  ]
+}

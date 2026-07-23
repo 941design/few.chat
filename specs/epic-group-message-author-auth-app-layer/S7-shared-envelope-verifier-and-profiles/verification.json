@@ -1,0 +1,57 @@
+{
+  "story_id": "S7",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S7-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the shared verifier's one-shot consumption a real, enforced state check keyed on the inner event id (e.g. a persisted/consulted seen-set) that actually blocks a second application, rather than a stub that always reports 'not yet consumed' or an in-memory set that resets per call and never actually accumulates across deliveries?"
+    },
+    {
+      "question_id": "VQ-S7-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is profileHandler.ts one caller of the shared verifier (generalized from parseProfilePayload) with no independent inline re-verification logic duplicated in the handler, and does the per-kind binding policy correctly mark profile as group-binding-exempt while leaving room for a future forwardable kind to declare group-binding without touching profileHandler.ts?"
+    },
+    {
+      "question_id": "VQ-S7-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Shared verifier` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S7-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/profileHandler.test.ts (plus a verifier-unit test for the shared verifier itself) cover: valid inner signature acceptance; invalid inner signature rejection; correct-vs-incorrect inner event kind; a directly-constructed group-scoped envelope with a mismatched group tag being rejected (since profile itself is group-binding-exempt and can't exercise this branch through the app, per architecture.md); one-shot consumption rejecting a second application of the same inner event id; and profileHandler.ts's fallback `payloadToMemberProfile(rumor.pubkey, ...)` being repointed to the authenticated sender for unsigned/legacy payloads?"
+    },
+    {
+      "question_id": "VQ-S7-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Is the roster-exemption for profiles applied consistently — no code path in profileHandler.ts or the shared verifier calls into the roster/admin provider for profile envelopes — confirming a departed member's late or forwarded profile envelope is never rejected on roster grounds?"
+    },
+    {
+      "question_id": "VQ-S7-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Does the shared verifier reject a group-scoped envelope whose group tag != the receiving group's id before any application-level side effect occurs (no partial profile merge, no premature one-shot consumption of the inner event id on a rejected envelope)?"
+    },
+    {
+      "question_id": "VQ-S7-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FWD-4",
+      "question": "Show the integrated-e2e test proving AC-FWD-4: a second signed-in peer (relayer) forwarding a third member's signed profile envelope results in the profile being attributed to the original signer (not the relayer, not raw rumor.pubkey), applied idempotently, and scoped correctly via the shared envelope verifier; separately confirm a departed member's late/forwarded profile envelope is not rejected by the roster check."
+    },
+    {
+      "question_id": "VQ-S7-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FWD-5",
+      "question": "Show the verifier-unit test proving AC-FWD-5: the shared verifier rejects a group-scoped envelope whose group tag != the receiving group's id (constructed directly in the test since no in-app producer can emit this for the group-binding-exempt profile kind); and one-shot consumption keyed on the inner event id means a self-authored copy and a forwarded copy of the same signed inner event are both accepted on first sight but the second application is a no-op, not double-applied."
+    }
+  ]
+}

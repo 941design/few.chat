@@ -1,0 +1,53 @@
+{
+  "module_name": "Dispatcher",
+  "purpose": "Per-message authenticated-sender seam + choke-point drop. Resolves an AuthenticatedSender for every inbound application rumor, drops sender-mismatched rumors before markSeen/fan-out (so dropped rumors never poison the per-group dedup LRU), and threads the resolved sender to handlers as a sibling argument. This is the foundation seam every later story (S2..S9) consumes.",
+  "public_api": [
+    {
+      "name": "AuthenticatedSender",
+      "signature": "interface AuthenticatedSender { pubkey: string; authenticity: 'claimed' | 'mls'; }",
+      "description": "The authenticated-sender payload. pubkey is the Nostr hex of the resolved sender; authenticity is 'claimed' under this epic's app-side stub (always, until the out-of-scope MLS backbone lands) or 'mls' when a resolver reports a real MLS-bound sender."
+    },
+    {
+      "name": "SenderResolver",
+      "signature": "type SenderResolver = (rumor: ApplicationRumor) => AuthenticatedSender",
+      "description": "Per-message resolver function. Passed as the optional third argument to Dispatcher.subscribe(). When omitted, the dispatcher's internal identity default (pubkey: rumor.pubkey, authenticity: 'claimed') is used, preserving old behavior for callers that don't supply one (e.g. pre-existing handler-unit tests calling subscribe(group, ctx) directly)."
+    },
+    {
+      "name": "RumorHandler.handle",
+      "signature": "handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender): Promise<void> | void",
+      "description": "Handler contract widened to accept the resolved AuthenticatedSender as a third, sibling argument (never a field on DispatcherContext, which is per-subscription not per-message). Existing handler implementations with 2-parameter handle functions remain structurally assignable (TS permits fewer declared parameters) and continue to compile/pass without modification; S2 is the story that propagates real attribution logic onto this new parameter."
+    },
+    {
+      "name": "Dispatcher.subscribe",
+      "signature": "subscribe(group: MarmotGroupLike, ctx: DispatcherContext, resolveSender?: SenderResolver): () => void",
+      "description": "Widened with an optional third parameter carrying the per-message sender resolver. Listener flow: deserialize -> isSeen check -> resolve sender -> [mismatch -> dev-log 'unauthenticatedMessage' + drop, no markSeen, no fan-out] -> markSeen -> fan-out with (rumor, ctx, sender)."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/applicationRumorDispatcher.ts (internal listener logic, LRU helpers — unchanged surface, extended body)"
+  ],
+  "owned_data": [
+    "per-group seen-id LRU (seenByGroup Map<groupId, Set<rumorId>>) — unchanged ownership, existing invariant strengthened: a sender-mismatched rumor's id is never added"
+  ],
+  "dependencies_allowed": [
+    "@internet-privacy/marmot-ts (deserializeApplicationData) — pre-existing",
+    "app/src/context/MarmotContext.tsx -> app/src/lib/marmot/applicationRumorDispatcher.ts (resolver closure + dev-hook wiring at the per-group subscribe call site, ~L1501-1612)"
+  ],
+  "dependencies_forbidden": [
+    "no React/context imports inside applicationRumorDispatcher.ts (boundary rule preserved)",
+    "no change to handler-body attribution logic in handlers/*.ts (S2's scope)",
+    "no change to second-hop authorization logic in reactions/api.ts or messageEdits/api.ts (S2/S4's scope)"
+  ],
+  "external_ports": [
+    "window.__fewTest.resolveAuthenticatedSender?: (rumor: ApplicationRumor) => AuthenticatedSender | undefined | null — dev-only override hook, gated `NODE_ENV !== 'production'` at every read (not just registration), consumed inline by the resolver closure built in MarmotContext.tsx; follows the existing window.__fewTest precedent (MarmotContext.tsx:777-786)."
+  ],
+  "events_emitted": [
+    "console.warn('[dispatcher.unauthenticatedMessage]', {...}) — dev-log diagnostic emitted exactly when rumor.pubkey !== sender.pubkey, before the rumor is dropped"
+  ],
+  "events_consumed": [
+    "group.on('applicationMessage', ...) — unchanged"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts"
+  ]
+}

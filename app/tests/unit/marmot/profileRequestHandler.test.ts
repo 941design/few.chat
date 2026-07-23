@@ -70,6 +70,13 @@ function makeCtx(selfPubkeyHex = SELF_PUBKEY) {
   };
 }
 
+// AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
+// Unused in profileRequestHandler's body this story — only needed to satisfy
+// the widened 3-arg handle() signature.
+function makeSender(pubkey: string = PEER_PUBKEY): { pubkey: string; authenticity: 'claimed' | 'mls' } {
+  return { pubkey, authenticity: 'claimed' };
+}
+
 function makeDeps() {
   return {
     recordRequestEmitted: vi.fn(async () => {}),
@@ -103,7 +110,7 @@ describe('profileRequestHandler', () => {
     const rumor = makeProfileRequestRumor();
     const ctx = makeCtx(SELF_PUBKEY); // self is SELF_PUBKEY, target is THIRD_PUBKEY
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.recordRequestEmitted).toHaveBeenCalledOnce();
     expect(deps.recordRequestEmitted.mock.calls[0][0]).toBe(GROUP_ID);
@@ -130,7 +137,7 @@ describe('profileRequestHandler', () => {
     const rumor = makeProfileRequestRumor({ content });
     const ctx = makeCtx(SELF_PUBKEY);
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.recordRequestEmitted).toHaveBeenCalledOnce();
     expect(deps.sendSelfProfile).toHaveBeenCalledOnce();
@@ -144,7 +151,7 @@ describe('profileRequestHandler', () => {
     const rumor = makeProfileRequestRumor({ content: '{ not valid request }' });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     expect(deps.recordRequestEmitted).not.toHaveBeenCalled();
     expect(deps.sendSelfProfile).not.toHaveBeenCalled();
     expect(deps.handleIncomingProfileRequest).not.toHaveBeenCalled();

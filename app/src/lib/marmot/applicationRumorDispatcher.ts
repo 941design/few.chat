@@ -28,13 +28,20 @@ export interface DispatcherContext {
   getActiveGroupId: () => string | null;
 }
 
+export interface AuthenticatedSender {
+  pubkey: string;
+  authenticity: 'claimed' | 'mls';
+}
+
+export type SenderResolver = (rumor: ApplicationRumor) => AuthenticatedSender;
+
 export interface RumorHandler<TKind extends number = number> {
   kind: TKind;
-  handle(rumor: ApplicationRumor, ctx: DispatcherContext): Promise<void> | void;
+  handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender): Promise<void> | void;
 }
 
 export interface Dispatcher {
-  subscribe(group: MarmotGroupLike, ctx: DispatcherContext): () => void;
+  subscribe(group: MarmotGroupLike, ctx: DispatcherContext, resolveSender?: SenderResolver): () => void;
 }
 
 import { deserializeApplicationData } from '@internet-privacy/marmot-ts';
@@ -78,7 +85,7 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
   }
 
   return {
-    subscribe(group: MarmotGroupLike, ctx: DispatcherContext): () => void {
+    subscribe(group: MarmotGroupLike, ctx: DispatcherContext, resolveSender?: SenderResolver): () => void {
       const listener = async (data: Uint8Array): Promise<void> => {
         let rumor: ApplicationRumor;
         try {
@@ -91,12 +98,35 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
         if (isSeen(ctx.groupId, rumor.id)) {
           return;
         }
+
+        // Resolve the authenticated sender AFTER deserialize but STRICTLY BEFORE
+        // markSeen and fan-out. A sender-mismatched rumor is dropped here and must
+        // never reach markSeen — otherwise its id would poison the per-group dedup
+        // LRU and a later legitimate redelivery of the same id would be silently
+        // swallowed (AC-XCUT-1). Falls back to the identity resolver
+        // ({ pubkey: rumor.pubkey, authenticity: 'claimed' }) when the caller
+        // supplies no resolver (e.g. pre-existing tests calling subscribe(group, ctx)).
+        const sender: AuthenticatedSender = resolveSender
+          ? resolveSender(rumor)
+          : { pubkey: rumor.pubkey, authenticity: 'claimed' };
+
+        if (sender.pubkey !== rumor.pubkey) {
+          console.warn('[dispatcher.unauthenticatedMessage]', {
+            groupId: ctx.groupId,
+            kind: rumor.kind,
+            rumorId: rumor.id,
+            claimedPubkey: rumor.pubkey,
+            authenticatedPubkey: sender.pubkey,
+          });
+          return;
+        }
+
         markSeen(ctx.groupId, rumor.id);
 
         const matching = handlers.filter((h) => h.kind === rumor.kind);
         for (const handler of matching) {
           try {
-            await handler.handle(rumor, ctx);
+            await handler.handle(rumor, ctx, sender);
           } catch (err) {
             console.warn(`[dispatcher.${rumor.kind}]`, err);
           }

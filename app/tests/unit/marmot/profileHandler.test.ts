@@ -111,6 +111,11 @@ function makeCtx() {
   };
 }
 
+// AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
+function makeSender(pubkey: string): { pubkey: string; authenticity: 'claimed' | 'mls' } {
+  return { pubkey, authenticity: 'claimed' };
+}
+
 function makeDeps(mergeResult = true) {
   return {
     mergeMemberProfile: vi.fn(async () => mergeResult),
@@ -187,7 +192,7 @@ describe('profileHandler', () => {
     const rumor = makeProfileRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
     expect(deps.setProfileVersion).toHaveBeenCalledOnce();
@@ -207,7 +212,7 @@ describe('profileHandler', () => {
     const rumor = makeProfileRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
     // setProfileVersion always bumps
@@ -222,9 +227,32 @@ describe('profileHandler', () => {
     const rumor = makeProfileRumor({ content: 'not valid json at all' });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     expect(deps.mergeMemberProfile).not.toHaveBeenCalled();
     expect(deps.setProfileVersion).not.toHaveBeenCalled();
+  });
+
+  // ─── AC-ATTR-6 (epic: group-message-author-auth-app-layer S2): attribution
+  // sources from sender.pubkey, not the forgeable rumor.pubkey ──────────────
+
+  it('AC-ATTR-6: an unsigned/legacy profile rumor (no signedEvent) where sender.pubkey differs from rumor.pubkey is merged and cached under sender.pubkey, not rumor.pubkey', async () => {
+    const deps = makeDeps(true);
+    const handler = createProfileHandler(deps);
+    // Legacy flat profile (no signedEvent) — authorPubkey falls back to sender.pubkey.
+    const rumor = makeProfileRumor(); // rumor.pubkey === PEER_PUBKEY
+    const ctx = makeCtx();
+    const forgedSender = makeSender(SELF_PUBKEY); // deliberately different from rumor.pubkey
+
+    await handler.handle(rumor, ctx, forgedSender);
+
+    expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
+    const [, mergedProfile] = deps.mergeMemberProfile.mock.calls[0];
+    expect(mergedProfile.pubkeyHex).toBe(SELF_PUBKEY);
+    expect(mergedProfile.pubkeyHex).not.toBe(rumor.pubkey);
+
+    expect(deps.writeContactEntry).toHaveBeenCalledOnce();
+    const [contactPubkey] = deps.writeContactEntry.mock.calls[0];
+    expect(contactPubkey).toBe(SELF_PUBKEY);
   });
 
   it('duplicate-id: dispatcher LRU prevents second mergeMemberProfile call', async () => {
@@ -253,7 +281,7 @@ describe('profileHandler', () => {
     const rumor = makeProfileRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     // signedEvent is absent in legacy profiles → notifyProfileObserved not called
     expect(deps.notifyProfileObserved).not.toHaveBeenCalled();
@@ -273,7 +301,7 @@ describe('profileHandler', () => {
     });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     // Must NOT be dropped — merge fires
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
@@ -297,7 +325,7 @@ describe('profileHandler', () => {
     const rumor = makeSignedProfileRumor({ authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.clearPendingDirectInvite).toHaveBeenCalledOnce();
     expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
@@ -309,7 +337,7 @@ describe('profileHandler', () => {
     const rumor = makeSignedProfileRumor({ authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     // Crux of AC-MARKER-5: must NOT regress to `if (merged) clear()` — arrival
     // of the invitee's own signed profile is proof of liveness regardless of
@@ -325,7 +353,7 @@ describe('profileHandler', () => {
     const rumor = makeProfileRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
   });
@@ -337,7 +365,7 @@ describe('profileHandler', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: PEER_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.clearPendingDirectInvite).toHaveBeenCalledOnce();
     expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
@@ -355,7 +383,7 @@ describe('profileHandler', () => {
     const rumor = makeSignedProfileRumor({ authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
     expect(deps.writeContactEntry).toHaveBeenCalledOnce();
   });
@@ -375,7 +403,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
     const content = deps.sendAnnouncement.mock.calls[0][0];
@@ -392,7 +420,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: PEER_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.sendAnnouncement).not.toHaveBeenCalled();
     // The pre-existing marker-clear mechanism is unchanged: a relay still
@@ -410,11 +438,11 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
 
     // First delivery: marker existed → posts, and consumePendingDirectInviteMarker's
     // atomic clear removes the marker from the shared backing store.
-    await handler.handle(firstDelivery, ctx);
+    await handler.handle(firstDelivery, ctx, makeSender(firstDelivery.pubkey));
     // Second delivery (e.g. after a reconnect/resubscribe): the marker the
     // first delivery consumed is gone, so consumePendingDirectInviteMarker now
     // reports false — driven by real state, not a hardcoded per-call return value.
-    await handler.handle(secondDelivery, ctx);
+    await handler.handle(secondDelivery, ctx, makeSender(secondDelivery.pubkey));
 
     expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
   });
@@ -442,7 +470,10 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
 
     // Fire both concurrently — no await between them — so both handle() calls
     // are in flight together, exactly the interleaving the finding describes.
-    await Promise.all([handler.handle(rumorA, ctx), handler.handle(rumorB, ctx)]);
+    await Promise.all([
+      handler.handle(rumorA, ctx, makeSender(rumorA.pubkey)),
+      handler.handle(rumorB, ctx, makeSender(rumorB.pubkey)),
+    ]);
 
     expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
     expect(deps.pendingMarkers.has(`${GROUP_ID}:${AUTHOR_PUBKEY}`)).toBe(false);
@@ -457,7 +488,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.sendAnnouncement).not.toHaveBeenCalled();
   });
@@ -472,7 +503,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
     expect(deps.writeContactEntry).toHaveBeenCalledOnce();
   });
@@ -487,7 +518,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     expect(deps.sendAnnouncement).not.toHaveBeenCalled();
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
   });
@@ -495,6 +526,57 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
   // ─── Round-trip seam binding (S2-review-established requirement): every
   // producer's payload must bind to the REAL parseStructured guard, not just
   // an assumed shape. ────────────────────────────────────────────────────────
+  // ─── VQ-S2-008 (post-impl closure, epic: group-message-author-auth-app-layer
+  // S2 remediation round 1): the SIGNED-path own-join gate
+  // (`sender.pubkey === authorPubkey`) is proven to read sender.pubkey, not
+  // rumor.pubkey — the pre-S2 behavior it replaced. Both combinations below
+  // are unreachable in real deliveries today (S1's dispatcher drops any
+  // rumor where rumor.pubkey !== sender.pubkey before a handler runs), so
+  // they exercise the dev-only sender-override hook. They lock the contract
+  // as defense-in-depth against a future dispatcher change that might relax
+  // that guarantee. ──────────────────────────────────────────────────────
+
+  it('VQ-S2-008: own-join fires when sender.pubkey === authorPubkey even though rumor.pubkey (transport) is a different pubkey', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    const handler = createProfileHandler(deps);
+    const ctx = makeCtx();
+    // signedEvent.pubkey = AUTHOR_PUBKEY; rumor.pubkey (transport) =
+    // PEER_PUBKEY, which differs from AUTHOR_PUBKEY. Under the OLD
+    // rumor.pubkey===authorPubkey gate this would NOT have been treated as
+    // an own-join. The authenticated sender is AUTHOR_PUBKEY itself, so the
+    // NEW sender.pubkey===authorPubkey gate correctly fires.
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: PEER_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const divergentSender = makeSender(AUTHOR_PUBKEY); // sender.pubkey === authorPubkey, !== rumor.pubkey
+
+    await handler.handle(rumor, ctx, divergentSender);
+
+    expect(deps.sendAnnouncement).toHaveBeenCalledOnce();
+    const content = deps.sendAnnouncement.mock.calls[0][0];
+    expect(JSON.parse(content)).toEqual({ type: 'invite_lifecycle', event: 'accepted', pubkey: AUTHOR_PUBKEY });
+  });
+
+  it('VQ-S2-008: own-join stays false (AC-PROD-4 preserved) when sender.pubkey does not match authorPubkey, even though rumor.pubkey (transport) coincides with the author', async () => {
+    const deps = makeMarkerAwareDeps(true);
+    deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
+    const handler = createProfileHandler(deps);
+    const ctx = makeCtx();
+    // signedEvent.pubkey = AUTHOR_PUBKEY; rumor.pubkey (transport) is ALSO
+    // AUTHOR_PUBKEY — the exact shape an OLD rumor.pubkey===authorPubkey
+    // gate would have accepted as an own-join. The authenticated sender is
+    // PEER_PUBKEY (a relayer), which diverges from authorPubkey, so the NEW
+    // sender.pubkey===authorPubkey gate must NOT fire.
+    const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const relayerSender = makeSender(PEER_PUBKEY); // sender.pubkey !== authorPubkey
+
+    await handler.handle(rumor, ctx, relayerSender);
+
+    expect(deps.sendAnnouncement).not.toHaveBeenCalled();
+    // Relay-on-behalf marker-clear is unaffected: still clears via
+    // clearPendingDirectInvite, just never mistaken for a join.
+    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+  });
+
   it('round-trip: buildAcceptedAnnouncementContent output parses back through the real parseStructured guard to the exact InviteLifecycleContent shape', async () => {
     const { parseStructured } = await import('@/src/lib/marmot/parseStructured');
     const { buildAcceptedAnnouncementContent } = await import('@/src/lib/marmot/handlers/profileHandler');

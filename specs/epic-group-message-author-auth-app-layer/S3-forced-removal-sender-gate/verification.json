@@ -1,0 +1,50 @@
+{
+  "story_id": "S3",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S3-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the `payload.pubkey === sender.pubkey` gate in leaveHandler.ts a real conditional that actually withholds the `enqueueLeave(ctx.groupId, payload.pubkey)` call on mismatch, rather than a check that runs but whose result is ignored (e.g. logged-only, or enqueueLeave called unconditionally with the gate's result discarded)?"
+    },
+    {
+      "question_id": "VQ-S3-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the gate live in leaveHandler.ts (the ingest boundary) before leaveSync.ts's enqueueLeave is invoked, with no second, divergent copy of the same subject-vs-sender comparison elsewhere in the leave flow (e.g. inside leaveSync.ts itself) that could disagree with the handler's decision?"
+    },
+    {
+      "question_id": "VQ-S3-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Leave` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S3-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/leaveHandler.test.ts include a handler-unit test that calls `handle()` directly with a `leave_intent` whose `payload.pubkey` differs from `sender.pubkey`, and assert both that `enqueueLeave` is not called and that no departure is rendered — alongside a matching-sender case proving the gate isn't just always-false?"
+    },
+    {
+      "question_id": "VQ-S3-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does any comment, log message, or UI copy touched by this story avoid overstating the guarantee — i.e. does nothing in the diff claim this gate 'prevents forced removal' or 'stops impersonation' outright, given AC-MV-1's honest caveat that under the app-layer stub the attacker controls both `payload.pubkey` and `sender.pubkey` via the dev override hook?"
+    },
+    {
+      "question_id": "VQ-S3-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "On a subject/sender mismatch, is the rejection fully fail-closed — no partial side effect occurs (no queued timer started, no UI state mutated, no leaveSync bookkeeping touched) before the gate returns, so a mismatched leave_intent leaves the leave-queue state byte-for-byte identical to having never arrived?"
+    },
+    {
+      "question_id": "VQ-S3-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FORCE-3",
+      "question": "Show the production code (leaveHandler.ts) and the handler-unit test(s) that exercise AC-FORCE-3 end-to-end: a `leave_intent` whose `payload.pubkey` (the subject) != `sender.pubkey` does not call `enqueueLeave` and is not rendered as a departure — confirm the test constructs a real handler-level call (not a mock of `enqueueLeave` alone that could pass even if the gate were removed)."
+    }
+  ]
+}

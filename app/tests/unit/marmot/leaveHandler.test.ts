@@ -64,6 +64,13 @@ function makeCtx() {
   };
 }
 
+// AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
+// From S3 onward this is load-bearing: leaveHandler's forced-removal gate
+// (AC-FORCE-3) compares payload.pubkey against sender.pubkey.
+function makeSender(pubkey: string = MEMBER_PUBKEY): { pubkey: string; authenticity: 'claimed' | 'mls' } {
+  return { pubkey, authenticity: 'claimed' };
+}
+
 function makeDeps() {
   return {
     enqueueLeave: vi.fn(),
@@ -96,7 +103,7 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     const rumor = makeLeaveRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.enqueueLeave).toHaveBeenCalledOnce();
     expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
@@ -108,7 +115,7 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     const rumor = makeLeaveRumor({ content: '{ "wrongField": "value" }' });
     const ctx = makeCtx();
 
-    expect(() => handler.handle(rumor, ctx)).not.toThrow();
+    expect(() => handler.handle(rumor, ctx, makeSender(rumor.pubkey))).not.toThrow();
     expect(deps.enqueueLeave).not.toHaveBeenCalled();
   });
 
@@ -118,8 +125,68 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     const rumor = makeLeaveRumor({ content: '{ bad json }' });
     const ctx = makeCtx();
 
-    expect(() => handler.handle(rumor, ctx)).not.toThrow();
+    expect(() => handler.handle(rumor, ctx, makeSender(rumor.pubkey))).not.toThrow();
     expect(deps.enqueueLeave).not.toHaveBeenCalled();
+  });
+
+  // ---- AC-FORCE-3: forced-removal rule (subject === sender) --------------
+
+  it('AC-FORCE-3 negative: payload.pubkey (victim) !== sender.pubkey (attacker) does NOT enqueue a removal', async () => {
+    const VICTIM_PUBKEY = 'bb'.repeat(32);
+    const ATTACKER_PUBKEY = 'dd'.repeat(32);
+    const deps = makeDeps();
+    const handler = createLeaveIntentHandler(deps);
+    // The rumor is authored (outer envelope) by the attacker, naming the
+    // victim as the leave subject in the message BODY — the forced-removal
+    // shape described in spec.md's Problem section.
+    const rumor = makeLeaveRumor({
+      pubkey: ATTACKER_PUBKEY,
+      content: JSON.stringify({ pubkey: VICTIM_PUBKEY }),
+    });
+    const ctx = makeCtx();
+    // Divergent sender: simulates having already passed the dispatcher's
+    // choke-point drop (sender.pubkey === rumor.pubkey there), landing at
+    // the handler with an authenticated sender that is NOT the named subject.
+    const sender = makeSender(ATTACKER_PUBKEY);
+
+    await handler.handle(rumor, ctx, sender);
+
+    expect(deps.enqueueLeave).not.toHaveBeenCalled();
+  });
+
+  it('AC-FORCE-3 positive: payload.pubkey === sender.pubkey (self-departure) enqueues the removal', async () => {
+    const deps = makeDeps();
+    const handler = createLeaveIntentHandler(deps);
+    const rumor = makeLeaveRumor({
+      pubkey: MEMBER_PUBKEY,
+      content: JSON.stringify({ pubkey: MEMBER_PUBKEY }),
+    });
+    const ctx = makeCtx();
+    const sender = makeSender(MEMBER_PUBKEY);
+
+    await handler.handle(rumor, ctx, sender);
+
+    expect(deps.enqueueLeave).toHaveBeenCalledOnce();
+    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
+  });
+
+  it('AC-FORCE-3 edge: payload.pubkey and sender.pubkey match only after case normalization still enqueues', async () => {
+    const deps = makeDeps();
+    const handler = createLeaveIntentHandler(deps);
+    // Body pubkey normalized to lowercase by parseLeaveIntent; sender.pubkey
+    // supplied in mixed case (e.g. a differently-cased but equal identity
+    // from an upstream source) must still compare equal.
+    const rumor = makeLeaveRumor({
+      pubkey: MEMBER_PUBKEY,
+      content: JSON.stringify({ pubkey: MEMBER_PUBKEY.toUpperCase() }),
+    });
+    const ctx = makeCtx();
+    const sender = makeSender(MEMBER_PUBKEY.toUpperCase());
+
+    await handler.handle(rumor, ctx, sender);
+
+    expect(deps.enqueueLeave).toHaveBeenCalledOnce();
+    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
   });
 
   it('duplicate-id: dispatcher LRU prevents second enqueueLeave call', async () => {

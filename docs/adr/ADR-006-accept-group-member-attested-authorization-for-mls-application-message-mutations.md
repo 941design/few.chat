@@ -1,11 +1,19 @@
 # ADR-006: Accept group-member-attested authorization for MLS application-message mutations
 
-**Status**: Proposed
+**Status**: Superseded
 **Date**: 2026-07-07
 **Type**: Lightweight
 **Affects**: specs/epic-feature-request-message-edit-and-delete/, specs/epic-emoji-feature/, specs/epic-learning-groups-nostr-mls/, project-wide
 **Supersedes**: none
-**Superseded by**: none
+**Superseded by**: ADR-012
+
+> **Superseded 2026-07-23 by ADR-012.** The blocker this ADR was built around —
+> no control over marmot-ts/ts-mls, so the spec-required sender check
+> (`group-messaging.md:43`) was unimplementable — no longer holds: the project
+> now controls the fork. ADR-012 implements the sender-binding check in the fork
+> (closing the member-on-member impersonation this ADR accepted as interim risk)
+> and adds signed enum meta-events for forwardable system messages. This ADR is
+> retained for history; its accepted-risk posture no longer governs.
 
 ## Context
 

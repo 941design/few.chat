@@ -21,6 +21,13 @@ export interface PollOpenPayload {
   description?: string;
   options: PollOptionDef[];
   pollType: 'singlechoice' | 'multiplechoice';
+  /**
+   * Self-asserted, wire-format only (epic: group-message-author-auth-app-layer
+   * S5, AC-POLL-1). Kept on the wire for back-compat parsing; the receiving
+   * handler (pollHandler.ts handleOpen) MUST NOT read this field to attribute
+   * ownership — it binds the stored Poll.creatorPubkey to the dispatcher's
+   * authenticated sender instead.
+   */
   creatorPubkey: string;
 }
 
@@ -31,6 +38,12 @@ export interface PollVotePayload {
 
 export interface PollClosePayload {
   pollId: string;
+  /**
+   * Self-asserted, wire-format only (epic: group-message-author-auth-app-layer
+   * S5, AC-POLL-4). The receiving handler (pollHandler.ts handleClose) MUST
+   * NOT trust these claimed counts — it recomputes the tally from stored
+   * PollVote rows instead, so a poll creator cannot forge the final results.
+   */
   results: PollResult[];
   totalVoters: number;
 }

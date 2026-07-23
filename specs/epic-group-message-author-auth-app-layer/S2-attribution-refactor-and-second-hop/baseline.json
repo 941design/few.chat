@@ -1,0 +1,20 @@
+{
+  "story_id": "S2",
+  "captured_at": "2026-07-23T20:30:00Z",
+  "test_unit": {
+    "command": "make test-unit (vitest, platform-stamped)",
+    "status": "PASS",
+    "files": 213,
+    "tests_passed": 4105,
+    "tests_skipped": 1,
+    "tests_total": 4106
+  },
+  "typecheck": {
+    "command": "cd app && npx tsc --noEmit",
+    "status": "clean"
+  },
+  "lint": {
+    "status": "NO_LINT",
+    "note": "package.json defines `npm run lint` -> `next lint`, but ESLint has never been configured in this repo (no .eslintrc*/eslint.config*); running it launches an interactive first-time-setup prompt rather than executing a check. architecture.md's Implementation Constraints section confirms: 'No lint/typecheck make target exists.' Treated as NO_LINT per Step 0's tolerance (pre-existing absence, not this story's debt)."
+  }
+}

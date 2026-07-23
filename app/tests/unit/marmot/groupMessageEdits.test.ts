@@ -118,6 +118,7 @@ const {
 
 type ChatMessageFixture = import('@/src/lib/marmot/chatPersistence').ChatMessage;
 type ChangeResultFixture = import('@/src/lib/messageEdits/api').ChangeResult;
+type AuthenticatedSender = import('@/src/lib/marmot/applicationRumorDispatcher').AuthenticatedSender;
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -319,6 +320,231 @@ describe('AC-AUTH-2 (group): rumor.pubkey (MLS-authenticated inner rumor) gates 
     expect(resolveResult.kind).toBe('delete');
     const { messages } = await loadMessages(GROUP_ID);
     expect(messages.find((m) => m.id === 'auth-pending-2')?.tombstoned).toBe(true);
+  });
+});
+
+// ─── AC-ATTR-6(c) (epic: group-message-author-auth-app-layer S2): applyDeleteEditSignal
+// authorizes against the resolved `sender.pubkey`, not the rumor's own (forgeable)
+// `rumor.pubkey` — the mechanical swap this story makes. Reuses the AC-AUTH-2 block's
+// two real, distinct keypairs (alice = target's stored author, mallory = attacker). ──
+
+describe('AC-ATTR-6(c) (group): sender.pubkey (dispatcher-resolved), not rumor.pubkey, gates own-author apply', () => {
+  it('DELETE: rumor.pubkey matches the stored author (alice) but sender.pubkey is mallory — rejected', async () => {
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'attr-del-1', senderPubkey: alicePubHex }));
+    // If the OLD rumor.pubkey-based check were still active, this would be authorized
+    // (rumor.pubkey === alicePubHex, the stored author).
+    const rumor = buildDeleteRumor('attr-del-1', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
+    expect(rumor.pubkey).toBe(alicePubHex);
+
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'attr-del-1')?.tombstoned).toBeFalsy();
+  });
+
+  it('DELETE: rumor.pubkey is mallory (mismatched) but sender.pubkey matches the stored author (alice) — applied', async () => {
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'attr-del-2', senderPubkey: alicePubHex }));
+    const rumor = buildDeleteRumor('attr-del-2', [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+    expect(rumor.pubkey).toBe(malloryPubHex);
+
+    const sender: AuthenticatedSender = { pubkey: alicePubHex, authenticity: 'mls' };
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('delete');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'attr-del-2')?.tombstoned).toBe(true);
+  });
+
+  it('EDIT: rumor.pubkey matches the stored author (alice) but sender.pubkey is mallory — rejected', async () => {
+    const target = makeGroupTarget({ id: 'attr-edit-1', senderPubkey: alicePubHex, createdAt: 1_700_000_000_000 });
+    await appendMessage(GROUP_ID, target);
+    // If the OLD rumor.pubkey-based check were still active, this would be authorized.
+    const rumor = buildEditReplacementRumor(
+      target.id,
+      Math.floor(target.createdAt / 1000),
+      'edited by forger, signed as alice',
+      CHAT_MESSAGE_KIND,
+      2_000,
+      alicePrivHex,
+    );
+    expect(rumor.pubkey).toBe(alicePubHex);
+
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'attr-edit-1')?.content).toBe('hello group');
+    expect(messages.find((m) => m.id === 'attr-edit-1')?.edited).toBeFalsy();
+  });
+
+  it('EDIT: rumor.pubkey is mallory (mismatched) but sender.pubkey matches the stored author (alice) — applied', async () => {
+    const target = makeGroupTarget({ id: 'attr-edit-2', senderPubkey: alicePubHex, createdAt: 1_700_000_000_000 });
+    await appendMessage(GROUP_ID, target);
+    const rumor = buildEditReplacementRumor(
+      target.id,
+      Math.floor(target.createdAt / 1000),
+      'edited by alice, signed as forger',
+      CHAT_MESSAGE_KIND,
+      2_000,
+      malloryPrivHex,
+    );
+    expect(rumor.pubkey).toBe(malloryPubHex);
+
+    const sender: AuthenticatedSender = { pubkey: alicePubHex, authenticity: 'mls' };
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('edit');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'attr-edit-2')?.content).toBe('edited by alice, signed as forger');
+    expect(messages.find((m) => m.id === 'attr-edit-2')?.edited).toBe(true);
+  });
+});
+
+// ─── AC-EDIT-7 (epic: group-message-author-auth-app-layer S4): edit/delete
+// authorization keyed on authenticated sender vs the target's STORED
+// authenticated sender, plus the admin-delete carve-out via GroupAdminsProvider
+// — and (test-only, no independent code change per this story's scope) proof
+// that chatPersistence.ts's TombstoneAuthorization inherits that SAME
+// authenticated value rather than reading rumor.pubkey independently. Builds
+// on the AC-ATTR-6(c) block above (S2), which already proves sender.pubkey
+// (not rumor.pubkey) gates own-author apply/reject; this block adds the
+// admin-delete path as its own distinct, directly-tested case and pins the
+// third-hop inheritance explicitly. ──────────────────────────────────────────
+
+describe('AC-EDIT-7 (S4): edit/delete authorization on authenticated sender + admin-delete carve-out', () => {
+  const ANNOUNCEMENT_CONTENT = JSON.stringify({ type: 'member_admitted', pubkey: 'b'.repeat(64) });
+
+  it('(a) own-author DELETE: sender.pubkey === target stored senderPubkey — applied', async () => {
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'edit7-own-del', senderPubkey: alicePubHex, content: 'ordinary message' }));
+    const rumor = buildDeleteRumor('edit7-own-del', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
+    const sender: AuthenticatedSender = { pubkey: alicePubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('delete');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-own-del')?.tombstoned).toBe(true);
+  });
+
+  it('(a) own-author EDIT: sender.pubkey === target stored senderPubkey — applied', async () => {
+    const target = makeGroupTarget({ id: 'edit7-own-edit', senderPubkey: alicePubHex, content: 'v1', createdAt: 1_700_000_100_000 });
+    await appendMessage(GROUP_ID, target);
+    const rumor = buildEditReplacementRumor(target.id, Math.floor(target.createdAt / 1000), 'own-author edit', CHAT_MESSAGE_KIND, 2_000, alicePrivHex);
+    const sender: AuthenticatedSender = { pubkey: alicePubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('edit');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-own-edit')?.content).toBe('own-author edit');
+  });
+
+  it('(b) cross-author DELETE against an ORDINARY message: sender.pubkey (mallory) !== target stored senderPubkey (alice), mallory is not admin — rejected, no tombstone', async () => {
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'edit7-cross-del', senderPubkey: alicePubHex, content: 'ordinary message' }));
+    const rumor = buildDeleteRumor('edit7-cross-del', [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-cross-del')?.tombstoned).toBeFalsy();
+  });
+
+  it('(b) admin delete of an ORDINARY (non-announcement) peer message is REJECTED — the admin carve-out is announcement-only, not a blanket admin-delete power (Fable S4 F2)', async () => {
+    // mallory IS a registered admin, but the target is an ordinary message, not
+    // an informative announcement — so the carve-out must NOT apply and the
+    // pure own-author gate rejects the cross-author delete. Guards against an
+    // over-broad carve-out regression (extending admin delete to all messages).
+    registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_ID ? [malloryPubHex] : []));
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'edit7-admin-ordinary-del', senderPubkey: alicePubHex, content: 'ordinary message' }));
+    const rumor = buildDeleteRumor('edit7-admin-ordinary-del', [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-admin-ordinary-del')?.tombstoned).toBeFalsy();
+  });
+
+  it('(b) cross-author DELETE against an ANNOUNCEMENT: mallory is NOT a registered admin — rejected even though the content shape would otherwise qualify for the admin carve-out (no provider registered — fail-closed empty admin set)', async () => {
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'edit7-cross-del-announce', senderPubkey: alicePubHex, content: ANNOUNCEMENT_CONTENT }));
+    const rumor = buildDeleteRumor('edit7-cross-del-announce', [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-cross-del-announce')?.tombstoned).toBeFalsy();
+  });
+
+  it('(b) cross-author EDIT: sender.pubkey (mallory) !== target stored senderPubkey (alice) — rejected even though mallory IS a registered admin (AC-IMMUT-6: edit never gets an admin carve-out, unlike delete)', async () => {
+    registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_ID ? [malloryPubHex] : []));
+    const target = makeGroupTarget({ id: 'edit7-cross-edit', senderPubkey: alicePubHex, content: 'hello group', createdAt: 1_700_000_200_000 });
+    await appendMessage(GROUP_ID, target);
+    const rumor = buildEditReplacementRumor(target.id, Math.floor(target.createdAt / 1000), 'forged edit by admin', CHAT_MESSAGE_KIND, 2_000, malloryPrivHex);
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-cross-edit')?.content).toBe('hello group');
+    expect(messages.find((m) => m.id === 'edit7-cross-edit')?.edited).toBeFalsy();
+  });
+
+  it('(c) ADMIN deletes another member\'s ANNOUNCEMENT via the receive-side authenticated sender — applied via GroupAdminsProvider, keyed on sender.pubkey NOT rumor.pubkey (VQ-S4-004(c), VQ-S4-005 tombstone-inheritance evidence #1)', async () => {
+    registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_ID ? [alicePubHex] : []));
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'edit7-admin-del', senderPubkey: malloryPubHex, content: ANNOUNCEMENT_CONTENT }));
+    // rumor.pubkey is mallory's OWN signature (the peer's announcement, forwarded
+    // as-is) — irrelevant to authorization. The dispatcher-resolved authenticated
+    // sender (alice, the real admin) is what must authorize this delete.
+    const rumor = buildDeleteRumor('edit7-admin-del', [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+    expect(rumor.pubkey).toBe(malloryPubHex);
+    const sender: AuthenticatedSender = { pubkey: alicePubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('delete');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-admin-del')?.tombstoned).toBe(true);
+  });
+
+  it('(c) a rumor.pubkey that IS the real admin does NOT bypass the gate when the authenticated sender is NOT actually admin — rejected (VQ-S4-004(c), VQ-S4-005 tombstone-inheritance evidence #2: if TombstoneAuthorization/chatPersistence.ts ever fell back to rumor.pubkey instead of the threaded sender, this would incorrectly succeed)', async () => {
+    registerGroupAdminsProvider(async (groupId: string) => (groupId === GROUP_ID ? [alicePubHex] : []));
+    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'edit7-fake-admin-del', senderPubkey: malloryPubHex, content: ANNOUNCEMENT_CONTENT }));
+    // rumor.pubkey is alice's (the real admin's) signature, but the
+    // dispatcher-resolved authenticated sender is mallory (not admin).
+    const rumor = buildDeleteRumor('edit7-fake-admin-del', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
+    expect(rumor.pubkey).toBe(alicePubHex);
+    const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+
+    const result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+
+    expect(result.kind).toBe('discarded');
+    const { messages } = await loadMessages(GROUP_ID);
+    expect(messages.find((m) => m.id === 'edit7-fake-admin-del')?.tombstoned).toBeFalsy();
+  });
+
+  it('(d) fail-closed at every point: a sender-mismatch rejection writes no tombstone and applies no edit for BOTH paths independently — re-asserts against real storage (not a spy) that the row is byte-for-byte unchanged', async () => {
+    const delTarget = makeGroupTarget({ id: 'edit7-failclosed-del', senderPubkey: alicePubHex, content: 'untouched' });
+    await appendMessage(GROUP_ID, delTarget);
+    const delRumor = buildDeleteRumor('edit7-failclosed-del', [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+    await applyDeleteEditSignal(GROUP_THREAD, delRumor as any, { pubkey: malloryPubHex, authenticity: 'mls' });
+    const { messages: afterDel } = await loadMessages(GROUP_ID);
+    expect(afterDel.find((m) => m.id === 'edit7-failclosed-del')).toEqual(delTarget);
+
+    const editTarget = makeGroupTarget({ id: 'edit7-failclosed-edit', senderPubkey: alicePubHex, content: 'untouched', createdAt: 1_700_000_300_000 });
+    await appendMessage(GROUP_ID, editTarget);
+    const editRumor = buildEditReplacementRumor(editTarget.id, Math.floor(editTarget.createdAt / 1000), 'forged replacement', CHAT_MESSAGE_KIND, 2_000, malloryPrivHex);
+    await applyDeleteEditSignal(GROUP_THREAD, editRumor as any, { pubkey: malloryPubHex, authenticity: 'mls' });
+    const { messages: afterEdit } = await loadMessages(GROUP_ID);
+    expect(afterEdit.find((m) => m.id === 'edit7-failclosed-edit')).toEqual(editTarget);
   });
 });
 

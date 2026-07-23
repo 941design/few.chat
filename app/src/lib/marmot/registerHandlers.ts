@@ -1,7 +1,7 @@
 import { createDispatcher, type Dispatcher, type RumorHandler } from './applicationRumorDispatcher';
 import type { ChatMessage } from './chatPersistence';
 import type { ReactionThreadKey } from '@/src/lib/reactions/types';
-import type { ApplicationRumor } from './applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender } from './applicationRumorDispatcher';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import type { ProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
@@ -25,13 +25,13 @@ export interface HandlerDeps {
   setChatVersion: (updater: (v: number) => number) => void;
   // Reaction handler deps (loadMessages shared with reaction gate)
   loadMessages: (groupId: string) => Promise<{ messages: ChatMessage[]; refetchIds: string[] }>;
-  applyInboundRumor: (thread: ReactionThreadKey, rumor: ApplicationRumor) => Promise<unknown>;
+  applyInboundRumor: (thread: ReactionThreadKey, rumor: ApplicationRumor, sender: AuthenticatedSender) => Promise<unknown>;
   setReactionsVersion: (updater: (v: number) => number) => void;
   // Delete/edit handler deps (S5). resolvePendingSignalsForSlot is consumed by
   // chatHandler.ts's resolve-after-append wiring (S3's required calling
   // convention); applyDeleteEditSignal is consumed by deleteEditHandler.ts
   // (kind-5) and chatHandler.ts's edit-marked-kind-9 dispatch-routing branch.
-  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor) => Promise<ChangeResult>;
+  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<ChangeResult>;
   resolvePendingSignalsForSlot: (thread: MessageEditsThreadKey, slotId: string, originalAuthorPubkeyHex: string) => Promise<ChangeResult>;
   // Profile handler deps
   mergeMemberProfile: (groupId: string, profile: MemberProfile) => Promise<boolean>;
@@ -70,6 +70,7 @@ export interface HandlerDeps {
   savePoll: (poll: Poll) => Promise<void>;
   saveVote: (vote: PollVote) => Promise<void>;
   getPoll: (groupId: string, pollId: string) => Promise<Poll | null>;
+  loadVotes: (pollId: string) => Promise<PollVote[]>;
   setPollVersion: (updater: (v: number) => number) => void;
   // Leave handler deps
   enqueueLeave: (groupId: string, pubkey: string) => void;
@@ -80,6 +81,7 @@ export function buildDispatcher(deps: HandlerDeps): Dispatcher {
     savePoll: deps.savePoll,
     saveVote: deps.saveVote,
     getPoll: deps.getPoll,
+    loadVotes: deps.loadVotes,
     setPollVersion: deps.setPollVersion,
   };
 

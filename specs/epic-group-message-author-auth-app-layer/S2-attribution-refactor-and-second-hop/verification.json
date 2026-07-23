@@ -1,0 +1,63 @@
+{
+  "story_id": "S2",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S2-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the vitest source-scan (precedent: zodBoundary.test.ts) a real fail-on-violation check — does it actually fail the build when a `rumor.pubkey` read is reintroduced inside handlers/ outside the allow-list — rather than a tautological assertion that always passes because it scans an empty/placeholder file list or matches a pattern too narrow to catch real reads? Demonstrate this by describing what the scan matches against, not just that it exists."
+    },
+    {
+      "question_id": "VQ-S2-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is the chatHandler.ts:108 own-send echo guard's `rumor.pubkey` read preserved as a scoped, explicitly-commented allow-list entry (not attribution/authorization, just an echo-suppression check) rather than a blanket exemption that would let other, real attribution reads slip past the scan under the same allow-list line?"
+    },
+    {
+      "question_id": "VQ-S2-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Handlers` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S2-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "For each rumor handler (chat, reaction, poll open/vote/close, leave, call_notice, group_renamed, member_admitted, invite_lifecycle, profile, profile-request), does a handler-level unit test call `handle()` directly with `sender.pubkey != rumor.pubkey` and assert the resulting attribution/authorization decision resolves to `sender.pubkey`, matching the leaveHandler.test.ts pattern referenced in architecture.md — and were all pre-existing call sites in app/tests/unit/marmot/*.test.ts updated to the new `handle(rumor, ctx, sender)` signature rather than left passing a stale two-argument call that a permissive TS config lets through?"
+    },
+    {
+      "question_id": "VQ-S2-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Was the field-swap at chatHandler.ts:86 (`ChatMessage.senderPubkey = sender.pubkey`, previously `rumor.pubkey`) applied, and were the two second-hop entry points `reactions/api.ts`'s `applyInboundRumor` and `messageEdits/api.ts`'s `applyDeleteEditSignal` given the new `sender` argument with only a basic field-swap (no deeper stored-sender comparison logic, which is explicitly deferred to S4) — confirm no authorization-logic drift beyond the field-swap crept into this story's diff?"
+    },
+    {
+      "question_id": "VQ-S2-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Is the handlers/ allow-list for the static-scan minimal and individually justified per entry (not a broad glob or directory-level exemption), so that adding a new handler in the future defaults to scanned-and-blocked rather than silently inheriting an exemption?"
+    },
+    {
+      "question_id": "VQ-S2-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ATTR-6",
+      "question": "Show evidence for all three sub-parts of AC-ATTR-6: (a) handler-unit tests for every listed handler kind proving `sender.pubkey`-based attribution/authorization with `sender.pubkey != rumor.pubkey`; (b) the static-scan file and a demonstration (via its own test assertions) that it fails on a reintroduced `rumor.pubkey` read outside the allow-list, scoped to handlers/ only (directMessages.ts, pairingAck.ts, gift-wrap paths excluded); (c) targeted handler-unit assertions that `reactions/api.ts`'s `applyInboundRumor` attributes both add and remove to the passed `sender.pubkey`, and `messageEdits/api.ts`'s `applyDeleteEditSignal` authorizes (own-author edit, admin-gated delete) on the passed `sender.pubkey` — confirm none of these are mock-spy proxies that only assert a spy call occurred without exercising real handler logic."
+    },
+    {
+      "question_id": "VQ-S2-008",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "ac_id": "AC-ATTR-6",
+      "question": "profileHandler.ts's own-join detection was swapped from `rumor.pubkey === authorPubkey` to `sender.pubkey === authorPubkey` on the SIGNED path (profilePayload.signedEvent present). This is only observably different from the pre-S2 behavior when sender.pubkey diverges from rumor.pubkey while a signedEvent is also present — a three-way combination (signed + sender-override + own-join branch) that no test in profileHandler.test.ts's diff exercises: the new AC-ATTR-6 test only covers the UNSIGNED/legacy fallback path with a forged sender, and every AC-PROD-4/AC-MARKER-6 (relay-on-behalf) test still calls `makeSender(rumor.pubkey)` (sender mirrors rumor.pubkey, so the swap is a no-op in those assertions). Is this coverage gap acceptable given S1's dispatcher-level guarantee that rumor.pubkey===sender.pubkey by the time any handler runs in production (so the divergent case is reachable today only via the dev-only override hook, not a real delivery path), or should a dedicated signed-path sender-divergence test be added before this AC is marked verified?"
+    },
+    {
+      "question_id": "VQ-S2-009",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "pollHandler.ts's handleOpen, leaveHandler.ts's handleLeaveIntent, and profileRequestHandler.ts's handle all now accept a `sender: AuthenticatedSender` parameter that is threaded through the call chain but never read in the function body (per architecture.json's explicit deferral to S3/S5). Confirm this is intentional signature-uniformity groundwork and not a silently-dropped requirement — i.e. that S3 (leave) and S5 (poll open creator-binding) both still have `sender` reads scoped as required work in their own story descriptions, so the unused parameter here doesn't get mistaken for 'already done' when those stories start."
+    }
+  ]
+}

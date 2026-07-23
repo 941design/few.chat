@@ -27,10 +27,17 @@ describe('leaveSync', () => {
     });
   });
 
+  const HEX64 = 'ab'.repeat(32);
+
   describe('parseLeaveIntent', () => {
-    it('round-trip: parseLeaveIntent(serialiseLeaveIntent({pubkey:"abcd"})) returns {pubkey:"abcd"}', () => {
-      const result = parseLeaveIntent(serialiseLeaveIntent({ pubkey: 'abcd' }));
-      expect(result).toEqual({ pubkey: 'abcd' });
+    it('round-trip: parseLeaveIntent(serialiseLeaveIntent({pubkey:<hex64>})) returns the canonical pubkey', () => {
+      const result = parseLeaveIntent(serialiseLeaveIntent({ pubkey: HEX64 }));
+      expect(result).toEqual({ pubkey: HEX64 });
+    });
+
+    it('canonicalizes an uppercase hex-64 pubkey to lowercase', () => {
+      const result = parseLeaveIntent(JSON.stringify({ pubkey: HEX64.toUpperCase() }));
+      expect(result).toEqual({ pubkey: HEX64 });
     });
 
     it('returns null for invalid JSON input', () => {
@@ -51,6 +58,21 @@ describe('leaveSync', () => {
 
     it('returns null for a JSON null value', () => {
       expect(parseLeaveIntent('null')).toBeNull();
+    });
+
+    // Fable S3 Stage-2 finding 1 + spec-request §7: an empty or non-canonical
+    // subject must drop as malformed, NOT pass the subject===sender gate
+    // vacuously ('' === '' would otherwise arm a no-op removal).
+    it('returns null for an empty pubkey (spec-request §7: pubkey:"" drops as malformed)', () => {
+      expect(parseLeaveIntent(JSON.stringify({ pubkey: '' }))).toBeNull();
+    });
+
+    it('returns null for a non-hex pubkey', () => {
+      expect(parseLeaveIntent(JSON.stringify({ pubkey: 'z'.repeat(64) }))).toBeNull();
+    });
+
+    it('returns null for a too-short pubkey', () => {
+      expect(parseLeaveIntent(JSON.stringify({ pubkey: 'abcd' }))).toBeNull();
     });
   });
 });

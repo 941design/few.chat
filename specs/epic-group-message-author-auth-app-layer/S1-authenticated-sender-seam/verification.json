@@ -1,0 +1,69 @@
+{
+  "story_id": "S1",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S1-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the AuthenticatedSender resolver closure wired in MarmotContext.tsx (~L1501-1612, where dispatcherCtx + buildDispatcher(...).subscribe(...) are set up) a real per-message computation that defaults to { pubkey: rumor.pubkey, authenticity: 'claimed' }, rather than a hardcoded/frozen constant returned regardless of the rumor — and is the dev-only override hook (window.__fewTest precedent at MarmotContext.tsx:777-786) actually gated by `NODE_ENV !== 'production'` at every read site, not merely at registration, so a production build cannot silently degrade to always-'claimed' even when a test tries to override it?"
+    },
+    {
+      "question_id": "VQ-S1-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does applicationRumorDispatcher.ts pass AuthenticatedSender to handlers strictly as a sibling function argument alongside rumor and ctx (matching the seam contract `handle(rumor, ctx, sender)`), and never as a field written onto the shared, once-per-subscription DispatcherContext object? Show the DispatcherContext type/interface diff (or its absence) as evidence that no sender-shaped field was added there."
+    },
+    {
+      "question_id": "VQ-S1-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Dispatcher` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S1-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/applicationRumorDispatcher.test.ts assert, against the real dispatcher listener (not a fan-out mock that unconditionally returns success), that (a) a sender-pubkey-mismatched rumor is dropped before any handler is invoked, (b) the dedup LRU/markSeen registration is never called for the dropped rumor's id, and (c) a sender-matched rumor is handled and attributed to sender.pubkey — exercised across the AC-SEAM-1 kind set (chat, reaction, poll, leave, profile-request/kind-30)?"
+    },
+    {
+      "question_id": "VQ-S1-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the resolver's default behavior and the choke-point drop match architecture.md's ordering requirement exactly — sender resolved after deserialize, compared against rumor.pubkey, and the drop applied strictly before markSeen and before any handler fan-out — with the production code (not just a test-only reordering) exhibiting this line ordering in applicationRumorDispatcher.ts?"
+    },
+    {
+      "question_id": "VQ-S1-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "When rumor.pubkey !== sender.pubkey, does the dispatcher emit exactly the 'unauthenticatedMessage' dev-log diagnostic without creating a new production information-disclosure surface (i.e. is the dev-log itself excluded from production builds or otherwise inert there), and is the drop unconditional — no code path lets a mismatched rumor reach a handler under any kind or race condition (e.g. a handler already in flight when the mismatch is detected)?"
+    },
+    {
+      "question_id": "VQ-S1-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEAM-1",
+      "question": "Show the production code path and the integrated-e2e test(s) that exercise AC-SEAM-1 end-to-end: with sender.pubkey = X (via the dev override hook) and an inbound rumor carrying rumor.pubkey = Y (Y != X) across chat/reaction/poll/leave/profile-request kinds, confirm the message is dropped before fan-out, the 'unauthenticatedMessage' diagnostic is dev-logged, no handler runs, and the rumor id is never added to the dedup LRU — and confirm the test drives the real app/dispatcher rather than asserting only that an internal spy was or wasn't called."
+    },
+    {
+      "question_id": "VQ-S1-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEAM-2",
+      "question": "Show the production code path and the integrated-e2e test(s) that exercise AC-SEAM-2 end-to-end: with rumor.pubkey === sender.pubkey, confirm the rumor is handled and attributed to that sender with nothing dropped — and confirm this is verified via a real, driven app flow (second signed-in context or the dev hook set to match), not merely a unit stub of the dispatcher's internals."
+    },
+    {
+      "question_id": "VQ-S1-009",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The implementation makes `Dispatcher.subscribe`'s third parameter (`resolveSender`) optional, falling back internally to the identity resolver ({ pubkey: rumor.pubkey, authenticity: 'claimed' }) when omitted. This preserves the ~9 pre-existing dispatcher-level tests and every handler-level unit test (leaveHandler.test.ts-pattern) that call `subscribe(group, ctx)` or `handler.handle(rumor, ctx)` with no third argument, without editing any of those files. Is this optionality itself a risk — could a future story accidentally ship a production `.subscribe(...)` call site with the resolver argument omitted (silently reverting that call site to the always-'claimed' identity default with no compile-time or lint signal), and if so, should a follow-up story add a static check (or make the parameter required with an explicit identity-resolver export for tests) once S2+ have finished threading the resolver through every remaining wiring path?"
+    },
+    {
+      "question_id": "VQ-S1-010",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The `resolveAuthenticatedSender` closure in MarmotContext.tsx is constructed once per group per `subscribeNewGroups()` pass (not per message), but its `NODE_ENV`/`window.__fewTest` lookup executes inside the closure body, so it re-evaluates on every invocation (i.e. every inbound rumor for that group), not once at closure-creation time. Is there a unit or integration test anywhere in the codebase (this story only added dispatcher-level tests, not a MarmotContext.tsx-level test — MarmotContext.tsx has no dedicated unit test file per the existing test layout) that would catch a regression where this per-call gating was accidentally hoisted to per-closure-creation (e.g. by memoizing the override lookup outside the returned function), given that such a regression would only be observable via an e2e test that toggles the override hook mid-session?"
+    }
+  ]
+}

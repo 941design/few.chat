@@ -97,7 +97,70 @@ describe('applicationRumorDispatcher', () => {
     await flushPromises();
 
     expect(handleSpy).toHaveBeenCalledOnce();
-    expect(handleSpy).toHaveBeenCalledWith(mockRumor, ctx);
+    expect(handleSpy).toHaveBeenCalledWith(mockRumor, ctx, {
+      pubkey: mockRumor.pubkey,
+      authenticity: 'claimed',
+    });
+  });
+
+  it('AC-SEAM-1/AC-XCUT-1: sender-mismatched rumor is dropped, not handed to handlers, and does not poison the dedup LRU — a later sender-matched redelivery of the same id still dispatches', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handleSpy = vi.fn();
+    const authenticatedPubkey = 'bb'.repeat(32);
+    const resolveSender = vi.fn(() => ({ pubkey: authenticatedPubkey, authenticity: 'mls' as const }));
+
+    const dispatcher = createDispatcher([{ kind: 9, handle: handleSpy }]);
+    const group = makeFakeGroup();
+    const ctx = makeCtx();
+    dispatcher.subscribe(group, ctx, resolveSender);
+
+    const sharedId = 'mismatch-then-match-id';
+
+    // First delivery: rumor.pubkey diverges from the resolved sender — dropped.
+    mockRumor = makeMockRumor({ id: sharedId, pubkey: 'aa'.repeat(32), kind: 9 });
+    group.emit(new Uint8Array());
+    await flushPromises();
+
+    expect(handleSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[dispatcher.unauthenticatedMessage]',
+      expect.objectContaining({
+        groupId: ctx.groupId,
+        kind: 9,
+        rumorId: sharedId,
+        claimedPubkey: 'aa'.repeat(32),
+        authenticatedPubkey,
+      }),
+    );
+
+    // Second delivery: same id, but this time rumor.pubkey matches the resolved
+    // sender. If the first (dropped) delivery had poisoned the seen-id LRU, this
+    // would be silently swallowed by the dedup check instead of dispatching.
+    mockRumor = makeMockRumor({ id: sharedId, pubkey: authenticatedPubkey, kind: 9 });
+    group.emit(new Uint8Array());
+    await flushPromises();
+
+    expect(handleSpy).toHaveBeenCalledOnce();
+
+    warnSpy.mockRestore();
+  });
+
+  it('AC-SEAM-1: sender-matched rumor dispatches with the actually-resolved sender object, not a hardcoded default', async () => {
+    const handleSpy = vi.fn();
+    const resolvedSender = { pubkey: 'aa'.repeat(32), authenticity: 'mls' as const };
+    const resolveSender = vi.fn(() => resolvedSender);
+
+    const dispatcher = createDispatcher([{ kind: 9, handle: handleSpy }]);
+    const group = makeFakeGroup();
+    const ctx = makeCtx();
+    dispatcher.subscribe(group, ctx, resolveSender);
+
+    mockRumor = makeMockRumor({ pubkey: 'aa'.repeat(32), kind: 9 });
+    group.emit(new Uint8Array());
+    await flushPromises();
+
+    expect(handleSpy).toHaveBeenCalledOnce();
+    expect(handleSpy).toHaveBeenCalledWith(mockRumor, ctx, resolvedSender);
   });
 
   it('AC-AR-17: unknown kind emits no console.error or console.warn', async () => {

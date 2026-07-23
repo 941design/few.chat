@@ -1,0 +1,78 @@
+{
+  "story_id": "S9",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S9-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does each of the five property tests genuinely quantify over a generator of orderings/interleavings/subsets (e.g. a loop or property-framework generator driving multiple constructed sequences per run), rather than a single hand-picked sequence dressed up with a 'property test' comment — for each of AC-XCUT-1..5, name the generator's dimension (e.g. 'arrival order of two rumors sharing an id', 'subset/duplication of PollVote rows') and confirm at least 2 distinct orderings are actually exercised per test, not just asserted about in a comment?"
+    },
+    {
+      "question_id": "VQ-S9-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Do all five property tests exercise the real, already-landed producers from S1 (Dispatcher), S3 (Leave), S4 (Edits 2nd hop + Tombstone 3rd hop), S5 (Poll), and S7 (Shared verifier + Profiles) — importing and calling the actual dispatcher/handler/verifier functions, not re-implemented shadow logic — and confirm no mocks-registry.json entry was added for any of these dependencies, per the Mock Strategy FR-A7 exception (never mock a spanned producer)?"
+    },
+    {
+      "question_id": "VQ-S9-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could this integration story's verification surface be deleted and rewritten without modifying any file outside its `dependencies_allowed` list (the union of its owned ACs' `Spans modules:` set: Dispatcher, Poll, Leave, Edits (2nd hop), Tombstone (3rd hop), Profiles (forwarded), Shared verifier)? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S9-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Are all five property tests added to their respective existing test files per this story's scope (applicationRumorDispatcher.test.ts, pollHandler.test.ts, leaveHandler.test.ts, groupMessageEdits.test.ts, profileHandler.test.ts) rather than a new, separate integration test file — and do they run cleanly under `make test-unit` alongside the rest of the suite (no test-order dependency introduced, e.g. no shared mutable module-level state leaking between the property test and its neighbors)?"
+    },
+    {
+      "question_id": "VQ-S9-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Do the five whole-flow guarantees hold when reasoned about together, not just individually — e.g. does the dispatcher's drop-then-redeliver test (AC-XCUT-1) interact correctly with the per-kind handler tests it feeds (poll/leave/edit/profile), such that no property test's passing conceals a violation the others would catch under a combined ordering?"
+    },
+    {
+      "question_id": "VQ-S9-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Are the five property tests deterministic (seeded generators / enumerated orderings, no reliance on real timers, `Date.now()` races, or fixed `sleep`-style waits per this project's e2e anti-pattern for async observers), and do they follow the `leaveHandler.test.ts` handler-unit pattern (direct `handle()`/API calls with injected deps) rather than inventing new test scaffolding for this story alone?"
+    },
+    {
+      "question_id": "VQ-S9-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-XCUT-1",
+      "question": "Show the property test proving AC-XCUT-1: for any interleaving of {a mismatched-sender rumor R with id r} and {a legitimate, sender-matched redelivery of a rumor sharing id r}, the dedup LRU never contains r as a result of the mismatched rumor, and the subsequent legitimate redelivery still fans out exactly once — regardless of arrival order. Confirm both orderings (mismatch-first and redelivery-first) are exercised."
+    },
+    {
+      "question_id": "VQ-S9-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-XCUT-2",
+      "question": "Show the property test proving AC-XCUT-2: for any arrival order, subset, or duplication of PollVote rows stored before an authenticated-creator poll_close is accepted, the displayed tally equals the recomputation from exactly the stored PollVote rows and never varies with the close message's claimed results/totalVoters values. Confirm the generator varies both vote order and the close message's forged-count payload."
+    },
+    {
+      "question_id": "VQ-S9-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-XCUT-3",
+      "question": "Show the property test proving AC-XCUT-3: for any interleaving of leave-intent messages within the 5-second debounce window (including a second subject's leave-intent arriving mid-debounce, or a duplicate leave-intent for the same subject), a removal is enqueued for a given subject if and only if that subject's own leave-intent had payload.pubkey === sender.pubkey. Confirm the generator includes at least one interleaving where a mismatched subject's leave-intent arrives concurrently with a matched one and only the matched subject is enqueued."
+    },
+    {
+      "question_id": "VQ-S9-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-XCUT-4",
+      "question": "Show the property test proving AC-XCUT-4: for any arrival order of an edit/delete signal relative to its target (signal-before-target or target-before-signal), and any resolution order resolvePendingSignalsForSlot applies across multiple pending signals for the same slot, the final authorization outcome is identical to the outcome computed from the authenticated senders alone — and confirm this is asserted identically at both messageEdits/api.ts and the chatPersistence.ts tombstone re-check, not just one of the two."
+    },
+    {
+      "question_id": "VQ-S9-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-XCUT-5",
+      "question": "Show the property test(s) proving AC-XCUT-5: for any delivery order of two profile envelopes for the same subject pubkey (including a self-authored/forwarded pair of the identical signed inner event, and out-of-chronological-order updatedAt values), (a) the merged MemberProfile state after both are processed is identical regardless of delivery order and equals the profile with the greatest updatedAt, and (b) the verifier's one-shot consumption applies a duplicate inner event id at most once regardless of which copy arrives first. Confirm both the handler-unit merge property and the verifier-unit one-shot property are covered."
+    }
+  ]
+}

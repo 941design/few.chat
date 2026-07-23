@@ -1,0 +1,46 @@
+{
+  "story_id": "S4",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-23T20:18:45Z",
+  "files_created": [
+    "specs/epic-group-message-author-auth-app-layer/S4-edit-delete-authorization/architecture.json",
+    "specs/epic-group-message-author-auth-app-layer/S4-edit-delete-authorization/baseline.json"
+  ],
+  "files_modified": [
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts (F2: admin-cannot-delete-ordinary test)",
+    "specs/epic-group-message-author-auth-app-layer/S4-edit-delete-authorization/verification.json"
+  ],
+  "tests_added": {
+    "unit": 8
+  },
+  "test_counts": {
+    "baseline": 4138,
+    "final": 4146
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "remediation_notes": [],
+  "modules_touched": [
+    "Edits (2nd hop)"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "AC-EDIT-7 was ALREADY correctly satisfied by prior work before this story began: S2's mechanical field-swap made `applyDeleteEditSignal` derive `senderPubkey = sender?.pubkey ?? rumor.pubkey` and compare it (DELETE via `authorizeDeleteAgainstTarget(threadKey, knownRow.content, senderPubkey, knownRow.senderPubkey)`; EDIT via `pubkeysMatch(senderPubkey, knownRow.senderPubkey)`) against `knownRow.senderPubkey`, which chatHandler.ts:86 (also S2) populates from the authenticated sender. The admin-delete carve-out already existed independently (epic-group-invite-lifecycle's DD-11/AC-IMMUT-4/5, `GroupAdminsProvider`), scoped to GROUP-thread informative-announcement targets only, and already keys its admin lookup on the same authenticated `senderPubkey` value (never `rumor.pubkey`) — confirmed by reading `authorizeDeleteAgainstTarget`/`groupAdminsFor`/`isAdminPubkey` in messageEdits/api.ts. The third-hop inheritance (chatPersistence.ts's `TombstoneAuthorization`) was also already correct: `TombstoneAuthorization.senderPubkeyHex` is populated exclusively from the caller-supplied `incoming.senderPubkeyHex` in `applyToKnownSlotCore`; `tombstoneMessage` never reads `rumor.pubkey` or any other forgeable field independently. No production code was changed in messageEdits/api.ts, deleteEditHandler.ts, or chatPersistence.ts. deleteEditHandler.ts:29-56's trust-model comment block was read and left byte-for-byte untouched. This story's entire diff is test-coverage: added an 'AC-EDIT-7 (S4)' describe block (8 new tests) to app/tests/unit/marmot/groupMessageEdits.test.ts, calling `applyDeleteEditSignal` directly (handler-unit level, real idb-keyval-backed storage, no spies on the authorization decision itself): (a) own-author delete/edit accepted (2 tests); (b) cross-author delete/edit rejected — ordinary-message delete, announcement delete by a non-admin (fail-closed empty admin set), and edit rejected even when the signer IS a registered admin (AC-IMMUT-6: edit never gets an admin carve-out) (3 tests); (c) the admin-delete path tested as its own distinct case, with rumor.pubkey and the authenticated `sender` deliberately swapped across the two tests so a naive rumor.pubkey fallback anywhere in the admin-check chain (including chatPersistence.ts) would flip at least one outcome — this doubles as direct evidence for the third-hop inheritance claim against real (non-mocked) storage (2 tests); (d) one combined fail-closed check asserting the target row is byte-for-byte unchanged (`toEqual`) after a rejected delete and a rejected edit.",
+  "verification": {
+    "verification_json": "7 pre-impl (planner) questions read and satisfied; 2 post-impl questions appended (VQ-S4-008 confirming the AC-EDIT-7 rule predates this story and the diff is test-only; VQ-S4-009 confirming the admin-carve-out tests exercise real, non-mocked storage as genuine third-hop-inheritance evidence, not a tautology)",
+    "all_tests_passing": 4146,
+    "baseline_to_final": "4138 -> 4146 (+8: AC-EDIT-7 own-author x2, cross-author-reject x3, admin-delete-distinct-path x2, fail-closed x1)",
+    "lint_typecheck": "lint=NO_LINT (no ESLint config; consistent with S1-S3 baseline), typecheck=clean (npx tsc --noEmit, exit 0, no new diagnostics)",
+    "reviews": "stage1=lead-owned (not run by this architect spawn, per FR-2); stage2=not run by this architect spawn (lead-owned); unactioned findings recorded as post-impl questions: 0"
+  },
+  "retrospective": {
+    "skipped": true,
+    "reason": "clean_run"
+  },
+  "review": {
+    "examiner": "9/9 YES",
+    "stage2_fable": "ship — AC-EDIT-7 fully enforced app-layer, tests pin it. F1 informational (sender is stub, member-attested until backbone — see AC-MV-1). F2 (low test-gap) FIXED by lead: added admin-deletes-ordinary-message-REJECTED test locking carve-out is announcement-only.",
+    "note": "test-only story; AC-EDIT-7 rule inherited from S2 field-swap + pre-existing admin carve-out"
+  }
+}

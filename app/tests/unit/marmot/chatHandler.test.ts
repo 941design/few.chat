@@ -68,6 +68,13 @@ function makeCtx(overrides: Partial<{
   };
 }
 
+// AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
+// Defaults to PEER_PUBKEY, mirroring rumor.pubkey for every pre-existing test
+// below (sender.pubkey === rumor.pubkey, authenticity: 'claimed').
+function makeSender(pubkey: string = PEER_PUBKEY): { pubkey: string; authenticity: 'claimed' | 'mls' } {
+  return { pubkey, authenticity: 'claimed' };
+}
+
 function makeDeps() {
   return {
     appendMessage: vi.fn(async () => {}),
@@ -99,7 +106,7 @@ describe('chatHandler', () => {
     const rumor = makeRumor({ content: 'hello from peer', tags: [] });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.appendMessage).toHaveBeenCalledOnce();
     const [groupId, msg] = deps.appendMessage.mock.calls[0];
@@ -135,7 +142,7 @@ describe('chatHandler', () => {
     });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.appendMessage).toHaveBeenCalledOnce();
     const [, msg] = deps.appendMessage.mock.calls[0];
@@ -153,7 +160,7 @@ describe('chatHandler', () => {
     const rumor = makeRumor({ content: 42 as unknown as string });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx)).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     // appendMessage still called with empty string content
     expect(deps.appendMessage).toHaveBeenCalledOnce();
     const [, msg] = deps.appendMessage.mock.calls[0];
@@ -166,8 +173,8 @@ describe('chatHandler', () => {
     const rumor = makeRumor({ id: 'dup-id-1' });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     // Handler itself does not dedup — dispatcher LRU does
     expect(deps.appendMessage).toHaveBeenCalledTimes(2);
@@ -179,7 +186,7 @@ describe('chatHandler', () => {
     const rumor = makeRumor({ pubkey: SELF_PUBKEY }); // own-send
     const ctx = makeCtx({ selfPubkeyHex: SELF_PUBKEY });
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.incrementUnread).not.toHaveBeenCalled();
     // appendMessage and setChatVersion still called for the IDB write
@@ -198,7 +205,7 @@ describe('chatHandler', () => {
       getActiveGroupId: () => 'G2',
     });
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.incrementUnread).toHaveBeenCalledOnce();
     expect(deps.incrementUnread).toHaveBeenCalledWith('G1');
@@ -216,7 +223,7 @@ describe('chatHandler', () => {
       getActiveGroupId: () => 'G1',
     });
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.incrementUnread).not.toHaveBeenCalled();
     expect(deps.markAsRead).toHaveBeenCalledOnce();
@@ -228,8 +235,8 @@ describe('chatHandler', () => {
     const handler = createChatHandler(deps);
     const ctx = makeCtx();
 
-    await handler.handle(makeRumor({ id: 'r1' }), ctx);
-    await handler.handle(makeRumor({ id: 'r2' }), ctx);
+    await handler.handle(makeRumor({ id: 'r1' }), ctx, makeSender());
+    await handler.handle(makeRumor({ id: 'r2' }), ctx, makeSender());
 
     expect(deps.setChatVersion).toHaveBeenCalledTimes(2);
   });
@@ -248,7 +255,7 @@ describe('chatHandler', () => {
 
     const handler = createChatHandler(deps);
     const rumor = makeRumor({ id: 'orig-1' });
-    await handler.handle(rumor, makeCtx());
+    await handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey));
 
     expect(deps.resolvePendingSignalsForSlot).toHaveBeenCalledOnce();
     expect(deps.resolvePendingSignalsForSlot).toHaveBeenCalledWith(
@@ -264,7 +271,7 @@ describe('chatHandler', () => {
     deps.resolvePendingSignalsForSlot.mockRejectedValueOnce(new Error('boom'));
     const handler = createChatHandler(deps);
 
-    await expect(handler.handle(makeRumor({ id: 'orig-2' }), makeCtx())).resolves.not.toThrow();
+    await expect(handler.handle(makeRumor({ id: 'orig-2' }), makeCtx(), makeSender())).resolves.not.toThrow();
     expect(deps.setChatVersion).toHaveBeenCalledOnce();
   });
 
@@ -284,12 +291,13 @@ describe('chatHandler', () => {
       tags: [['e', 'orig-1', '', 'edit'], ['rev', '1000']],
     });
 
-    await handler.handle(replacement, makeCtx());
+    await handler.handle(replacement, makeCtx(), makeSender(replacement.pubkey));
 
     expect(deps.applyDeleteEditSignal).toHaveBeenCalledOnce();
     expect(deps.applyDeleteEditSignal).toHaveBeenCalledWith(
       { kind: 'group', groupId: GROUP_ID },
       replacement,
+      makeSender(replacement.pubkey),
     );
     expect(deps.appendMessage).not.toHaveBeenCalled();
     expect(deps.resolvePendingSignalsForSlot).not.toHaveBeenCalled();
@@ -309,7 +317,7 @@ describe('chatHandler', () => {
       tags: [['e', 'orig-1', '', 'edit'], ['rev', '1']],
     });
 
-    await handler.handle(replacement, makeCtx());
+    await handler.handle(replacement, makeCtx(), makeSender(replacement.pubkey));
 
     expect(deps.setChatVersion).toHaveBeenCalledOnce();
   });
@@ -323,7 +331,7 @@ describe('chatHandler', () => {
       tags: [['e', 'orig-1', '', 'edit'], ['rev', '1']],
     });
 
-    await expect(handler.handle(replacement, makeCtx())).resolves.not.toThrow();
+    await expect(handler.handle(replacement, makeCtx(), makeSender(replacement.pubkey))).resolves.not.toThrow();
 
     expect(deps.setChatVersion).not.toHaveBeenCalled();
   });
@@ -333,9 +341,26 @@ describe('chatHandler', () => {
     const handler = createChatHandler(deps);
     const rumor = makeRumor({ id: 'plain-1', tags: [['e', 'unrelated']] });
 
-    await handler.handle(rumor, makeCtx());
+    await handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey));
 
     expect(deps.applyDeleteEditSignal).not.toHaveBeenCalled();
     expect(deps.appendMessage).toHaveBeenCalledOnce();
+  });
+
+  // ─── AC-ATTR-6 (epic: group-message-author-auth-app-layer S2): attribution
+  // sources from sender.pubkey, not the forgeable rumor.pubkey ──────────────
+
+  it('AC-ATTR-6: a chat message where sender.pubkey differs from rumor.pubkey is appended with senderPubkey === sender.pubkey (not rumor.pubkey)', async () => {
+    const deps = makeDeps();
+    const handler = createChatHandler(deps);
+    const rumor = makeRumor({ pubkey: PEER_PUBKEY }); // claimed author
+    const forgedSender = makeSender(SELF_PUBKEY); // dispatcher-authenticated sender, deliberately different
+
+    await handler.handle(rumor, makeCtx(), forgedSender);
+
+    expect(deps.appendMessage).toHaveBeenCalledOnce();
+    const [, msg] = deps.appendMessage.mock.calls[0];
+    expect(msg.senderPubkey).toBe(SELF_PUBKEY);
+    expect(msg.senderPubkey).not.toBe(rumor.pubkey);
   });
 });

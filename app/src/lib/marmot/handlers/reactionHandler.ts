@@ -12,7 +12,7 @@
  */
 
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
-import type { ApplicationRumor, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 import type { ReactionThreadKey } from '@/src/lib/reactions/types';
 
 /** Named constant for the reaction rumor kind. */
@@ -23,11 +23,12 @@ export interface ReactionHandlerDeps {
   applyInboundRumor: (
     thread: ReactionThreadKey,
     rumor: ApplicationRumor,
+    sender: AuthenticatedSender,
   ) => Promise<unknown>;
   setReactionsVersion: (updater: (v: number) => number) => void;
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: ReactionHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ReactionHandlerDeps): Promise<void> {
   // Extract the e-tag to find the target message ID.
   const targetETag = rumor.tags?.find((t: string[]) => t[0] === 'e');
   const targetMessageId = targetETag?.[1];
@@ -43,6 +44,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Rea
   const result = await deps.applyInboundRumor(
     { kind: 'group', groupId: ctx.groupId },
     rumor,
+    sender,
   ).catch((err: unknown) => {
     console.warn('[dispatcher.7] applyInboundRumor failed:', err);
     return null;
@@ -56,6 +58,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Rea
 export function createReactionHandler(deps: ReactionHandlerDeps): RumorHandler {
   return {
     kind: REACTION_RUMOR_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext) => handle(rumor, ctx, deps),
+    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
   };
 }

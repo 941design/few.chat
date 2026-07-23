@@ -1,0 +1,20 @@
+{
+  "captured_at": "2026-07-23T19:50:00Z",
+  "command": "make test-unit",
+  "test_files": 212,
+  "tests_passed": 4100,
+  "tests_skipped": 1,
+  "tests_total": 4101,
+  "tests_failed": 0,
+  "status": "PASS",
+  "lint": {
+    "command": "cd app && npx next lint",
+    "status": "NO_LINT",
+    "note": "No ESLint config present (no .eslintrc*/eslint.config* file); `next lint` drops into the interactive first-time-setup prompt rather than running a check. Confirms architecture.md's Implementation constraints note: 'No lint/typecheck make target exists.'"
+  },
+  "typecheck": {
+    "command": "cd app && npx tsc --noEmit",
+    "status": "clean",
+    "note": "No make target exists for this; run directly against the project tsconfig as the closest available typecheck baseline. Exit 0, no diagnostics."
+  }
+}

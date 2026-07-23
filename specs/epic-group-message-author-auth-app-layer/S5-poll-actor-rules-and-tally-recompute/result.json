@@ -1,0 +1,60 @@
+{
+  "story_id": "S5",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-23T20:57:34Z",
+  "files_created": [
+    "specs/epic-group-message-author-auth-app-layer/S5-poll-actor-rules-and-tally-recompute/architecture.json",
+    "specs/epic-group-message-author-auth-app-layer/S5-poll-actor-rules-and-tally-recompute/baseline.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollSync.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/context/MarmotContext.tsx",
+    "specs/epic-group-message-author-auth-app-layer/S5-poll-actor-rules-and-tally-recompute/verification.json",
+    "specs/epic-group-message-author-auth-app-layer/S5-poll-actor-rules-and-tally-recompute/architecture.json"
+  ],
+  "tests_added": {
+    "unit": 12
+  },
+  "test_counts": {
+    "baseline": 4147,
+    "final": 4159
+  },
+  "mocks": [],
+  "remediation_rounds": 2,
+  "remediation_notes": [
+    "Round 1 (coordinator-directed, not a Decider consult): the coordinator overrode this story's original design decision (loadVotes imported directly into pollHandler.ts, recorded as VQ-S5-011) on the grounds that getPoll is an equally same-module poll-store read yet IS injected via PollHandlerDeps — the direct import for loadVotes was therefore an unprincipled inconsistency, not a principled scope-preserving exception. The coordinator explicitly authorized the resulting scope expansion to registerHandlers.ts and MarmotContext.tsx. Change: loadVotes: (pollId: string) => Promise<PollVote[]> added to PollHandlerDeps (pollHandler.ts) and threaded through registerHandlers.ts's HandlerDeps interface + pollDeps pass-through and MarmotContext.tsx's pollPersistence import + PollHandlerDeps construction, mirroring getPoll's wiring exactly at every site. pollHandler.test.ts's AC-POLL-4 tests were switched from seeding real (mocked-idb-keyval-backed) storage via a dynamically-imported real saveVote to injecting a loadVotes vi.fn() spy through makeDeps' new `votes` parameter, exercising the injected path like getPoll/savePoll. Behavioral assertions (forged-results ignored, AC-XCUT-2 order-independence, partial-votes eventual-consistency, multiplechoice) are unchanged. architecture.json and verification.json (VQ-S5-013 appended) updated to reflect the corrected design; VQ-S5-011 left as historical record of the original (now-superseded) decision, not edited.",
+    "Round 2 (Fable Stage-2 review findings F2 and F4; scope confined to pollHandler.ts + pollHandler.test.ts, no other files touched). F2 (creator-binding hole — first-open-wins): handleOpen had no guard against re-opening an existing pollId — since savePoll upserts by id, any member could resend poll_open reusing an existing pollId to rebind creatorPubkey to themselves, reset closed=false, and replace title/options, then pass close-authz as 'creator'. Fixed by adding `const existing = await deps.getPoll(ctx.groupId, payload.id); if (existing) return;` at the top of handleOpen, before payload.id is used to construct the Poll — a re-open of an existing poll is dropped (no savePoll, no version bump). Legit pollIds are fresh per-poll UUIDs and the dispatcher LRU already dedups identical rumor-id redelivery, so only a malicious/distinct re-open with a reused pollId reaches this guard. Test added (POLL_OPEN describe block): open poll P as creator X, then a second poll_open for the same pollId from sender Y != X is rejected — savePoll called only once, and getPoll (simulated persistence) still returns the ORIGINAL poll (creatorPubkey===X, original title/options, closed unchanged). F4 (vote-response validation — protect the recomputed tally): handleVote previously saved payload.responses verbatim with no validation against the poll's actual options, so a crafted singlechoice vote with two option ids could contribute to both, and bogus option ids could inflate totalVoters (computeTally counts vote rows, not selected options, so even an empty-response vote would count as a voter). Fixed by filtering payload.responses to option ids present in existingPoll.options, capping to at most one response for singlechoice polls (first valid wins), and dropping the vote entirely (no saveVote call) if zero valid responses survive filtering. Tests added (new 'POLL_VOTE response sanitization (F4)' describe block, using a voteThenClose helper that chains createPollVoteHandler -> createPollCloseHandler so assertions read through the real computeTally recompute, not internal sanitization logic directly): (a) singlechoice vote [validA, validB] is capped to [validA] only, counted as one option; (b) a bogus id mixed with a valid one on a multiplechoice poll is dropped, valid id kept; a vote of ALL-bogus ids is dropped entirely (saveVote not called, no totalVoters inflation); (c) multiplechoice vote [validA, validB, bogus] keeps both valid ids and drops the bogus one. Verified `make test-unit` (214 files, 4159 passed, 1 skipped, 0 failed — baseline 4147, +12 total across both remediation rounds: +7 round-1-era AC-POLL-1/AC-POLL-4/multiplechoice tests, +5 round-2 F2/F4 tests) and `cd app && npx tsc --noEmit` clean."
+  ],
+  "modules_touched": [
+    "Poll"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Confirmed S2 already correctly implemented AC-POLL-2 (poll_vote's PollVote.voterPubkey/id keyed on sender.pubkey) and AC-POLL-3 (poll_close authorization compares sender.pubkey against the stored creatorPubkey, not rumor.pubkey) — no production changes needed for those two, only additional/relabeled test coverage. This story's original work was AC-POLL-1 and AC-POLL-4: (1) handleOpen now stores creatorPubkey: sender.pubkey, ignoring the self-asserted payload field. (2) handleClose recomputes results/totalVoters from stored PollVote rows via a pure computeTally(options, votes) helper, reading votes through deps.loadVotes(pollId) (injected exactly like getPoll/savePoll/saveVote per remediation round 1 — see remediation_notes). Remediation round 2 (Fable Stage-2 review) closed two further gaps in the same module, both now fixed in production code: F2 added a first-open-wins guard at the top of handleOpen (deps.getPoll(ctx.groupId, payload.id); if existing, drop the re-open) closing a creator-rebinding hole where any member could resend poll_open for an existing pollId to hijack ownership and reset poll state. F4 added response sanitization in handleVote — responses are filtered to the poll's actual option ids, capped to one for singlechoice, and the vote is dropped entirely if no valid responses remain — closing a hole where a crafted vote could contribute to multiple singlechoice options or inflate totalVoters via bogus option ids (computeTally counts vote rows unconditionally, so an unsanitized empty-response vote would still count as a voter). Tests (pollHandler.test.ts, 28 tests total) cover: AC-POLL-1, AC-POLL-2/AC-POLL-3 (kept/relabeled from S2), AC-POLL-3 fail-closed, AC-POLL-4 forged-results/order-independence/partial-votes/zero-votes/multiplechoice (all via the loadVotes deps spy), F2 first-open-wins (a hijack re-open is dropped, original poll state unchanged), and F4(a)/(b)/(c) response sanitization asserted through the real computeTally recompute via a voteThenClose helper that chains the vote and close handlers.",
+  "verification": {
+    "verification_json": "10 pre-impl (planner) questions read and satisfied; 3 post-impl questions appended in round 1 (VQ-S5-011 superseded design record, VQ-S5-012 multiplechoice gap closed, VQ-S5-013 remediation round 1 deps-injection fix). Round 2 (F2/F4) was a coordinator-directed Fable Stage-2 review fix, not a new pre/post-impl verification question round — no new VQ- entries appended for F2/F4; the fixes and their tests are the verification record.",
+    "all_tests_passing": 4159,
+    "baseline_to_final": "4147 -> 4159 (+12 total: +7 from round-1-era AC-POLL-1/AC-POLL-4/multiplechoice work, +5 from round-2 F2 (x1) and F4 (x4))",
+    "lint_typecheck": "lint=NO_LINT (no ESLint config; consistent with S1-S4 baseline), typecheck=clean (npx tsc --noEmit, exit 0, no diagnostics, re-verified after both remediation rounds)",
+    "reviews": "stage1=lead-owned (not run by this architect spawn, per FR-2); stage2=Fable review surfaced F1-F4 (F1 routed to S6, F2/F4 fixed here in round 2, F3 explicitly out of scope per coordinator instruction); unactioned findings recorded as post-impl questions: 0 (F3 is a tracked out-of-scope item, not an unactioned finding within this story's remit)"
+  },
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story's scope.includes was strictly 3 files (pollHandler.ts, pollSync.ts, pollHandler.test.ts), but AC-POLL-4's recompute needs to read the stored PollVote rows, and every other handler in this codebase gets 100% of its persistence access via an injected deps bag wired through registerHandlers.ts/MarmotContext.tsx — both outside scope. I initially resolved this with a direct import (justified by architecture.md's module map placing pollPersistence.ts in the same 'Poll' module) to honor the literal scope constraint, but the coordinator correctly pointed out the inconsistency this created against getPoll (an equally same-module read that WAS injected) and overrode it, authorizing the scope expansion in round 1. In hindsight the getPoll precedent should have settled the question during my own pre-implementation reasoning — I had already grepped every handler's imports to confirm the deps-injection convention was universal, which surfaced exactly this getPoll comparison, but I weighted the literal scope.includes constraint over the convention it existed to protect. Separately, round 2's F2 (missing re-open guard) and F4 (missing response validation) are both gaps my own original implementation should have caught: the tally-recompute work (AC-POLL-4) closed forgeability of the CLOSE message's claimed counts, but left the upstream inputs to that same recompute (the stored Poll row's identity via re-open, and each vote's responses) unvalidated — a Fable review, not my own pre-impl reasoning, is what surfaced that the recompute is only as trustworthy as the votes and poll state feeding it.",
+    "surprised_by": "",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "review": {
+    "examiner": "12 YES / 1 PARTIAL (ACs satisfied)",
+    "stage1_opus": "clean; confirmed F2/F4 fixes correct, no legit-path break",
+    "stage2_fable": "found F1 (routed S6), F2+F4 (fixed in S5 rd2), F3 (backlog finding poll-vote-store-key-not-group), F5 (product tradeoff surfaced), F6 (S9 note)",
+    "deps_fix": "loadVotes threaded via deps (rd1)"
+  }
+}

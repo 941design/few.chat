@@ -42,10 +42,11 @@ import { purgeStrangerDmReactions } from '@/src/lib/reactions/api';
 import { loadKnownPeers, rememberKnownPeers, knownPeersMigrationComplete, markKnownPeersMigrationComplete } from '@/src/lib/knownPeers';
 import { MAINTAINER_PUBKEYS_HEX } from '@/src/config/maintainer';
 import { buildDispatcher } from '@/src/lib/marmot/registerHandlers';
+import { createAuthenticatedSenderResolver } from '@/src/lib/marmot/authenticatedSenderResolver';
 import { clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { applyInboundRumor } from '@/src/lib/reactions/api';
 import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider } from '@/src/lib/messageEdits/api';
-import { savePoll, saveVote, getPoll, clearPollData } from '@/src/lib/marmot/pollPersistence';
+import { savePoll, saveVote, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
@@ -1505,6 +1506,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // so chatHandler can suppress the bell for the group on screen.
             getActiveGroupId,
           };
+
+          // S1 (authenticated-sender seam): see authenticatedSenderResolver.ts for
+          // the resolver's behavior/doc-comment (per-call NODE_ENV/__fewTest
+          // re-evaluation, ADR-012 backbone note).
+          const resolveAuthenticatedSender = createAuthenticatedSenderResolver();
           const unsubDispatcher = buildDispatcher({
             // Chat
             appendMessage,
@@ -1606,10 +1612,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             savePoll,
             saveVote,
             getPoll,
+            loadVotes,
             setPollVersion,
             // S4 (AC-QUEUE-4): real enqueueLeave closure — replaces MOCK-S2-001 stub from S2.
             enqueueLeave,
-          }).subscribe(mlsGroup, dispatcherCtx);
+          }).subscribe(mlsGroup, dispatcherCtx, resolveAuthenticatedSender);
 
           // Combine both unsubscribe functions so cleanup tears down both listeners.
           subsMap.set(group.id, () => {

@@ -1,0 +1,64 @@
+{
+  "story_id": "S4",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S4-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does `applyDeleteEditSignal`'s rejection compare the signal's authenticated sender against the *target message's actually-stored* `ChatMessage.senderPubkey` (populated by S2's field-swap), rather than against the signal rumor's own claimed subject or a value that happens to always equal the signal's sender (which would make the comparison vacuously true and never reject)? Show a test case where the two differ and the edit/delete is rejected."
+    },
+    {
+      "question_id": "VQ-S4-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the admin-delete path route exclusively through the existing `GroupAdminsProvider` (no parallel/duplicate admin-check logic added in this story), and is the trust-model comment block at deleteEditHandler.ts:29-56 preserved verbatim (not edited, trimmed, or reworded) as architecture.md requires until the backbone lands?"
+    },
+    {
+      "question_id": "VQ-S4-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Edits (2nd hop)` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S4-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/groupMessageEdits.test.ts cover, as handler-unit tests calling `applyDeleteEditSignal` directly: (a) own-author edit/delete accepted, (b) cross-author edit/delete rejected with no tombstone written and no edit applied, (c) cross-author delete accepted only via the separate admin-delete path, and (d) the exact stored-vs-signal sender values used in each assertion (not just a boolean 'authorized' flag)?"
+    },
+    {
+      "question_id": "VQ-S4-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Was the test-only verification added (no independent code change per this story's scope) proving chatPersistence.ts's Tombstone re-check inherits the same authenticated-sender value the edits module used, per architecture.md's explicit third-hop inheritance note — and does that test fail if the inheritance were broken (e.g. if chatPersistence.ts read `rumor.pubkey` directly instead of the value threaded from messageEdits/api.ts)?"
+    },
+    {
+      "question_id": "VQ-S4-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "On a sender-mismatch rejection, is the rejection fully fail-closed — no tombstone row, no edit applied, and no optimistic UI/state mutation performed before the authorization check completes — for both the edit path and the delete path independently?"
+    },
+    {
+      "question_id": "VQ-S4-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-EDIT-7",
+      "question": "Show the production code (messageEdits/api.ts's `applyDeleteEditSignal`) and the handler-unit test(s) that exercise AC-EDIT-7 end-to-end: an edit or delete signal whose authenticated sender differs from the target message's stored authenticated sender is rejected — no tombstone written, no edit applied — regardless of admin status unless the admin-delete path is separately satisfied via GroupAdminsProvider; confirm the admin-delete case is tested as a distinct path, not conflated with the own-author case."
+    },
+    {
+      "question_id": "VQ-S4-008",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "ac_id": "AC-EDIT-7",
+      "question": "S2's mechanical field-swap (`senderPubkey = sender?.pubkey ?? rumor.pubkey` in both the DELETE branch's `authorizeDeleteAgainstTarget` call and the EDIT branch's `pubkeysMatch` call) plus the pre-existing DD-11/AC-IMMUT-4/5 admin carve-out (from epic-group-invite-lifecycle, unmodified by this story) together already implemented AC-EDIT-7's exact rule before this story started. Confirm no production code in messageEdits/api.ts, deleteEditHandler.ts, or chatPersistence.ts was changed by S4 — this story's diff is test-file-only (app/tests/unit/marmot/groupMessageEdits.test.ts, +8 tests in a new 'AC-EDIT-7 (S4)' describe block: own-author accept x2, cross-author reject x3 (ordinary-message delete, announcement delete by a non-admin, edit rejected even when the signer IS a registered admin), admin-delete-via-provider x2 (accept when sender is admin regardless of rumor.pubkey, reject when rumor.pubkey merely LOOKS like the admin but the authenticated sender is not), and one combined fail-closed real-storage-untouched check)."
+    },
+    {
+      "question_id": "VQ-S4-009",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "ac_id": "AC-EDIT-7",
+      "question": "The two 'VQ-S4-004(c)' tests (edit7-admin-del / edit7-fake-admin-del) deliberately swap which key signs the raw rumor (rumor.pubkey) versus which key is passed as the dispatcher-resolved `sender` object, so that a naive implementation reading rumor.pubkey anywhere in the admin-check chain (messageEdits/api.ts's `authorizeDeleteAgainstTarget`/`groupAdminsFor`, or chatPersistence.ts's `tombstoneMessage`/`TombstoneAuthorization`) would flip at least one of the two outcomes. Confirm both tests currently pass against the real (non-mocked) `tombstoneMessage` storage write, not a spied/stubbed one — i.e. this is genuine evidence for the third-hop inheritance claim (VQ-S4-005), not a tautological assertion against the test's own input."
+    }
+  ]
+}

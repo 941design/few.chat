@@ -62,6 +62,11 @@ function makeCtx() {
   };
 }
 
+// AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
+function makeSender(pubkey: string = PEER_PUBKEY): { pubkey: string; authenticity: 'claimed' | 'mls' } {
+  return { pubkey, authenticity: 'claimed' };
+}
+
 type Deps = {
   loadMessages: ReturnType<typeof vi.fn>;
   applyInboundRumor: ReturnType<typeof vi.fn>;
@@ -118,14 +123,31 @@ describe('reactionHandler', () => {
     const rumor = makeReactionRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.applyInboundRumor).toHaveBeenCalledOnce();
     expect(deps.applyInboundRumor).toHaveBeenCalledWith(
       { kind: 'group', groupId: GROUP_ID },
       rumor,
+      makeSender(rumor.pubkey),
     );
     expect(deps.setReactionsVersion).toHaveBeenCalledOnce();
+  });
+
+  it('AC-ATTR-6: applyInboundRumor is called with sender as its third argument (forwarding assertion — attribution logic itself lives in reactions/api.ts)', async () => {
+    const deps = makeDeps(true);
+    const handler = createReactionHandler(deps);
+    const rumor = makeReactionRumor();
+    const ctx = makeCtx();
+    const forgedSender = makeSender('aa'.repeat(32)); // deliberately distinct from rumor.pubkey
+
+    await handler.handle(rumor, ctx, forgedSender);
+
+    expect(deps.applyInboundRumor).toHaveBeenCalledWith(
+      { kind: 'group', groupId: GROUP_ID },
+      rumor,
+      forgedSender,
+    );
   });
 
   it('AC-AR-10 target-message-not-found: IDB returns empty array — applyInboundRumor NOT called', async () => {
@@ -134,7 +156,7 @@ describe('reactionHandler', () => {
     const rumor = makeReactionRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.applyInboundRumor).not.toHaveBeenCalled();
     expect(deps.setReactionsVersion).not.toHaveBeenCalled();
@@ -146,7 +168,7 @@ describe('reactionHandler', () => {
     const rumor = makeReactionRumor({ tags: [] }); // no e-tag
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.applyInboundRumor).not.toHaveBeenCalled();
   });
@@ -158,7 +180,7 @@ describe('reactionHandler', () => {
     const rumor = makeReactionRumor();
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.applyInboundRumor).toHaveBeenCalledOnce();
     expect(deps.setReactionsVersion).not.toHaveBeenCalled();
@@ -200,8 +222,8 @@ describe('reactionHandler', () => {
     const rumor = makeReactionRumor({ id: 'direct-dup-id' });
     const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx);
-    await handler.handle(rumor, ctx);
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
+    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     // Handler itself does not dedup — that's dispatcher's job
     expect(deps.applyInboundRumor).toHaveBeenCalledTimes(2);

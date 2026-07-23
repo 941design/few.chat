@@ -1,0 +1,327 @@
+{
+  "epic": "group-message-author-auth-app-layer",
+  "concepts": [
+    {
+      "id": "dispatcher-choke-point-drop",
+      "name": "Dispatcher choke-point drop-before-markSeen ordering",
+      "owning_module": "Dispatcher",
+      "type": "invariant",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "handler-sender-arg-contract",
+      "name": "Handler contract: attribute/authorize only on the sender sibling arg, never rumor.pubkey",
+      "owning_module": "Handlers",
+      "type": "public_contract",
+      "added_by_story": "S2"
+    },
+    {
+      "id": "structured-parse-author-and-actor-rules",
+      "name": "StructuredContent author sourced from sender; per-type actor rules",
+      "owning_module": "Structured parse",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "leave-subject-sender-gate",
+      "name": "Leave enqueue requires subject === sender",
+      "owning_module": "Leave",
+      "type": "invariant",
+      "added_by_story": "S3"
+    },
+    {
+      "id": "poll-creator-and-tally-authority",
+      "name": "Poll creatorPubkey bound to sender; tally always recomputed from stored votes",
+      "owning_module": "Poll",
+      "type": "invariant",
+      "added_by_story": "S5",
+      "partial_by_story": "S2 (close/vote reads repointed to sender; creator-binding-at-open + tally-recompute are S5)",
+      "coverage": "AC-POLL-1 creator bound to sender at open; AC-POLL-4 tally recompute (pure, order-indep) from stored votes ignoring payload counts; close-authz creator-only; F2 first-open-wins prevents creator rebinding via upsert; F4 vote-response sanitization prevents tally skew/totalVoters inflation"
+    },
+    {
+      "id": "reactions-attribution-on-sender",
+      "name": "Reaction add/remove attribution keyed to sender, not rumor.pubkey",
+      "owning_module": "Reactions (2nd hop)",
+      "type": "invariant",
+      "added_by_story": "S2"
+    },
+    {
+      "id": "edits-authz-on-stored-sender",
+      "name": "Edit/delete authorization compares signal sender to target's stored authenticated sender",
+      "owning_module": "Edits (2nd hop)",
+      "type": "invariant",
+      "added_by_story": "S4 (rule from S2 field-swap; AC-EDIT-7 confirmed + test-locked in S4)",
+      "partial_by_story": "S2 (signature-threaded only; AC-EDIT-7 stored-sender comparison is S4)"
+    },
+    {
+      "id": "tombstone-sender-inheritance",
+      "name": "Tombstone re-check inherits authenticated sender from the Edits module, no independent resolution",
+      "owning_module": "Tombstone (3rd hop)",
+      "type": "invariant",
+      "added_by_story": "S4 (verified inherits authenticated sender; no independent rumor.pubkey read)"
+    },
+    {
+      "id": "chat-store-ingest-gate",
+      "name": "Announcement ingest gate runs before appendMessage/unread increment/notification",
+      "owning_module": "Chat store",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "admin-roster-provider-contract",
+      "name": "GroupAdminsProvider + live-roster accessor are the sole source of admin/roster facts, fail-closed to []",
+      "owning_module": "Admin/roster provider",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "profiles-roster-exempt",
+      "name": "Forwarded profile envelopes are exempt from the actor-in-roster check",
+      "owning_module": "Profiles (forwarded)",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "shared-verifier-per-kind-binding",
+      "name": "Shared envelope verifier's per-kind binding policy (signature, kind, group-binding, one-shot on inner event id)",
+      "owning_module": "Shared verifier",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "authenticated-sender-seam-type",
+      "name": "AuthenticatedSender { pubkey, authenticity: claimed|mls } + SenderResolver; sender threaded as per-message sibling arg to handle(), never a DispatcherContext field",
+      "owning_module": "Dispatcher",
+      "type": "public_contract",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "sender-resolver-app-scaffolding",
+      "name": "App-side per-group sender resolver + dev-only override hook (gated NODE_ENV!==production); throwaway scaffolding, default returns claimed rumor.pubkey, replaced when MLS backbone lands",
+      "owning_module": "Dispatcher / marmot lib (authenticatedSenderResolver.ts)",
+      "type": "throwaway_scaffolding",
+      "added_by_story": "S1"
+    }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "surfaces_touched": [
+        "applicationRumorDispatcher.ts (types + widened handle/subscribe + choke-point drop before markSeen)",
+        "MarmotContext.tsx (resolver closure + dev __fewTest override hook)",
+        "applicationRumorDispatcher.test.ts (drop + no-LRU-poison + resolved-sender tests)",
+        "app/src/lib/marmot/authenticatedSenderResolver.ts (NEW — createAuthenticatedSenderResolver factory extracted from MarmotContext, byte-identical; VQ-S1-010 remediation)",
+        "app/tests/unit/marmot/authenticatedSenderResolver.test.ts (NEW — claimed default, per-call override re-eval, NODE_ENV=production gating)"
+      ],
+      "findings": [
+        {
+          "id": "S1-F1",
+          "category": "convention_drift",
+          "severity": 4,
+          "summary": "optional resolver param, trust-permissive default: forgetful caller reverts to forgeable trust once handlers trust sender + backbone lands; track as backbone gate"
+        },
+        {
+          "id": "S1-F2",
+          "category": "contract_mismatch",
+          "severity": 3,
+          "summary": "exact-string pubkey equality; normalization skew could false-drop legit msgs under backbone"
+        },
+        {
+          "id": "S1-F3",
+          "category": "best_practices",
+          "severity": 2,
+          "summary": "unconditional console.warn vs dev-log wording; benign"
+        }
+      ],
+      "watch_items_for_later_stories": [
+        "S2: verify handlers read sender.pubkey not rumor.pubkey",
+        "Backbone: resolver optionality (S1-F1) + pubkey normalization (S1-F2)"
+      ],
+      "remediation": {
+        "round": 1,
+        "closed": [
+          "VQ-S1-010"
+        ],
+        "deferred": [
+          "VQ-S1-009 (backbone gate)"
+        ]
+      }
+    },
+    {
+      "id": "S2",
+      "findings": [
+        {
+          "id": "S2-F1",
+          "category": "missing_test",
+          "severity": 3,
+          "summary": "profileHandler own-join gate (3-identity read) lacks AC-ATTR-6 divergent-sender behavioral lock; prod-unreachable, defense-in-depth"
+        },
+        {
+          "id": "S2-F2",
+          "category": "convention_drift",
+          "severity": 3,
+          "summary": "second-hop optional-sender ??rumor.pubkey fallback unguarded for hypothetical future group-inbound caller (same class as S1-F1); backbone watch"
+        },
+        {
+          "id": "S2-F3",
+          "category": "best_practices",
+          "severity": 2,
+          "summary": "static-scan comment stripper narrow false-negative on rumor.pubkey sharing a line with a //-containing string literal; theoretical"
+        }
+      ],
+      "verified_preserved": [
+        "deleteEditHandler trust comment verbatim",
+        "profileHandler signedEvent author precedence",
+        "DM/self-echo paths unaffected"
+      ],
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "chatHandler own-send guard was last identity check on forgeable field; repointed to sender.pubkey -> handlers/ ban now absolute (empty allow-list)"
+        },
+        {
+          "id": "F2",
+          "severity": "low-med",
+          "status": "dissolved_by_F1",
+          "summary": "allow-list marker laundering; moot once allow-list empty"
+        },
+        {
+          "id": "F3",
+          "severity": "low",
+          "status": "documented",
+          "summary": "scanner is literal-name-based (defeatable by alias/destructure/computed); noted in test header as a regression tripwire not adversarial guarantee"
+        },
+        {
+          "id": "F4",
+          "severity": "info",
+          "status": "deferred",
+          "summary": "leave payload.pubkey + poll payload.creatorPubkey still content-forgeable; S3/S5 own"
+        },
+        {
+          "id": "F5",
+          "severity": "low",
+          "status": "deferred_backbone",
+          "summary": "optional seam args rely on call-site discipline; backbone watch (class of S1-F1)"
+        }
+      ]
+    },
+    {
+      "id": "S3",
+      "findings": [
+        {
+          "id": "S3-F1",
+          "category": "convention_drift",
+          "severity": 2,
+          "summary": "cross-gate normalization: leaveHandler normalizes case both sides but S1 dispatcher drop is exact-string; reinforces S1-F2, live under backbone"
+        }
+      ],
+      "verified": [
+        "single enqueue path",
+        "rejected leave = zero side effects",
+        "case-norm edge test guards both sites",
+        "readiness-only comment honest"
+      ],
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "low",
+          "status": "fixed",
+          "summary": "empty-pubkey vacuous match: parseLeaveIntent now requires hex-64, drops malformed subjects per spec-request §7"
+        },
+        {
+          "id": "F2",
+          "severity": "medium",
+          "status": "routed_to_S6",
+          "summary": "kind-9 leave_intent departure announcement (X-left row) renders from self-reported field ungated; subject===sender ingest rule folded into S6"
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "test_only": true,
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "info",
+          "status": "documented",
+          "summary": "authenticated sender is the stub (member-attested until backbone); AC-MV-1 covers it"
+        },
+        {
+          "id": "F2",
+          "severity": "low",
+          "status": "fixed",
+          "summary": "added test: admin deleting an ORDINARY peer message is rejected (carve-out is announcement-only)"
+        }
+      ],
+      "verified": [
+        "AC-EDIT-7 enforced on both edit+delete paths",
+        "admin carve-out announcement-only, keys on authenticated sender",
+        "tombstone 3rd-hop strictly inherits",
+        "group inbound path always supplies sender (fallback never fires)"
+      ]
+    },
+    {
+      "id": "S5",
+      "findings": [
+        {
+          "id": "S5-F1",
+          "category": "contract_mismatch",
+          "severity": 2,
+          "summary": "vote store key not group-scoped; recompute rests on poll.id global uniqueness — PRE-EXISTING (vote-write uses same key), not S5 regression"
+        }
+      ],
+      "verified": [
+        "computeTally pure/order-independent, distinct-voter totalVoters, zero+multichoice correct",
+        "handleClose never reads payload counts, options from stored creator-bound poll",
+        "close-authz creator-only vs authenticated sender",
+        "partial-vote honest EC",
+        "loadVotes wired via deps like getPoll"
+      ],
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "major",
+          "status": "routed_to_S6",
+          "summary": "poll_close chat announcement renders forged counts ungated; creator-gate + recomputed-tally render owed by S6"
+        },
+        {
+          "id": "F2",
+          "severity": "major",
+          "status": "fixed",
+          "summary": "first-open-wins guard closes creator-rebinding via poll_open re-send"
+        },
+        {
+          "id": "F3",
+          "severity": "medium",
+          "status": "backlog",
+          "summary": "cross-group vote-store contamination (pollId-only key); finding poll-vote-store-key-not-group"
+        },
+        {
+          "id": "F4",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "vote-response sanitization (filter to valid options, singlechoice cap, drop all-bogus)"
+        },
+        {
+          "id": "F5",
+          "severity": "info",
+          "status": "surfaced_to_po",
+          "summary": "permanent tally understatement: client that closes before all votes arrive shows frozen partial count; accepted consequence of recompute-on-close"
+        },
+        {
+          "id": "F6",
+          "severity": "low",
+          "status": "note_S9",
+          "summary": "saveVote LWW by arrival not votedAt; out-of-order changed vote regresses; AC-XCUT-2/S9 note"
+        }
+      ]
+    }
+  ],
+  "reviewer_state": {
+    "last_story_reviewed": "S5",
+    "model_at": "2026-07-23T20:57:34Z",
+    "updated_at": "2026-07-23T18:02:23Z"
+  }
+}

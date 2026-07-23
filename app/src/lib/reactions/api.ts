@@ -19,6 +19,7 @@
  */
 
 import type { Reaction, ReactionThreadKey } from '@/src/lib/reactions/types';
+import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
 import * as walledGarden from '@/src/lib/walledGarden';
 
 // ─── Public types ────────────────────────────────────────────────────────────
@@ -296,6 +297,14 @@ export function rollbackOptimistic(
  * Note: AC-11 "silent discard for unknown messageId" is enforced by the dispatcher
  * (MarmotContext case 7 / ContactChat kind-7 dispatch), not by this leaf module.
  *
+ * `sender` (optional, epic: group-message-author-auth-app-layer S2): the
+ * dispatcher-resolved authenticated sender for the group path. When
+ * supplied, every attribution decision in this function sources the
+ * reactor pubkey from `sender.pubkey` instead of the forgeable
+ * `rumor.pubkey`. Callers that don't supply one (the DM path, seal-
+ * signature-authenticated independently) keep reading `rumor.pubkey`
+ * unchanged.
+ *
  * AC-09, AC-10, AC-58.
  */
 export async function applyInboundRumor(
@@ -307,7 +316,10 @@ export async function applyInboundRumor(
     content: string;
     tags: string[][];
   },
+  sender?: AuthenticatedSender,
 ): Promise<{ messageId: string } | null> {
+  const senderPubkey = sender?.pubkey ?? rumor.pubkey;
+
   // Extract the e-tag value (first occurrence)
   // Guard against malformed tags where t[0] is absent or non-string.
   const eTag = rumor.tags.find((t) => typeof t[0] === 'string' && t[0] === 'e');
@@ -358,7 +370,7 @@ export async function applyInboundRumor(
         const idx = current.findIndex(
           (r) =>
             r.messageId === messageId &&
-            r.reactorPubkey === rumor.pubkey &&
+            r.reactorPubkey === senderPubkey &&
             r.emoji === targetEmoji &&
             !r.removed,
         );
@@ -376,7 +388,7 @@ export async function applyInboundRumor(
       // exists for (messageId, reactorPubkey) — unambiguous single-emoji case.
       // Zero or multiple rows → silent discard (§2.4, D2 safety).
       const candidates = current.filter(
-        (r) => r.messageId === messageId && r.reactorPubkey === rumor.pubkey && !r.removed,
+        (r) => r.messageId === messageId && r.reactorPubkey === senderPubkey && !r.removed,
       );
       if (candidates.length !== 1) {
         return null;
@@ -393,7 +405,7 @@ export async function applyInboundRumor(
     const existingIdx = current.findIndex(
       (r) =>
         r.messageId === messageId &&
-        r.reactorPubkey === rumor.pubkey &&
+        r.reactorPubkey === senderPubkey &&
         r.emoji === emoji,
     );
 
@@ -420,7 +432,7 @@ export async function applyInboundRumor(
       const newRow: Reaction = {
         id: rumor.id,
         messageId,
-        reactorPubkey: rumor.pubkey,
+        reactorPubkey: senderPubkey,
         emoji,
         eventId: rumor.id,
         createdAt: rumor.created_at * 1000, // rumor.created_at is unix seconds; Reaction.createdAt is ms

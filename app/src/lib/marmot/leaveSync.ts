@@ -29,7 +29,20 @@ export function parseLeaveIntent(content: string): LeaveIntentPayload | null {
     if (typeof d.pubkey !== 'string') {
       return null;
     }
-    return { pubkey: d.pubkey };
+    // Canonicalize to lowercase hex so the forced-removal subject===sender
+    // gate in leaveHandler.ts (AC-FORCE-3) compares like-for-like against
+    // AuthenticatedSender.pubkey — the wire shape (JSON { pubkey }) is
+    // unchanged, only the in-memory representation is normalized.
+    const pubkey = d.pubkey.toLowerCase();
+    // Drop empty / non-canonical subjects as malformed, per the spec-request
+    // (§7 "pubkey:'' is a live-send edge ... drop as malformed — do not add an
+    // empty-pubkey tolerance carve-out"). Without this, an empty subject from a
+    // not-yet-hydrated client (pubkeyHex ?? '') would pass the subject===sender
+    // gate VACUOUSLY ('' === '') and arm a no-op removal.
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
+      return null;
+    }
+    return { pubkey };
   } catch {
     return null;
   }

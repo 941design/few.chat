@@ -43,6 +43,7 @@ const {
 const { buildReactionRumor } = await import('@/src/lib/reactions/rumor');
 
 import type { Reaction } from '@/src/lib/reactions/types';
+import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -288,6 +289,53 @@ describe('applyInboundRumor for group reactions (AC-38, AC-39, S4)', () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     unsub();
+  });
+});
+
+// ─── Authenticated sender attribution (AC-ATTR-6(c), epic: group-message-author-auth-app-layer S2) ──
+
+describe('applyInboundRumor attributes to the authenticated sender, not rumor.pubkey (AC-ATTR-6c)', () => {
+  it('add: stored reactorPubkey is sender.pubkey when it differs from rumor.pubkey', async () => {
+    const forgedPubkey = 'forger-' + 'ee'.repeat(28);
+    const realSenderPubkey = 'real-sender-' + 'ff'.repeat(26);
+    const sender: AuthenticatedSender = { pubkey: realSenderPubkey, authenticity: 'mls' };
+
+    const rumor = makeInboundRumor({ id: 'attr-add-' + 'aa'.repeat(28), pubkey: forgedPubkey, content: '🔥' });
+    const result = await applyInboundRumor(GROUP_THREAD, rumor, sender);
+    expect(result).not.toBeNull();
+
+    const rows = await loadReactions(GROUP_THREAD);
+    const row = rows.find((r) => r.emoji === '🔥');
+    expect(row).toBeDefined();
+    expect(row?.reactorPubkey).toBe(realSenderPubkey);
+    expect(row?.reactorPubkey).not.toBe(forgedPubkey);
+  });
+
+  it('removal: tombstones the row matching sender.pubkey, not the removal rumor\'s own (forged) rumor.pubkey', async () => {
+    const forgedPubkey = 'forger-' + 'ee'.repeat(28);
+    const realSenderPubkey = 'real-sender-' + 'ff'.repeat(26);
+    const sender: AuthenticatedSender = { pubkey: realSenderPubkey, authenticity: 'mls' };
+
+    // Original add, attributed (via sender) to realSenderPubkey.
+    const addRumor = makeInboundRumor({ id: 'attr-add-2-' + 'aa'.repeat(28), pubkey: forgedPubkey, content: '🔥' });
+    await applyInboundRumor(GROUP_THREAD, addRumor, sender);
+
+    // Removal rumor's own (forged) pubkey field is DIFFERENT again, but its resolved
+    // sender still matches the original add's attributed sender.
+    const anotherForgedPubkey = 'forger2-' + 'dd'.repeat(28);
+    const removalRumor = makeInboundRumor({
+      id: 'attr-removal-' + 'bb'.repeat(28),
+      pubkey: anotherForgedPubkey,
+      content: '-',
+      tags: [['e', TARGET_MSG_ID], ['k', '9'], ['emoji', '🔥']],
+    });
+    const result = await applyInboundRumor(GROUP_THREAD, removalRumor, sender);
+    expect(result).not.toBeNull();
+
+    const rows = await loadReactions(GROUP_THREAD);
+    const row = rows.find((r) => r.emoji === '🔥' && r.reactorPubkey === realSenderPubkey);
+    expect(row).toBeDefined();
+    expect(row?.removed).toBe(true);
   });
 });
 

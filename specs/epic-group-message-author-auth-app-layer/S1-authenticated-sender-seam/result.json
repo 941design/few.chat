@@ -1,0 +1,47 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "completed_at": "2026-07-23T18:19:35Z",
+  "remediated_at": "2026-07-23T21:00:00Z",
+  "files_created": [
+    "app/src/lib/marmot/authenticatedSenderResolver.ts",
+    "app/tests/unit/marmot/authenticatedSenderResolver.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts"
+  ],
+  "tests_added": {
+    "unit": 5
+  },
+  "test_counts": {
+    "baseline": 4101,
+    "final": 4106
+  },
+  "mocks": [],
+  "remediation_rounds": 1,
+  "modules_touched": [
+    "Dispatcher"
+  ],
+  "remediation_log": [
+    {
+      "round": 1,
+      "gap": "VQ-S1-010",
+      "severity": 6,
+      "category": "missing_test",
+      "summary": "resolveAuthenticatedSender's NODE_ENV/window.__fewTest override lookup must re-evaluate per call (S2/S3 e2e attacker tests toggle the override mid-session), but no test existed that would catch a regression hoisting the lookup to closure-creation time.",
+      "fix": "Extracted the resolver into a pure factory, app/src/lib/marmot/authenticatedSenderResolver.ts (createAuthenticatedSenderResolver(): SenderResolver), with byte-identical runtime behavior. MarmotContext.tsx now calls the factory once per group instead of inlining the closure. Added app/tests/unit/marmot/authenticatedSenderResolver.test.ts (3 tests): default-claimed behavior, per-call re-evaluation (single resolver instance, override changed between two calls, asserting the second call reflects the new override — this is the case a hoisted lookup would fail), and NODE_ENV=production gating (override ignored). Used repo-convention vi.stubEnv/vi.stubGlobal with afterEach unstubAllEnvs/unstubAllGlobals cleanup (no jsdom).",
+      "left_open": "VQ-S1-009 (resolveSender optional-param forward risk) intentionally not addressed — tracked as an accepted backbone-story gate; a one-line note was added in the new resolver's doc comment only.",
+      "verification": {
+        "test_unit": "make test-unit: 213 files, 4105 passed + 1 skipped = 4106 total (was 4103) — net +3, no regressions",
+        "typecheck": "cd app && npx tsc --noEmit: clean, exit 0"
+      }
+    }
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "clean_run"
+  },
+  "final_outcome": "accepted"
+}

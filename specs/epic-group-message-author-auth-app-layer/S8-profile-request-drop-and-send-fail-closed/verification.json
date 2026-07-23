@@ -1,0 +1,50 @@
+{
+  "story_id": "S8",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-23T16:30:29Z",
+  "questions": [
+    {
+      "question_id": "VQ-S8-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "When a forwardable inner signature cannot be produced (locked/absent NIP-07 signer), is the meta-event truly not emitted — is there no code path where the relay-publish call still fires (e.g. with an empty/placeholder signature) while only the UI layer suppresses the error — and is local action (e.g. any local state update implying the send succeeded) also withheld, not just the network call?"
+    },
+    {
+      "question_id": "VQ-S8-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the interactive-path error and the background/relay-path dev-log both live at the correct call boundary in MarmotContext.tsx / profileRequestHandler.ts (not duplicated ad hoc at each call site), and are the new user-facing error strings added to i18n.ts's `Copy` type plus both `en` and `de` objects (not hardcoded in the component), consumed via `useCopy()` per CLAUDE.md's translation rule?"
+    },
+    {
+      "question_id": "VQ-S8-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Profiles (forwarded)` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S8-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Is there an integrated-e2e test (locked/absent signer, interactive user-initiated send) asserting a visible i18n-backed error appears, and a handler-unit test (background/relay send) asserting a dev-log-only failure with no UI error and continued reliance on the existing profile-request retry machinery — and do both tests assert on the *absence* of the meta-event (no relay publish call recorded), not just presence of the error path?"
+    },
+    {
+      "question_id": "VQ-S8-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the background/relay failure path genuinely rely on the existing profile-request retry machinery (no new retry logic invented for this story), confirmed by tracing that the same retry code path already exercised elsewhere in profileRequestHandler.ts / profileRequestSync.ts is what picks up the failed send?"
+    },
+    {
+      "question_id": "VQ-S8-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Does the signer-availability check happen before any partial local action (e.g. optimistic local application of the profile-request response, or a locally-cached 'sent' flag) is taken, so a failed send leaves no residual local state implying success?"
+    },
+    {
+      "question_id": "VQ-S8-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEND-10",
+      "question": "Show the production code and both test levels proving AC-SEND-10: if a forwardable inner signature cannot be produced (locked/absent NIP-07 signer), the meta-event is not emitted and not actioned locally; an interactive send shows a visible, i18n-backed error (integrated-e2e); a background/relay send dev-logs the failure and relies on the existing retry machinery, showing no UI error (handler-unit) — confirm both paths are tested independently, not conflated into one assertion."
+    }
+  ]
+}

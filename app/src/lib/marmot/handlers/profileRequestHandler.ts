@@ -14,7 +14,7 @@
 
 import { PROFILE_REQUEST_KIND, parseProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
 import type { ProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
-import type { ApplicationRumor, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 
 export interface ProfileRequestHandlerDeps {
   /** AC-032: record every observed request regardless of target. */
@@ -36,7 +36,7 @@ export interface ProfileRequestHandlerDeps {
   }) => Promise<void>;
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: ProfileRequestHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileRequestHandlerDeps): Promise<void> {
   const reqPayload = parseProfileRequestPayload(rumor.content);
   if (!reqPayload) return;
 
@@ -58,6 +58,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Pro
 export function createProfileRequestHandler(deps: ProfileRequestHandlerDeps): RumorHandler {
   return {
     kind: PROFILE_REQUEST_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext) => handle(rumor, ctx, deps),
+    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
   };
 }

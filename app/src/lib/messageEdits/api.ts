@@ -124,6 +124,7 @@ import {
 } from '@/src/lib/marmot/chatPersistence';
 import { DELETE_EDIT_RUMOR_KIND, hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
 import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
+import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
 
 // ─── Public types ─────────────────────────────────────────────────────────
 
@@ -143,7 +144,11 @@ export type MessageEditsThreadKey =
  * MLS-authenticated INNER rumor pubkey — never the kind-445 wrapper's
  * ephemeral author (see the kind-445-events-have-ephemeral-authors
  * learning). Extracting that value correctly is S4/S5's job; this module
- * only compares it.
+ * only compares it. (Epic: group-message-author-auth-app-layer S2 — this
+ * pre-substitute-into-`pubkey` convention is now superseded for group
+ * callers, which instead pass the authenticated value via
+ * `applyDeleteEditSignal`'s optional `sender` parameter; `rumor.pubkey`
+ * remains the fallback for callers, e.g. DM, that don't supply one.)
  */
 export interface InboundDeleteEditRumor {
   id: string;
@@ -1288,12 +1293,22 @@ function serialize<T>(task: () => Promise<T>): Promise<T> {
 /**
  * The frozen reconciliation seam entrypoint. See the module doc comment for
  * the full classification / ordering / pending-buffer contract.
+ *
+ * `sender` (optional, epic: group-message-author-auth-app-layer S2): the
+ * dispatcher-resolved authenticated sender for the group path. When
+ * supplied, every authorization/attribution decision below sources the
+ * signal's author pubkey from `sender.pubkey` instead of the forgeable
+ * `rumor.pubkey`. Callers that don't supply one (the DM path, seal-
+ * signature-authenticated independently) keep reading `rumor.pubkey`
+ * unchanged.
  */
 export function applyDeleteEditSignal(
   thread: MessageEditsThreadKey,
   rumor: InboundDeleteEditRumor,
+  sender?: AuthenticatedSender,
 ): Promise<ChangeResult> {
   return serialize(async () => {
+    const senderPubkey = sender?.pubkey ?? rumor.pubkey;
     const threadKey = groupIdFor(thread);
     await sweepExpiredForThreadKeyLocked(threadKey);
 
@@ -1319,7 +1334,7 @@ export function applyDeleteEditSignal(
             targetId,
             rev: classification.rev,
             rumorId: rumor.id,
-            authorPubkeyHex: rumor.pubkey,
+            authorPubkeyHex: senderPubkey,
             receivedAt: Date.now(),
           });
         }
@@ -1333,7 +1348,7 @@ export function applyDeleteEditSignal(
       const { authorized, adminPubkeysHex } = await authorizeDeleteAgainstTarget(
         threadKey,
         knownRow.content,
-        rumor.pubkey,
+        senderPubkey,
         knownRow.senderPubkey,
       );
       if (!authorized) {
@@ -1344,7 +1359,7 @@ export function applyDeleteEditSignal(
         kind: 'delete',
         rev: classification.rev,
         rumorId: rumor.id,
-        senderPubkeyHex: rumor.pubkey,
+        senderPubkeyHex: senderPubkey,
         adminPubkeysHex,
       });
     }
@@ -1369,7 +1384,7 @@ export function applyDeleteEditSignal(
         targetId,
         rev: classification.rev,
         rumorId: rumor.id,
-        authorPubkeyHex: rumor.pubkey,
+        authorPubkeyHex: senderPubkey,
         content: classification.content,
         createdAtSeconds: classification.createdAtSeconds,
         receivedAt: Date.now(),
@@ -1377,7 +1392,7 @@ export function applyDeleteEditSignal(
       return { thread, slotId: null, kind: 'pending' as const };
     }
 
-    if (!pubkeysMatch(rumor.pubkey, knownRow.senderPubkey)) {
+    if (!pubkeysMatch(senderPubkey, knownRow.senderPubkey)) {
       return { thread, slotId: knownRow.id, kind: 'discarded' as const };
     }
 
@@ -1386,7 +1401,7 @@ export function applyDeleteEditSignal(
       rev: classification.rev,
       rumorId: rumor.id,
       content: classification.content,
-      senderPubkeyHex: rumor.pubkey,
+      senderPubkeyHex: senderPubkey,
       adminPubkeysHex: [],
     });
   });

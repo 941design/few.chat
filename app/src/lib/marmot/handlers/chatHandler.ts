@@ -13,7 +13,7 @@
 
 import { CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
-import type { ApplicationRumor, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
 import { hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
 
@@ -35,7 +35,7 @@ export interface ChatHandlerDeps {
    * bogus new "original" row (which would corrupt the store: a duplicate row
    * under the replacement's own id, while the real target slot never updates).
    */
-  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor) => Promise<ChangeResult>;
+  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<ChangeResult>;
   /**
    * S5: required calling convention from S3 (messageEdits/api.ts module doc
    * comment, carried into S4/S5 via ownership-ledger.json) — after every
@@ -48,7 +48,7 @@ export interface ChatHandlerDeps {
   resolvePendingSignalsForSlot: (thread: MessageEditsThreadKey, slotId: string, originalAuthorPubkeyHex: string) => Promise<ChangeResult>;
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: ChatHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ChatHandlerDeps): Promise<void> {
   const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
 
   // S5 dispatch-routing check (mirrors ContactChat.tsx's isEditMarkedReplacement
@@ -58,7 +58,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Cha
   // `content` is the NEW message text, not something chatHandler should ever
   // append as an independent row.
   if (hasEditMarkerTag(rumor.tags)) {
-    const result = await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor).catch((err: unknown) => {
+    const result = await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender).catch((err: unknown) => {
       console.warn('[dispatcher.9] applyDeleteEditSignal (edit-marked replacement) failed:', err);
       return null;
     });
@@ -83,7 +83,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Cha
   const msg: ChatMessage = {
     id: rumor.id,
     content: typeof rumor.content === 'string' ? rumor.content : '',
-    senderPubkey: rumor.pubkey,
+    senderPubkey: sender.pubkey,
     groupId: ctx.groupId,
     createdAt: rumor.created_at * 1000,
     ...(hasAttachment ? { attachments } : {}),
@@ -102,10 +102,16 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Cha
 
   deps.setChatVersion((v) => v + 1);
 
-  // Own-send guard: skip incrementUnread for messages sent by the local user.
+  // Own-send guard: skip incrementUnread for messages authored by the local user.
   // marmot-ts #sentEventIds prevents own-send from reaching the bus at all,
-  // but this guard provides defense-in-depth.
-  if (rumor.pubkey !== ctx.selfPubkeyHex) {
+  // but this guard provides defense-in-depth. Keyed on the authenticated
+  // `sender.pubkey` (not the forgeable rumor.pubkey) so "is this mine" is an
+  // authenticated-author comparison like every other identity check in this
+  // epic — which lets the handlers/ rumor.pubkey static-scan ban be absolute
+  // (empty allow-list). Under the stub sender.pubkey === rumor.pubkey, so this
+  // is behavior-preserving today; under the backbone it prevents an attacker
+  // from suppressing the victim's notification by forging rumor.pubkey.
+  if (sender.pubkey !== ctx.selfPubkeyHex) {
     // Epic: notification-domain-invariants. If THIS group is the one currently
     // open in the detail view (getActiveGroupId — the DispatcherContext seam
     // wired to activeViewStore), the open chat already renders the message via
@@ -123,6 +129,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, deps: Cha
 export function createChatHandler(deps: ChatHandlerDeps): RumorHandler {
   return {
     kind: CHAT_MESSAGE_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext) => handle(rumor, ctx, deps),
+    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
   };
 }

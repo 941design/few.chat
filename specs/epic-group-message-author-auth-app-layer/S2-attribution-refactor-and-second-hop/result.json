@@ -1,0 +1,91 @@
+{
+  "story_id": "S2",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-23T19:45:33Z",
+  "files_created": [
+    "app/tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts (F1: own-send guard -> sender.pubkey)",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/messageEdits/api.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/groupReactions.test.ts",
+    "app/tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts (F1/F2/F3: empty allow-list, decoupled self-tests, limitation note)",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/reactionHandler.test.ts",
+    "specs/epic-group-message-author-auth-app-layer/S2-attribution-refactor-and-second-hop/verification.json"
+  ],
+  "tests_added": {
+    "unit": 25
+  },
+  "test_counts": {
+    "baseline": 4105,
+    "final": 4130
+  },
+  "mocks": [],
+  "remediation_rounds": 2,
+  "remediation_notes": [
+    {
+      "round": 1,
+      "trigger": "examiner PARTIAL findings, missing_test",
+      "closed": [
+        {
+          "vq_id": "VQ-S2-008",
+          "gap": "profileHandler.ts's SIGNED-path own-join gate (`sender.pubkey === authorPubkey`, profileHandler.ts:101) had no test exercising a divergence between sender.pubkey and rumor.pubkey while signedEvent was present.",
+          "closure": "Added two tests to app/tests/unit/marmot/profileHandler.test.ts (accept-producer describe block): (1) signedEvent.pubkey === sender.pubkey but rumor.pubkey (transport) differs -> own-join fires, accepted posted; (2) rumor.pubkey coincides with the author (the shape the OLD rumor.pubkey===authorPubkey gate would have accepted) but sender.pubkey is a relayer -> own-join does NOT fire, no accepted post (AC-PROD-4 preserved). Both are commented as prod-unreachable today (S1's dispatcher drops any rumor where rumor.pubkey !== sender.pubkey before a handler runs) and exist as defense-in-depth."
+        },
+        {
+          "vq_id": "VQ-S2-004",
+          "gap": "pollHandler.ts divergent-sender attribution (POLL_VOTE voterPubkey, POLL_CLOSE creator-check) flagged missing_test.",
+          "closure": "Found already present and passing in app/tests/unit/marmot/pollHandler.test.ts (uncommitted working-tree state from the original S2 implementation, concurrently landed by teammate dev agents): POLL_VOTE divergent-sender test (vote keyed to sender.pubkey, not rumor.pubkey) and both POLL_CLOSE divergent-sender tests (sender.pubkey === creatorPubkey with rumor.pubkey divergent -> closed=true; sender.pubkey !== creatorPubkey with rumor.pubkey === creatorPubkey -> NOT closed). No new poll tests were needed; verified by running the file standalone and confirming all assertions are behavioral (saved-state checks), not mock-spy tautologies."
+        }
+      ],
+      "deferred_documented": [
+        {
+          "vq_id": "VQ-S2-004",
+          "scope": "leaveHandler.ts + profileRequestHandler.ts",
+          "note": "No divergent-sender tests added for these two handlers — they do not consume `sender` in S2. leaveHandler's subject===sender gate is explicitly S3 scope. profileRequestHandler is target-driven (responds based on the request's target pubkey, not an attribution/authorization decision keyed on sender) and is protected only by the S1 dispatcher choke-point (rumor.pubkey===sender.pubkey guarantee), which is N/A to add a divergent-sender test against here. This is a scope-boundary clarification, not a defect — S3's leaveHandler story owns that coverage."
+        }
+      ],
+      "not_in_scope": "No S3/S4/S5/S6 semantic logic was added. Production code was not modified this round — test-only additions."
+    }
+  ],
+  "modules_touched": [
+    "Handlers",
+    "Reactions (2nd hop)",
+    "Edits (2nd hop)"
+  ],
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story arrived with the production refactor already landed by a prior run (uncommitted in the working tree) plus two still-running teammate agents (dev-s2-handlers, dev-s2-secondhop) concurrently finishing the fix for the same RED suite. My first `vitest run` against the three named failing files caught a genuine mid-edit race (reactionHandler.test.ts referenced an undefined `SELF_PUBKEY_FOR_FORWARDING_TEST` fixture) that had already resolved itself 90 seconds later once the teammates finished their turn. Distinguishing 'real stale-test bug' from 'I sampled mid-edit' required diff'ing file mtimes against my run timestamps and re-running the full suite three times consecutively before treating the tree as stable, rather than fixing what would have been someone else's in-flight edit out from under them.",
+    "surprised_by": "The task briefing flagged profileHandler.ts's own-join detection (`rumor.pubkey === authorPubkey` -> `sender.pubkey === authorPubkey`) as the most likely real regression. On inspection it is not: S1's dispatcher already drops any rumor where `rumor.pubkey !== sender.pubkey` before any handler runs, so the two are always equal in production, and every AC-PROD-4/AC-MARKER-6 relay-on-behalf test in the diff calls `makeSender(rumor.pubkey)` (sender mirrors rumor.pubkey), so the swap is a semantic no-op there and exactly the mandated attribution repointing, not an over-swap. The one path where sender.pubkey really can diverge from rumor.pubkey in this handler (the unsigned/legacy payloadToMemberProfile fallback) is the one S2 was explicitly told to swap, and it has a dedicated AC-ATTR-6 test with a forged sender. The signed-path own-join branch has no test exercising sender-divergence-while-signed (flagged as VQ-S2-008, post-impl) but that combination is unreachable in production today for the same dispatcher-guarantee reason.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "review": {
+    "stage1_opus": "converged (3 sub-sev-5 findings recorded)",
+    "stage2_fable": "F1 (medium) fixed by lead: chatHandler own-send guard repointed to sender.pubkey, handlers/ ban now ABSOLUTE (empty allow-list); F2 dissolved by F1; F3 (literal-name scanner limitation) documented in test header",
+    "deferred_findings": [
+      "F4: leaveHandler payload.pubkey + pollHandler payload.creatorPubkey still content-forgeable — deliberate, owned by S3/S5",
+      "F5: optional seam args rest on call-site discipline (same class as S1-F1) — backbone watch"
+    ]
+  }
+}

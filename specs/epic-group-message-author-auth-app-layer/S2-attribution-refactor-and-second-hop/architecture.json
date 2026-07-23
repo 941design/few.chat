@@ -1,0 +1,88 @@
+{
+  "module_name": "Handlers",
+  "purpose": "Mechanical attribution refactor. Threads S1's AuthenticatedSender sibling argument into every rumor handler's wrapper + inner function, repoints every attribution/authorization read from rumor.pubkey to sender.pubkey (preserving the one documented non-attribution echo-guard read), and threads the same sender argument into the two second-hop authorization modules (reactions/api.ts's applyInboundRumor, messageEdits/api.ts's applyDeleteEditSignal) with a basic field-swap only. Adds a vitest source-scan that fails the build on any un-allow-listed rumor.pubkey read inside handlers/, plus targeted second-hop assertions. This story does NOT add new semantic authorization rules (leave subject===sender, poll creator-binding-at-open + tally recompute, announcement actor rules, deeper edit/delete stored-sender comparison, shared envelope verifier) — those are S3-S8's scope; where an existing rumor.pubkey read is part of logic a later story reworks, S2 still performs the mechanical swap so the static-scan ban passes, without adding new rules.",
+  "public_api": [
+    {
+      "name": "RumorHandler.handle (all 7 handler factories)",
+      "signature": "handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender): Promise<void> | void",
+      "description": "Every createXHandler() wrapper closure in chatHandler.ts, deleteEditHandler.ts, leaveHandler.ts, pollHandler.ts (x3: open/vote/close), profileHandler.ts, profileRequestHandler.ts, reactionHandler.ts now forwards the third `sender` argument into its inner handle function. Interface itself is unchanged (frozen by S1); this story is entirely about handler BODIES actually consuming the parameter. Handlers with no current rumor.pubkey attribution read (leaveHandler, pollHandler's handleOpen, profileRequestHandler) still thread the parameter through for contract uniformity even though it is not yet read (S3/S5 add the reads)."
+    },
+    {
+      "name": "HandlerDeps.applyInboundRumor (registerHandlers.ts)",
+      "signature": "applyInboundRumor: (thread: ReactionThreadKey, rumor: ApplicationRumor, sender: AuthenticatedSender) => Promise<unknown>",
+      "description": "Widened deps-bag contract: reactionHandler.ts now always supplies the resolved sender as a required third argument. The underlying production function (reactions/api.ts's applyInboundRumor) declares this parameter OPTIONAL, so MarmotContext.tsx's existing wiring (`applyInboundRumor` passed by reference) remains structurally assignable with zero changes at the wiring site, mirroring S1's documented 'fewer/optional declared parameters remain assignable' pattern.",
+      "seam": {
+        "cross_story": false
+      }
+    },
+    {
+      "name": "HandlerDeps.applyDeleteEditSignal (registerHandlers.ts)",
+      "signature": "applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<ChangeResult>",
+      "description": "Widened deps-bag contract, symmetric with applyInboundRumor above: chatHandler.ts's edit-marked-replacement branch and deleteEditHandler.ts now always supply sender. Underlying production function's third param is optional; MarmotContext.tsx wiring unchanged.",
+      "seam": {
+        "cross_story": false
+      }
+    },
+    {
+      "name": "applyInboundRumor (reactions/api.ts — second-hop, module owned by 'Reactions (2nd hop)')",
+      "signature": "applyInboundRumor(thread: ReactionThreadKey, rumor: {id,pubkey,created_at,content,tags}, sender?: AuthenticatedSender): Promise<{messageId: string} | null>",
+      "description": "New optional third parameter. When supplied (group path, via reactionHandler.ts), reaction add/remove attribution (reactorPubkey) is keyed on sender.pubkey instead of rumor.pubkey. When omitted (DM path — ContactChat.tsx, already seal-authenticated, out of this epic's scope per architecture.md/CLAUDE.md), behavior is byte-for-byte unchanged: falls back to rumor.pubkey. Only the entry function's own body changes; internal helpers (enqueue, idbKeyFor, etc.) are untouched — the swap is entirely local to applyInboundRumor's closure.",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": ["S9"]
+      }
+    },
+    {
+      "name": "applyDeleteEditSignal (messageEdits/api.ts — second-hop, module owned by 'Edits (2nd hop)')",
+      "signature": "applyDeleteEditSignal(thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender?: AuthenticatedSender): Promise<ChangeResult>",
+      "description": "New optional third parameter, same fallback discipline as applyInboundRumor above (DM callers in ContactChat.tsx/directMessages.ts keep calling with 2 args, unaffected). Every existing attribution/authorization read inside the function body (pending-signal authorPubkeyHex, authorizeDeleteAgainstTarget's senderPubkeyHex argument, applyToKnownSlot's senderPubkeyHex, and the own-author pubkeysMatch comparison) is repointed from rumor.pubkey to the resolved sender.pubkey — a BASIC field-swap of the EXISTING checks only. The deeper AC-EDIT-7 rule (signal sender vs TARGET's stored authenticated sender, which now auto-improves because chatHandler.ts's ChatMessage.senderPubkey is itself fixed to sender.pubkey by this same story) is S4's scope: S4 verifies/extends this comparison, S2 only makes the inputs to it authenticated.",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": ["S4", "S9"]
+      }
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/registerHandlers.ts"
+  ],
+  "owned_data": [
+    "No new data owned by this story. Existing fields are re-attributed in place: ChatMessage.senderPubkey (chatPersistence.ts, owned by Chat store), Reaction.reactorPubkey (reactions/types.ts, owned by Reactions 2nd hop), PollVote.voterPubkey / Poll.creatorPubkey-close-check (pollPersistence.ts, owned by Poll), PendingSignal/DeleteMarker.authorPubkeyHex and applyToKnownSlot's senderPubkeyHex (messageEdits/api.ts internal state, owned by Edits 2nd hop) now source their value from sender.pubkey instead of rumor.pubkey."
+  ],
+  "dependencies_allowed": [
+    "handlers/*.ts -> app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender type import) — pre-existing edge, widened usage",
+    "reactions/api.ts -> app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender type-only import) — NEW type-only edge. Sanctioned by architecture.md's seam declaration (seam destination explicitly names 'reactions/api.ts applyInboundRumor ... second-hop signature threading') and stories.json's S2 description/scope.includes, which lists app/src/lib/reactions/api.ts as an in-scope file for this exact signature threading. Not a functional coupling — Reactions module gains no new behavioral dependency on Dispatcher, only a shared contract type.",
+    "messageEdits/api.ts -> app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender type-only import) — NEW type-only edge, same justification as the reactions/api.ts edge above.",
+    "handlers/chatHandler.ts, handlers/deleteEditHandler.ts, handlers/reactionHandler.ts -> reactions/api.ts / messageEdits/api.ts (widened call signatures) — pre-existing functional edges via registerHandlers.ts's injected deps bag, unchanged in kind, widened in arity only."
+  ],
+  "dependencies_forbidden": [
+    "no React/context imports inside handlers/*.ts (boundary rule preserved, unchanged from S1)",
+    "no new semantic authorization/actor rules: leave_intent subject===sender enforcement (S3's scope, NOT added here even though leaveHandler.ts's signature is threaded)",
+    "no poll-open creator-binding-to-sender or tally-recompute logic (S5's scope; pollHandler.ts's handleOpen signature is threaded but its body is untouched)",
+    "no announcement per-type actor rules or ingest-time roster gate (S6's scope; chatHandler.ts's system-message rows still flow through the unchanged appendMessage path except for the senderPubkey field-swap)",
+    "no deeper edit/delete stored-sender comparison rule beyond the existing pubkeysMatch/authorizeDeleteAgainstTarget checks, and no independent chatPersistence.ts change (S4's scope; TombstoneAuthorization inherits the swapped value automatically, no code touch needed)",
+    "no shared envelope verifier or profile roster-exemption logic (S7's scope; profileHandler.ts's rumor.pubkey reads are swapped to sender.pubkey mechanically only, per the STRICT SCOPE EXCLUDES carve-out for logic another story reworks)",
+    "no meta-event send fail-closed behavior or MarmotContext.tsx / i18n.ts changes (S8's scope; not touched by this story at all)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/reactionHandler.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/groupReactions.test.ts",
+    "app/tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts (new — static source-scan, precedent: app/tests/unit/themes/zodBoundary.test.ts)"
+  ]
+}

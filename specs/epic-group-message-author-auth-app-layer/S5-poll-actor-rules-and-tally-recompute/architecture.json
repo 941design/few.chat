@@ -1,0 +1,54 @@
+{
+  "module_name": "Poll",
+  "purpose": "AC-POLL-1: poll_open binds the stored Poll.creatorPubkey to the dispatcher-resolved authenticated sender, never the self-asserted payload.creatorPubkey (inherited-verified: was already correct from S2? No — this was a real gap, fixed here). AC-POLL-2 (inherited from S2, verified/kept): poll_vote already keys PollVote.voterPubkey and PollVote.id on sender.pubkey. AC-POLL-3 (inherited from S2, verified/kept): poll_close authorization already compares sender.pubkey against the stored creatorPubkey, not rumor.pubkey. AC-POLL-4 (green-field, the substantive new work): on an accepted poll_close, the persisted Poll.results/Poll.totalVoters are recomputed from the PollVote rows this client has actually stored (pollPersistence.loadVotes), never taken from the close message's results/totalVoters fields — closing a real app-layer forgery (a poll creator faking final counts). The recompute is a pure function of the stored vote set (AC-XCUT-2: order-independent, and independent of which subset of votes this client has observed — eventual-consistency on completeness is accepted, forgeability of the reported numbers is not).",
+  "public_api": [
+    {
+      "name": "createPollOpenHandler",
+      "signature": "createPollOpenHandler(deps: PollHandlerDeps): RumorHandler",
+      "description": "Unchanged signature. Internal handleOpen now stores creatorPubkey: sender.pubkey instead of payload.creatorPubkey (AC-POLL-1)."
+    },
+    {
+      "name": "createPollVoteHandler",
+      "signature": "createPollVoteHandler(deps: PollHandlerDeps): RumorHandler",
+      "description": "Unchanged (AC-POLL-2 already correct from S2 — voterPubkey/id keyed on sender.pubkey). Verified, not modified."
+    },
+    {
+      "name": "createPollCloseHandler",
+      "signature": "createPollCloseHandler(deps: PollHandlerDeps): RumorHandler",
+      "description": "Unchanged signature and unchanged authorization comparison (AC-POLL-3, already correct from S2: existingPoll.creatorPubkey !== sender.pubkey). Internal handleClose now recomputes results/totalVoters from deps' poll-store accessor (AC-POLL-4) instead of writing payload.results/payload.totalVoters verbatim."
+    },
+    {
+      "name": "PollHandlerDeps",
+      "signature": "interface PollHandlerDeps { savePoll; saveVote; getPoll; loadVotes; setPollVersion }",
+      "description": "Gains one new field: loadVotes: (pollId: string) => Promise<PollVote[]>, injected exactly like getPoll/savePoll/saveVote (coordinator override of this story's original direct-import decision — see RETROSPECTIVE remediation entry). Wired through the shared registerHandlers.ts HandlerDeps/pollDeps composition root and MarmotContext.tsx's pollPersistence import + PollHandlerDeps construction, mirroring getPoll's wiring exactly."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/pollHandler.ts (handleOpen: creatorPubkey binding; handleClose: tally recompute via new computeTally helper reading deps.loadVotes)",
+    "app/src/lib/marmot/pollSync.ts (doc-comment-only: PollOpenPayload.creatorPubkey and PollClosePayload.results/totalVoters annotated as wire-format-only / not trusted by the receiving handler; no functional/type change)",
+    "app/src/lib/marmot/registerHandlers.ts (coordinator-authorized scope expansion, remediation round 1: loadVotes added to HandlerDeps and the pollDeps pass-through, mirroring getPoll)",
+    "app/src/context/MarmotContext.tsx (coordinator-authorized scope expansion, remediation round 1: loadVotes added to the pollPersistence import and the PollHandlerDeps construction, mirroring getPoll)"
+  ],
+  "owned_data": [
+    "Poll.creatorPubkey (write path: handleOpen, now authenticated-sender-bound)",
+    "Poll.results / Poll.totalVoters (write path: handleClose, now recomputed from stored PollVote rows)"
+  ],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/pollPersistence.ts (savePoll, saveVote, getPoll, loadVotes — all four poll-store reads/writes injected uniformly via PollHandlerDeps, consistent with every other handler in app/src/lib/marmot/handlers/. The original implementation imported loadVotes directly as a same-module accessor to stay within this story's literal scope.includes; the coordinator overruled that (getPoll is an equally-same-module read and IS injected, so the direct import was an unprincipled inconsistency) and authorized touching registerHandlers.ts + MarmotContext.tsx to wire it properly.)",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender, DispatcherContext, RumorHandler types — pre-existing S1 seam, unchanged)"
+  ],
+  "dependencies_forbidden": [
+    "no admin-based authorization on poll_close (creator-only, per architecture.md's per-type actor rule table — no undocumented admin override)",
+    "no read of payload.creatorPubkey for attribution (AC-POLL-1)",
+    "no read of payload.results/payload.totalVoters for the persisted tally (AC-POLL-4)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/pollHandler.test.ts"
+  ],
+  "seam": {
+    "cross_story": false
+  }
+}

@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-22T22:39:10Z",
+  "updated_at": "2026-07-23T20:50:05Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -236,6 +236,11 @@
       "path": "specs/epic-group-invite-lifecycle/",
       "status": "DONE",
       "next_action": "completed 2026-07-23"
+    },
+    {
+      "path": "specs/epic-group-message-author-auth-app-layer/",
+      "status": "IN_PROGRESS",
+      "next_action": "created 2026-07-23 — app-layer authenticated-sender seam"
     }
   ],
   "findings": [
@@ -608,6 +613,20 @@
       "motivation": "All structured timeline notices (group_renamed, leave_intent, invite_cancelled, poll_*, member_admitted) render from any member-sent kind-9 with no authentication, so a member can post a cosmetic fake notice; separately, the leave_intent/invite_cancelled guards accept any string pubkey which can throw in pubkeyToNpub on malformed hex and break the timeline for receivers (member_admitted was hardened to 64-hex in epic group-admission-chat-announcement; the siblings were left for a uniform pass).",
       "behavior": "Notices are display-only decorations; membership/admin state remains authoritative from MLS, so a spoof cannot change real state, and the actor is always the real protocol sender. Product owner accepted the spoofability as-is for member_admitted (2026-07-19). The malformed-pubkey render throw is latent in the sibling guards.",
       "approach": "If hardening is desired: add a non-forgeable/authenticated marker (or validate against a real approval/commit event) uniformly across all announcement types; and tighten leave_intent/invite_cancelled pubkey guards to canonical 64-hex like member_admitted now is."
+    },
+    {
+      "slug": "poll-vote-store-key-not-group",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts",
+        "line": 54
+      },
+      "text": "Poll vote store key is not group-scoped (few:poll-votes:{pollId}); a member sharing two groups with a victim can inject non-member votes into a poll's recomputed tally by reusing a pollId across groups",
+      "created_at": "2026-07-23",
+      "motivation": "S5's tally-recompute makes the local vote store the authoritative source for a closed poll's displayed counts. Because votes are keyed by pollId alone (not groupId), and pollId is attacker-visible and attacker-choosable at poll_open, an attacker who shares group A and B with a victim can open a poll in B reusing A's pollId; sock-puppet votes cast in B land under the shared key on the victim's client and are counted into A's tally at close. Previously latent (close trusted payload counts); S5 elevated it to a real integrity hole.",
+      "behavior": "loadVotes(pollId) returns all locally-stored votes under that pollId regardless of group; computeTally counts them all. Legit pollIds are random UUIDs so accidental collision is nil, but a crafted poll_open can set any pollId.",
+      "approach": "Group-scope the vote store key (few:poll-votes:{groupId}:{pollId}) or persist groupId on PollVote and filter in loadVotes; migrate existing rows. Beyond the app-layer-auth epic's poll-story scope.",
+      "success_signal": "A vote cast in group B for a pollId reused from group A does not appear in group A's recomputed tally"
     }
   ],
   "archive": [

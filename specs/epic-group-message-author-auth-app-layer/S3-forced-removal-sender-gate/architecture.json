@@ -1,0 +1,35 @@
+{
+  "module_name": "Leave",
+  "purpose": "Forced-removal rule: a leave_intent's subject (payload.pubkey, self-declared in the message BODY) may only enqueue a removal for the group member matching its own AUTHENTICATED sender (the S1 seam's AuthenticatedSender). A leave_intent naming a different subject than its sender is dropped at the handler boundary before enqueueLeave — no removal enqueued, no departure rendered. Readiness-only per AC-MV-1: under the app-layer-only stub the attacker controls both payload.pubkey and sender.pubkey, so this does not yet stop a real forced removal; it becomes load-bearing once the out-of-scope MLS backbone feeds a true authenticated sender.",
+  "public_api": [
+    {
+      "name": "createLeaveIntentHandler",
+      "signature": "createLeaveIntentHandler(deps: LeaveHandlerDeps): RumorHandler",
+      "description": "Unchanged public surface (pre-existing from S1/S2). Internal handleLeaveIntent now gates deps.enqueueLeave on payload.pubkey === sender.pubkey.toLowerCase() before calling it."
+    },
+    {
+      "name": "parseLeaveIntent",
+      "signature": "parseLeaveIntent(content: string): LeaveIntentPayload | null",
+      "description": "Unchanged wire shape ({ pubkey: string } JSON). The returned pubkey is now canonicalized to lowercase hex so the handler's subject===sender comparison is a like-for-like string compare against AuthenticatedSender.pubkey."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/leaveHandler.ts (handleLeaveIntent gate)",
+    "app/src/lib/marmot/leaveSync.ts (parseLeaveIntent normalization)"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender, ApplicationRumor, DispatcherContext, RumorHandler types — S1 seam, pre-existing)"
+  ],
+  "dependencies_forbidden": [
+    "no app/src/context/ imports (handler boundary rule)",
+    "no change to MarmotContext.tsx fireAutoCommit / commit-time re-verification (explicitly out of scope per spec.md Non-Goals — the enqueue-time gate is this story's rule)",
+    "no change to the dispatcher choke-point drop (S1's scope, already lands sender.pubkey === rumor.pubkey before fan-out)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/leaveHandler.test.ts"
+  ]
+}

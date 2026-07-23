@@ -1,0 +1,47 @@
+{
+  "story_id": "S3",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-23T20:02:31Z",
+  "files_created": [],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/leaveSync.ts",
+    "app/src/lib/marmot/leaveSync.ts (F1: hex-64 validation, drop malformed)",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/leaveSync.test.ts (F1: empty/non-hex drop tests)",
+    "specs/epic-group-message-author-auth-app-layer/S3-forced-removal-sender-gate/architecture.json",
+    "specs/epic-group-message-author-auth-app-layer/S3-forced-removal-sender-gate/baseline.json"
+  ],
+  "tests_added": {
+    "unit": 3
+  },
+  "test_counts": {
+    "baseline": 4131,
+    "final": 4134
+  },
+  "mocks": [],
+  "remediation_rounds": 1,
+  "remediation_notes": [],
+  "modules_touched": [
+    "Leave"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Gated handleLeaveIntent's deps.enqueueLeave(ctx.groupId, payload.pubkey) call on payload.pubkey === sender.pubkey.toLowerCase() (AC-FORCE-3): a leave_intent whose message-BODY subject diverges from the message's authenticated sender (the S1 seam, threaded through as the handler's 3rd arg since S2) is now silently dropped before enqueueLeave — no removal enqueued, no departure side effect. The self-departure path (subject === sender) is unaffected: payload.pubkey is still passed through to enqueueLeave unchanged. parseLeaveIntent (leaveSync.ts) now canonicalizes the parsed pubkey to lowercase hex so the comparison is like-for-like against AuthenticatedSender.pubkey; the wire shape ({ pubkey: string } JSON) is unchanged. Added an inline comment on the gate documenting the AC-MV-1 readiness-only caveat: under the app-layer-only stub the attacker controls both payload.pubkey and sender.pubkey (directly, or via the dev-only override hook), so the gate does not yet stop a real forced removal — it becomes load-bearing once the out-of-scope MLS sender-binding backbone (ADR-012) feeds a true authenticated sender. Did not touch MarmotContext.fireAutoCommit (commit-time re-verification is an explicit Non-Goal — a separate follow-up) and made no change to the dispatcher choke-point (S1) or handler signature (S2).",
+  "verification": {
+    "verification_json": "5 pre-impl (planner) questions read and satisfied; 0 post-impl questions appended (the pre-impl commitment set — VQ-S3-001..007 — already covers the audit floor for a story this narrow: the gate's realness, its single-location ownership, module boundary, test coverage of both branches, honest non-overstatement of the guarantee, and fail-closed behavior on mismatch)",
+    "all_tests_passing": 4134,
+    "baseline_to_final": "4131 -> 4134 (+3: AC-FORCE-3 negative/positive/case-normalization-edge)",
+    "lint_typecheck": "lint=NO_LINT (no ESLint config; consistent with S1/S2 baseline), typecheck=clean (npx tsc --noEmit, exit 0, no new diagnostics)",
+    "reviews": "stage1=lead-owned (not run by this architect spawn, per FR-2); stage2=not run by this architect spawn (lead-owned); unactioned findings recorded as post-impl questions: 0"
+  },
+  "retrospective": {
+    "skipped": true,
+    "reason": "clean_run"
+  },
+  "review": {
+    "stage1_opus": "clean (1 sev-2: cross-gate normalization, backbone watch S3-F1)",
+    "stage2_fable": "F1 (low, spec-mandated) FIXED by lead: parseLeaveIntent now drops empty/non-canonical subjects (spec-request §7); F2 (medium, NOT S3) routed to S6: kind-9 leave_intent departure announcement render is ungated",
+    "examiner": "7/7 YES"
+  }
+}
