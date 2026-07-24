@@ -1,0 +1,67 @@
+{
+  "story_id": "S8",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-24T02:55:00Z",
+  "remediation_rounds": 1,
+  "modules_touched": [
+    "Profiles (forwarded)"
+  ],
+  "files_created": [
+    "app/tests/e2e/groups-profile-send-fails-closed.spec.ts",
+    "app/tests/unit/pages/profile-broadcast-marker.test.ts"
+  ],
+  "files_modified": [
+    "app/pages/profile.tsx",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/i18n.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "specs/epic-group-message-author-auth-app-layer/S8-profile-request-drop-and-send-fail-closed/verification.json"
+  ],
+  "scope_deviation": {
+    "declared_scope_includes": [
+      "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/src/lib/i18n.ts",
+      "app/tests/unit/marmot/profileRequestHandler.test.ts"
+    ],
+    "actually_touched_beyond_declared": [
+      "app/tests/e2e/groups-profile-send-fails-closed.spec.ts (new \u2014 AC-SEND-10's integrated-e2e interactive-path coverage; the story's own 'Testing' section explicitly requires an e2e test under app/tests/e2e/, so this is anticipated, not an implicit-boundary violation, mirroring S6's and S7's identical self-flagged e2e-spec additions)"
+    ],
+    "not_touched_despite_being_in_scope": [
+      "app/src/lib/marmot/handlers/profileRequestHandler.ts \u2014 read, not modified. The profile-request bind (spec.md Solution \u00a78) already holds via S1's dispatcher choke-point drop (applied uniformly to every kind including 30); profileRequestHandler.ts's handle() has no sender-comparison logic of its own and needs none \u2014 see architecture.json's profile_request_bind_confirmation. AC-SEND-10 itself (meta-event send fails closed) is entirely a send-side concern, resolved inside MarmotContext.tsx where serialiseProfileUpdate is actually called; profileRequestHandler.ts only routes an already-authenticated rumor to deps.sendSelfProfile / deps.handleIncomingProfileRequest, neither of which it implements."
+    ],
+    "rationale": "The e2e spec is the only file touched outside the declared list, and it was explicitly called for by this story's own 'Testing' section ('integrated-e2e ... Under app/tests/e2e/'). No other scope expansion occurred."
+  },
+  "tests_added": {
+    "handler_unit": 7,
+    "integrated_e2e": 1
+  },
+  "test_counts": {
+    "baseline": 4214,
+    "final": 4221
+  },
+  "verification": {
+    "pre_impl_questions": 7,
+    "post_impl_questions": 4,
+    "lint": "NO_LINT",
+    "typecheck": "clean (baseline showed 1 pre-existing error from concurrent sibling-story WIP in this shared tree, unrelated to S8 and self-resolved by completion; S8's own changes introduced zero new errors at any point)"
+  },
+  "mocks": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story brief characterized MarmotContext.tsx's five serialiseProfileUpdate call sites as 'a mix of interactive user-initiated sends and background/relay sends' without saying which was which, and publishProfileUpdate \u2014 the one method whose own doc comment calls it the 'explicit' publish path \u2014 turned out to have ZERO production callers anywhere under app/src or app/pages at story start (confirmed by grep before concluding it was genuinely dead code). Assuming it really was unwired, the first implementation pass added a dev-only window.__fewTest.publishProfileUpdate hook so an e2e test could drive it directly. A second, wider grep (this time including app/pages/, which the first pass had missed) turned up the real caller: app/pages/profile.tsx's handleNicknameBlur -> broadcastProfile -> publishProfileUpdate(next), fired on blurring the nickname field. The dev hook was then removed in favor of driving the real UI, per CLAUDE.md's 'publish through the app' rule \u2014 but this cost a full extra investigation + implementation + removal cycle that a scope note pointing at profile.tsx up front would have avoided.",
+    "surprised_by": "onHistorySynced's profilePublishedRef Set (a 'this group's profile was already auto-published this session' guard) was marked BEFORE the signing attempt even started, not after \u2014 a pre-existing latent bug that happens to be exactly the failure shape VQ-S8-006 warns about (a locally-cached 'sent' flag set optimistically ahead of the actual send outcome). It was in-scope to fix under AC-SEND-10's 'no residual local state implying success' requirement, but the story task did not call it out as a known issue.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "examiner_remediation": {
+    "trigger": "examiner PARTIAL sev7 arch_violation (interactive-path retry-suppression); Decider RETRY",
+    "scope_expansion": "app/pages/profile.tsx (out of declared scope.includes; authorized under AC-SEND-10 ownership per Decider)",
+    "fix": "publishProfileUpdate Promise<void>->Promise<boolean>; broadcastProfile advances lastBroadcastNickname only on confirmed send via nextBroadcastMarker; resolvePublishProfileUpdateShortCircuit distinguishes vacuous-0-groups(true) vs not-ready(false)",
+    "outcome": "both PARTIALs cleared to YES on re-exam; interactive path re-broadcasts after signer recovery without text change"
+  }
+}

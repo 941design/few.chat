@@ -1,9 +1,9 @@
 {
   "epic_name": "group-message-author-auth-app-layer",
-  "status": "in_progress",
-  "phase": "IMPLEMENTATION",
+  "status": "done",
+  "phase": "COMPLETE",
   "created_at": "2026-07-23T00:00:00Z",
-  "updated_at": "2026-07-23T20:57:34Z",
+  "updated_at": "2026-07-24T04:10:00Z",
   "pre_existing_dirty_files": [
     ".serena/project.yml",
     "docs/adr/ADR-006-accept-group-member-attested-authorization-for-mls-application-message-mutations.md",
@@ -17,7 +17,11 @@
     "S2",
     "S3",
     "S4",
-    "S5"
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9"
   ],
   "escalated_stories": [],
   "phase_history": [
@@ -25,6 +29,11 @@
       "phase": "SPEC_VALIDATED",
       "timestamp": "2026-07-23T00:00:00Z",
       "trigger": "validation_passed"
+    },
+    {
+      "phase": "COMPLETE",
+      "timestamp": "2026-07-24T04:10:00Z",
+      "trigger": "all_stories_done_interlock_passed"
     }
   ],
   "plugin_sha": "f5e4524c7b9618d99914da272f8e8e9745ed9057",
@@ -37,5 +46,171 @@
   "ownership_ledger_path": "ownership-ledger.json",
   "reviewer_agent_id": "abdbb66ce54a4fad9",
   "stage2_reviewer": "fable",
-  "stage2_reviewer_note": "Codex unavailable this session (shell exec fault); user authorized Fable as Stage-2 independent reviewer 2026-07-23"
+  "stage2_reviewer_note": "Codex unavailable this session (shell exec fault); user authorized Fable as Stage-2 independent reviewer 2026-07-23",
+  "ac_closure": [
+    {
+      "ac_id": "AC-SEAM-1",
+      "status": "met",
+      "evidence": "S1 handler-unit+e2e seam drop; examiner YES"
+    },
+    {
+      "ac_id": "AC-SEAM-2",
+      "status": "met",
+      "evidence": "S1 pass-through; examiner YES"
+    },
+    {
+      "ac_id": "AC-ATTR-6",
+      "status": "met",
+      "evidence": "S2 handler-unit (a)/(c) behavioral + static-scan (b); examiner YES"
+    },
+    {
+      "ac_id": "AC-FORCE-3",
+      "status": "met",
+      "evidence": "S3 leaveHandler subject===sender handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-EDIT-7",
+      "status": "met",
+      "evidence": "S4 applyDeleteEditSignal handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-POLL-1",
+      "status": "met",
+      "evidence": "S5 handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-POLL-2",
+      "status": "met",
+      "evidence": "S5 handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-POLL-3",
+      "status": "met",
+      "evidence": "S5 handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-POLL-4",
+      "status": "met",
+      "evidence": "S5 tally recompute handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-ANNOUNCE-1",
+      "status": "met",
+      "evidence": "S6 chatHandler.test assertFullyRejected; examiner YES"
+    },
+    {
+      "ac_id": "AC-ANNOUNCE-2",
+      "status": "met",
+      "evidence": "S6 handler-unit invited/declined never roster-gated; examiner YES"
+    },
+    {
+      "ac_id": "AC-ANNOUNCE-3",
+      "status": "met",
+      "evidence": "S6 e2e groups-announcement-roster-gate ran live; examiner YES"
+    },
+    {
+      "ac_id": "AC-ANNOUNCE-4",
+      "status": "met",
+      "evidence": "S6 call_notice actor from senderPubkey; examiner YES"
+    },
+    {
+      "ac_id": "AC-ANNOUNCE-5",
+      "status": "met",
+      "evidence": "S6 group_renamed admin gate handler-unit; examiner YES"
+    },
+    {
+      "ac_id": "AC-FWD-4",
+      "status": "met",
+      "evidence": "S7 e2e groups-profile-forwarded-attribution ran live; examiner YES"
+    },
+    {
+      "ac_id": "AC-FWD-5",
+      "status": "met",
+      "evidence": "S7 verifier-unit group-tag + one-shot; examiner YES"
+    },
+    {
+      "ac_id": "AC-SEND-10",
+      "status": "met",
+      "evidence": "S8 handler-unit (background) + e2e (interactive) fails-closed + retry-eligibility; examiner YES"
+    },
+    {
+      "ac_id": "AC-XCUT-1",
+      "status": "met",
+      "evidence": "S9 dispatcher property test 2 orderings; examiner YES"
+    },
+    {
+      "ac_id": "AC-XCUT-2",
+      "status": "met",
+      "evidence": "S9 poll property test 9 combos + real storage; examiner YES"
+    },
+    {
+      "ac_id": "AC-XCUT-3",
+      "status": "met",
+      "evidence": "S9 leave property test 3 interleavings; examiner YES"
+    },
+    {
+      "ac_id": "AC-XCUT-4",
+      "status": "met",
+      "evidence": "S9 edits property test 2nd+3rd hop; examiner YES"
+    },
+    {
+      "ac_id": "AC-XCUT-5",
+      "status": "met",
+      "evidence": "S9 profile merge + one-shot property test; examiner YES"
+    },
+    {
+      "ac_id": "AC-GATE-11",
+      "status": "met",
+      "evidence": "user-authorized acceptance 2026-07-24: 3 new epic e2e specs ran live-green; full-gate flake is documented pre-existing (e2e_full_gate_preexisting_flaky)"
+    }
+  ],
+  "gate_runs": [
+    {
+      "gate_id": "mutation",
+      "outcome": "skipped",
+      "skip_reason": "large multi-module security epic; product-owner-authorized spec opt-out (mutation_gate: skip)"
+    },
+    {
+      "gate_id": "e2e",
+      "outcome": "accepted",
+      "detail": "user-authorized: 3 new epic e2e specs (groups-announcement-roster-gate, groups-profile-forwarded-attribution, groups-profile-send-fails-closed) ran live-green during impl; full 60-test gate redness is documented pre-existing flake (e2e_full_gate_preexisting_flaky)"
+    },
+    {
+      "gate_id": "pre_commit_review",
+      "outcome": "fired_remediated",
+      "structural_findings": {
+        "surfaced": 4,
+        "acted": 3,
+        "disclosed_unacted": 1
+      },
+      "detail": "Opus whole-assembly (resumable, S1-S9 accumulated) + Fable independent whole-tree pass; 0 code/security/privacy defects; 3 doc/hygiene remediated (deleteEditHandler trust-comment, profileHandler own-join comment, ledger concept stamp); 1 disclosed-unacted (PCG-2 exact-vs-insensitive pubkey compare at dispatcher drop, already ledger-tracked S1-F2/S3-F1, backbone-conditional)"
+    }
+  ],
+  "e2e_gate_accepted": {
+    "tests": [
+      "make test-e2e-all (full 60-test gate)"
+    ],
+    "reason": "user-authorized 2026-07-24: epic's own 3 new specs ran live-green; full-gate redness is documented rotating VM-latency flake, not real failures"
+  },
+  "manual_validation": [
+    {
+      "ac_id": "AC-MV-1",
+      "status": "waived",
+      "owner": "product owner",
+      "evidence": "Product-owner waived 2026-07-24: this epic is app-layer readiness ONLY and explicitly does NOT close impersonation or forced removal (real forgery still succeeds until the MLS-backbone epic feeds the seam the true sender). The impersonation security finding stays OPEN, not resolved by this epic. Understood and accepted at ship time."
+    },
+    {
+      "ac_id": "AC-MV-2",
+      "status": "waived",
+      "owner": "product owner",
+      "evidence": "Product-owner waived 2026-07-24: the impersonation security finding is NOT recorded as resolved by this epic; it remains open pointing at the backbone epic."
+    },
+    {
+      "ac_id": "AC-MV-3",
+      "status": "waived",
+      "owner": "product owner",
+      "evidence": "Product-owner waived 2026-07-24: real forgery-drop (request AC-1 true form) and AC-9 epoch-correct fork attribution are validated by the backbone epic, blocked_on that epic."
+    }
+  ],
+  "reviewer_state": {}
 }

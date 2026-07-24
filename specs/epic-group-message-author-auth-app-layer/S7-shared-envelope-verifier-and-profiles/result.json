@@ -1,0 +1,65 @@
+{
+  "story_id": "S7",
+  "status": "done",
+  "completed_at": "2026-07-24T01:30:00Z",
+  "files_created": [
+    "specs/epic-group-message-author-auth-app-layer/S7-shared-envelope-verifier-and-profiles/architecture.json",
+    "specs/epic-group-message-author-auth-app-layer/S7-shared-envelope-verifier-and-profiles/baseline.json",
+    "app/src/lib/marmot/envelopeVerifier.ts",
+    "app/tests/unit/marmot/envelopeVerifier.test.ts",
+    "app/tests/e2e/groups-profile-forwarded-attribution.spec.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/profileSync.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "specs/epic-group-message-author-auth-app-layer/S7-shared-envelope-verifier-and-profiles/verification.json"
+  ],
+  "tests_added": {
+    "unit": 19,
+    "e2e": 1
+  },
+  "test_counts": {
+    "baseline": 4190,
+    "final": 4209
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "Shared verifier",
+    "Profiles"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Generalized profileSync.ts's inline signature/shape verification (verifyEvent + looksLikeEnvelope) into a new shared verifier module (app/src/lib/marmot/envelopeVerifier.ts) with two decoupled primitives: verifyForwardedEnvelope(content, spec, groupId?) \u2014 pure/stateless: signed-inner-event shape, correct inner kind, valid Schnorr signature, and (only when spec.binding.groupScoped) a [GROUP_BINDING_TAG_NAME, groupId] tag match \u2014 and createOneShotGate() \u2014 a real, accumulating Set-backed tryConsume(innerEventId) gate, deliberately separate from verification so a self-authored delivery and a forwarded copy of the byte-identical signed inner event both legitimately verify but only the first reaches application (AC-FWD-5). profileSync.ts now declares profile's own PROFILE_KIND_SPEC (innerKind: 0, groupScoped: false \u2014 the roster/group-binding exemption) and delegates parseProfilePayload's envelope branch to verifyForwardedEnvelope, falling back to legacy flat-payload parsing ONLY on a 'malformed' (not-envelope-shaped) result \u2014 never on invalid-signature/wrong-kind, closing a theoretical strip-and-resubmit-as-legacy path. profileHandler.ts creates ONE createOneShotGate() instance per createProfileHandler() call (subscribe-scoped, mirroring applicationRumorDispatcher.ts's own per-subscribe seen-rumor-id LRU) and gates the entire body of handle() \u2014 merge, marker logic, announcement, contact-cache write \u2014 on tryConsume(profilePayload.signedEvent.id) for signed deliveries, before any side effect. The unsigned/legacy fallback pubkey in payloadToMemberProfile(sender.pubkey, ...) was already correctly repointed to the authenticated sender by a prior story (S1/S2); verified unchanged. Roster exemption (VQ-S7-005) is structural: neither profileHandler.ts nor envelopeVerifier.ts references any roster/admin identifier, enforced by a new source-scan describe block in profileHandler.test.ts mirroring the existing handlersRumorPubkeyBoundary.test.ts precedent. Verifier-unit coverage (app/tests/unit/marmot/envelopeVerifier.test.ts, 14 tests, real nostr-tools signing) proves valid/invalid signature, correct/incorrect inner kind, and \u2014 via a directly-constructed hypothetical group-scoped spec since profile itself is group-binding-exempt \u2014 group-tag-match/mismatch/omitted-groupId rejection, plus the one-shot gate's real accumulation across many ids and independence between separate instances. profileHandler.test.ts gained 5 tests: 2 for AC-FWD-5 (self-authored+forwarded pair applies once; two genuinely distinct signed deliveries both apply) and 3 for the roster-exemption structural guard. A pre-existing test-helper interaction was found and fixed in passing: makeSignedProfileRumor's inner signedEvent.id was deterministic-per-author, which the new one-shot gate would have silently short-circuited in the pre-existing S3 gate-remediation TOCTOU concurrent test (rumorA/rumorB sharing an id) before that test ever reached the marker-consumption logic it was written to exercise; fixed with a monotonic per-call counter defaulting to unique ids, with an explicit override param for the two tests that deliberately want a shared id. AC-FWD-4's integrated-e2e spec (app/tests/e2e/groups-profile-forwarded-attribution.spec.ts) was authored AND actually executed against the real strfry relay (not merely authored) \u2014 it passes: a 3-peer group (A receiver, B relayer, C original signer) where C goes offline forces A's profile request to be answered only by B's relay-on-behalf of C's cached signedEvent; A's member row for C (keyed by C's pubkey prefix) renders 'Carol', B's own row still renders 'Bob', and a forced second relay cycle of the byte-identical cached signedEvent leaves exactly one row for C, no error overlay. A direct raw-IndexedDB introspection of the 'few-member-profiles' store was tried first as a deeper attribution check and dropped after it consistently disagreed with the live app state (empty store moments after the UI correctly rendered the name) for reasons not root-caused within this story \u2014 documented as a caveat and post-impl question (VQ-S7-010) rather than silently worked around.",
+  "verification": {
+    "verification_json": "8 pre-impl (planner) questions read and satisfied; 3 post-impl questions appended (VQ-S7-009: the makeSignedProfileRumor uniqueness fix and its interaction with pre-existing multi-call tests; VQ-S7-010: whether the UI-testid attribution proof is adequate given the raw-IndexedDB read discrepancy; VQ-S7-011: whether the structural roster-exemption guard is an adequate substitute for a live departed-member e2e scenario).",
+    "all_tests_passing": "4209 unit (4208 passed + 1 pre-existing skipped) + 1 new e2e test (executed against the real strfry relay, passing)",
+    "baseline_to_final": "4190 -> 4209 unit (+19: 14 in envelopeVerifier.test.ts, 2 AC-FWD-5 + 3 roster-exemption in profileHandler.test.ts); +1 e2e test (groups-profile-forwarded-attribution.spec.ts, actually run via `E2E_GROUPS=1 node scripts/run-e2e.mjs tests/e2e/groups-profile-forwarded-attribution.spec.ts` against the already-running strfry/blossom-mock containers \u2014 passes, 21.6s test body)",
+    "lint_typecheck": "lint=NO_LINT (no ESLint config in app/ \u2014 next lint prompts interactively; consistent with S1-S6 baseline), typecheck=clean (cd app && npx tsc --noEmit -p tsconfig.json, exit 0, re-verified after implementation)",
+    "reviews": "stage1=lead-owned (not run by this architect spawn, per FR-2); stage2=lead-owned; unactioned findings recorded as post-impl questions: 0"
+  },
+  "scope_deviation": {
+    "declared_scope_includes": [
+      "app/src/lib/marmot/profileSync.ts",
+      "app/src/lib/marmot/handlers/profileHandler.ts",
+      "app/tests/unit/marmot/profileHandler.test.ts"
+    ],
+    "actually_touched_beyond_declared": [
+      "app/src/lib/marmot/envelopeVerifier.ts (new \u2014 the shared verifier module itself, the story's entire point)",
+      "app/tests/unit/marmot/envelopeVerifier.test.ts (new \u2014 verifier-unit tests for the new module, per architecture.md's own guidance that the group-tag-mismatch branch must be exercised by a directly-constructed test since profile can't reach it through the app)",
+      "app/tests/e2e/groups-profile-forwarded-attribution.spec.ts (new \u2014 AC-FWD-4's integrated-e2e coverage)"
+    ],
+    "rationale": "Explicitly pre-authorized by the spawning task prompt itself: 'Expand scope only where genuinely necessary (e.g. a new verifier file, an e2e spec) and self-flag any expansion in result.json' \u2014 both named examples materialized exactly as anticipated. Not a deviation from an implicit boundary; recorded here per that instruction, not as a correction."
+  },
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "A live e2e run surfaced a genuine puzzle worth flagging: a direct raw-indexedDB.open() read of 'few-member-profiles' (mirroring the existing idb-record.ts helper pattern used elsewhere in the e2e suite) consistently returned an EMPTY store moments after the UI correctly rendered the relayed name \u2014 tracing MemberList.tsx's displayName source (profile?.nickname || truncateNpub(npub), no other source exists) confirmed the live app state was correct and the raw-connection read was the one disagreeing, not the reverse. This cost two full e2e run cycles (~4 minutes each including a ~1-minute 3-peer group beforeAll) before concluding it was a pre-existing test-infrastructure quirk unrelated to this story's code (groupStorage.ts's IDB write path is untouched by S7) rather than chasing it further into idb-keyval's connection-caching internals. Separately, a pre-existing test helper (makeSignedProfileRumor in profileHandler.test.ts) generated a DETERMINISTIC inner signedEvent.id per author, which silently interacted with the new one-shot gate: the pre-existing 'S3 gate-remediation (TOCTOU)' concurrent test fires two handle() calls with distinct outer rumor ids but (before the fix) identical embedded signedEvent.id, which the new gate would short-circuit on the second call BEFORE it ever reached the marker-consumption logic that test exists to exercise \u2014 the test would still have passed (same final assertions hold) while silently testing something different than its own documentation claims. Required tracing the exact synchronous-vs-awaited execution order of two back-to-back handle() calls under Promise.all to confirm the interference, then fixing the helper to default to unique-per-call ids with an explicit override for the two tests that deliberately want a shared id.",
+    "surprised_by": "The first e2e run attempt failed on an unrelated navigation bug, not a product defect: openGroup() leaves the page on the group DETAIL route, and page.reload() reloads whatever route the page currently sits on \u2014 the existing groups-profile-request.spec.ts scenario this test's structure was modeled on only avoids this because its receiver page (C) was left on /groups/ by an earlier beforeAll navigation step, a precondition this new spec's flow (where the SAME peer, A, is both the group creator being warmed up and the receiver being reloaded) didn't share. Easy to copy the pattern without copying the precondition it silently depends on.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "final_outcome": "accepted"
+}

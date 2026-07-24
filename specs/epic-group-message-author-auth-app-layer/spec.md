@@ -1,6 +1,8 @@
 ---
 arch_debate: false
 constrained_by_adrs: [ADR-012, ADR-006, ADR-003]
+mutation_gate: skip
+mutation_gate_reason: "Large multi-module security epic (~18-20 touched production modules); test quality evidenced by adversarial Opus+Fable per-story review to fixpoint, examiner verification (all AC questions YES), and 7 real-producer order-sensitivity property tests. Product-owner-authorized skip 2026-07-24."
 ---
 
 # Group Message Author Authentication — App Layer

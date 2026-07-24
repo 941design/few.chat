@@ -1,0 +1,21 @@
+{
+  "story_id": "S7",
+  "captured_at": "2026-07-24T00:47:00Z",
+  "tests": {
+    "command": "make test-unit",
+    "test_files": 215,
+    "passed": 4189,
+    "skipped": 1,
+    "total": 4190,
+    "failed": 0
+  },
+  "lint": {
+    "status": "NO_LINT",
+    "note": "app/package.json has a `lint` script (`next lint`), but no ESLint config exists yet — `next lint` prompts interactively to scaffold one (never completed in this repo). Matches architecture.md's boundary-rules note: 'there is no ESLint' — enforcement is via vitest source-scan tests (e.g. zodBoundary.test.ts precedent) instead."
+  },
+  "typecheck": {
+    "status": "clean",
+    "command": "npx tsc --noEmit -p tsconfig.json",
+    "note": "Zero errors at baseline."
+  }
+}

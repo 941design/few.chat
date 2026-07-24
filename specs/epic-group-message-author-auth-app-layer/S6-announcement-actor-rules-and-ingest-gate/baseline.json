@@ -1,0 +1,14 @@
+{
+  "captured_at": "2026-07-23T23:40:18Z",
+  "command": "make test-unit",
+  "status": "PASS",
+  "test_files": 214,
+  "tests_passed": 4159,
+  "tests_skipped": 1,
+  "tests_total": 4160,
+  "lint": "NO_LINT",
+  "lint_note": "No ESLint config exists in app/ (next lint prompts interactively to create one — matches architecture.md's boundary-rules note that there is no ESLint; the repo relies on vitest source-scan tests like zodBoundary.test.ts instead). No Makefile lint target either.",
+  "typecheck": "clean",
+  "typecheck_command": "cd app && npx tsc --noEmit -p tsconfig.json",
+  "typecheck_note": "No Makefile typecheck target; discovered via app/tsconfig.json. Exit 0, no errors."
+}

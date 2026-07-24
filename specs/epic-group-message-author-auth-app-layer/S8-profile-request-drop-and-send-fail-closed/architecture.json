@@ -1,0 +1,42 @@
+{
+  "module_name": "Profiles (forwarded) — send side",
+  "purpose": "Owns AC-SEND-10 (meta-event send fails closed): centralizes the fail-closed behavior for producing the forwardable signed inner kind-0 envelope (serialiseProfileUpdate) so a locked/absent signer NEVER results in an emitted meta-event or a local action implying success, with surfacing split by call-site nature — interactive (visible i18n error) vs background/relay (dev-log only, relies on the pre-existing profile-request retry machinery). Also confirms (does not re-implement) that the profile-request bind (spec.md Solution §8) already holds: a mismatched-sender kind-30 rumor is dropped at S1's dispatcher choke point before ANY handler (including profileRequestHandler.ts) runs — no separate handler-level check exists or is needed for this story.",
+  "public_api": [
+    {
+      "name": "signAndSendProfileBackground",
+      "signature": "(args: { signer: EventSigner | null; profile: UserProfile; sendRumor: (payload: string) => Promise<void>; logLabel: string }) => Promise<{ sent: boolean }>",
+      "description": "Exported from MarmotContext.tsx (module-scope pure/DI function, mirrors the fireAutoCommit / applyPairingAdmissionDigest precedent). Attempts serialiseProfileUpdate(profile, signer); on a null signer or a thrown signature, `sendRumor` is NEVER invoked (no meta-event, no local action) and the failure is dev-logged only via console.warn. On success, calls the caller-bound `sendRumor(payload)` exactly once and returns { sent: true }. This is THE single implementation every background/relay profile-send call site funnels through (onHistorySynced auto-publish, sendSelfProfile's AC-030 self-reply, createGroup's welcome broadcast, inviteByNpub's post-invite re-send)."
+    },
+    {
+      "name": "signProfileForInteractiveSend",
+      "signature": "(profile: UserProfile, signer: EventSigner | null, errorMessage: string, onSignFailed: (message: string) => void) => Promise<string | null>",
+      "description": "Exported from MarmotContext.tsx. The interactive twin of signAndSendProfileBackground: on a null signer or a thrown signature, invokes `onSignFailed(errorMessage)` (wired to a Chakra toast by publishProfileUpdate) and returns null — the caller MUST treat null as 'stop, nothing was emitted, nothing was actioned locally' and must not enter any per-group send loop. On success returns the signed payload. The signer check runs before any caller-side local action (VQ-S8-006)."
+    }
+  ],
+  "private_files": [
+    "app/src/context/MarmotContext.tsx (the two exported functions above, the `readForcedProfileSignerFailureOverride` dev-only e2e hook, and the five call sites rewired to funnel through them: onHistorySynced ~L1561, sendSelfProfile dispatcher dep ~L1688, createGroup ~L1780, inviteByNpub ~L1891, publishProfileUpdate ~L1980)"
+  ],
+  "owned_data": [
+    "profilePublishedRef (per-group 'already auto-published this session' Set, useRef) — behavior fixed this story: marked ONLY after signAndSendProfileBackground reports { sent: true }, never before (VQ-S8-006 — a signer failure must leave no residual local state implying success)."
+  ],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/profileSync.ts (serialiseProfileUpdate) — pre-existing dependency, unchanged",
+    "@chakra-ui/react (useToast) — re-added to MarmotContext.tsx's module-scope imports; was previously imported for the S5 pairing-admission-digest feature and later removed when that feature's toast caller was retired (applyPairingAdmissionDigest / resolveAndApplyPairingAdmissionDigest remain as documented no-production-caller pure functions) — precedent for a Provider-level useToast() call already established, not a new pattern",
+    "@/src/context/LanguageContext (useCopy) — already imported by MarmotContext.tsx before this story (copy was destructured but unused); now consumed for copy.groups.profileSendFailed"
+  ],
+  "dependencies_forbidden": [],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/profileRequestHandler.test.ts — 'AC-SEND-10: background/relay send fails closed' + 'AC-SEND-10: interactive send fails closed' describe blocks (handler-unit; imports signAndSendProfileBackground / signProfileForInteractiveSend directly from MarmotContext.tsx per the fireAutoCommit exported-pure-function precedent — see autoCommitLeave.test.ts / admissionDigest.test.ts for the module-load boilerplate this file's new blocks reuse)",
+    "app/tests/e2e/groups-profile-send-fails-closed.spec.ts (new — integrated-e2e, interactive path: locked/absent signer via the dev-only forceProfileSignerFailure override, real UI nickname-blur → publishProfileUpdate, asserts a visible i18n error AND zero PROFILE_RUMOR_KIND rumor-out count via the FIXTURE-07-001 rumor-counter mechanism)"
+  ],
+  "profile_request_bind_confirmation": {
+    "claim": "spec.md Solution §8 / architecture.md's per-type actor-rules table row 'profile_request (30-req) | choke-point drop only (target-driven auto-reply) | no separate handler logic' already holds and required NO code change this story.",
+    "evidence": "applicationRumorDispatcher.ts's subscribe() listener resolves `sender` and compares `sender.pubkey !== rumor.pubkey` (drop + dev-log, no markSeen, no fan-out) BEFORE the `handlers.filter((h) => h.kind === rumor.kind)` fan-out loop that would otherwise route to profileRequestHandler.ts (kind 30). This is unconditional across all kinds, including 30 — profileRequestHandler.ts's own handle() body has no sender-comparison logic of its own (confirmed by reading the file: it only branches on reqPayload.targetPubkey === ctx.selfPubkeyHex, never on `sender`), which is correct per the architecture table: the auto-reply is target-driven (who is the request FOR), not sender-authorization-driven (who SENT the request) — that authorization already happened at the choke point."
+  },
+  "seam": {
+    "cross_story": false
+  }
+}

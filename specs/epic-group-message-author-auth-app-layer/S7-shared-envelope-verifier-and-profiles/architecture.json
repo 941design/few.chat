@@ -1,0 +1,54 @@
+{
+  "module_name": "Shared verifier",
+  "purpose": "Generalizes the inline signature/shape verification that profileSync.ts's parseProfilePayload used to perform inline into ONE reusable inner-envelope verifier for all forwardable kinds (kind-0 profile is the only one today). Applies the hardening set that is applicable now: signed-inner-event shape, correct inner kind, valid Schnorr signature, and a per-kind group-binding policy (profile is EXEMPT — context-free/identity-scoped, per architecture.md's profile(0) actor-rule row). One-shot consumption keyed on the inner event id is a deliberately DECOUPLED, separately-stateful concern (createOneShotGate), so verify() itself stays pure/stateless and a self-authored delivery + a forwarded delivery of the byte-identical signed inner event both legitimately verify — only the first to reach the gate wins the application-level side effect (AC-FWD-5). The module never touches roster/admin state for any kind — verification (who signed this) is a distinct concern from authorization (are they allowed to act here); profile's roster exemption is enforced by simply never wiring a roster dependency into this module or profileHandler.ts, not by a bypassable flag.",
+  "public_api": [
+    {
+      "name": "verifyForwardedEnvelope",
+      "signature": "(content: string, spec: ForwardedKindSpec, groupId?: string) => VerifyResult",
+      "description": "Pure, stateless. Parses `content` as JSON, checks it structurally matches a SignedInnerEvent (id/pubkey/sig/created_at/content/tags/kind), checks `event.kind === spec.innerKind`, verifies the Schnorr signature via nostr-tools/pure verifyEvent, and — ONLY when spec.binding.groupScoped is true — checks the inner event's [GROUP_BINDING_TAG_NAME, groupId] tag matches the passed groupId (fails closed if groupId is omitted for a group-scoped spec). Returns { ok: true, event } or { ok: false, reason }, reason one of 'malformed' | 'invalid-signature' | 'wrong-kind' | 'group-mismatch'. 'malformed' is the ONLY reason a caller may treat as 'try a different (e.g. legacy unsigned) wire shape instead' — every other reason is a hard reject, never a fallback (rejecting a stripped/forged envelope must not let it be resubmitted and accepted as 'legacy')."
+    },
+    {
+      "name": "createOneShotGate",
+      "signature": "() => OneShotGate  // { tryConsume(innerEventId: string): boolean }",
+      "description": "Factory for a REAL, accumulating consumption gate (a Set that only grows for the gate's lifetime) — not a stub that always answers 'not yet consumed'. tryConsume(id) returns true the first time a given inner event id is passed and marks it consumed; every later call for the same id returns false. Callers own the instance's lifetime; profileHandler.ts creates ONE instance per createProfileHandler() call (i.e. per handler construction / per group-subscribe, mirroring applicationRumorDispatcher.ts's own per-subscribe seen-rumor-id LRU precedent) so state genuinely persists across the handler's `handle()` calls for that subscription's lifetime, never resetting per call. Exported standalone (not folded into verifyForwardedEnvelope) precisely so S9's property test can construct its own instance and exercise the mechanism directly, without reaching into profileHandler.ts's private wiring."
+    },
+    {
+      "name": "GROUP_BINDING_TAG_NAME",
+      "signature": "'g'",
+      "description": "Tag name (first element of a Nostr tag array) carrying the receiving group's id on a group-scoped forwarded kind's inner signed event, e.g. ['g', groupId]. No current forwardable kind sets spec.binding.groupScoped = true (profile is exempt), so no in-app producer emits this tag today — exercised only by directly-constructed envelopes in verifier-unit tests (AC-FWD-5) and by future group-scoped kinds."
+    },
+    {
+      "name": "ForwardedKindSpec / GroupBindingPolicy / SignedInnerEvent / VerifyResult",
+      "signature": "types (see envelopeVerifier.ts)",
+      "description": "ForwardedKindSpec = { innerKind: number; binding: GroupBindingPolicy }. GroupBindingPolicy = { groupScoped: boolean }. A future forwardable kind declares its OWN spec (see profileSync.ts's PROFILE_KIND_SPEC as the pattern) with groupScoped: true and gets the group-tag check for free — no change to profileHandler.ts or this module required (per spec.md Solution §6's explicit interface requirement)."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/envelopeVerifier.ts (new — this module's sole implementation file)"
+  ],
+  "owned_data": [
+    "No persisted data of its own. OneShotGate instance state is owned by the CALLER (profileHandler.ts), not by this module — createOneShotGate is a factory, not a singleton registry."
+  ],
+  "dependencies_allowed": [
+    "nostr-tools/pure (verifyEvent) — pre-existing dependency, previously imported directly by profileSync.ts for the exact same signature check this module generalizes; not a new boundary crossing."
+  ],
+  "dependencies_forbidden": [
+    "app/src/context/* — zero context imports (boundary rule, architecture.md)",
+    "GroupAdminsProvider / any roster-admin accessor — this module verifies inner-signer authenticity, never authorizes against group membership; profile's roster exemption is structural (no dependency exists to call), not a conditional bypass"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/envelopeVerifier.test.ts (new — verifier-unit: valid/invalid signature, correct/incorrect inner kind, group-tag-mismatch rejection via a directly-constructed group-scoped spec, one-shot consumption)",
+    "app/tests/unit/marmot/profileHandler.test.ts (fallback repoint already-verified as sender.pubkey; profileHandler as sole verifier caller; one-shot gate wired at the application boundary)"
+  ],
+  "consumers": {
+    "note": "Not itself part of dependencies_allowed (this module has no forward dependency on its consumers) — recorded here for traceability. profileSync.ts (module: Profiles) imports verifyForwardedEnvelope + declares PROFILE_KIND_SPEC (groupScoped: false). profileHandler.ts (module: Profiles) imports createOneShotGate and owns the one-shot instance, gating application (merge + all downstream side effects) on tryConsume(signedEvent.id) — the ONE caller of the shared verifier's application-time gate; no inline re-verification duplicated in the handler.",
+    "modules": ["Profiles (profileSync.ts, handlers/profileHandler.ts)"]
+  },
+  "seam": {
+    "cross_story": true,
+    "consumed_by": ["S9"]
+  }
+}

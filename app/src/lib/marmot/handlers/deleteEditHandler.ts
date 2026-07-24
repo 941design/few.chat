@@ -29,9 +29,13 @@
  * ─── The forwarded pubkey is the INNER rumor pubkey (NOT the kind-445 author) ─
  * ─── but it is group-member-attested, NOT MLS-identity-bound (see below) ──────
  *
- * `rumor.pubkey` (the value this handler forwards to `applyDeleteEditSignal`)
- * is the INNER application-rumor pubkey — never the kind-445 wrapper's
- * ephemeral author (learning `kind-445-events-have-ephemeral-authors`).
+ * This handler forwards the authenticated `sender` (AuthenticatedSender) to
+ * `applyDeleteEditSignal`, which authorizes on `sender.pubkey`. Under the S1
+ * stub `sender.pubkey` IS the claimed inner application-rumor pubkey (the seam
+ * resolver returns `rumor.pubkey`/`'claimed'` until the MLS backbone lands), so
+ * the trust level described below is unchanged by the seam refactor. That inner
+ * pubkey is never the kind-445 wrapper's ephemeral author
+ * (learning `kind-445-events-have-ephemeral-authors`).
  * `applicationRumorDispatcher.ts`'s listener calls `deserializeApplicationData`
  * on the MLS-decrypted application-message bytes and hands EVERY registered
  * handler that decoded rumor object directly — the kind-445 wrapper event

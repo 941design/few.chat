@@ -18,6 +18,11 @@ vi.mock('idb-keyval', () => ({
   del: vi.fn(async (key: string) => { idbStore.delete(key); }),
   keys: vi.fn(async () => [...idbStore.keys()]),
   delMany: vi.fn(async (ks: string[]) => { ks.forEach((k) => idbStore.delete(k)); }),
+  // AC-XCUT-5: groupStorage.ts calls createStore(...) at module scope (for
+  // memberProfileStore) — needed once that module is imported for real
+  // below. get/set above already ignore their second "store" arg and key
+  // purely by the string key, so a stub object is a drop-in addition.
+  createStore: vi.fn(() => ({})),
 }));
 
 // ─── nostr-tools/pure mock ───────────────────────────────────────────────────
@@ -35,6 +40,10 @@ vi.mock('@internet-privacy/marmot-ts', () => ({
 const { createProfileHandler } = await import('@/src/lib/marmot/handlers/profileHandler');
 const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
 const { PROFILE_RUMOR_KIND } = await import('@/src/lib/marmot/profileSync');
+// AC-XCUT-5: the REAL producer, wired into deps.mergeMemberProfile for the
+// merge-order property test below — not mocked, since the property under
+// test IS the real last-writer-wins merge behavior.
+const { mergeMemberProfile: realMergeMemberProfile, loadMemberProfiles } = await import('@/src/lib/marmot/groupStorage');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -50,17 +59,31 @@ const GROUP_ID = 'group-profile-test';
  * but the inner event is signed by the original author.
  * verifyEvent is mocked to return true so no real key material is needed.
  */
+// Monotonic counter backing makeSignedProfileRumor's default inner-event id
+// (epic: group-message-author-auth-app-layer S7). Each call gets a UNIQUE
+// inner signedEvent.id by default — mirroring reality, where two distinct
+// signed publishes (even by the same author) have distinct ids — so tests
+// that call handle() more than once with fresh rumors don't accidentally
+// collide on profileHandler.ts's new one-shot consumption gate (which is
+// keyed on signedEvent.id, not the outer rumor id). Tests that DELIBERATELY
+// want to exercise the one-shot gate (a genuine redelivery / relayed copy of
+// the SAME signed content) pass an explicit `innerEventId` override so both
+// calls share one id.
+let profileEventIdCounter = 0;
+
 function makeSignedProfileRumor({
   rumorSenderPubkey = PEER_PUBKEY,
   authorPubkey = AUTHOR_PUBKEY,
   updatedAt = new Date().toISOString(),
+  innerEventId,
 }: {
   rumorSenderPubkey?: string;
   authorPubkey?: string;
   updatedAt?: string;
+  innerEventId?: string;
 } = {}) {
   const signedEvent = {
-    id: 'event-id-' + authorPubkey.slice(0, 8),
+    id: innerEventId ?? `event-id-${authorPubkey.slice(0, 8)}-${++profileEventIdCounter}`,
     pubkey: authorPubkey,
     created_at: Math.floor(Date.now() / 1000),
     kind: 0 as const,
@@ -317,6 +340,60 @@ describe('profileHandler', () => {
     expect(contactPubkey).toBe(AUTHOR_PUBKEY);
   });
 
+  // ─── AC-FWD-5 (epic: group-message-author-auth-app-layer S7): one-shot
+  // consumption at the application boundary — a self-authored copy and a
+  // forwarded copy of the SAME signed inner event both parse/verify
+  // successfully, but the second application is a silent no-op. ───────────
+
+  it('AC-FWD-5: a self-authored delivery followed by a relayed copy of the SAME signed profile (same inner event id, different outer rumor) applies once — second delivery is a no-op', async () => {
+    const deps = makeDeps(true);
+    const handler = createProfileHandler(deps);
+    const ctx = makeCtx();
+    const sharedInnerEventId = 'shared-inner-event-id-for-dedup-test';
+
+    // First delivery: the author's own direct publish.
+    const ownDelivery = makeSignedProfileRumor({
+      rumorSenderPubkey: AUTHOR_PUBKEY,
+      authorPubkey: AUTHOR_PUBKEY,
+      innerEventId: sharedInnerEventId,
+    });
+    // Second delivery: a DIFFERENT outer rumor (relayed by PEER_PUBKEY) that
+    // happens to carry the byte-identical signed inner event (same id) — the
+    // dispatcher's own outer-rumor-id LRU would not catch this since the two
+    // outer rumor ids differ; only the shared verifier's one-shot gate does.
+    const relayedCopy = makeSignedProfileRumor({
+      rumorSenderPubkey: PEER_PUBKEY,
+      authorPubkey: AUTHOR_PUBKEY,
+      innerEventId: sharedInnerEventId,
+    });
+    expect(ownDelivery.id).not.toBe(relayedCopy.id);
+
+    await handler.handle(ownDelivery, ctx, makeSender(ownDelivery.pubkey));
+    await handler.handle(relayedCopy, ctx, makeSender(relayedCopy.pubkey));
+
+    // Both deliveries "verify" (both are validly signed) but only the FIRST
+    // applies a side effect — the second is a no-op, not double-applied.
+    expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
+    expect(deps.writeContactEntry).toHaveBeenCalledOnce();
+    expect(deps.setProfileVersion).toHaveBeenCalledOnce();
+  });
+
+  it('AC-FWD-5: two DIFFERENT signed profile deliveries (distinct inner event ids) both apply — one-shot gate does not over-collapse unrelated updates', async () => {
+    const deps = makeDeps(true);
+    const handler = createProfileHandler(deps);
+    const ctx = makeCtx();
+
+    // Two genuinely distinct signed publishes (default innerEventId is
+    // unique per call) — must NOT be treated as duplicates of each other.
+    const first = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+    const second = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
+
+    await handler.handle(first, ctx, makeSender(first.pubkey));
+    await handler.handle(second, ctx, makeSender(second.pubkey));
+
+    expect(deps.mergeMemberProfile).toHaveBeenCalledTimes(2);
+  });
+
   // ─── AC-MARKER-5/6: clearPendingDirectInvite wiring ─────────────────────────
 
   it('AC-MARKER-5: own-signed profile (merged=true) clears the pending-direct-invite marker', async () => {
@@ -386,6 +463,119 @@ describe('profileHandler', () => {
     await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
     expect(deps.writeContactEntry).toHaveBeenCalledOnce();
+  });
+
+  // ─── AC-XCUT-5 (epic: group-message-author-auth-app-layer S9): the
+  // profile merge and the shared one-shot verifier are each order-
+  // independent under redelivery — a self-authored copy and a forwarded
+  // copy of the identical signed inner event, and envelopes whose
+  // updatedAt values arrive out of chronological order, must not produce
+  // delivery-order-dependent state. ────────────────────────────────────
+
+  describe('AC-XCUT-5 (property tests over delivery order)', () => {
+    const SUBJECT_PUBKEY = 'ee'.repeat(32);
+    const RELAYER_PUBKEY = 'ff'.repeat(32);
+
+    it('AC-XCUT-5(a) (property test over delivery order): merged MemberProfile after two envelopes for the same subject is order-independent and equals the greatest-updatedAt profile — through the REAL groupStorage.mergeMemberProfile', async () => {
+      const OLD_UPDATED_AT = '2026-01-01T00:00:00.000Z';
+      const NEW_UPDATED_AT = '2026-06-01T00:00:00.000Z';
+
+      const orderings: Array<'old-then-new' | 'new-then-old'> = ['old-then-new', 'new-then-old'];
+
+      for (const ordering of orderings) {
+        const groupId = `xcut5-merge-${ordering}`;
+        const ctx = { groupId, selfPubkeyHex: SELF_PUBKEY, getActiveGroupId: () => groupId };
+
+        // envelopeOld: self-authored, chronologically earlier updatedAt.
+        const envelopeOld = makeSignedProfileRumor({
+          rumorSenderPubkey: SUBJECT_PUBKEY,
+          authorPubkey: SUBJECT_PUBKEY,
+          updatedAt: OLD_UPDATED_AT,
+        });
+        // envelopeNew: forwarded/relay-on-behalf copy (different outer
+        // transport sender), chronologically later updatedAt.
+        const envelopeNew = makeSignedProfileRumor({
+          rumorSenderPubkey: RELAYER_PUBKEY,
+          authorPubkey: SUBJECT_PUBKEY,
+          updatedAt: NEW_UPDATED_AT,
+        });
+        expect(envelopeOld.id).not.toBe(envelopeNew.id);
+
+        const deps = { ...makeDeps(true), mergeMemberProfile: realMergeMemberProfile };
+        const handler = createProfileHandler(deps);
+
+        const ordered = ordering === 'old-then-new' ? [envelopeOld, envelopeNew] : [envelopeNew, envelopeOld];
+        for (const envelope of ordered) {
+          await handler.handle(envelope, ctx, makeSender(envelope.pubkey));
+        }
+
+        const stored = await loadMemberProfiles(groupId);
+        const subjectProfile = stored.find((p) => p.pubkeyHex === SUBJECT_PUBKEY);
+
+        expect(subjectProfile, `ordering=${ordering}`).toBeDefined();
+        expect(subjectProfile!.updatedAt, `ordering=${ordering}`).toBe(NEW_UPDATED_AT);
+        expect(subjectProfile!.pubkeyHex, `ordering=${ordering}`).toBe(SUBJECT_PUBKEY);
+      }
+    });
+
+    it('AC-XCUT-5(b) (property test over delivery order): a self-authored copy and a forwarded copy of the SAME signed inner event apply at most once, regardless of which arrives first', async () => {
+      const SHARED_INNER_ID = 'xcut5-oneshot-inner-id';
+
+      const orderings: Array<'self-then-forwarded' | 'forwarded-then-self'> = ['self-then-forwarded', 'forwarded-then-self'];
+
+      for (const ordering of orderings) {
+        const ctx = makeCtx();
+
+        // Self-authored copy: rumor sent under the author's own pubkey.
+        const selfCopy = makeSignedProfileRumor({
+          innerEventId: SHARED_INNER_ID,
+          rumorSenderPubkey: SUBJECT_PUBKEY,
+          authorPubkey: SUBJECT_PUBKEY,
+        });
+        // Forwarded copy: same signed inner event, different outer transport sender.
+        const forwardedCopy = makeSignedProfileRumor({
+          innerEventId: SHARED_INNER_ID,
+          rumorSenderPubkey: RELAYER_PUBKEY,
+          authorPubkey: SUBJECT_PUBKEY,
+        });
+
+        const deps = makeDeps(true);
+        // Fresh handler per ordering — a fresh OneShotGate instance, so the
+        // gate under test isn't carrying state across iterations.
+        const handler = createProfileHandler(deps);
+
+        const ordered = ordering === 'self-then-forwarded' ? [selfCopy, forwardedCopy] : [forwardedCopy, selfCopy];
+        for (const envelope of ordered) {
+          await handler.handle(envelope, ctx, makeSender(envelope.pubkey));
+        }
+
+        expect(deps.mergeMemberProfile, `ordering=${ordering}`).toHaveBeenCalledOnce();
+
+        // Self-containment check (Fable-S9-1): the assertion above alone
+        // would ALSO pass under a hypothetical future gate that rejects
+        // every forwarded copy outright (sender !== author), since that
+        // too would leave mergeMemberProfile called exactly once. Prove
+        // the single application above is genuinely the one-shot GATE's
+        // doing — not a blanket forwarded-copy rejection — by delivering
+        // a further forwarded envelope for the SAME subject but with a
+        // DISTINCT inner event id, and asserting the call count actually
+        // increments. If forwarded copies were blanket-rejected, this
+        // would still read as 1, not 2.
+        const distinctForwardedCopy = makeSignedProfileRumor({
+          rumorSenderPubkey: RELAYER_PUBKEY,
+          authorPubkey: SUBJECT_PUBKEY,
+        });
+        // Assert against the INNER signed-event id (what the one-shot gate
+        // keys on) — the outer rumor id is derived only from
+        // rumorSenderPubkey and is shared with `forwardedCopy` above.
+        const distinctInnerId = (JSON.parse(distinctForwardedCopy.content) as { id: string }).id;
+        expect(distinctInnerId, `ordering=${ordering}`).not.toBe(SHARED_INNER_ID);
+
+        await handler.handle(distinctForwardedCopy, ctx, makeSender(distinctForwardedCopy.pubkey));
+
+        expect(deps.mergeMemberProfile, `ordering=${ordering}`).toHaveBeenCalledTimes(2);
+      }
+    });
   });
 });
 
@@ -585,5 +775,92 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const parsed = parseStructured(content);
 
     expect(parsed).toEqual({ type: 'invite_lifecycle', event: 'accepted', pubkey: AUTHOR_PUBKEY });
+  });
+});
+
+// ─── VQ-S7-005 (epic: group-message-author-auth-app-layer S7): roster
+// exemption static guard. Profiles are roster-EXEMPT (spec.md Solution §6,
+// architecture.md's profile(0) actor-rule row) — a departed member's late or
+// forwarded profile must never be rejected on roster grounds. The strongest
+// proof of an EXEMPTION is structural absence: none of profileHandler.ts,
+// the shared verifier (envelopeVerifier.ts), or profileSync.ts (where
+// parseProfilePayload lives, also in the profile verification path) may
+// reference ANY roster/admin accessor at all. Mirrors
+// handlersRumorPubkeyBoundary.test.ts's source-scan precedent (real files,
+// not mocked deps — a mocked-deps test could pass even if a real roster call
+// were wired in and simply never invoked). ──────
+describe('roster exemption (VQ-S7-005): profileHandler.ts, envelopeVerifier.ts, and profileSync.ts never reference a roster/admin accessor', () => {
+  it('profileHandler.ts source contains no roster/admin identifier', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const filePath = path.resolve(
+      fileURLToPath(new URL('.', import.meta.url)),
+      '../../../src/lib/marmot/handlers/profileHandler.ts',
+    );
+    const source = readFileSync(filePath, 'utf8');
+    const ROSTER_IDENTIFIERS = ['isGroupAdmin', 'isGroupMember', 'GroupAdminsProvider', 'groupAdminsFor', 'isAdminPubkey', 'getGroupMembers', 'getLiveMemberPubkeys'];
+    const found = ROSTER_IDENTIFIERS.filter((id) => source.includes(id));
+    expect(found, `profileHandler.ts must never reference roster/admin accessors — found: ${found.join(', ')}`).toEqual([]);
+  });
+
+  it('envelopeVerifier.ts source contains no roster/admin identifier', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const filePath = path.resolve(
+      fileURLToPath(new URL('.', import.meta.url)),
+      '../../../src/lib/marmot/envelopeVerifier.ts',
+    );
+    const source = readFileSync(filePath, 'utf8');
+    const ROSTER_IDENTIFIERS = ['isGroupAdmin', 'isGroupMember', 'GroupAdminsProvider', 'groupAdminsFor', 'isAdminPubkey', 'getGroupMembers', 'getLiveMemberPubkeys'];
+    const found = ROSTER_IDENTIFIERS.filter((id) => source.includes(id));
+    expect(found, `envelopeVerifier.ts must never reference roster/admin accessors — found: ${found.join(', ')}`).toEqual([]);
+  });
+
+  it('profileSync.ts source contains no roster/admin identifier', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const filePath = path.resolve(
+      fileURLToPath(new URL('.', import.meta.url)),
+      '../../../src/lib/marmot/profileSync.ts',
+    );
+    const source = readFileSync(filePath, 'utf8');
+    const ROSTER_IDENTIFIERS = ['isGroupAdmin', 'isGroupMember', 'GroupAdminsProvider', 'groupAdminsFor', 'isAdminPubkey', 'getGroupMembers', 'getLiveMemberPubkeys'];
+    const found = ROSTER_IDENTIFIERS.filter((id) => source.includes(id));
+    expect(found, `profileSync.ts must never reference roster/admin accessors — found: ${found.join(', ')}`).toEqual([]);
+  });
+
+  it('profileRequestSync.ts source contains no roster/admin identifier', async () => {
+    // architecture.md's Profiles row also names profileRequestSync.ts —
+    // completing the negative-guarantee scan alongside profileSync.ts,
+    // profileHandler.ts, and envelopeVerifier.ts above. Note:
+    // profileRequestRunner.ts is deliberately OUT of this ban scan — its
+    // getGroupMembers use is a legitimate roster-scoped outbound request
+    // sweep, not a verification-path roster dependency.
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const filePath = path.resolve(
+      fileURLToPath(new URL('.', import.meta.url)),
+      '../../../src/lib/marmot/profileRequestSync.ts',
+    );
+    const source = readFileSync(filePath, 'utf8');
+    const ROSTER_IDENTIFIERS = ['isGroupAdmin', 'isGroupMember', 'GroupAdminsProvider', 'groupAdminsFor', 'isAdminPubkey', 'getGroupMembers', 'getLiveMemberPubkeys'];
+    const found = ROSTER_IDENTIFIERS.filter((id) => source.includes(id));
+    expect(found, `profileRequestSync.ts must never reference roster/admin accessors — found: ${found.join(', ')}`).toEqual([]);
+  });
+
+  it('ProfileHandlerDeps has no roster/admin field (registerHandlers.ts never wires one in)', () => {
+    // Structural evidence, not a runtime-defeatable claim: makeDeps() builds
+    // the FULL ProfileHandlerDeps shape used everywhere else in this file —
+    // if a roster field existed on the type, TypeScript would already force
+    // it to be present here. Its absence from every deps fixture below is
+    // therefore load-bearing, not incidental.
+    const deps = makeDeps();
+    const depsKeys = Object.keys(deps);
+    const ROSTER_KEYS = ['isGroupAdmin', 'isGroupMember', 'isAdminPubkey'];
+    expect(depsKeys.filter((k) => ROSTER_KEYS.includes(k))).toEqual([]);
   });
 });

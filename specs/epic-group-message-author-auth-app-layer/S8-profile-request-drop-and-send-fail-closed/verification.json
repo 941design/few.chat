@@ -45,6 +45,30 @@
       "category": "SPEC",
       "ac_id": "AC-SEND-10",
       "question": "Show the production code and both test levels proving AC-SEND-10: if a forwardable inner signature cannot be produced (locked/absent NIP-07 signer), the meta-event is not emitted and not actioned locally; an interactive send shows a visible, i18n-backed error (integrated-e2e); a background/relay send dev-logs the failure and relies on the existing retry machinery, showing no UI error (handler-unit) — confirm both paths are tested independently, not conflated into one assertion."
+    },
+    {
+      "question_id": "VQ-S8-008",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "MarmotContext.tsx has FIVE call sites that produce a forwardable signed profile envelope (onHistorySynced auto-publish, sendSelfProfile's AC-030 self-reply, createGroup's welcome broadcast, inviteByNpub's post-invite re-send, publishProfileUpdate). This story classified only publishProfileUpdate as INTERACTIVE (visible error) and the other four as BACKGROUND/RELAY (dev-log only), on the reasoning that the other four are best-effort side effects of an already-successful primary action (group creation / invite / historical sync / an incoming request) rather than something the user is watching a 'send my profile' action for. Is this classification correct, or should createGroup's / inviteByNpub's profile broadcast — which DO fire synchronously inside a user-clicked action handler — also surface a visible error?"
+    },
+    {
+      "question_id": "VQ-S8-009",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "publishProfileUpdate had NO production caller anywhere in the app when this story started (confirmed by grepping app/src and app/pages before implementation) — the interactive path appeared to be dead code. Investigation found the real caller in app/pages/profile.tsx (handleNicknameBlur -> broadcastProfile -> publishProfileUpdate(next)), a file OUTSIDE this story's scope.includes. Does profile.tsx require ANY change for AC-SEND-10 to hold end-to-end (it does not call publishProfileUpdate expecting a specific return value or catch a rejection — the fail-closed contract is entirely internal to publishProfileUpdate itself), and is app/tests/e2e/groups-profile-send-fails-closed.spec.ts's decision to drive the REAL nickname-blur UI (rather than adding a synthetic window.__fewTest.publishProfileUpdate hook, which was implemented first and then removed once the real caller was found) the more faithful test per CLAUDE.md's 'publish through the app' rule?"
+    },
+    {
+      "question_id": "VQ-S8-010",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "onHistorySynced's profilePublishedRef Set previously marked a group 'already auto-published this session' BEFORE attempting serialiseProfileUpdate at all (a locally-cached optimistic 'sent' flag matching VQ-S8-006's exact failure pattern). This story moved the mark to occur ONLY after signAndSendProfileBackground reports { sent: true }. Was this pre-existing bug in-scope for AC-SEND-10 to fix (vs. a separate finding to file), and does the fix have any unintended effect on the 'exactly once per group per session' auto-publish intent the ref was originally added for (e.g. could a transient signing failure now cause the SAME group to be auto-published more than once per session if onHistorySynced's callback can fire more than once for the same group)?"
+    },
+    {
+      "question_id": "VQ-S8-011",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "There is no real NIP-07 browser extension in this repo's Playwright e2e harness (test identities use a local in-app signer seeded via localStorage, per auth-helpers.ts) — 'locked/absent NIP-07 signer' is simulated via a new dev-only window.__fewTest.forceProfileSignerFailure override on publishProfileUpdate, gated NODE_ENV !== 'production' and re-read on every call, mirroring authenticatedSenderResolver.ts's resolveAuthenticatedSender override precedent from S1. Is a synthetic override an acceptable substitute for a genuinely locked NIP-07 signer for THIS AC's e2e coverage, and does its narrow scope (affects only publishProfileUpdate, checked at call time, gated out of production builds) rule out any production risk?"
     }
   ]
 }

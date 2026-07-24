@@ -33,6 +33,9 @@ export interface HandlerDeps {
   // (kind-5) and chatHandler.ts's edit-marked-kind-9 dispatch-routing branch.
   applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<ChangeResult>;
   resolvePendingSignalsForSlot: (thread: MessageEditsThreadKey, slotId: string, originalAuthorPubkeyHex: string) => Promise<ChangeResult>;
+  // S6 (epic: group-message-author-auth-app-layer): announcement ingest-gate deps.
+  isGroupAdmin: (groupId: string, pubkeyHex: string) => Promise<boolean>;
+  isGroupMember: (groupId: string, pubkeyHex: string) => Promise<boolean>;
   // Profile handler deps
   mergeMemberProfile: (groupId: string, profile: MemberProfile) => Promise<boolean>;
   clearPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void>;
@@ -93,6 +96,10 @@ export function buildDispatcher(deps: HandlerDeps): Dispatcher {
       setChatVersion: deps.setChatVersion,
       applyDeleteEditSignal: deps.applyDeleteEditSignal,
       resolvePendingSignalsForSlot: deps.resolvePendingSignalsForSlot,
+      isGroupAdmin: deps.isGroupAdmin,
+      isGroupMember: deps.isGroupMember,
+      getPoll: deps.getPoll,
+      loadVotes: deps.loadVotes,
     }),
     createReactionHandler({
       loadMessages: deps.loadMessages,

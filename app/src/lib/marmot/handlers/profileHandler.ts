@@ -13,6 +13,7 @@
  */
 
 import { PROFILE_RUMOR_KIND, parseProfilePayload, payloadToMemberProfile } from '@/src/lib/marmot/profileSync';
+import { createOneShotGate, type OneShotGate } from '@/src/lib/marmot/envelopeVerifier';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 
@@ -65,9 +66,34 @@ export function buildAcceptedAnnouncementContent(pubkeyHex: string): string {
   });
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileHandlerDeps, oneShot: OneShotGate): Promise<void> {
   const profilePayload = parseProfilePayload(rumor.content);
   if (!profilePayload) return;
+
+  // AC-FWD-5 (epic: group-message-author-auth-app-layer S7): one-shot
+  // consumption keyed on the INNER signed event id — a SEPARATE gate from
+  // the dispatcher's own outer-rumor-id LRU (applicationRumorDispatcher.ts).
+  // A self-authored publish and a relay-on-behalf forward of the SAME signed
+  // profile arrive as two DISTINCT outer rumors (distinct rumor.id, so the
+  // dispatcher's LRU does not catch this), but carry the byte-identical
+  // embedded SignedProfileEvent. Both are legitimately signed and therefore
+  // both "verify" (envelopeVerifier.ts's verify()/tryConsume() are
+  // deliberately decoupled), but only the FIRST delivery to reach here may
+  // apply a side effect — every later delivery of the same inner id is a
+  // silent no-op (not double-applied). Legacy unsigned payloads (no
+  // signedEvent) have no inner id to gate on and rely solely on the
+  // dispatcher's outer-rumor-id LRU, as before.
+  if (profilePayload.signedEvent && !oneShot.tryConsume(profilePayload.signedEvent.id)) {
+    return;
+  }
+
+  // Consume-before-merge is required to close the double-apply race (two
+  // concurrent deliveries of the same inner id must not both apply) — the
+  // tradeoff is that a mid-handle throw below (e.g. from mergeMemberProfile)
+  // leaves this inner id permanently consumed with no retry; that specific
+  // signed profile becomes a no-op on redelivery, recovered only by a later
+  // profile update with a newer updatedAt and a distinct inner id (LWW).
+  // Intentionally not wrapped in try/catch — see S7-F3.
 
   // sig verified by parseProfilePayload. For relay-on-behalf the MLS sender is
   // the relayer, not the author — signedEvent.pubkey is authoritative.
@@ -80,13 +106,15 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   deps.setProfileVersion((v) => v + 1);
 
   // AC-PROD-3/4/5 (DD-9), S3 gate-remediation (severity-4 finding): gated on
-  // this profile rumor being B's OWN transport publish (rumor.pubkey ===
+  // this profile rumor being B's OWN transport publish (sender.pubkey ===
   // authorPubkey) — not a third-member relay, where authorPubkey (the signed
-  // author) would still equal B but rumor.pubkey (the transport sender) would
-  // be the relayer instead (AC-PROD-4). Only evaluated when
-  // profilePayload.signedEvent is present — otherwise authorPubkey trivially
-  // falls back to rumor.pubkey and this check would be vacuously true for
-  // every unsigned/legacy rumor, mirroring AC-MARKER-6's gate below.
+  // author) would still equal B but sender.pubkey (the authenticated transport
+  // sender, S1 seam) would be the relayer instead (AC-PROD-4). NB sender.pubkey
+  // equals the claimed rumor.pubkey only under the S1 stub; it is the
+  // authenticated-sender seam value, never a raw rumor.pubkey read. Only
+  // evaluated when profilePayload.signedEvent is present — otherwise authorPubkey
+  // trivially falls back to sender.pubkey and this check would be vacuously true
+  // for every unsigned/legacy rumor, mirroring AC-MARKER-6's gate below.
   //
   // On the own-join branch, the check ("was B pending?") and the clear are
   // done as ONE atomic step via consumePendingDirectInviteMarker — closing the
@@ -160,8 +188,17 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
 }
 
 export function createProfileHandler(deps: ProfileHandlerDeps): RumorHandler {
+  // ONE gate instance per handler construction (i.e. per group-subscribe in
+  // production, registerHandlers.ts's buildDispatcher() call) — mirrors
+  // applicationRumorDispatcher.ts's per-subscribe lifecycle (one instance per
+  // subscribe), though createOneShotGate's Set is intentionally UNBOUNDED
+  // (unlike the dispatcher's own capacity-evicting seen-rumor-id LRU) — see
+  // createOneShotGate's doc comment in envelopeVerifier.ts. State genuinely
+  // accumulates across every handle() call made through this handler
+  // instance; it is NOT recreated per call.
+  const oneShot = createOneShotGate();
   return {
     kind: PROFILE_RUMOR_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
+    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps, oneShot),
   };
 }

@@ -1,0 +1,64 @@
+{
+  "module_name": "Chat store",
+  "purpose": "AC-ANNOUNCE-1..5: enforce per-type actor rules for enum (system) chat announcements at INGEST TIME, strictly before deps.appendMessage, so a rejected announcement leaves no chat row, no setChatVersion bump, no unread increment, and no notification (AC-ANNOUNCE-1). Per-type rules: group_renamed/invite_lifecycle('invited'|'declined')/invite_cancelled require an admin/creator actor but are never roster-gated (AC-ANNOUNCE-2 — subject rendered as an unverified claim); member_admitted/invite_lifecycle('accepted') additionally roster-gate the subject once, at first ingest, with the outcome baked into whether a row is ever persisted — never re-evaluated on a later groupDataVersion bump (AC-ANNOUNCE-3, verified via an integrated-e2e non-retroactivity test); call_notice's displayed actor is always sender.pubkey (ChatMessage.senderPubkey), never the payload's self-reported initiator (AC-ANNOUNCE-4); group_renamed is admin-gated (AC-ANNOUNCE-5). Two Amendment fold-ins land in the same ingest gate: (a) F1 (S5 Stage-2 review) creator-gates the kind-9 poll_close CHAT ANNOUNCEMENT (sender.pubkey === stored Poll.creatorPubkey) and rewrites its persisted content to a recomputed tally from stored PollVote rows — never the closer's self-reported results/totalVoters; (b) F1/S3 (S3 Stage-2 review) gates the kind-9 leave_intent DEPARTURE ANNOUNCEMENT on structured.pubkey === sender.pubkey, mirroring leaveHandler.ts's kind-13 forced-removal rule. All admin/roster lookups fail closed (indeterminate provider/lookup rejects, never defaults to accept — VQ-S6-006).",
+  "public_api": [
+    {
+      "name": "createChatHandler",
+      "signature": "createChatHandler(deps: ChatHandlerDeps): RumorHandler",
+      "description": "Unchanged signature. Internal handle() now runs parseStructured(content) + a per-type ingest gate BEFORE building the ChatMessage / calling deps.appendMessage. A rejected announcement returns early with zero side effects (no appendMessage, no resolvePendingSignalsForSlot, no setChatVersion, no incrementUnread/markAsRead)."
+    },
+    {
+      "name": "ChatHandlerDeps",
+      "signature": "interface ChatHandlerDeps { appendMessage; incrementUnread; markAsRead; setChatVersion; applyDeleteEditSignal; resolvePendingSignalsForSlot; isGroupAdmin: (groupId: string, pubkeyHex: string) => Promise<boolean>; isGroupMember: (groupId: string, pubkeyHex: string) => Promise<boolean>; getPoll: (groupId: string, pollId: string) => Promise<Poll | null>; loadVotes: (pollId: string) => Promise<PollVote[]> }",
+      "description": "Four new fields. isGroupAdmin/isGroupMember back the admin- and roster-actor gates; both fail closed (reject on throw/indeterminate). getPoll/loadVotes are the SAME accessors already injected into PollHandlerDeps (registerHandlers.ts threads deps.getPoll/deps.loadVotes to both — no new top-level HandlerDeps fields for these two)."
+    },
+    {
+      "name": "computeTally",
+      "signature": "computeTally(options: PollOptionDef[], votes: PollVote[]): { results: PollResult[]; totalVoters: number }",
+      "description": "Extracted from pollHandler.ts (module-private there previously) into a new shared pure utility app/src/lib/marmot/pollTally.ts, so chatHandler.ts's poll_close ingest-gate recompute and pollHandler.ts's handleClose recompute share one implementation (DRY — the two call sites must never independently drift). pollHandler.ts is refactored to import it; behavior is unchanged (verified against the existing pollHandler.test.ts suite)."
+    },
+    {
+      "name": "isRegisteredGroupAdmin",
+      "signature": "isRegisteredGroupAdmin(groupId: string, pubkeyHex: string): Promise<boolean>",
+      "description": "New export on app/src/lib/messageEdits/api.ts, wrapping the ALREADY-REGISTERED GroupAdminsProvider singleton (groupAdminsFor + isAdminPubkey, both pre-existing module-private helpers) so chatHandler's admin-actor gate consults the exact same admin set as the announcement-immutability delete/edit gate — not a second, independently-instantiated lookup (VQ-S6-002). Inherits fail-closed semantics from groupAdminsFor (unregistered provider / non-group threadKey / throwing provider -> [] -> false)."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/chatHandler.ts (ingest-gate switch over parseStructured(content).type; poll_close content rewrite) — within stories.json scope.includes",
+    "app/src/lib/marmot/pollTally.ts (new: computeTally, extracted) — scope expansion, see note below",
+    "app/src/lib/marmot/handlers/pollHandler.ts (computeTally import replaces the module-private definition; no behavior change) — scope expansion, see note below",
+    "app/src/lib/messageEdits/api.ts (new export: isRegisteredGroupAdmin, thin wrapper over existing groupAdminsFor/isAdminPubkey) — scope expansion, see note below",
+    "app/src/lib/marmot/registerHandlers.ts (HandlerDeps gains isGroupAdmin/isGroupMember; createChatHandler(...) call gains isGroupAdmin/isGroupMember/getPoll/loadVotes) — scope expansion, see note below",
+    "app/src/context/MarmotContext.tsx (buildDispatcher({...}) call wires isGroupAdmin: isRegisteredGroupAdmin and isGroupMember: a closure wrapping the existing getLiveMemberPubkeys roster accessor; imports isRegisteredGroupAdmin from messageEdits/api.ts) — scope expansion, see note below",
+    "app/src/components/chat/ChatBox.tsx (call_notice render branch: actor display sourced from msg.senderPubkey, never structured.initiator — AC-ANNOUNCE-4) — scope expansion, see note below",
+    "app/tests/unit/marmot/registerHandlers.test.ts (fixture updated for the 4 new ChatHandlerDeps fields; pre-existing loadVotes assertion gap in the poll-bag expectation fixed in passing) — scope expansion, see note below",
+    "SCOPE NOTE (self-flagged, not pre-authorized by a coordinator round-trip — see VQ-S6-012): stories.json's scope.includes for S6 names only chatHandler.ts, parseStructured.ts, and chatHandler.test.ts — narrower than what AC-ANNOUNCE-1..5 actually require. Two categories of necessary expansion: (1) composition-root wiring — the 4 new ChatHandlerDeps fields (isGroupAdmin, isGroupMember, getPoll, loadVotes) must be threaded through registerHandlers.ts's HandlerDeps and MarmotContext.tsx's buildDispatcher(...) call, the only place live closures exist; messageEdits/api.ts gains isRegisteredGroupAdmin so the admin gate reuses the ALREADY-registered GroupAdminsProvider (VQ-S6-002) instead of re-instantiating one. This exact pair of files (registerHandlers.ts, MarmotContext.tsx) was ALSO expanded-into by S5 for an analogous reason (S5's own architecture.json: 'coordinator-authorized scope expansion, remediation round 1: loadVotes added to HandlerDeps...') — a recurring pattern worth the epic-level retrospective flag raised in VQ-S6-012. (2) AC-ANNOUNCE-4's literal wording ('the structured payload's initiator field... is not rendered as the actor') cannot be satisfied by chatHandler.ts alone, since chatHandler.ts does not control rendering — architecture.md's own Scope section explicitly names this as call_notice's actor rule ('stop rendering initiator from the payload'), so the ChatBox.tsx one-line fix is required by the AC's substance, not incidental. pollTally.ts/pollHandler.ts avoid duplicating the recompute logic (DRY) rather than reimplementing it inline in chatHandler.ts."
+  ],
+  "owned_data": [
+    "ChatMessage.content for a poll_close announcement (rewritten at ingest to embed the recomputed tally, never the closer's self-reported results/totalVoters)",
+    "Ingest-time accept/reject decision for member_admitted / invite_lifecycle('accepted') — implicitly persisted as 'row exists or does not', never re-derived from roster state on subsequent reads"
+  ],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/parseStructured.ts (StructuredContent, parseStructured — already imported transitively by this module's callers; chatHandler.ts now imports it directly to run the ingest gate)",
+    "app/src/lib/marmot/pollPersistence.ts (Poll, PollVote, PollOptionDef, PollResult — type-only, mirrors the Poll module's own dependency shape)",
+    "app/src/lib/marmot/pollTally.ts (computeTally — new shared utility, also depended on by the Poll module)",
+    "app/src/lib/messageEdits/api.ts (ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey — pre-existing S5 dependency; isRegisteredGroupAdmin is a net-new export on the same already-allowed edge, consulted only via injected deps, never imported directly into chatHandler.ts)",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts (AuthenticatedSender, DispatcherContext, RumorHandler — pre-existing seam, unchanged)"
+  ],
+  "dependencies_forbidden": [
+    "no direct import of isRegisteredGroupAdmin / getGroupMembers / mlsGroup state into chatHandler.ts itself — admin and roster facts reach the handler ONLY via injected ChatHandlerDeps closures (boundary rule: handlers stay pure over deps; testable via mocked deps, not global provider registration)",
+    "no re-evaluation of the admission roster-gate outcome on a later groupDataVersion bump — the check runs exactly once, at first ingest, before any row exists",
+    "no trusting rumor.pubkey / payload self-reported actor fields (structured.by, structured.initiator, payload.pubkey-as-subject-not-actor) for any authorization decision — sender.pubkey (the AuthenticatedSender seam) is the only trusted actor value, per architecture.md boundary rules"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/e2e/groups-announcement-roster-gate.spec.ts"
+  ],
+  "seam": {
+    "cross_story": false
+  }
+}

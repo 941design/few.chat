@@ -1,0 +1,78 @@
+{
+  "story_id": "S6",
+  "status": "done",
+  "completed_at": "2026-07-24T00:45:00Z",
+  "files_created": [
+    "specs/epic-group-message-author-auth-app-layer/S6-announcement-actor-rules-and-ingest-gate/architecture.json",
+    "specs/epic-group-message-author-auth-app-layer/S6-announcement-actor-rules-and-ingest-gate/baseline.json",
+    "app/src/lib/marmot/pollTally.ts",
+    "app/tests/e2e/groups-announcement-roster-gate.spec.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/messageEdits/api.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "specs/epic-group-message-author-auth-app-layer/S6-announcement-actor-rules-and-ingest-gate/verification.json"
+  ],
+  "tests_added": {
+    "unit": 23,
+    "e2e": 6
+  },
+  "test_counts": {
+    "baseline": 4160,
+    "final": 4183
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "Chat store"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Added an ingest-time per-type actor-rule gate to chatHandler.ts (a new module-private gateAnnouncement() function, run on every kind-9 rumor's parseStructured(content) result, strictly before deps.appendMessage/setChatVersion/incrementUnread/markAsRead). group_renamed and invite_cancelled require an admin actor (via a new isGroupAdmin dep). invite_lifecycle requires an admin actor for every event, and additionally roster-gates the subject at ingest ONLY for event='accepted' (via a new isGroupMember dep) \u2014 'invited'/'declined' render unconditionally as unverified claims (AC-ANNOUNCE-2). member_admitted (defensive, no live producer) gets the same admin+roster gate as accepted (AC-ANNOUNCE-1/3). leave_intent gates subject===sender (S3 Stage-2 review fold-in \u2014 the kind-9 DEPARTURE ANNOUNCEMENT mirrors leaveHandler.ts's kind-13 rule). poll_close is creator-gated against the stored Poll (new getPoll/loadVotes deps reused from the existing poll-store accessors) and its persisted content is REWRITTEN to a tally recomputed from stored PollVote rows via a newly-extracted, shared computeTally (app/src/lib/marmot/pollTally.ts, also now used by pollHandler.ts) \u2014 never the closer's self-reported results/totalVoters (F1, S5 Stage-2 review fold-in). call_notice is never actor-gated (AC-ANNOUNCE-4) and its ChatBox.tsx render branch was fixed to source the displayed actor from msg.senderPubkey instead of the payload's self-reported initiator field. Every admin/roster/poll lookup in the gate is wrapped in .catch() to fail closed on a throwing/indeterminate provider (VQ-S6-006). isGroupAdmin is wired at the composition root (MarmotContext.tsx) to a new isRegisteredGroupAdmin export on messageEdits/api.ts, which wraps the ALREADY-registered GroupAdminsProvider singleton rather than instantiating a second lookup (VQ-S6-002); isGroupMember wraps the pre-existing getLiveMemberPubkeys live-roster accessor. A new integrated-e2e spec (groups-announcement-roster-gate.spec.ts) drives a real invite+accept+leave flow through the app UI (never raw WebSocket) proving AC-ANNOUNCE-3: the accepted announcement remains visible after the admitted member later leaves \u2014 the ingest-time decision is never retroactively re-evaluated.",
+  "verification": {
+    "verification_json": "11 pre-impl (planner) questions read and satisfied; 3 post-impl questions appended (VQ-S6-012: self-flagged scope.includes expansion beyond the 3 files named in stories.json, mirroring an identical precedent in S5's architecture.json for the same two composition-root files; VQ-S6-013: pollTally.ts extraction behavior-preservation + poll_close recompute-not-copied assertion; VQ-S6-014: fail-closed .catch() wrapping actually exercised by a throwing-mock test, not just assumed from deps' own default).",
+    "all_tests_passing": 4183,
+    "baseline_to_final": "4160 -> 4183 (+23 unit tests, all in chatHandler.test.ts's new 'S6: announcement actor rules + ingest gate' describe block; +1 new e2e spec file with 6 tests, not run by the architect \u2014 requires Docker/strfry, out of scope for this spawn per CLAUDE.md's e2e gate)",
+    "lint_typecheck": "lint=NO_LINT (no ESLint config in app/ \u2014 next lint prompts interactively to create one; consistent with S1-S5 baseline), typecheck=clean (cd app && npx tsc --noEmit -p tsconfig.json, exit 0, re-verified after implementation)",
+    "reviews": "stage1=lead-owned (not run by this architect spawn, per FR-2); stage2=lead-owned; unactioned findings recorded as post-impl questions: 0"
+  },
+  "scope_deviation": {
+    "declared_scope_includes": [
+      "app/src/lib/marmot/handlers/chatHandler.ts",
+      "app/src/lib/marmot/parseStructured.ts",
+      "app/tests/unit/marmot/chatHandler.test.ts"
+    ],
+    "actually_touched_beyond_declared": [
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/src/lib/messageEdits/api.ts",
+      "app/src/lib/marmot/handlers/pollHandler.ts",
+      "app/src/lib/marmot/pollTally.ts (new)",
+      "app/src/components/chat/ChatBox.tsx",
+      "app/tests/unit/marmot/registerHandlers.test.ts",
+      "app/tests/e2e/groups-announcement-roster-gate.spec.ts (new)"
+    ],
+    "rationale": "Not pre-authorized by a synchronous coordinator round-trip within this spawn \u2014 self-flagged for the lead's record (VQ-S6-012 in verification.json; full rationale also in architecture.json's private_files SCOPE NOTE). Two categories: (1) the four new ChatHandlerDeps fields (isGroupAdmin/isGroupMember/getPoll/loadVotes) require composition-root wiring \u2014 registerHandlers.ts and MarmotContext.tsx are the only place live closures exist; this exact pair of files was ALSO expanded-into by S5 for an analogous reason (see S5's own architecture.json 'coordinator-authorized scope expansion' note), suggesting a recurring staleness in how scope.includes is derived for stories whose ACs require new composition-root dep-wiring. (2) AC-ANNOUNCE-4's literal wording ('is not rendered as the actor') cannot be satisfied by chatHandler.ts alone since it does not control rendering; architecture.md's own Scope section explicitly names the call_notice render fix ('stop rendering initiator from the payload') as part of this story's substance."
+  },
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story's declared scope.includes (stories.json) named only 3 files, but this story's actual substance \u2014 architecture.md's own 'hidden coupling... biggest work item' framing \u2014 always required composition-root wiring (registerHandlers.ts, MarmotContext.tsx) and, less obviously until deep in discovery, a UI render fix (ChatBox.tsx's call_notice branch) to make AC-ANNOUNCE-4 true in the observable product, not just in an internal field. Diagnosing WHERE the poll_close F1 fold-in and the leave_intent departure-announcement fold-in needed to attach also took significant investigation: neither is a new handler type, both are pre-existing announcement renderers whose actual producers/wire-shapes had to be traced through several indirection layers (PollStoreContext.tsx's closePoll, profileHandler.ts's accept-producer, cancelInvitationImpl.ts) before the gate's per-type switch could be written with confidence that it wouldn't reject any legitimate existing producer.",
+    "surprised_by": "group_renamed and member_admitted currently have ZERO live production producers (verified by exhaustive grep) \u2014 both are purely defensive/legacy per architecture.md's own note about member_admitted, but the same turned out to be true of group_renamed too, which architecture.md's per-type table doesn't call out. This meant admin-gating both types carried no regression risk against any real sender, which simplified the implementation but was not something I could have assumed from the spec text alone.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "final_outcome": "accepted",
+  "review": {
+    "stage1_opus": "clean at fixpoint (2 remediation cascades: 5 quality findings, then 5 Stage-2-surfaced findings incl. 2 real correctness bugs)",
+    "stage2_fable": "clean of real defects at fixpoint",
+    "examiner": "FAST PATH pass \u2014 14 VQs all YES/by-design at confidence 0.95-1.0"
+  }
+}

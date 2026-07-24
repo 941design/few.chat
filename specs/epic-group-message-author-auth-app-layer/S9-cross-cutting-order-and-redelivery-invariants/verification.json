@@ -73,6 +73,27 @@
       "category": "SPEC",
       "ac_id": "AC-XCUT-5",
       "question": "Show the property test(s) proving AC-XCUT-5: for any delivery order of two profile envelopes for the same subject pubkey (including a self-authored/forwarded pair of the identical signed inner event, and out-of-chronological-order updatedAt values), (a) the merged MemberProfile state after both are processed is identical regardless of delivery order and equals the profile with the greatest updatedAt, and (b) the verifier's one-shot consumption applies a duplicate inner event id at most once regardless of which copy arrives first. Confirm both the handler-unit merge property and the verifier-unit one-shot property are covered."
+    },
+    {
+      "question_id": "VQ-S9-012",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-XCUT-4",
+      "question": "The unauthorized-delete sub-case of `groupMessageEdits.test.ts`'s new `'AC-XCUT-4 (property test over signal/target arrival order)'` test asserts only `result.kind !== 'delete'` (not exact-kind equality) between the 'target-first' ('discarded') and 'signal-first' ('noop') orderings, with a comment claiming this label divergence is pre-existing, non-epic-introduced ChangeResultKind semantics (immediate-known-row rejection vs buffered-then-rejected-on-resolve), and that the storage-level `.tombstoned` assertion is the operative order-independence check. Independently confirm from `messageEdits/api.ts` that this labeling split (`'discarded'` at the immediate-known-row path in `applyDeleteEditSignal` vs `'noop'` at the buffered-then-rejected path in `resolveKnownRowAgainstStores`) predates this story and is not itself a symptom of order-dependent authorization logic."
+    },
+    {
+      "question_id": "VQ-S9-013",
+      "phase": "post-impl",
+      "category": "TEST",
+      "ac_id": "AC-XCUT-2",
+      "question": "`pollHandler.test.ts`'s new duplication describe block wires `deps.saveVote`/`deps.loadVotes` to the REAL `pollPersistence.saveVote`/`loadVotes` (not the file's usual `vi.fn()` mocks) for that one test, while `deps.savePoll`/`deps.getPoll` remain mocked. Confirm this partial-real wiring is a legitimate, minimal exercise of the real upsert-by-id storage behavior the 'duplication' dimension of AC-XCUT-2 depends on, and that it does not silently mask a divergence between the real `saveVote` keying (`${pollId}:${voterPubkey}`) and any assumption the rest of the file's mocked `loadVotes` fixtures make elsewhere."
+    },
+    {
+      "question_id": "VQ-S9-014",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "ac_id": "AC-XCUT-1",
+      "question": "`applicationRumorDispatcher.test.ts`'s new 'redelivery-first' ordering asserts `warnSpy` was NOT called on the second (mismatched, same-id) delivery, reasoning that `isSeen(groupId, rumor.id)` short-circuits before sender resolution/the mismatch-warn branch ever runs. Confirm against `applicationRumorDispatcher.ts`'s `subscribe()` listener that the `isSeen` check textually precedes the `resolveSender`/mismatch-warn logic (it does, per the source read during design — `isSeen` returns early at the top of the listener before `resolveSender` is invoked), so this assertion is pinning real control-flow ordering rather than an accidental pass."
     }
   ]
 }

@@ -164,6 +164,32 @@ export function executeProfileAnnounceFanout(params: ExecuteProfileAnnounceFanou
   }
 }
 
+/**
+ * PURE. AC-SEND-10 (S8-remediation) — decides whether the "last broadcast
+ * nickname" marker (`broadcastProfile`'s `lastBroadcastNickname` ref) should
+ * advance after one interactive broadcast attempt.
+ *
+ * The marker exists so a blur that didn't change the nickname text doesn't
+ * re-broadcast to every group. The bug this guards against: advancing the
+ * marker unconditionally (BEFORE the send, or after a send that merely
+ * *attempted* but did not confirm delivery) permanently suppresses a
+ * same-text retry once a locked/absent signer recovers, because a later
+ * blur with the identical text is compared against a marker that already
+ * claims that text was sent. Only a CONFIRMED-successful send (at least one
+ * group actually received the meta-event — see
+ * `MarmotContext#publishProfileUpdate`'s return value) may advance the
+ * marker; any other outcome (signer failure, every per-group send failing,
+ * an unexpected rejection) must leave the previous marker value untouched
+ * so the next same-text blur re-attempts the broadcast.
+ */
+export function nextBroadcastMarker(
+  previousMarker: string | null,
+  attemptedNickname: string,
+  sendConfirmed: boolean,
+): string | null {
+  return sendConfirmed ? attemptedNickname : previousMarker;
+}
+
 function AvatarDisplay({ avatar, displayName, size }: { avatar: ProfileAvatar | null; displayName: string; size: string }) {
   return (
     <Box
@@ -275,6 +301,14 @@ function OwnProfileSection() {
   // connect) is swallowed here so it can never surface as a profile-save
   // error — the nickname/avatar edit itself already succeeded via
   // `saveProfile` before `broadcastProfile` is ever called.
+  //
+  // AC-SEND-10 (S8-remediation) determination: this fan-out carries NO
+  // pre-send "already announced" baseline/marker of its own (unlike
+  // `broadcastProfile`'s `lastBroadcastNickname` ref for the group path) — it
+  // unconditionally recomputes `plan` from the live contact list and fires
+  // on every call. There is nothing here that gets set BEFORE a send and
+  // then wrongly suppresses a later retry, so the arch_violation this story
+  // fixes does not apply to this function and it is left untouched.
   const fanOutProfileAnnounceOnChange = useCallback(
     (next: UserProfile) => {
       if (!pubkeyHex || !privateKeyHex) return;
@@ -305,8 +339,42 @@ function OwnProfileSection() {
 
   const broadcastProfile = useCallback(
     (next: UserProfile) => {
-      lastBroadcastNickname.current = next.nickname;
-      void publishProfileUpdate(next);
+      // AC-SEND-10 (S8-remediation): the marker advances ONLY after
+      // `publishProfileUpdate` confirms at least one group actually received
+      // the meta-event (see `nextBroadcastMarker` above for why). Previously
+      // the marker was set BEFORE the (fire-and-forget) send, so a
+      // locked/absent-signer failure still advanced it — a same-text blur
+      // after signer recovery was then permanently suppressed until the text
+      // changed again. `publishProfileUpdate` itself never throws (its
+      // per-group sends are individually try/caught), but `.catch` is kept
+      // as defense-in-depth: an unexpected rejection must never advance the
+      // marker either.
+      //
+      // S8R-2: the marker advances ASYNCHRONOUSLY, in the `.then` below,
+      // after `publishProfileUpdate` resolves — not synchronously before the
+      // send. This briefly reopens the same-text dedup window: a rapid
+      // identical re-blur fired while a send is still in flight isn't
+      // suppressed, and two different-text broadcasts resolving out of order
+      // can leave the marker holding an older-but-still-confirmed-sent
+      // nickname. This is intentionally tolerated, not a bug to close with
+      // an in-flight tracking Set: the marker only ever holds
+      // confirmed-sent values (see `nextBroadcastMarker`), so it can never
+      // suppress an UNsent update — the retry-eligibility invariant that
+      // actually matters is preserved. The only cost is an occasional
+      // redundant re-broadcast of content that was already sent, and that is
+      // neutralized downstream by S7's receiver-side one-shot + LWW handling.
+      const attemptedNickname = next.nickname;
+      void publishProfileUpdate(next)
+        .then((sendConfirmed) => {
+          lastBroadcastNickname.current = nextBroadcastMarker(
+            lastBroadcastNickname.current,
+            attemptedNickname,
+            sendConfirmed,
+          );
+        })
+        .catch(() => {
+          // Never advance the marker on an unexpected rejection.
+        });
       fanOutProfileAnnounceOnChange(next);
     },
     [publishProfileUpdate, fanOutProfileAnnounceOnChange],

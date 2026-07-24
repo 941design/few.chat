@@ -1,0 +1,148 @@
+{
+  "story_id": "S9",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-24T03:55:00Z",
+  "remediation_rounds": 0,
+  "modules_touched": [
+    "Dispatcher",
+    "Poll",
+    "Leave",
+    "Edits (2nd hop)",
+    "Tombstone (3rd hop)",
+    "Profiles (forwarded)",
+    "Shared verifier"
+  ],
+  "files_created": [],
+  "files_modified": [
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "specs/epic-group-message-author-auth-app-layer/S9-cross-cutting-order-and-redelivery-invariants/verification.json"
+  ],
+  "properties_added": [
+    {
+      "ac_id": "AC-XCUT-1",
+      "file": "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+      "test_name": "AC-XCUT-1: dedup LRU is never poisoned by a mismatched-sender rumor, and a matched redelivery still fans out exactly once \u2014 for both arrival orderings",
+      "generator_dimension": "arrival order of {mismatched-sender rumor sharing id r} vs {sender-matched redelivery of id r}",
+      "orderings_exercised": 2,
+      "orderings": [
+        "mismatch-first",
+        "redelivery-first"
+      ],
+      "real_producer": "createDispatcher (app/src/lib/marmot/applicationRumorDispatcher.ts)"
+    },
+    {
+      "ac_id": "AC-XCUT-2",
+      "file": "app/tests/unit/marmot/pollHandler.test.ts",
+      "test_name": "AC-XCUT-2: tally is invariant across vote-arrival-order permutations AND the close payload's forged results/totalVoters (+ a second test: vote redelivery through real storage never inflates the tally)",
+      "generator_dimension": "3 vote-arrival permutations x 3 forged close-payload bodies (nested loop, 9 combinations), plus a separate 3-interleaving generator over real saveVote/loadVotes redelivery ordering",
+      "orderings_exercised": 9,
+      "real_producer": "computeTally (pollTally.ts) via createPollCloseHandler; pollPersistence.saveVote/loadVotes (real, not mocked) for the duplication sub-test"
+    },
+    {
+      "ac_id": "AC-XCUT-3",
+      "file": "app/tests/unit/marmot/leaveHandler.test.ts",
+      "test_name": "AC-XCUT-3 (property test over concurrent leave-intent interleavings): a removal is enqueued for a subject iff that subject's own leave-intent was sender-matched \u2014 never a function of interleaving order",
+      "generator_dimension": "interleaving order of {self-departure, forced-removal-shaped mismatch, second distinct matched subject, resend/duplicate of the first subject}",
+      "orderings_exercised": 3,
+      "real_producer": "createLeaveIntentHandler (app/src/lib/marmot/handlers/leaveHandler.ts)"
+    },
+    {
+      "ac_id": "AC-XCUT-4",
+      "file": "app/tests/unit/marmot/groupMessageEdits.test.ts",
+      "test_name": "AC-XCUT-4 (property test over signal/target arrival order) + AC-XCUT-4: resolution order across multiple pending signals for the same slot does not change the final outcome",
+      "generator_dimension": "signal-vs-target arrival order (target-first / signal-first) x {authorized, unauthorized} sender case; separately, buffering order of two competing pending delete signals for one slot (high-rev-then-low-rev / low-rev-then-high-rev)",
+      "orderings_exercised": 4,
+      "real_producer": "applyDeleteEditSignal + resolvePendingSignalsForSlot (messageEdits/api.ts, 2nd hop) asserted against ChangeResult.kind, AND chatPersistence.ts's tombstoneMessage-written .tombstoned storage truth via loadMessages (3rd hop) \u2014 both asserted in every case",
+      "note": "The unauthorized case's ChangeResult.kind legitimately differs between orderings ('discarded' immediate-reject vs 'noop' buffered-then-rejected) \u2014 this is pre-existing, non-epic-introduced ChangeResultKind labeling, not an AC-XCUT-4 violation; the test asserts the substantive storage-level outcome (never tombstoned) identically across orderings instead of the raw kind string. Flagged for independent confirmation as VQ-S9-012."
+    },
+    {
+      "ac_id": "AC-XCUT-5",
+      "file": "app/tests/unit/marmot/profileHandler.test.ts",
+      "test_name": "AC-XCUT-5(a) (property test over delivery order): merged MemberProfile ... through the REAL groupStorage.mergeMemberProfile; AC-XCUT-5(b) (property test over delivery order): self-authored vs forwarded copy of the SAME signed inner event applies at most once",
+      "generator_dimension": "(a) delivery order of {older self-authored envelope, newer forwarded envelope} for one subject; (b) delivery order of {self-authored copy, forwarded copy} sharing one inner event id",
+      "orderings_exercised": 4,
+      "real_producer": "createProfileHandler (handlers/profileHandler.ts) wired to the REAL groupStorage.mergeMemberProfile (LWW) for (a), readback via groupStorage.loadMemberProfiles; createOneShotGate (envelopeVerifier.ts), exercised via profileHandler's real per-instance gate, for (b)"
+    }
+  ],
+  "tests_added": {
+    "property_tests": 7,
+    "by_file": {
+      "applicationRumorDispatcher.test.ts": 1,
+      "leaveHandler.test.ts": 1,
+      "pollHandler.test.ts": 1,
+      "groupMessageEdits.test.ts": 2,
+      "profileHandler.test.ts": 2
+    }
+  },
+  "test_counts": {
+    "baseline": 4236,
+    "final": 4243,
+    "baseline_total_incl_skipped": 4237,
+    "final_total_incl_skipped": 4244,
+    "delta": 7,
+    "note": "The +7 delta exactly matches the sum of S9's own property-test additions across the 5 target files (1+1+1+2+2=7) \u2014 no interference from concurrent sibling-agent (dev-s2-handlers/dev-s2-secondhop) work landing new tests during this story's window in this shared, uncommitted working tree. Baseline captured via `make test-unit` at story start (specs/.../S9.../baseline.json), which \u2014 mirroring S8's baseline note \u2014 already reflects that shared tree's in-flight S6/S7/S8 state at capture time, not a frozen S9-only checkout."
+  },
+  "verification": {
+    "pre_impl_questions": 11,
+    "post_impl_questions": 3,
+    "lint": "NO_LINT (unchanged from baseline \u2014 no ESLint config exists)",
+    "typecheck": "clean (0 errors, unchanged from baseline)"
+  },
+  "mocks": [],
+  "scope_deviation": {
+    "declared_scope_includes": [
+      "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+      "app/tests/unit/marmot/pollHandler.test.ts",
+      "app/tests/unit/marmot/leaveHandler.test.ts",
+      "app/tests/unit/marmot/groupMessageEdits.test.ts",
+      "app/tests/unit/marmot/profileHandler.test.ts"
+    ],
+    "actually_touched_beyond_declared": [
+      "specs/epic-group-message-author-auth-app-layer/S9-cross-cutting-order-and-redelivery-invariants/verification.json (append-only, as required by the architect workflow's Step 6 post-impl-questions contract \u2014 not a scope violation)"
+    ],
+    "not_touched_despite_being_in_scope": [],
+    "rationale": "Verification-only integration story: exactly the 5 declared test files were touched, plus the story's own verification.json (append-only). No production file was modified. No mocks-registry.json entry was added for any spanned producer (Dispatcher/Poll/Leave/Edits/Tombstone/Profiles/Shared-verifier), consistent with the integration-story Mock Strategy exception (FR-A7)."
+  },
+  "production_invariant_findings": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story's five properties span very different code shapes (a synchronous dispatcher LRU, an async pending-signal buffer with a marker-aware resolver, a real IDB-backed merge, and a stateful one-shot gate), so each property needed its own from-scratch trace through the real production code (applicationRumorDispatcher.ts, messageEdits/api.ts's ~1550-line module including its buffered/marker resolution paths, chatPersistence.ts's tombstoneMessage re-check, groupStorage.ts's mergeMemberProfile) before a correct, non-guessed test design was possible \u2014 in particular, AC-XCUT-4's unauthorized-case ChangeResultKind label legitimately differing between the immediate-known-row path ('discarded') and the buffered-then-resolved path ('noop') had to be traced through resolveKnownRowAgainstStores/applyToKnownSlotCore before writing the assertion, to avoid either a false 'violation' report or a test asserting the wrong invariant (raw kind equality vs. substantive storage-outcome equality).",
+    "surprised_by": "None of the property tests revealed a real production invariant violation \u2014 all five whole-flow guarantees held under every constructed ordering, including the deliberately adversarial AC-XCUT-4 competing-pending-signals case (a lower-rev attacker signal buffered concurrently with a higher-rev legitimate one never won, regardless of arrival order) and the AC-XCUT-2 real-storage redelivery case (upsert-by-id never inflated the tally).",
+    "scope": "meta",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [
+      {
+        "agent": "dev",
+        "spawn_index": 1,
+        "note": "dev-s9-dispatcher: added the AC-XCUT-1 property test exactly as scoped, both orderings, real dispatcher, no production changes."
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 2,
+        "note": "dev-s9-poll: replaced the single-ordering AC-XCUT-2 stub with a 3x3 permutation/forgery generator and added a separate real-storage redelivery generator for the duplication dimension."
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 3,
+        "note": "dev-s9-leave: added the AC-XCUT-3 interleaving generator over 3 orderings including the required mismatched-concurrent-with-matched case."
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 4,
+        "note": "dev-s9-edits: added both AC-XCUT-4 tests, correctly identifying and documenting the discarded-vs-noop label nuance rather than misreporting it as a violation or asserting the wrong invariant."
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 5,
+        "note": "dev-s9-profile: added both AC-XCUT-5 sub-properties, wiring the real groupStorage.mergeMemberProfile for the merge property and extending the idb-keyval mock additively (createStore) without breaking any pre-existing test in a large, already-modified file."
+      }
+    ],
+    "lead_clarifications": []
+  }
+}

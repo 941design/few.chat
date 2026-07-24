@@ -14,8 +14,9 @@
  */
 
 import { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, parsePollOpen, parsePollVote, parsePollClose } from '@/src/lib/marmot/pollSync';
-import type { Poll, PollVote, PollOptionDef, PollResult } from '@/src/lib/marmot/pollPersistence';
+import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import { computeTally } from '../pollTally';
 
 export interface PollHandlerDeps {
   savePoll: (poll: Poll) => Promise<void>;
@@ -121,27 +122,10 @@ export function createPollVoteHandler(deps: PollHandlerDeps): RumorHandler {
   };
 }
 
-// ---- Tally recompute (AC-POLL-4) ---------------------------------------------
-
-/**
- * Recomputes the poll tally from the votes THIS client has stored — a pure,
- * order-independent function of the stored vote set (AC-XCUT-2: the
- * displayed tally never varies with arrival order, and never with the
- * closer's claimed counts). If this client hasn't observed every vote
- * (redelivery, missed messages), the result is this client's own
- * best-known count — that eventual-consistency gap is accepted;
- * forgeability of the final counts is what this closes.
- */
-function computeTally(options: PollOptionDef[], votes: PollVote[]): { results: PollResult[]; totalVoters: number } {
-  const results: PollResult[] = options.map((option) => ({
-    optionId: option.id,
-    label: option.label,
-    count: votes.reduce((count, vote) => count + (vote.responses.includes(option.id) ? 1 : 0), 0),
-  }));
-  return { results, totalVoters: votes.length };
-}
-
 // ---- POLL_CLOSE handler -----------------------------------------------------
+// Tally recompute (AC-POLL-4) is provided by computeTally, imported from
+// ../pollTally (extracted in S6 so chatHandler.ts's poll_close ingest gate
+// can reuse it without importing a handler module).
 
 async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: PollHandlerDeps): Promise<void> {
   const payload = parsePollClose(rumor.content);
@@ -149,8 +133,12 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
 
   const existingPoll = await deps.getPoll(ctx.groupId, payload.pollId);
   if (!existingPoll) return;
-  // Only the poll creator can close.
-  if (existingPoll.creatorPubkey !== sender.pubkey) return;
+  // Only the poll creator can close. Case-insensitive (F4, Stage-2 review):
+  // aligns with the S6 poll_close ingest gate in chatHandler.ts's
+  // gateAnnouncement and messageEdits/api.ts's pubkeysMatch, which both
+  // compare identity case-insensitively. No behavior change for canonical
+  // hex; unifies the epic's identity-comparison discipline.
+  if (existingPoll.creatorPubkey.toLowerCase() !== sender.pubkey.toLowerCase()) return;
 
   // AC-POLL-4: recompute the tally from stored PollVote rows. The close
   // payload's results/totalVoters are parsed (pollSync.ts validates the

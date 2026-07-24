@@ -1,0 +1,22 @@
+{
+  "story_id": "S8",
+  "captured_at": "2026-07-24T02:08:10Z",
+  "note": "Captured via git stash of this story's three touched files (MarmotContext.tsx, i18n.ts, profileRequestHandler.test.ts) against the live working tree, which also carries concurrent in-flight work from sibling S2 agents (dev-s2-handlers, dev-s2-secondhop) in this shared session — the baseline below reflects that shared tree at capture time, not a frozen S7-only checkout.",
+  "tests": {
+    "command": "make test-unit",
+    "test_files": 216,
+    "passed": 4213,
+    "skipped": 1,
+    "total": 4214,
+    "failed": 0
+  },
+  "lint": {
+    "status": "NO_LINT",
+    "note": "Same as S7's baseline: app/package.json has a `lint` script (`next lint`), but no ESLint config exists — `next lint` would prompt interactively to scaffold one. architecture.md: enforcement is via vitest source-scan tests instead."
+  },
+  "typecheck": {
+    "status": "1 pre-existing error (unowned by S8)",
+    "command": "npx tsc --noEmit -p tsconfig.json",
+    "note": "With S8's files stashed out, `MarmotContext.tsx(1514,51)` failed to typecheck: a dispatcher-deps object literal was missing `isGroupAdmin`/`isGroupMember` against `HandlerDeps`. This is concurrent S2-story WIP (registerHandlers.ts/HandlerDeps under active edit by sibling agents in this shared tree at capture time) — unrelated to S8's scope (Profiles send-side) and not introduced by this story. Re-running tsc immediately after restoring S8's changes showed 0 errors (the concurrent S2 work had self-resolved by then), confirming volatility from the shared tree rather than an S8 regression."
+  }
+}

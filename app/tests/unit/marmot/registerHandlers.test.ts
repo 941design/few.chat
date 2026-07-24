@@ -87,6 +87,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     appendMessage: vi.fn(async () => {}),
     incrementUnread: vi.fn(),
     setChatVersion: vi.fn(),
+    markAsRead: vi.fn(),
     // reaction
     loadMessages: vi.fn(async () => ({ messages: [], refetchIds: [] })),
     applyInboundRumor: vi.fn(async () => undefined),
@@ -94,6 +95,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     // delete/edit (S5)
     applyDeleteEditSignal: vi.fn(async () => ({ thread: { kind: 'group', groupId: 'g' }, slotId: null, kind: 'noop' })),
     resolvePendingSignalsForSlot: vi.fn(async () => ({ thread: { kind: 'group', groupId: 'g' }, slotId: null, kind: 'noop' })),
+    // S6 (epic: group-message-author-auth-app-layer): announcement ingest-gate deps.
+    isGroupAdmin: vi.fn(async () => false),
+    isGroupMember: vi.fn(async () => false),
     // profile
     mergeMemberProfile: vi.fn(async () => true),
     clearPendingDirectInvite: vi.fn(async () => {}),
@@ -109,6 +113,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     savePoll: vi.fn(async () => {}),
     saveVote: vi.fn(async () => {}),
     getPoll: vi.fn(async () => null),
+    loadVotes: vi.fn(async () => []),
     setPollVersion: vi.fn(),
     // leave
     enqueueLeave: vi.fn(),
@@ -171,8 +176,13 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       appendMessage: deps.appendMessage,
       incrementUnread: deps.incrementUnread,
       setChatVersion: deps.setChatVersion,
+      markAsRead: deps.markAsRead,
       applyDeleteEditSignal: deps.applyDeleteEditSignal,
       resolvePendingSignalsForSlot: deps.resolvePendingSignalsForSlot,
+      isGroupAdmin: deps.isGroupAdmin,
+      isGroupMember: deps.isGroupMember,
+      getPoll: deps.getPoll,
+      loadVotes: deps.loadVotes,
     });
   });
 
@@ -225,6 +235,7 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       savePoll: deps.savePoll,
       saveVote: deps.saveVote,
       getPoll: deps.getPoll,
+      loadVotes: deps.loadVotes,
       setPollVersion: deps.setPollVersion,
     };
     expect(createPollOpenHandler).toHaveBeenCalledWith(pollBag);

@@ -237,6 +237,15 @@ export type Copy = {
     chatJustNow: string;
     chatMinutesAgo: (minutes: number) => string;
     createGroupError: string;
+    /**
+     * Epic: group-message-author-auth-app-layer, story S8 (AC-SEND-10) —
+     * shown via toast when the INTERACTIVE profile-send path
+     * (publishProfileUpdate) cannot produce a forwardable signed inner
+     * envelope (locked/absent signer). Background/relay sends never show
+     * this — they dev-log only and rely on the existing profile-request
+     * retry machinery.
+     */
+    profileSendFailed: string;
     imageAttachmentLabel: string;
     imageProcessing: string;
     imageUploading: (pct: number) => string;
@@ -912,6 +921,7 @@ const copy: Record<LanguageCode, Copy> = {
       chatJustNow: 'just now',
       chatMinutesAgo: (minutes: number) => `${minutes}m ago`,
       createGroupError: 'Failed to create group. Please try again.',
+      profileSendFailed: "Couldn't send your profile — your signer is locked or unavailable.",
       imageAttachmentLabel: 'Attach image',
       imageProcessing: 'Processing image…',
       imageUploading: (pct: number) => `Uploading ${pct}%`,
@@ -1477,6 +1487,7 @@ const copy: Record<LanguageCode, Copy> = {
       chatJustNow: 'gerade eben',
       chatMinutesAgo: (minutes: number) => `vor ${minutes} Min.`,
       createGroupError: 'Gruppe konnte nicht erstellt werden. Bitte erneut versuchen.',
+      profileSendFailed: 'Dein Profil konnte nicht gesendet werden – dein Signierer ist gesperrt oder nicht verfügbar.',
       imageAttachmentLabel: 'Bild anhängen',
       imageProcessing: 'Bild wird verarbeitet…',
       imageUploading: (pct: number) => `Wird hochgeladen ${pct} %`,

@@ -30,6 +30,10 @@ vi.mock('@internet-privacy/marmot-ts', () => ({
 const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } = await import('@/src/lib/marmot/handlers/pollHandler');
 const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND } = await import('@/src/lib/marmot/pollSync');
+// Real storage layer (AC-XCUT-2 duplication test, epic: group-message-author-auth-app-layer
+// S9) — exercises the actual upsert-by-id behavior of saveVote/loadVotes against the
+// idb-keyval mock above, rather than a hand-fabricated votes array.
+const { saveVote: realSaveVote, loadVotes: realLoadVotes } = await import('@/src/lib/marmot/pollPersistence');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -664,34 +668,53 @@ describe('pollHandler / POLL_CLOSE tally recompute (AC-POLL-4, epic: group-messa
     expect(byOption.B).toBe(1);
   });
 
-  it('AC-XCUT-2: tally is order-independent — the same set of votes stored in a different arrival order yields the same tally', async () => {
-    const storedPoll = makeStoredPoll(false);
+  it('AC-XCUT-2: tally is invariant across vote-arrival-order permutations AND the close payload\'s forged results/totalVoters — never the payload numbers, regardless of order or forgery', async () => {
+    const storedPoll = makeStoredPoll(false); // options A, B
     const ctx = makeCtx();
 
-    // Arrival order 1: A, B, A
-    const votesOrder1 = [
+    // Canonical vote set: true tally A=2, B=1, totalVoters=3.
+    const canonicalVotes = [
       makeStoredVote(VOTER_A, ['A']),
-      makeStoredVote(VOTER_B, ['B']),
-      makeStoredVote(VOTER_C, ['A']),
+      makeStoredVote(VOTER_B, ['A']),
+      makeStoredVote(VOTER_C, ['B']),
     ];
-    const deps1 = makeDeps(storedPoll, votesOrder1);
-    const handler1 = createPollCloseHandler(deps1);
-    await handler1.handle(makePollCloseRumor(CREATOR_PUBKEY, { id: 'order-1' }), ctx, makeSender(CREATOR_PUBKEY));
-    const [savedPoll1] = deps1.savePoll.mock.calls[0];
 
-    // The SAME set of votes, re-ordered.
-    const votesOrder2 = [
-      makeStoredVote(VOTER_C, ['A']),
-      makeStoredVote(VOTER_A, ['A']),
-      makeStoredVote(VOTER_B, ['B']),
+    // >= 3 distinct arrival orders of the same 3 votes.
+    const permutations = [
+      [0, 1, 2],
+      [2, 0, 1],
+      [1, 2, 0],
     ];
-    const deps2 = makeDeps(storedPoll, votesOrder2);
-    const handler2 = createPollCloseHandler(deps2);
-    await handler2.handle(makePollCloseRumor(CREATOR_PUBKEY, { id: 'order-2' }), ctx, makeSender(CREATOR_PUBKEY));
-    const [savedPoll2] = deps2.savePoll.mock.calls[0];
 
-    expect(savedPoll2.totalVoters).toBe(savedPoll1.totalVoters);
-    expect(savedPoll2.results).toEqual(savedPoll1.results);
+    // >= 3 distinct forged close-payload bodies — wildly wrong counts, all
+    // zero, and option ids reordered with mismatched counts.
+    const forgedPayloads = [
+      { pollId: POLL_ID, results: [{ optionId: 'A', label: 'Red', count: 999 }, { optionId: 'B', label: 'Blue', count: 999 }], totalVoters: 999 },
+      { pollId: POLL_ID, results: [{ optionId: 'A', label: 'Red', count: 0 }, { optionId: 'B', label: 'Blue', count: 0 }], totalVoters: 0 },
+      { pollId: POLL_ID, results: [{ optionId: 'B', label: 'Blue', count: 7 }, { optionId: 'A', label: 'Red', count: 42 }], totalVoters: 1 },
+    ];
+
+    let n = 0;
+    for (const order of permutations) {
+      const votes = order.map((idx) => canonicalVotes[idx]);
+      for (const forgedContent of forgedPayloads) {
+        const deps = makeDeps(storedPoll, votes);
+        const handler = createPollCloseHandler(deps);
+        const rumor = makePollCloseRumor(CREATOR_PUBKEY, {
+          id: `xcut2-${n++}`,
+          content: JSON.stringify(forgedContent),
+        });
+
+        await handler.handle(rumor, ctx, makeSender(CREATOR_PUBKEY));
+
+        expect(deps.savePoll).toHaveBeenCalledOnce();
+        const [savedPoll] = deps.savePoll.mock.calls[0];
+        expect(savedPoll.totalVoters).toBe(3);
+        const byOption = Object.fromEntries(savedPoll.results.map((r: { optionId: string; count: number }) => [r.optionId, r.count]));
+        expect(byOption.A).toBe(2);
+        expect(byOption.B).toBe(1);
+      }
+    }
   });
 
   it('a client missing some votes (redelivery/missed) shows its own partial, best-known count — documents accepted eventual consistency', async () => {
@@ -752,5 +775,72 @@ describe('pollHandler / POLL_CLOSE tally recompute (AC-POLL-4, epic: group-messa
     const byOption = Object.fromEntries(savedPoll.results.map((r: { optionId: string; count: number }) => [r.optionId, r.count]));
     expect(byOption.A).toBe(1);
     expect(byOption.B).toBe(2);
+  });
+});
+
+// ---- POLL_VOTE + POLL_CLOSE duplication through real storage (AC-XCUT-2) -----
+
+describe('pollHandler / vote redelivery through real storage (AC-XCUT-2, epic: group-message-author-auth-app-layer S9)', () => {
+  it('a same-voter redelivery (different rumor id, same responses) upserts in real storage — never appends a second row — and the recomputed tally is identical regardless of where the redelivery lands relative to the other voter', async () => {
+    // Three deliveries: (a) VOTER_A votes A, (b) VOTER_B votes B, (c) a
+    // REDELIVERY of VOTER_A's vote — same voter, same responses, but a
+    // different rumor id (simulating a resend of the same intent, not the
+    // dispatcher's exact-rumor-id dedup tested elsewhere). c always follows
+    // a in wall-clock order (it IS a redelivery of a); only its position
+    // relative to b's single delivery varies.
+    const interleavings: Array<Array<'a' | 'b' | 'c'>> = [
+      ['a', 'b', 'c'],
+      ['b', 'a', 'c'],
+      ['b', 'c', 'a'],
+    ];
+
+    for (let i = 0; i < interleavings.length; i++) {
+      idbStore.clear();
+      const pollId = `dup-poll-${i}`;
+      const storedPoll = { ...makeStoredPoll(false), id: pollId };
+      const ctx = makeCtx();
+
+      const voteHandler = createPollVoteHandler({
+        savePoll: vi.fn(async () => {}),
+        saveVote: realSaveVote,
+        getPoll: vi.fn(async () => storedPoll),
+        loadVotes: realLoadVotes,
+        setPollVersion: vi.fn(),
+      });
+
+      const deliveries: Record<'a' | 'b' | 'c', () => Promise<void>> = {
+        a: () => voteHandler.handle(makePollVoteRumor(pollId, { id: 'vote-a-1', pubkey: VOTER_A }), ctx, makeSender(VOTER_A)),
+        b: () => voteHandler.handle(makePollVoteRumor(pollId, { id: 'vote-b-1', pubkey: VOTER_B, content: JSON.stringify({ pollId, responses: ['B'] }) }), ctx, makeSender(VOTER_B)),
+        c: () => voteHandler.handle(makePollVoteRumor(pollId, { id: 'vote-a-2', pubkey: VOTER_A }), ctx, makeSender(VOTER_A)),
+      };
+
+      for (const step of interleavings[i]) {
+        await deliveries[step]();
+      }
+
+      // Real storage: exactly one row per unique voter — the redelivery
+      // upserted over the original (pollPersistence.saveVote keys by
+      // `${pollId}:${voterPubkey}`), it never appended a second row.
+      const storedVotes = await realLoadVotes(pollId);
+      expect(storedVotes).toHaveLength(2);
+      expect(new Set(storedVotes.map((v) => v.voterPubkey))).toEqual(new Set([VOTER_A, VOTER_B]));
+
+      const savePoll = vi.fn(async () => {});
+      const closeHandler = createPollCloseHandler({
+        savePoll,
+        saveVote: vi.fn(async () => {}),
+        getPoll: vi.fn(async () => storedPoll),
+        loadVotes: vi.fn(async () => realLoadVotes(pollId)),
+        setPollVersion: vi.fn(),
+      });
+      await closeHandler.handle(makePollCloseRumor(CREATOR_PUBKEY, { id: `dup-close-${i}` }), ctx, makeSender(CREATOR_PUBKEY));
+
+      expect(savePoll).toHaveBeenCalledOnce();
+      const [savedPoll] = savePoll.mock.calls[0];
+      expect(savedPoll.totalVoters).toBe(2);
+      const byOption = Object.fromEntries(savedPoll.results.map((r: { optionId: string; count: number }) => [r.optionId, r.count]));
+      expect(byOption.A).toBe(1);
+      expect(byOption.B).toBe(1);
+    }
   });
 });

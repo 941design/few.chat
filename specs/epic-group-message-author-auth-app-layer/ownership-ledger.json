@@ -20,7 +20,8 @@
       "name": "StructuredContent author sourced from sender; per-type actor rules",
       "owning_module": "Structured parse",
       "type": "validation_rule",
-      "added_by_story": null
+      "added_by_story": "S6",
+      "partial_by_story": "S2 (author-from-sender attribution precedent; per-type actor rules realized in S6 gateAnnouncement + ChatBox render)"
     },
     {
       "id": "leave-subject-sender-gate",
@@ -36,7 +37,7 @@
       "type": "invariant",
       "added_by_story": "S5",
       "partial_by_story": "S2 (close/vote reads repointed to sender; creator-binding-at-open + tally-recompute are S5)",
-      "coverage": "AC-POLL-1 creator bound to sender at open; AC-POLL-4 tally recompute (pure, order-indep) from stored votes ignoring payload counts; close-authz creator-only; F2 first-open-wins prevents creator rebinding via upsert; F4 vote-response sanitization prevents tally skew/totalVoters inflation"
+      "coverage": "AC-POLL-1 creator bound to sender at open; AC-POLL-4 tally recompute (pure, order-indep) from stored votes ignoring payload counts; close-authz creator-only; F2 first-open-wins prevents creator rebinding via upsert; F4 vote-response sanitization prevents tally skew/totalVoters inflation S6 folds in the kind-9 poll_close CHAT ANNOUNCEMENT (F1): creator-gated AND content rewritten to recomputed tally + stored title; computeTally extracted verbatim to pollTally.ts, single-sourced by pollHandler + chatHandler."
     },
     {
       "id": "reactions-attribution-on-sender",
@@ -65,28 +66,31 @@
       "name": "Announcement ingest gate runs before appendMessage/unread increment/notification",
       "owning_module": "Chat store",
       "type": "validation_rule",
-      "added_by_story": null
+      "added_by_story": "S6",
+      "coverage": "gateAnnouncement() runs before appendMessage/setChatVersion/incrementUnread/markAsRead. Per-type: group_renamed/invite_cancelled admin; invite_lifecycle invited/declined admin-only, accepted+member_admitted admin+roster (ingest-time, non-retroactive); leave_intent subject===sender; poll_close creator-gate + recomputed tally+stored title; call_notice never gated (actor=sender). Fail-closed on every lookup."
     },
     {
       "id": "admin-roster-provider-contract",
       "name": "GroupAdminsProvider + live-roster accessor are the sole source of admin/roster facts, fail-closed to []",
       "owning_module": "Admin/roster provider",
       "type": "public_contract",
-      "added_by_story": null
+      "added_by_story": "S6",
+      "coverage": "isGroupAdmin reuses the ALREADY-REGISTERED GroupAdminsProvider via new isRegisteredGroupAdmin export (single admin source, no forked lookup); isGroupMember wraps getLiveMemberPubkeys; both read live MLS group state at call time (ingest-time), fail-closed."
     },
     {
       "id": "profiles-roster-exempt",
       "name": "Forwarded profile envelopes are exempt from the actor-in-roster check",
       "owning_module": "Profiles (forwarded)",
       "type": "validation_rule",
-      "added_by_story": null
+      "added_by_story": "S7"
     },
     {
       "id": "shared-verifier-per-kind-binding",
       "name": "Shared envelope verifier's per-kind binding policy (signature, kind, group-binding, one-shot on inner event id)",
       "owning_module": "Shared verifier",
       "type": "public_contract",
-      "added_by_story": null
+      "added_by_story": "S7",
+      "coverage": "verifyForwardedEnvelope(content, spec, groupId?) pure/stateless; ForwardedKindSpec{innerKind, binding.groupScoped}; shape\u2192looksLikeSignedEvent\u2192inner kind\u2192nostr-tools verifyEvent (recomputes id)\u2192group-tag binding (group-scoped only, entry-shape guarded). One-shot DECOUPLED (createOneShotGate, unbounded by design). Signed-shaped-invalid is a hard reject (no legacy downgrade)."
     },
     {
       "id": "authenticated-sender-seam-type",
@@ -101,6 +105,13 @@
       "owning_module": "Dispatcher / marmot lib (authenticatedSenderResolver.ts)",
       "type": "throwaway_scaffolding",
       "added_by_story": "S1"
+    },
+    {
+      "name": "Profile meta-event send fails closed (AC-SEND-10)",
+      "owning_module": "MarmotContext (send-side)",
+      "type": "invariant",
+      "added_by_story": "S8",
+      "coverage": "Two centralized helpers are the sole serialiseProfileUpdate callers; signer-absent/throw \u21d2 no relay publish, no placeholder sig, nothing actioned locally. Interactive \u21d2 i18n toast; background \u21d2 dev-log + existing profile-request retry (no new retry). Enforcement of single-caller is convention (grep/source-scan-verifiable), not structure \u2014 watch when adding future profile-send sites."
     }
   ],
   "stories": [
@@ -110,8 +121,8 @@
         "applicationRumorDispatcher.ts (types + widened handle/subscribe + choke-point drop before markSeen)",
         "MarmotContext.tsx (resolver closure + dev __fewTest override hook)",
         "applicationRumorDispatcher.test.ts (drop + no-LRU-poison + resolved-sender tests)",
-        "app/src/lib/marmot/authenticatedSenderResolver.ts (NEW — createAuthenticatedSenderResolver factory extracted from MarmotContext, byte-identical; VQ-S1-010 remediation)",
-        "app/tests/unit/marmot/authenticatedSenderResolver.test.ts (NEW — claimed default, per-call override re-eval, NODE_ENV=production gating)"
+        "app/src/lib/marmot/authenticatedSenderResolver.ts (NEW \u2014 createAuthenticatedSenderResolver factory extracted from MarmotContext, byte-identical; VQ-S1-010 remediation)",
+        "app/tests/unit/marmot/authenticatedSenderResolver.test.ts (NEW \u2014 claimed default, per-call override re-eval, NODE_ENV=production gating)"
       ],
       "findings": [
         {
@@ -228,7 +239,7 @@
           "id": "F1",
           "severity": "low",
           "status": "fixed",
-          "summary": "empty-pubkey vacuous match: parseLeaveIntent now requires hex-64, drops malformed subjects per spec-request §7"
+          "summary": "empty-pubkey vacuous match: parseLeaveIntent now requires hex-64, drops malformed subjects per spec-request \u00a77"
         },
         {
           "id": "F2",
@@ -269,7 +280,7 @@
           "id": "S5-F1",
           "category": "contract_mismatch",
           "severity": 2,
-          "summary": "vote store key not group-scoped; recompute rests on poll.id global uniqueness — PRE-EXISTING (vote-write uses same key), not S5 regression"
+          "summary": "vote store key not group-scoped; recompute rests on poll.id global uniqueness \u2014 PRE-EXISTING (vote-write uses same key), not S5 regression"
         }
       ],
       "verified": [
@@ -317,11 +328,291 @@
           "summary": "saveVote LWW by arrival not votedAt; out-of-order changed vote regresses; AC-XCUT-2/S9 note"
         }
       ]
+    },
+    {
+      "id": "S6",
+      "surfaces_touched": [
+        "handlers/chatHandler.ts (gateAnnouncement ingest gate + 4 new ChatHandlerDeps closures)",
+        "marmot/pollTally.ts (NEW \u2014 computeTally extracted verbatim from pollHandler)",
+        "handlers/pollHandler.ts (imports shared computeTally; handleClose creator check now case-insensitive)",
+        "messageEdits/api.ts (NEW export isRegisteredGroupAdmin \u2014 reuses registered GroupAdminsProvider)",
+        "registerHandlers.ts (wires isGroupAdmin/isGroupMember/getPoll/loadVotes into chat slice)",
+        "MarmotContext.tsx (isGroupAdmin=isRegisteredGroupAdmin, isGroupMember wraps getLiveMemberPubkeys)",
+        "ChatBox.tsx (call_notice AND poll_open actor sourced from msg.senderPubkey)",
+        "chatHandler.test.ts / registerHandlers.test.ts / chatBoxPollOpenAttribution.test.ts / groups-announcement-roster-gate.spec.ts (NEW e2e AC-ANNOUNCE-3)"
+      ],
+      "findings": [
+        {
+          "id": "S6-F1",
+          "category": "inference",
+          "severity": 4,
+          "status": "fixed",
+          "summary": "fail-closed admission-gate reject is permanent (LRU dedup); documented via comment as spec-sanctioned (AC-ANNOUNCE-3), surface to PO"
+        },
+        {
+          "id": "S6-F2",
+          "category": "convention_drift",
+          "severity": 3,
+          "status": "fixed",
+          "summary": "accept/member_admitted gate assumes announcement author is current admin (MLS-only-admins-commit-Adds); documented via comment"
+        },
+        {
+          "id": "S6-F3",
+          "category": "best_practices",
+          "severity": 3,
+          "status": "fixed",
+          "summary": "poll_close bubble now uses stored poll.title not payload structured.title"
+        },
+        {
+          "id": "S6-F4",
+          "category": "convention_drift",
+          "severity": 2,
+          "status": "fixed",
+          "summary": "poll_close creator check made case-insensitive (gate)"
+        },
+        {
+          "id": "S6-F5",
+          "category": "missing_test",
+          "severity": 2,
+          "status": "fixed",
+          "summary": "registerHandlers chat-slice assertion now locks markAsRead wiring"
+        }
+      ],
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "major",
+          "status": "fixed",
+          "summary": "poll_open announcement was payload-attributed (structured.creatorPubkey); ChatBox now sources creator from msg.senderPubkey \u2014 spoof closed"
+        },
+        {
+          "id": "F2",
+          "severity": "major",
+          "status": "fixed",
+          "summary": "poll_close loadVotes .catch(()=>[]) was fail-OPEN with fabricated 0/0 tally; now try/catch return null (fail-closed) + throwing-dep tests"
+        },
+        {
+          "id": "F3",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "e2e now asserts accepted row on pageB (gate-transiting copy), not only A's local echo; comment corrected"
+        },
+        {
+          "id": "F4",
+          "severity": "info",
+          "status": "fixed",
+          "summary": "pollHandler.handleClose creator check aligned case-insensitive"
+        },
+        {
+          "id": "F5",
+          "severity": "info",
+          "status": "fixed",
+          "summary": "PERMANENT comments scoped to session/in-memory-LRU + cross-session re-gate caveat; F2 retry-semantics comment corrected (markSeen precedes fan-out, both paths cross-session-only)"
+        }
+      ],
+      "verified": [
+        "AC-ANNOUNCE-1 reject leaves no trace (all 4 side effects gated by early return; assertFullyRejected)",
+        "AC-ANNOUNCE-2 invited/declined/invite_cancelled admin-gated but never roster-gated",
+        "AC-ANNOUNCE-3 non-retroactive: gate at ingest only; e2e proves row survives subject's later leave (asserted on B's gated copy)",
+        "AC-ANNOUNCE-4 call_notice AND poll_open actor = msg.senderPubkey; payload initiator/creatorPubkey never read for attribution",
+        "AC-ANNOUNCE-5 group_renamed admin-actor gate",
+        "VQ-S6-006 fail-closed on throwing isGroupAdmin/isGroupMember/getPoll/loadVotes",
+        "poll_close F1: creator-gate + recomputed tally + stored title; forged payload overridden",
+        "computeTally extraction byte-identical; single-sourced, no divergent tally",
+        "boundary: chatHandler zero app/src/context imports; admin/roster via injected deps; single registered provider"
+      ],
+      "reviewer_state": {
+        "last_story_reviewed": "S6"
+      }
+    },
+    {
+      "id": "S7",
+      "surfaces_touched": [
+        "envelopeVerifier.ts (NEW \u2014 verifyForwardedEnvelope pure verifier + createOneShotGate; group-binding tag lookup entry-shape guarded)",
+        "profileSync.ts (PROFILE_KIND_SPEC groupScoped:false; parseProfilePayload delegates crypto; signed-shaped-invalid never downgraded to legacy)",
+        "handlers/profileHandler.ts (sole verifier caller; one OneShotGate per construction, consumed synchronously pre-merge; fallback keys to sender.pubkey)",
+        "envelopeVerifier.test.ts (NEW real nostr-tools signing incl. id-tamper + malformed-tags guards), profileHandler.test.ts (+AC-FWD-5 + roster source-scan over 4 profile-path modules)",
+        "groups-profile-forwarded-attribution.spec.ts (NEW relay bucket; run live green)"
+      ],
+      "findings": [
+        {
+          "id": "S7-F1",
+          "category": "comment_rot",
+          "severity": 3,
+          "status": "fixed",
+          "summary": "OneShotGate unbounded Set \u2014 decision: stays intentionally unbounded (safer for exact one-shot); comment corrected to drop bounded-LRU-parity claim"
+        },
+        {
+          "id": "S7-F2",
+          "category": "missing_test",
+          "severity": 2,
+          "status": "fixed",
+          "summary": "roster source-scan extended to profileSync.ts (and later profileRequestSync.ts via Fable-S7-3)"
+        },
+        {
+          "id": "S7-F3",
+          "category": "correctness",
+          "severity": 2,
+          "status": "fixed",
+          "summary": "consume-before-merge tradeoff documented (mid-merge throw is LWW-recoverable, deliberately correct for the race); comment added, ordering kept"
+        }
+      ],
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "group-binding tag lookup could throw on malformed tags entry; now Array.isArray(t)&&t[0] guarded \u2014 hardens future group-scoped kinds; +2 tests"
+        },
+        {
+          "id": "F2",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "added id-tampered-envelope test \u2014 regression-guards the cryptographic one-shot binding vs a nostr-tools bump"
+        },
+        {
+          "id": "F3",
+          "severity": "info",
+          "status": "fixed",
+          "summary": "roster source-scan extended to profileRequestSync.ts (profileRequestRunner.ts correctly kept OUT \u2014 legit outbound sweep)"
+        },
+        {
+          "id": "F4",
+          "severity": "info",
+          "status": "accepted",
+          "summary": "e2e idempotency leg doesn't traverse the one-shot gate (A reloads \u2192 fresh gate); disclosed in spec header; exact-once proven at unit level"
+        }
+      ],
+      "verified": [
+        "AC-FWD-4 forwarded attribution to ORIGINAL signer (authorPubkey=signedEvent.pubkey); roster-EXEMPT proven structurally over 4 modules; app-driven e2e run live-green",
+        "AC-FWD-5 one-shot real + accumulating; keyed on cryptographically-bound signedEvent.id (verifyEvent recomputes hash!==id); rejected envelope never consumes id; group-tag mismatch rejects before side effect",
+        "fallback repoints to authenticated sender, never rumor.pubkey; signed-shaped-invalid hard-rejected (no attribution laundering)",
+        "per-kind binding is a real interface parameter; fails closed if a group-scoped kind omits groupId",
+        "single application path (no residual MarmotContext inbound kind-0 branch); no cross-story duplication"
+      ],
+      "reviewer_state": {
+        "last_story_reviewed": "S7"
+      }
+    },
+    {
+      "id": "S8",
+      "surfaces_touched": [
+        "MarmotContext.tsx (signAndSendProfileBackground + signProfileForInteractiveSend \u2014 sole serialiseProfileUpdate callers; onHistorySynced in-flight+durable refs, try/catch/finally; dev override forceProfileSignerFailure gated NODE_ENV!=production)",
+        "i18n.ts (groups.profileSendFailed en+de)",
+        "profileRequestHandler.test.ts (+8: both paths real impls + MarmotContext wiring source-scan VQ-S8-002)",
+        "groups-profile-send-fails-closed.spec.ts (NEW relay bucket; live green; bounded-settle absence assertion)"
+      ],
+      "findings": [
+        {
+          "id": "S8-F1",
+          "category": "correctness",
+          "severity": 2,
+          "status": "fixed",
+          "summary": "onHistorySynced lost synchronous re-entry guard when mark moved post-send; fixed via separate transient profilePublishInFlightRef (add-before-async, delete-in-finally) distinct from durable published ref"
+        }
+      ],
+      "stage2_fable_findings": [
+        {
+          "id": "F1",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "e2e absence assertion was a point-read \u2192 false-pass window; now bounded 2s settle (immediate + post-wait, both toBe 0)"
+        },
+        {
+          "id": "F2",
+          "severity": "medium",
+          "status": "fixed",
+          "summary": "shadow-init: 'real sendSelfProfile wiring' test re-implemented the wiring; added bounded source-scan asserting MarmotContext.sendSelfProfile funnels through signAndSendProfileBackground"
+        },
+        {
+          "id": "F3",
+          "severity": "info",
+          "status": "fixed",
+          "summary": "onHistorySynced null-signer pre-check bypassed the helper's centralized dev-log; removed so null flows through the helper"
+        },
+        {
+          "id": "F4",
+          "severity": "info",
+          "status": "accepted",
+          "summary": "relay-failure-marks-published under softFail:true \u2014 pre-existing, out of AC-SEND-10 signer-failure scope; recovery via kind-30 request-retry"
+        }
+      ],
+      "verified": [
+        "AC-SEND-10 no-emit-on-failure both paths (no publish, no placeholder sig, nothing actioned locally)",
+        "centralized: serialiseProfileUpdate called only in the 2 helpers; no call site slipped",
+        "per-path surfacing: interactive toasts copy.groups.profileSendFailed; background dev-logs only; no new retry logic (reuses profileRequestRunner)",
+        "VQ-S8-006 ordering: durable published ref marked only on {sent:true}; re-entry guarded by transient in-flight ref",
+        "kind-30 bind = S1 seam drop; profileRequestHandler has no sender comparison (routes on payload.targetPubkey vs ctx.selfPubkeyHex)",
+        "i18n complete en+de; dev override gated NODE_ENV!=production, re-read per call, interactive path only"
+      ],
+      "reviewer_state": {
+        "last_story_reviewed": "S8"
+      },
+      "examiner_remediation_round": {
+        "trigger": "examiner PARTIAL sev7 arch_violation + sev6 missing_test (interactive-path retry-suppression in profile.tsx); Decider RETRY",
+        "findings": [
+          {
+            "id": "S8R-1",
+            "severity": 3,
+            "status": "fixed",
+            "summary": "publishProfileUpdate returned false for vacuous 0-groups case \u2192 redundant contact fan-out for 0-groups user; fixed via resolvePublishProfileUpdateShortCircuit (vacuous\u2192true, not-ready\u2192false)"
+          },
+          {
+            "id": "S8R-2",
+            "severity": 2,
+            "status": "accepted",
+            "summary": "async marker advance loses synchronous same-text dedup in-flight window; benign (marker only holds confirmed-sent values; S7 one-shot+LWW neutralize); documented"
+          }
+        ],
+        "outcome": "both original examiner PARTIALs (VQ-S8-001, VQ-S8-007) cleared to YES on re-exam; profile.tsx scope expansion authorized under AC-SEND-10 ownership"
+      }
+    },
+    {
+      "id": "S9",
+      "test_only": true,
+      "surfaces_touched": [
+        "applicationRumorDispatcher.test.ts (+1 AC-XCUT-1, 2 orderings)",
+        "pollHandler.test.ts (+1 AC-XCUT-2, 9 combos + real-storage redelivery)",
+        "leaveHandler.test.ts (+1 AC-XCUT-3, 3 interleavings)",
+        "groupMessageEdits.test.ts (+2 AC-XCUT-4, 2nd+3rd hop, signal/target + pending-resolution orders)",
+        "profileHandler.test.ts (+2 AC-XCUT-5, merge-order + one-shot-order; S9-1 self-containment assertion added)"
+      ],
+      "findings": [],
+      "stage2_fable_findings": [
+        {
+          "id": "S9-1",
+          "severity": "info",
+          "status": "fixed",
+          "summary": "AC-XCUT-5(b) made self-contained \u2014 added distinct-inner-id forwarded envelope asserting merge count increments (proves forwarded copies accepted; once-only is the gate's doing)"
+        },
+        {
+          "id": "S9-2",
+          "severity": "info",
+          "status": "accepted",
+          "summary": "mergeMemberProfile strict > \u2192 equal-updatedAt ties first-arrival-wins; PRE-EXISTING production LWW property, out of epic scope, practically unreachable; curator/backlog candidate"
+        },
+        {
+          "id": "S9-3",
+          "severity": "info",
+          "status": "accepted",
+          "summary": "XCUT-1 warnSpy tripwire couples to dedup-before-sender ordering \u2014 defensible regression tripwire (Fable suggested_fix null)"
+        }
+      ],
+      "verified": [
+        "all 7 property tests loop over >=2 executed orderings, exercise REAL producers, no spanned-producer mocked (only side-effect sinks + idb/deserialize stubs)",
+        "assertions non-vacuous (each fails under its violation); AC-XCUT-5(b) now self-contained",
+        "deterministic: no fast-check, enumerated orderings, isolated state; no assertion reads Date.now/random/timers",
+        "VQ-S9-012 caveat sound (discarded/noop = same-decision provenance; storage-truth tombstoned asserted both orderings is the real guard)",
+        "no production code changed"
+      ],
+      "reviewer_state": {
+        "last_story_reviewed": "S9"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S5",
+    "last_story_reviewed": "S9",
     "model_at": "2026-07-23T20:57:34Z",
-    "updated_at": "2026-07-23T18:02:23Z"
+    "updated_at": "2026-07-24T03:40:00Z"
   }
 }

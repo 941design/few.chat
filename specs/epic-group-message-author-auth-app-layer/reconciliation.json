@@ -1,0 +1,30 @@
+{
+  "spec_sha": "458ebed7b94e",
+  "git_sha": "1924c9b2018d93bfa8d63ae183cc8b4a8b849401",
+  "computed_at": "2026-07-23T23:10:00Z",
+  "note": "RESUME reconcile: S1-S5 committed (1924c9b) + examiner-accepted; working tree clean apart from baseline .serena/project.yml. S6-S9 not yet implemented (expected). No drift; no adjudication triggered.",
+  "verdicts": [
+    {"ac_id": "AC-SEAM-1", "verdict": "holds", "evidence": "applicationRumorDispatcher.ts:109-114 seam+drop; S1 accepted"},
+    {"ac_id": "AC-SEAM-2", "verdict": "holds", "evidence": "S1 accepted (pass-through)"},
+    {"ac_id": "AC-ATTR-6", "verdict": "holds", "evidence": "S2 accepted (handlers+2nd hop+static ban)"},
+    {"ac_id": "AC-FORCE-3", "verdict": "holds", "evidence": "S3 accepted (leaveHandler subject===sender)"},
+    {"ac_id": "AC-EDIT-7", "verdict": "holds", "evidence": "S4 accepted (applyDeleteEditSignal authz)"},
+    {"ac_id": "AC-POLL-1", "verdict": "holds", "evidence": "S5 accepted"},
+    {"ac_id": "AC-POLL-2", "verdict": "holds", "evidence": "S5 accepted"},
+    {"ac_id": "AC-POLL-3", "verdict": "holds", "evidence": "S5 accepted"},
+    {"ac_id": "AC-POLL-4", "verdict": "holds", "evidence": "S5 accepted (tally recompute)"},
+    {"ac_id": "AC-ANNOUNCE-1", "verdict": "unverifiable", "evidence": "S6 pending"},
+    {"ac_id": "AC-ANNOUNCE-2", "verdict": "unverifiable", "evidence": "S6 pending"},
+    {"ac_id": "AC-ANNOUNCE-3", "verdict": "unverifiable", "evidence": "S6 pending"},
+    {"ac_id": "AC-ANNOUNCE-4", "verdict": "unverifiable", "evidence": "S6 pending"},
+    {"ac_id": "AC-ANNOUNCE-5", "verdict": "unverifiable", "evidence": "S6 pending"},
+    {"ac_id": "AC-FWD-4", "verdict": "unverifiable", "evidence": "S7 pending"},
+    {"ac_id": "AC-FWD-5", "verdict": "unverifiable", "evidence": "S7 pending"},
+    {"ac_id": "AC-SEND-10", "verdict": "unverifiable", "evidence": "S8 pending"},
+    {"ac_id": "AC-XCUT-1", "verdict": "unverifiable", "evidence": "S9 pending"},
+    {"ac_id": "AC-XCUT-2", "verdict": "unverifiable", "evidence": "S9 pending"},
+    {"ac_id": "AC-XCUT-3", "verdict": "unverifiable", "evidence": "S9 pending"},
+    {"ac_id": "AC-XCUT-4", "verdict": "unverifiable", "evidence": "S9 pending"},
+    {"ac_id": "AC-XCUT-5", "verdict": "unverifiable", "evidence": "S9 pending"}
+  ]
+}

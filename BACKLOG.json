@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-23T20:50:05Z",
+  "updated_at": "2026-07-24T06:29:16Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -239,8 +239,8 @@
     },
     {
       "path": "specs/epic-group-message-author-auth-app-layer/",
-      "status": "IN_PROGRESS",
-      "next_action": "created 2026-07-23 — app-layer authenticated-sender seam"
+      "status": "DONE",
+      "next_action": "completed 2026-07-24"
     }
   ],
   "findings": [

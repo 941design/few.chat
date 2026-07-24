@@ -89,6 +89,15 @@ function makeDeps() {
     // case every pre-S5 test in this file exercises.
     applyDeleteEditSignal: vi.fn(async () => ({ thread: { kind: 'group' as const, groupId: GROUP_ID }, slotId: null, kind: 'discarded' as const })),
     resolvePendingSignalsForSlot: vi.fn(async () => ({ thread: { kind: 'group' as const, groupId: GROUP_ID }, slotId: null, kind: 'noop' as const })),
+    // S6 (epic: group-message-author-auth-app-layer) — announcement ingest
+    // gate deps. Default to fail-closed (false/null/[]) so every accept-path
+    // test below must explicitly opt in — a test that forgets to override
+    // these fails LOUD (reject) rather than silently passing an unintended
+    // accept.
+    isGroupAdmin: vi.fn(async () => false),
+    isGroupMember: vi.fn(async () => false),
+    getPoll: vi.fn(async () => null as import('@/src/lib/marmot/pollPersistence').Poll | null),
+    loadVotes: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PollVote[]),
   };
 }
 
@@ -362,5 +371,445 @@ describe('chatHandler', () => {
     const [, msg] = deps.appendMessage.mock.calls[0];
     expect(msg.senderPubkey).toBe(SELF_PUBKEY);
     expect(msg.senderPubkey).not.toBe(rumor.pubkey);
+  });
+
+  // ─── S6 (epic: group-message-author-auth-app-layer): enum announcement
+  // per-type actor rules + ingest-time enforcement gate ────────────────────
+  //
+  // AC-ANNOUNCE-1: a rejected announcement produces NO chat row, NO
+  // setChatVersion bump, NO unread increment, NO notification — asserted by
+  // checking ALL FOUR side-effect deps are untouched, not merely
+  // appendMessage.
+  describe('S6: announcement actor rules + ingest gate', () => {
+    const SUBJECT_PUBKEY = 'dd'.repeat(32);
+    const OTHER_PUBKEY = 'ee'.repeat(32);
+
+    function assertFullyRejected(deps: ReturnType<typeof makeDeps>) {
+      expect(deps.appendMessage).not.toHaveBeenCalled();
+      expect(deps.setChatVersion).not.toHaveBeenCalled();
+      expect(deps.incrementUnread).not.toHaveBeenCalled();
+      expect(deps.markAsRead).not.toHaveBeenCalled();
+      expect(deps.resolvePendingSignalsForSlot).not.toHaveBeenCalled();
+    }
+
+    // ── group_renamed (AC-ANNOUNCE-5) ──────────────────────────────────────
+
+    it('AC-ANNOUNCE-5: group_renamed from an admin actor is accepted (row appended)', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({ content: JSON.stringify({ type: 'group_renamed', name: 'New Name' }) });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.isGroupAdmin).toHaveBeenCalledWith(GROUP_ID, PEER_PUBKEY);
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+      expect(deps.setChatVersion).toHaveBeenCalledOnce();
+    });
+
+    it('AC-ANNOUNCE-5: group_renamed from a NON-admin actor is rejected — no row, no version bump, no unread, no notification', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(false);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({ content: JSON.stringify({ type: 'group_renamed', name: 'Forged Name' }) });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    // ── invite_lifecycle('accepted') / member_admitted (AC-ANNOUNCE-1, AC-ANNOUNCE-3 ingest half) ──
+
+    it("AC-ANNOUNCE-1/3: invite_lifecycle('accepted') from an admin actor whose subject IS in the roster is accepted", async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      deps.isGroupMember.mockResolvedValue(true);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'invite_lifecycle', event: 'accepted', pubkey: SUBJECT_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.isGroupMember).toHaveBeenCalledWith(GROUP_ID, SUBJECT_PUBKEY);
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+    });
+
+    it("AC-ANNOUNCE-1: invite_lifecycle('accepted') from a NON-admin actor is rejected regardless of roster membership", async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(false);
+      deps.isGroupMember.mockResolvedValue(true);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'invite_lifecycle', event: 'accepted', pubkey: SUBJECT_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    it("AC-ANNOUNCE-1: invite_lifecycle('accepted') from an admin actor whose subject is NOT in the roster is rejected (ingest-time roster gate)", async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      deps.isGroupMember.mockResolvedValue(false);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'invite_lifecycle', event: 'accepted', pubkey: SUBJECT_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    it('AC-ANNOUNCE-1: member_admitted (defensive — no live producer) applies the same admin+roster gate as accepted', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      deps.isGroupMember.mockResolvedValue(false);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'member_admitted', pubkey: SUBJECT_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    it('member_admitted from an admin actor with subject IN the roster is accepted', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      deps.isGroupMember.mockResolvedValue(true);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'member_admitted', pubkey: SUBJECT_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+    });
+
+    // ── invite_lifecycle('invited'/'declined'), invite_cancelled (AC-ANNOUNCE-2: admin-gated, NEVER roster-gated) ──
+
+    it.each(['invited', 'declined'] as const)(
+      "AC-ANNOUNCE-2: invite_lifecycle('%s') from an admin actor renders even when the subject is absent from the roster (isGroupMember not consulted)",
+      async (event) => {
+        const deps = makeDeps();
+        deps.isGroupAdmin.mockResolvedValue(true);
+        deps.isGroupMember.mockResolvedValue(false); // subject absent from roster — must NOT matter
+        const handler = createChatHandler(deps);
+        const rumor = makeRumor({
+          content: JSON.stringify({ type: 'invite_lifecycle', event, pubkey: SUBJECT_PUBKEY }),
+        });
+
+        await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+        expect(deps.appendMessage).toHaveBeenCalledOnce();
+        // AC-ANNOUNCE-2 is explicit: these types are NEVER roster-gated —
+        // the roster accessor must not even be consulted for them.
+        expect(deps.isGroupMember).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['invited', 'declined'] as const)(
+      "invite_lifecycle('%s') from a NON-admin actor is rejected",
+      async (event) => {
+        const deps = makeDeps();
+        deps.isGroupAdmin.mockResolvedValue(false);
+        const handler = createChatHandler(deps);
+        const rumor = makeRumor({
+          content: JSON.stringify({ type: 'invite_lifecycle', event, pubkey: SUBJECT_PUBKEY }),
+        });
+
+        await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+        assertFullyRejected(deps);
+      },
+    );
+
+    it('AC-ANNOUNCE-2: invite_cancelled from an admin actor renders even when the subject is absent from the roster', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      deps.isGroupMember.mockResolvedValue(false);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'invite_cancelled', pubkey: SUBJECT_PUBKEY, by: PEER_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+      expect(deps.isGroupMember).not.toHaveBeenCalled();
+    });
+
+    it('invite_cancelled from a NON-admin actor is rejected', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(false);
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'invite_cancelled', pubkey: SUBJECT_PUBKEY, by: PEER_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    // ── call_notice (AC-ANNOUNCE-4): actor is ALWAYS sender.pubkey, never gated, never reads `initiator` for attribution ──
+
+    it('AC-ANNOUNCE-4: call_notice is never actor-gated (no admin/roster check) — renders from any sender', async () => {
+      const deps = makeDeps(); // isGroupAdmin/isGroupMember default to false — must not matter
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'call_notice', event: 'started', callId: 'call-1', initiator: OTHER_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+      expect(deps.isGroupAdmin).not.toHaveBeenCalled();
+      expect(deps.isGroupMember).not.toHaveBeenCalled();
+    });
+
+    it("AC-ANNOUNCE-4: the persisted ChatMessage.senderPubkey is sender.pubkey even when the payload's initiator diverges", async () => {
+      const deps = makeDeps();
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        content: JSON.stringify({ type: 'call_notice', event: 'started', callId: 'call-2', initiator: OTHER_PUBKEY }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      const [, msg] = deps.appendMessage.mock.calls[0];
+      expect(msg.senderPubkey).toBe(PEER_PUBKEY);
+      expect(msg.senderPubkey).not.toBe(OTHER_PUBKEY);
+    });
+
+    // ── leave_intent DEPARTURE ANNOUNCEMENT (kind-9) — S3 Fable Stage-2 review fold-in: subject === sender ──
+
+    it('leave_intent departure announcement: subject === sender is accepted', async () => {
+      const deps = makeDeps();
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        content: JSON.stringify({ type: 'leave_intent', pubkey: PEER_PUBKEY, name: 'Leaver' }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+    });
+
+    it('leave_intent departure announcement: subject !== sender (forged self-departure claim) is rejected', async () => {
+      const deps = makeDeps();
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        // The rumor CLAIMS a different member (SUBJECT_PUBKEY) left, but the
+        // authenticated sender is PEER_PUBKEY — a member announcing someone
+        // ELSE's departure must not render as a departure at all.
+        content: JSON.stringify({ type: 'leave_intent', pubkey: SUBJECT_PUBKEY, name: 'Victim' }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    // ── poll_close CHAT ANNOUNCEMENT (F1, S5 Stage-2 review fold-in): creator-gate + tally recompute ──
+
+    it('poll_close announcement from the stored poll CREATOR is accepted and the persisted content carries the RECOMPUTED tally, never the closer\'s claimed counts', async () => {
+      const deps = makeDeps();
+      const poll = {
+        id: 'poll-1',
+        groupId: GROUP_ID,
+        title: 'Lunch?',
+        options: [{ id: 'A', label: 'Pizza' }, { id: 'B', label: 'Sushi' }],
+        pollType: 'singlechoice' as const,
+        creatorPubkey: PEER_PUBKEY,
+        createdAt: Date.now(),
+        closed: false,
+      };
+      deps.getPoll.mockResolvedValue(poll);
+      deps.loadVotes.mockResolvedValue([
+        { id: 'poll-1:v1', pollId: 'poll-1', voterPubkey: 'v1'.padEnd(64, '1'), responses: ['A'], votedAt: Date.now() },
+        { id: 'poll-1:v2', pollId: 'poll-1', voterPubkey: 'v2'.padEnd(64, '2'), responses: ['A'], votedAt: Date.now() },
+        { id: 'poll-1:v3', pollId: 'poll-1', voterPubkey: 'v3'.padEnd(64, '3'), responses: ['B'], votedAt: Date.now() },
+      ]);
+      const handler = createChatHandler(deps);
+      // The closer's SELF-REPORTED payload forges a landslide for B — the
+      // real stored votes (above) say A:2 B:1.
+      const forgedContent = JSON.stringify({
+        type: 'poll_close',
+        pollId: 'poll-1',
+        title: 'Lunch?',
+        results: [{ optionId: 'A', label: 'Pizza', count: 0 }, { optionId: 'B', label: 'Sushi', count: 99 }],
+        totalVoters: 99,
+      });
+      const rumor = makeRumor({ pubkey: PEER_PUBKEY, content: forgedContent });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+      const [, msg] = deps.appendMessage.mock.calls[0];
+      const persisted = JSON.parse(msg.content);
+      expect(persisted.type).toBe('poll_close');
+      expect(persisted.totalVoters).toBe(3);
+      const byId = Object.fromEntries(persisted.results.map((r: { optionId: string; count: number }) => [r.optionId, r.count]));
+      expect(byId.A).toBe(2);
+      expect(byId.B).toBe(1);
+    });
+
+    it('poll_close announcement: the persisted title derives from the STORED poll, never the closer\'s payload title', async () => {
+      const deps = makeDeps();
+      const poll = {
+        id: 'poll-1',
+        groupId: GROUP_ID,
+        title: 'Lunch?',
+        options: [{ id: 'A', label: 'Pizza' }, { id: 'B', label: 'Sushi' }],
+        pollType: 'singlechoice' as const,
+        creatorPubkey: PEER_PUBKEY,
+        createdAt: Date.now(),
+        closed: false,
+      };
+      deps.getPoll.mockResolvedValue(poll);
+      deps.loadVotes.mockResolvedValue([]);
+      const handler = createChatHandler(deps);
+      // The closer's SELF-REPORTED payload diverges from the stored poll's
+      // title — same distrust as the forged counts above (F1/S6-F3).
+      const forgedContent = JSON.stringify({
+        type: 'poll_close',
+        pollId: 'poll-1',
+        title: 'FORGED TITLE',
+        results: [],
+        totalVoters: 0,
+      });
+      const rumor = makeRumor({ pubkey: PEER_PUBKEY, content: forgedContent });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+      const [, msg] = deps.appendMessage.mock.calls[0];
+      const persisted = JSON.parse(msg.content);
+      expect(persisted.title).toBe('Lunch?');
+    });
+
+    it('poll_close announcement from a NON-creator actor is rejected (F1: any member could otherwise post a fake closed-poll bubble)', async () => {
+      const deps = makeDeps();
+      deps.getPoll.mockResolvedValue({
+        id: 'poll-1',
+        groupId: GROUP_ID,
+        title: 'Lunch?',
+        options: [{ id: 'A', label: 'Pizza' }],
+        pollType: 'singlechoice' as const,
+        creatorPubkey: OTHER_PUBKEY, // NOT the sender below
+        createdAt: Date.now(),
+        closed: false,
+      });
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'Lunch?', results: [], totalVoters: 0 }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    it('poll_close announcement for an UNKNOWN poll (not yet observed by this client) is rejected — fail closed', async () => {
+      const deps = makeDeps(); // getPoll defaults to null
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        content: JSON.stringify({ type: 'poll_close', pollId: 'unknown-poll', title: 'X', results: [], totalVoters: 0 }),
+      });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      assertFullyRejected(deps);
+    });
+
+    // ── VQ-S6-006: fail-closed on an indeterminate/throwing admin or roster lookup ──
+
+    it('VQ-S6-006: a throwing isGroupAdmin lookup fails CLOSED (rejects) rather than defaulting to accept', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockRejectedValue(new Error('provider not populated'));
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({ content: JSON.stringify({ type: 'group_renamed', name: 'X' }) });
+
+      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).resolves.not.toThrow();
+      assertFullyRejected(deps);
+    });
+
+    it('VQ-S6-006: a throwing isGroupMember lookup fails CLOSED for an admission-type announcement', async () => {
+      const deps = makeDeps();
+      deps.isGroupAdmin.mockResolvedValue(true);
+      deps.isGroupMember.mockRejectedValue(new Error('roster lookup pending'));
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'invite_lifecycle', event: 'accepted', pubkey: SUBJECT_PUBKEY }),
+      });
+
+      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).resolves.not.toThrow();
+      assertFullyRejected(deps);
+    });
+
+    it('VQ-S6-014/F2 (Stage-2 review): a throwing getPoll lookup fails CLOSED for poll_close (unlike isGroupAdmin/isGroupMember, this dep was previously untested)', async () => {
+      const deps = makeDeps();
+      deps.getPoll.mockRejectedValue(new Error('poll store unavailable'));
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'X', results: [], totalVoters: 0 }),
+      });
+
+      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).resolves.not.toThrow();
+      assertFullyRejected(deps);
+    });
+
+    it('VQ-S6-014/F2 (Stage-2 review): a throwing loadVotes lookup fails CLOSED — MUST NOT swallow into an empty-votes accept with a fabricated "0 votes, 0 voters" tally', async () => {
+      const deps = makeDeps();
+      const poll = {
+        id: 'poll-1',
+        groupId: GROUP_ID,
+        title: 'Lunch?',
+        options: [{ id: 'A', label: 'Pizza' }],
+        pollType: 'singlechoice' as const,
+        creatorPubkey: PEER_PUBKEY,
+        createdAt: Date.now(),
+        closed: false,
+      };
+      deps.getPoll.mockResolvedValue(poll);
+      deps.loadVotes.mockRejectedValue(new Error('vote store unavailable'));
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'Lunch?', results: [], totalVoters: 0 }),
+      });
+
+      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).resolves.not.toThrow();
+      // F2: fail-closed means NO appendMessage at all — never a persisted
+      // row with a fabricated zero tally. assertFullyRejected covers
+      // appendMessage/setChatVersion/unread/markAsRead/resolvePendingSignals.
+      assertFullyRejected(deps);
+    });
+
+    // ── Regression guard: an ordinary (non-announcement) chat message is never gated ──
+
+    it('regression: a plain text message never consults isGroupAdmin/isGroupMember/getPoll', async () => {
+      const deps = makeDeps();
+      const handler = createChatHandler(deps);
+      const rumor = makeRumor({ content: 'just chatting' });
+
+      await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+
+      expect(deps.appendMessage).toHaveBeenCalledOnce();
+      expect(deps.isGroupAdmin).not.toHaveBeenCalled();
+      expect(deps.isGroupMember).not.toHaveBeenCalled();
+      expect(deps.getPoll).not.toHaveBeenCalled();
+    });
   });
 });

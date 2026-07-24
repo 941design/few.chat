@@ -15,6 +15,8 @@ import React, {
   useState,
 } from 'react';
 import type { Group, MemberProfile, UserProfile } from '@/src/types';
+import type { EventSigner } from 'applesauce-core';
+import { useToast } from '@chakra-ui/react';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useCopy } from '@/src/context/LanguageContext';
 import {
@@ -45,7 +47,7 @@ import { buildDispatcher } from '@/src/lib/marmot/registerHandlers';
 import { createAuthenticatedSenderResolver } from '@/src/lib/marmot/authenticatedSenderResolver';
 import { clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { applyInboundRumor } from '@/src/lib/reactions/api';
-import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider } from '@/src/lib/messageEdits/api';
+import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider, isRegisteredGroupAdmin } from '@/src/lib/messageEdits/api';
 import { savePoll, saveVote, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
@@ -247,6 +249,131 @@ export async function fireAutoCommit(deps: FireAutoCommitDeps): Promise<void> {
   onCommitted(departingPubkeys);
 }
 
+/**
+ * AC-SEND-10 (epic: group-message-author-auth-app-layer, story S8) —
+ * BACKGROUND/RELAY profile-send helper. Attempts to produce the forwardable
+ * signed inner envelope (`serialiseProfileUpdate`) and, only on success,
+ * invokes the caller-bound `sendRumor` (which already captures `buildRumor` +
+ * the target group + `sendRumorSafe`). Fails CLOSED: if the signer is absent
+ * or signing throws (locked/absent NIP-07), `sendRumor` is NEVER invoked —
+ * no meta-event is emitted and no local action is taken — and the failure is
+ * dev-logged only (`console.warn`), never surfaced as a UI error. Recovery
+ * relies entirely on the EXISTING profile-request retry machinery
+ * (profileRequestRunner.ts's `sweepStaleProfiles` / `shouldEmitRequest` on
+ * the requester's side keeps re-requesting our profile until an answer
+ * lands, retrying this exact signing step) — no new retry logic is
+ * introduced here (VQ-S8-005).
+ *
+ * Every background/relay profile-send call site (onHistorySynced auto-
+ * publish, sendSelfProfile's AC-030 request-reply, createGroup's welcome
+ * broadcast, inviteByNpub's post-invite re-send) funnels through this one
+ * function so the fail-closed + dev-log behavior lives in exactly one place
+ * (VQ-S8-002), instead of being duplicated ad hoc at each call site.
+ *
+ * Callers driving an INTERACTIVE, user-initiated send must NOT use this
+ * helper — see `signProfileForInteractiveSend` (below) / `publishProfileUpdate`,
+ * which show a visible i18n error instead of a silent dev-log.
+ */
+export async function signAndSendProfileBackground(args: {
+  signer: EventSigner | null;
+  profile: UserProfile;
+  /** Caller-bound send — already captures buildRumor + the target group + sendRumorSafe options. */
+  sendRumor: (payload: string) => Promise<void>;
+  /** Distinguishes call sites in the dev-log line (e.g. 'sendSelfProfile'). */
+  logLabel: string;
+}): Promise<{ sent: boolean }> {
+  const { signer, profile, sendRumor, logLabel } = args;
+  if (!signer) {
+    console.warn(`[Marmot] ${logLabel}: no signer available — profile send skipped (background; the existing profile-request retry machinery will pick this up)`);
+    return { sent: false };
+  }
+  let payload: string;
+  try {
+    payload = await serialiseProfileUpdate(profile, signer);
+  } catch (err) {
+    console.warn(`[Marmot] ${logLabel}: forwardable profile signature could not be produced — profile send skipped (background; the existing profile-request retry machinery will pick this up)`, err);
+    return { sent: false };
+  }
+  await sendRumor(payload);
+  return { sent: true };
+}
+
+/**
+ * AC-SEND-10 — INTERACTIVE profile-send helper (the visible-error twin of
+ * `signAndSendProfileBackground`). If the signer is absent or signing throws
+ * (locked/absent NIP-07), NO local action is taken — the caller must treat a
+ * `null` return as "stop: nothing was emitted, nothing was actioned locally"
+ * and must not enter its per-group send loop — and `onSignFailed` is invoked
+ * with the i18n-backed error message so the user SEES the failure (unlike
+ * the background path, which only dev-logs). The signer check/attempt runs
+ * before any caller-side local action (VQ-S8-006).
+ */
+export async function signProfileForInteractiveSend(
+  profile: UserProfile,
+  signer: EventSigner | null,
+  errorMessage: string,
+  onSignFailed: (message: string) => void,
+): Promise<string | null> {
+  if (!signer) {
+    onSignFailed(errorMessage);
+    return null;
+  }
+  try {
+    return await serialiseProfileUpdate(profile, signer);
+  } catch (err) {
+    console.warn('[Marmot] publishProfileUpdate: forwardable profile signature could not be produced (interactive send)', err);
+    onSignFailed(errorMessage);
+    return null;
+  }
+}
+
+/**
+ * Dev-only override hook (window.__fewTest precedent — mirrors
+ * authenticatedSenderResolver.ts's resolveAuthenticatedSender override) that
+ * lets E2E tests simulate a locked/absent signer on the INTERACTIVE profile-
+ * send path (AC-SEND-10) without a real NIP-07 browser extension in the
+ * Playwright harness. Gated NODE_ENV !== 'production' and re-read on every
+ * call (not cached) so a production build can never be made to honor it.
+ */
+function readForcedProfileSignerFailureOverride(): boolean {
+  if (process.env.NODE_ENV === 'production' || typeof window === 'undefined') return false;
+  const hooks = (window as unknown as { __fewTest?: { forceProfileSignerFailure?: boolean } }).__fewTest;
+  return hooks?.forceProfileSignerFailure === true;
+}
+
+/**
+ * PURE. S8R-1 — decides whether `publishProfileUpdate` should short-circuit
+ * BEFORE attempting to sign/send, and if so, what boolean it should resolve.
+ * Extracted so the two early-return branches it replaces (previously
+ * collapsed into one `!client || groups.length === 0 || !pubkeyHex` guard
+ * that always returned `false`) stay unit-testable without mounting the
+ * MarmotContext provider (no jsdom/renderHook precedent in this repo — see
+ * `nextBroadcastMarker` in pages/profile.tsx for the same pattern).
+ *
+ * - NOT-READY (`clientReady` false or no `pubkeyHex`): the send genuinely
+ *   didn't happen — resolves `false`. A caller gating a "last sent" marker
+ *   on this outcome (e.g. `pages/profile.tsx#broadcastProfile`) must not
+ *   treat this as confirmed-sent, or a retry once the client becomes ready
+ *   would be wrongly suppressed.
+ * - VACUOUS (ready, but `groupCount === 0`): there is nothing to send to.
+ *   This is not a failure — resolves `true` so a same-text dedup marker MAY
+ *   advance (a group joined later triggers its own onHistorySynced
+ *   publish). Regression this guards: collapsing this case into the
+ *   NOT-READY `false` permanently defeated no-change-suppression for any
+ *   0-groups/≥1-contact user — every same-text blur re-fired a redundant
+ *   gift-wrap fan-out to all contacts.
+ * - Otherwise: not a short-circuit — the caller proceeds to sign+send.
+ */
+export function resolvePublishProfileUpdateShortCircuit(args: {
+  clientReady: boolean;
+  pubkeyHex: string | null;
+  groupCount: number;
+}): { shortCircuit: true; result: boolean } | { shortCircuit: false } {
+  if (!args.clientReady || !args.pubkeyHex) return { shortCircuit: true, result: false };
+  if (args.groupCount === 0) return { shortCircuit: true, result: true };
+  return { shortCircuit: false };
+}
+
 type MarmotContextValue = {
   /** Whether marmot client has been initialized */
   ready: boolean;
@@ -266,8 +393,20 @@ type MarmotContextValue = {
   inviteByNpub: (groupId: string, npub: string) => Promise<{ ok: boolean; error?: string }>;
   /** Leave a group */
   leaveGroup: (groupId: string) => Promise<boolean>;
-  /** Publish profile to all groups. Pass profileOverride to avoid stale-closure race. */
-  publishProfileUpdate: (profileOverride?: UserProfile) => Promise<void>;
+  /**
+   * Publish profile to all groups. Pass profileOverride to avoid stale-closure race.
+   * Resolves `true` when the interactive sign+send actually succeeded for at
+   * least one group (a real, forwardable meta-event was sent) — OR when the
+   * client is ready but the user simply has zero groups (S8R-1: vacuous
+   * "nothing to send to" is not a failure). Resolves `false` on a NOT-READY
+   * state (client/identity not yet available), a fail-closed signer failure
+   * (AC-SEND-10), or when every per-group send attempt failed. Callers that
+   * gate local "already broadcast" state on this outcome (e.g.
+   * `pages/profile.tsx#broadcastProfile`) must treat `false` as "nothing was
+   * confirmed sent" so a subsequent same-text retry is not suppressed
+   * (S8-remediation / AC-SEND-10 interactive-path gap).
+   */
+  publishProfileUpdate: (profileOverride?: UserProfile) => Promise<boolean>;
   /** Get member profiles for a given group */
   getMemberProfiles: (groupId: string) => Promise<MemberProfile[]>;
   /** Reload groups from storage */
@@ -622,6 +761,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   const { profile: localProfile } = useProfile();
   const { markDirty: markBackupDirty } = useBackup();
   const copy = useCopy();
+  // AC-SEND-10 (S8): the interactive profile-send error toast (publishProfileUpdate).
+  const toast = useToast();
   const [ready, setReady] = useState(false);
   const [unsupported, setUnsupported] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -653,6 +794,17 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   const debounceTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   // Track groups where profile has been published (to avoid re-publishing)
   const profilePublishedRef = useRef<Set<string>>(new Set());
+  // S8-F1: SYNCHRONOUS re-entry guard for onHistorySynced's profile publish.
+  // Distinct from profilePublishedRef (which is durable and marked ONLY on a
+  // successful send, per VQ-S8-006). This ref marks a group as "attempt in
+  // flight" synchronously, BEFORE the async sign+send begins, and is cleared
+  // in a finally regardless of outcome. Without it, two onHistorySynced
+  // firings for the same group before the first send's await resolves both
+  // pass the profilePublishedRef.has() check and both sign+publish — a
+  // redundant double broadcast. Never marked on success (that stays
+  // profilePublishedRef's job) — this ref only ever tracks "attempt currently
+  // running", never "attempt completed".
+  const profilePublishInFlightRef = useRef<Set<string>>(new Set());
   // Ref for the app-start stale-profile sweep guard (runs once after ready+groups+pubkeyHex)
   const appStartSweepRanRef = useRef(false);
   // Ref for localProfile to avoid stale closures in subscription callbacks
@@ -1479,20 +1631,53 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // Publish profile after historical sync completes (epoch is up-to-date).
             // Uses localProfileRef to avoid stale-closure race.
             () => {
+              // S8-F1: check the durable published-ref AND the transient
+              // in-flight ref. Either one already covers this group means a
+              // second concurrent (or completed) attempt must be skipped.
               if (profilePublishedRef.current.has(group.id)) return;
-              if (!signerRef.current) return;
-              profilePublishedRef.current.add(group.id);
+              if (profilePublishInFlightRef.current.has(group.id)) return;
               const currentProfile = localProfileRef.current;
+              // May be null (locked/absent signer) — signAndSendProfileBackground
+              // owns the null-signer guard and dev-logs the skip itself (AC-SEND-10 /
+              // Fable-S8-3: don't pre-empt the helper's centralized observability).
               const signer = signerRef.current;
+              // Marked SYNCHRONOUSLY, before the async sign+send starts, so a
+              // second onHistorySynced firing for the same group (before this
+              // attempt's await resolves) is rejected by the check above
+              // rather than racing into a duplicate sign+publish.
+              profilePublishInFlightRef.current.add(group.id);
               void (async () => {
                 try {
-                  const payload = await serialiseProfileUpdate(currentProfile, signer);
-                  console.info(`[Marmot] onHistorySynced: publishing profile for group ${group.id}, nickname="${currentProfile.nickname}"`);
-                  const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
-                  await sendRumorSafe(mlsGroup, rumor as any, { softFail: true });
-                  console.info(`[Marmot] onHistorySynced: profile published successfully for group ${group.id}`);
+                  // AC-SEND-10 (VQ-S8-006): profilePublishedRef is marked ONLY
+                  // after a successful signature+send — never before — so a
+                  // signer failure (locked/absent NIP-07) leaves no residual
+                  // "already published" local state that would suppress a
+                  // legitimate retry once the signer recovers.
+                  const { sent } = await signAndSendProfileBackground({
+                    signer,
+                    profile: currentProfile,
+                    logLabel: `onHistorySynced (group ${group.id})`,
+                    sendRumor: async (payload) => {
+                      console.info(`[Marmot] onHistorySynced: publishing profile for group ${group.id}, nickname="${currentProfile.nickname}"`);
+                      const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
+                      await sendRumorSafe(mlsGroup, rumor as any, { softFail: true });
+                      console.info(`[Marmot] onHistorySynced: profile published successfully for group ${group.id}`);
+                    },
+                  });
+                  if (sent) {
+                    profilePublishedRef.current.add(group.id);
+                  }
                 } catch (err) {
-                  console.warn(`[Marmot] onHistorySynced profile publish for ${group.id} failed:`, err);
+                  // Defense-in-depth parity with the pre-S8 code: sendRumorSafe
+                  // runs { softFail: true } so it does not throw today, but a
+                  // future config change must dev-log here, not surface as an
+                  // unhandled rejection.
+                  console.warn(`[Marmot] onHistorySynced: profile publish failed for group ${group.id}`, err);
+                } finally {
+                  // Always release the in-flight marker (success or failure)
+                  // so a future onHistorySynced firing (e.g. a legitimate
+                  // retry after a signer failure) is not permanently blocked.
+                  profilePublishInFlightRef.current.delete(group.id);
                 }
               })();
             },
@@ -1525,6 +1710,17 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // per architecture.md seam #3's explicit reuse allowance.
             applyDeleteEditSignal,
             resolvePendingSignalsForSlot,
+            // S6 (epic: group-message-author-auth-app-layer): announcement
+            // ingest-gate deps. isGroupAdmin reuses the SAME registered
+            // GroupAdminsProvider the announcement-immutability delete/edit
+            // gate already consults (VQ-S6-002). isGroupMember wraps the
+            // existing getLiveMemberPubkeys live-roster accessor, fail-closed
+            // to false on undefined/throw.
+            isGroupAdmin: isRegisteredGroupAdmin,
+            isGroupMember: async (groupId: string, pubkeyHex: string): Promise<boolean> => {
+              const members = await getLiveMemberPubkeys(groupId).catch(() => undefined);
+              return (members ?? []).some((m) => typeof m === 'string' && m.toLowerCase() === pubkeyHex.toLowerCase());
+            },
             // Profile
             mergeMemberProfile,
             clearPendingDirectInvite,
@@ -1583,11 +1779,20 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // Profile request
             recordRequestEmitted,
             // AC-030: self-target reply — sign our current profile and send immediately.
+            // AC-SEND-10: this is THE background/relay send path — a signer
+            // failure fails closed via signAndSendProfileBackground (dev-log
+            // only, no UI error, no relay-publish call); recovery relies on
+            // the requester's existing profile-request retry machinery.
             sendSelfProfile: async (_groupId: string) => {
-              if (!signerRef.current) return;
-              const payload = await serialiseProfileUpdate(localProfileRef.current, signerRef.current);
-              const rumor2 = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
-              await sendRumorSafe(mlsGroup, rumor2 as any);
+              await signAndSendProfileBackground({
+                signer: signerRef.current,
+                profile: localProfileRef.current,
+                logLabel: 'sendSelfProfile (profile-request self-reply, AC-030)',
+                sendRumor: async (payload) => {
+                  const rumor2 = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
+                  await sendRumorSafe(mlsGroup, rumor2 as any);
+                },
+              });
             },
             // AC-031: relay path — pre-bind loadProfile and sendRumor.
             handleIncomingProfileRequest: async (args: { groupId: string; payload: import('@/src/lib/marmot/profileRequestSync').ProfileRequestPayload }) => {
@@ -1651,6 +1856,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         }
       }
       profilePublishedRef.current.clear();
+      profilePublishInFlightRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed
     // on the id SET (groupSubscriptionKey), not the `groups` array reference; see
@@ -1683,14 +1889,23 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       await reloadGroups();
       markBackupDirty(true);
 
-      // Publish profile to the new group
+      // Publish profile to the new group. Background/best-effort (AC-SEND-10):
+      // group creation already succeeded above, so a signer failure here
+      // fails closed via signAndSendProfileBackground (dev-log only, no UI
+      // error, no relay-publish call) — the existing profile-request retry
+      // machinery covers any future member requesting our profile.
       try {
-        if (!signerRef.current) throw new Error('signer not initialised');
-        const payload = await serialiseProfileUpdate(localProfile, signerRef.current);
-        const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex);
-        await sendRumorSafe(mlsGroup, rumor as any);
+        await signAndSendProfileBackground({
+          signer: signerRef.current,
+          profile: localProfile,
+          logLabel: `createGroup welcome-broadcast (group ${groupId})`,
+          sendRumor: async (payload) => {
+            const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex);
+            await sendRumorSafe(mlsGroup, rumor as any);
+          },
+        });
       } catch (err) {
-        console.warn('[Marmot] publishProfileUpdate on createGroup failed:', err);
+        console.warn(`[Marmot] createGroup welcome-broadcast to ${groupId} failed:`, err);
       }
 
       return group;
@@ -1773,13 +1988,23 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         // insufficient here because the local overlay can refresh member count
         // before the subscription callback observes the join, which prevents
         // the inviter from sending its "welcome" profile to the new member.
+        // Background/best-effort (AC-SEND-10): the invite itself already
+        // succeeded, so a signer failure here fails closed via
+        // signAndSendProfileBackground (dev-log only, no UI error, no
+        // relay-publish call) — the existing profile-request retry machinery
+        // covers the new member requesting our profile.
         try {
-          if (!signerRef.current) throw new Error('signer not initialised');
-          const payload = await serialiseProfileUpdate(localProfileRef.current, signerRef.current);
-          const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
-          await sendRumorSafe(mlsGroup, rumor as any);
+          await signAndSendProfileBackground({
+            signer: signerRef.current,
+            profile: localProfileRef.current,
+            logLabel: `inviteByNpub post-invite re-send (group ${groupId})`,
+            sendRumor: async (payload) => {
+              const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
+              await sendRumorSafe(mlsGroup, rumor as any);
+            },
+          });
         } catch (profileErr) {
-          console.warn('[Marmot] inviter profile publish after invite failed:', profileErr);
+          console.warn(`[Marmot] inviteByNpub post-invite re-send to ${groupId} failed:`, profileErr);
         }
 
         markBackupDirty(true);
@@ -1847,13 +2072,44 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     return loadMemberProfiles(groupId);
   }, []);
 
-  const publishProfileUpdate = useCallback(async (profileOverride?: UserProfile): Promise<void> => {
+  const publishProfileUpdate = useCallback(async (profileOverride?: UserProfile): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client || groups.length === 0 || !pubkeyHex) return;
-    if (!signerRef.current) return;
+    const shortCircuit = resolvePublishProfileUpdateShortCircuit({
+      clientReady: client != null,
+      pubkeyHex,
+      groupCount: groups.length,
+    });
+    if (shortCircuit.shortCircuit) return shortCircuit.result;
+    // Narrowing note: `resolvePublishProfileUpdateShortCircuit` already
+    // guarantees `client` and `pubkeyHex` are both non-null whenever it lets
+    // execution continue past the line above (that's exactly the NOT-READY
+    // branch it short-circuits) — TS can't see through the helper call, so
+    // this re-check is for the type-checker only, not a reachable runtime path.
+    if (!client || !pubkeyHex) return false;
 
-    const payload = await serialiseProfileUpdate(profileOverride ?? localProfile, signerRef.current);
+    // AC-SEND-10: this is THE interactive, user-initiated send path. The
+    // signature is attempted BEFORE the per-group send loop (VQ-S8-006) —
+    // on failure, `payload` is null, the loop never runs (no meta-event is
+    // emitted to ANY group, nothing is actioned locally), and a visible,
+    // i18n-backed error is shown via toast (unlike the background/relay
+    // paths, which only dev-log). The dev-only override lets e2e simulate a
+    // locked/absent signer without a real NIP-07 extension in Playwright.
+    const effectiveSigner = readForcedProfileSignerFailureOverride() ? null : signerRef.current;
+    const payload = await signProfileForInteractiveSend(
+      profileOverride ?? localProfile,
+      effectiveSigner,
+      copy.groups.profileSendFailed,
+      (message) => { toast({ title: message, status: 'error', duration: 5000, isClosable: true }); },
+    );
+    if (payload === null) return false;
 
+    // S8-remediation (AC-SEND-10): tracks whether AT LEAST ONE group actually
+    // received the meta-event, so the caller can distinguish "confirmed sent"
+    // from "signed, but every per-group send attempt failed" — both must be
+    // reported as `false` to a caller gating local "already broadcast" state
+    // on the outcome, otherwise a transient send failure would be silently
+    // treated as success and suppress a legitimate retry.
+    let sentCount = 0;
     for (const group of groups) {
       try {
         const mlsGroup = await client.groups.get(group.id).catch(() => null);
@@ -1861,18 +2117,28 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
 
         const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex);
         await sendRumorSafe(mlsGroup, rumor as any);
+        sentCount += 1;
+        // Dev-only observability: lets E2E tests assert a kind-0 meta-event
+        // WAS (or, for AC-SEND-10, was NOT) actually emitted — mirrors the
+        // onRumorSent(PROFILE_REQUEST_KIND) precedent above.
+        if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
+          ((window as unknown as Record<string, unknown>).__fewTest as { onRumorSent?: (kind: number) => void } | undefined)
+            ?.onRumorSent?.(PROFILE_RUMOR_KIND);
+        }
       } catch (err) {
         console.warn(`[Marmot] publishProfileUpdate to group ${group.id} failed:`, err);
       }
     }
-    console.info('[Marmot] publishProfileUpdate sent to', groups.length, 'group(s)');
-  }, [groups, pubkeyHex, localProfile]);
+    console.info('[Marmot] publishProfileUpdate sent to', sentCount, 'of', groups.length, 'group(s)');
+    return sentCount > 0;
+  }, [groups, pubkeyHex, localProfile, copy, toast]);
 
   const clearAll = useCallback(async () => {
     await clearAllGroupData();
     setGroups([]);
     clientRef.current = null;
     profilePublishedRef.current.clear();
+    profilePublishInFlightRef.current.clear();
     appStartSweepRanRef.current = false;
   }, []);
 
@@ -2366,7 +2632,7 @@ const DEFAULT_MARMOT: MarmotContextValue = {
   createGroup: NOOP_NULL as () => Promise<null>,
   inviteByNpub: async () => ({ ok: false, error: 'not_ready' }),
   leaveGroup: NOOP_BOOL,
-  publishProfileUpdate: NOOP_ASYNC,
+  publishProfileUpdate: NOOP_BOOL,
   getMemberProfiles: NOOP_ARRAY as () => Promise<MemberProfile[]>,
   reloadGroups: NOOP_ASYNC,
   clearAll: NOOP_ASYNC,

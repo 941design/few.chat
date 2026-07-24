@@ -145,6 +145,63 @@ describe('applicationRumorDispatcher', () => {
     warnSpy.mockRestore();
   });
 
+  it('AC-XCUT-1: dedup LRU is never poisoned by a mismatched-sender rumor, and a matched redelivery still fans out exactly once — for both arrival orderings', async () => {
+    const authenticatedPubkey = 'bb'.repeat(32);
+    const attackerPubkey = 'aa'.repeat(32);
+    const resolveSender = vi.fn(() => ({ pubkey: authenticatedPubkey, authenticity: 'mls' as const }));
+
+    for (const ordering of ['mismatch-first', 'redelivery-first'] as const) {
+      // Fresh dispatcher/group/spy state per iteration — no leakage across orderings.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const handleSpy = vi.fn();
+      const dispatcher = createDispatcher([{ kind: 9, handle: handleSpy }]);
+      const group = makeFakeGroup();
+      const ctx = makeCtx();
+      dispatcher.subscribe(group, ctx, resolveSender);
+
+      const sharedId = `xcut1-${ordering}`;
+
+      if (ordering === 'mismatch-first') {
+        // Step 1: mismatched-sender rumor arrives first — dropped, not dispatched.
+        mockRumor = makeMockRumor({ id: sharedId, pubkey: attackerPubkey, kind: 9 });
+        group.emit(new Uint8Array());
+        await flushPromises();
+
+        expect(handleSpy).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledWith('[dispatcher.unauthenticatedMessage]', expect.anything());
+
+        // Step 2: matched redelivery of the same id — must still dispatch, proving
+        // the mismatched delivery above never poisoned the dedup LRU.
+        mockRumor = makeMockRumor({ id: sharedId, pubkey: authenticatedPubkey, kind: 9 });
+        group.emit(new Uint8Array());
+        await flushPromises();
+
+        expect(handleSpy).toHaveBeenCalledOnce();
+      } else {
+        // Step 1: matched, legitimate rumor arrives first — dispatches.
+        mockRumor = makeMockRumor({ id: sharedId, pubkey: authenticatedPubkey, kind: 9 });
+        group.emit(new Uint8Array());
+        await flushPromises();
+
+        expect(handleSpy).toHaveBeenCalledOnce();
+
+        // Step 2: a mismatched-sender rumor sharing the same id arrives next. The
+        // id is already marked seen from step 1, so the dedup check short-circuits
+        // before sender resolution ever runs — handler count stays at one, and
+        // (observed) no unauthenticatedMessage warning fires for this delivery,
+        // since the mismatch path is never reached.
+        mockRumor = makeMockRumor({ id: sharedId, pubkey: attackerPubkey, kind: 9 });
+        group.emit(new Uint8Array());
+        await flushPromises();
+
+        expect(handleSpy).toHaveBeenCalledOnce();
+        expect(warnSpy).not.toHaveBeenCalled();
+      }
+
+      warnSpy.mockRestore();
+    }
+  });
+
   it('AC-SEAM-1: sender-matched rumor dispatches with the actually-resolved sender object, not a hardcoded default', async () => {
     const handleSpy = vi.fn();
     const resolvedSender = { pubkey: 'aa'.repeat(32), authenticity: 'mls' as const };

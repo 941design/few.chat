@@ -12,12 +12,19 @@
  * with no envelope. parseProfilePayload accepts both shapes; legacy parses
  * yield `signedEvent === undefined` and are non-relayable until the peer
  * upgrades.
+ *
+ * Epic: group-message-author-auth-app-layer | Story S7 — the envelope's
+ * crypto/shape verification (signature, inner kind, group-binding policy) is
+ * generalized into the shared verifier (envelopeVerifier.ts); this module
+ * declares profile's OWN per-kind spec (PROFILE_KIND_SPEC, group-binding
+ * EXEMPT) and stays responsible only for the profile-specific wire shape
+ * (nickname/avatar/updatedAt) and the legacy-unsigned fallback.
  */
 
-import { verifyEvent } from 'nostr-tools/pure';
 import type { EventSigner } from 'applesauce-core';
 import type { UserProfile, ProfileAvatar, MemberProfile, SignedProfileEvent } from '@/src/types';
 import { AVATAR_BROWSER_CONFIG } from '@/src/config/profile';
+import { verifyForwardedEnvelope, type ForwardedKindSpec } from '@/src/lib/marmot/envelopeVerifier';
 
 /** MLS application-message rumor kind for profile updates (kind 0 = metadata). */
 export const PROFILE_RUMOR_KIND = 0;
@@ -75,19 +82,20 @@ export async function serialiseProfileUpdate(
   return JSON.stringify(envelope);
 }
 
-function looksLikeEnvelope(parsed: unknown): parsed is SignedProfileEvent {
-  if (!parsed || typeof parsed !== 'object') return false;
-  const o = parsed as Record<string, unknown>;
-  return (
-    typeof o.id === 'string' &&
-    typeof o.pubkey === 'string' &&
-    typeof o.sig === 'string' &&
-    typeof o.created_at === 'number' &&
-    typeof o.content === 'string' &&
-    Array.isArray(o.tags) &&
-    o.kind === 0
-  );
-}
+/**
+ * Profile's own per-kind spec for the shared envelope verifier
+ * (architecture.md "Shared verifier" module / per-kind binding policy).
+ * groupScoped: false — profile is context-free and identity-scoped, so it is
+ * EXEMPT from the group-tag check (and, separately, from the roster/actor-
+ * in-roster check — neither this module nor handlers/profileHandler.ts ever
+ * consults a roster/admin provider for profile envelopes). Rejecting a
+ * departed member's late or forwarded profile on roster grounds would
+ * degrade their name in history to a raw key (spec.md Solution §6).
+ */
+export const PROFILE_KIND_SPEC: ForwardedKindSpec = {
+  innerKind: PROFILE_RUMOR_KIND,
+  binding: { groupScoped: false },
+};
 
 function parseInnerProfile(content: string): {
   nickname: string;
@@ -115,31 +123,41 @@ function parseInnerProfile(content: string): {
 /**
  * Parse rumor content as a ProfilePayload.
  *
- * - Envelope shape (signed Nostr kind:0): verify the signature; on success,
- *   parse the inner content and return the payload with signedEvent populated.
- *   On verification failure, return null — the rumor is dropped silently.
- * - Legacy flat shape: return the payload with signedEvent undefined.
+ * - Envelope shape (signed Nostr kind:0): verified via the shared envelope
+ *   verifier (envelopeVerifier.ts) against PROFILE_KIND_SPEC — signature,
+ *   inner kind, and (vacuously, since profile is group-binding EXEMPT) no
+ *   group-tag check. On success, parse the inner content and return the
+ *   payload with signedEvent populated. On a structurally-envelope-shaped
+ *   but failed verification (bad sig / wrong kind), reject outright — do NOT
+ *   fall back to legacy parsing (that would let an attacker strip/forge the
+ *   envelope and resubmit the same bytes as "legacy").
+ * - Not envelope-shaped at all (verifier reason 'malformed'): try the legacy
+ *   flat ProfilePayload shape. Legacy parses yield signedEvent undefined.
  * - Anything else: null.
+ *
+ * One-shot consumption (AC-FWD-5) is NOT performed here — this function only
+ * verifies; the caller (handlers/profileHandler.ts) gates application of a
+ * side effect on the shared verifier's createOneShotGate(), keyed on
+ * signedEvent.id, at the point it actually applies the profile.
  */
 export function parseProfilePayload(content: string): ProfilePayload | null {
+  const verifyResult = verifyForwardedEnvelope(content, PROFILE_KIND_SPEC);
+
+  if (verifyResult.ok) {
+    const inner = parseInnerProfile(verifyResult.event.content);
+    if (!inner) return null;
+    return { ...inner, signedEvent: verifyResult.event as SignedProfileEvent };
+  }
+
+  if (verifyResult.reason !== 'malformed') {
+    return null;
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch {
     return null;
-  }
-
-  if (looksLikeEnvelope(parsed)) {
-    let verified = false;
-    try {
-      verified = verifyEvent(parsed as never);
-    } catch {
-      verified = false;
-    }
-    if (!verified) return null;
-    const inner = parseInnerProfile(parsed.content);
-    if (!inner) return null;
-    return { ...inner, signedEvent: parsed };
   }
 
   if (parsed && typeof parsed === 'object') {

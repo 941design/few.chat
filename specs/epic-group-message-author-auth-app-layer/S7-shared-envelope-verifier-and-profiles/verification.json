@@ -52,6 +52,26 @@
       "category": "SPEC",
       "ac_id": "AC-FWD-5",
       "question": "Show the verifier-unit test proving AC-FWD-5: the shared verifier rejects a group-scoped envelope whose group tag != the receiving group's id (constructed directly in the test since no in-app producer can emit this for the group-binding-exempt profile kind); and one-shot consumption keyed on the inner event id means a self-authored copy and a forwarded copy of the same signed inner event are both accepted on first sight but the second application is a no-op, not double-applied."
+    },
+    {
+      "question_id": "VQ-S7-009",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "createOneShotGate() is instantiated once per createProfileHandler() call (subscribe-scoped, mirroring applicationRumorDispatcher.ts's per-subscribe seen-rumor-id LRU), not as a module-level singleton spanning the whole app lifetime or the whole test file. Does profileHandler.test.ts's pre-existing makeSignedProfileRumor helper generate a UNIQUE inner signedEvent.id per call by default (fixed during S7 with a monotonic counter) so that pre-existing multi-call tests (e.g. the S3 gate-remediation TOCTOU concurrent test, AC-PROD-5's redelivery test) are not silently short-circuited by the new one-shot gate before they exercise the marker-consumption logic they were actually written to test — and is this verified by rerunning the full profileHandler.test.ts file (not just the newly-added AC-FWD-5 tests) after the change?"
+    },
+    {
+      "question_id": "VQ-S7-010",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FWD-4",
+      "question": "AC-FWD-4's e2e spec (groups-profile-forwarded-attribution.spec.ts) was actually executed against the real strfry relay (not merely authored) and passes. It verifies attribution and idempotency via UI-testid assertions rather than direct IndexedDB introspection, after a direct raw-indexedDB.open() read of the 'few-member-profiles' store was tried and found to disagree with the live app state (empty store moments after the UI correctly rendered the relayed name) for reasons not root-caused within this story. Is the UI-testid-based proof (`member-name-${pubkeyPrefix}` keyed by the ORIGINAL SIGNER's pubkey, cross-checked against MemberList.tsx's displayName source `profile?.nickname \\|\\| truncateNpub(npub)` having no other source) actually sufficient and non-circular evidence of correct attribution, and should the raw-IndexedDB read discrepancy be tracked as a follow-up for future e2e specs needing IDB introspection against this store?"
+    },
+    {
+      "question_id": "VQ-S7-011",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FWD-4",
+      "question": "AC-FWD-4's e2e spec deliberately does not drive a full MLS member-leave flow to exercise the literal 'departed member' half of the roster-exemption clause (judged too flake-prone to stack atop an already-elaborate 3-peer relay setup, mirroring the precedent flake documented for groups-member-profiles.spec.ts's 3-member join scenario). Instead, roster-exemption is proven structurally via profileHandler.test.ts's 'roster exemption (VQ-S7-005)' describe block, which source-scans profileHandler.ts and envelopeVerifier.ts for ANY roster/admin identifier and asserts none exist. Is a structural absence-of-dependency proof an adequate substitute for a live departed-member e2e scenario for this specific claim (a negative/architectural guarantee), or does the epic need a dedicated follow-up story once a leave-flow e2e fixture exists that is not itself flake-prone?"
     }
   ]
 }

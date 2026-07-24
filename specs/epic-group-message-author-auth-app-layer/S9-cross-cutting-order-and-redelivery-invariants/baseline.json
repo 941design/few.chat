@@ -1,0 +1,21 @@
+{
+  "story_id": "S9",
+  "captured_at": "2026-07-24T03:19:00Z",
+  "tests": {
+    "command": "make test-unit",
+    "test_files": 217,
+    "passed": 4236,
+    "skipped": 1,
+    "total": 4237,
+    "failed": 0
+  },
+  "lint": {
+    "status": "NO_LINT",
+    "note": "Same as S7/S8's baseline: app/package.json has a `lint` script (`next lint`), but no ESLint config exists — `next lint` would prompt interactively to scaffold one. architecture.md: enforcement is via vitest source-scan tests instead."
+  },
+  "typecheck": {
+    "status": "clean",
+    "command": "npx tsc --noEmit -p tsconfig.json",
+    "note": "0 errors at baseline."
+  }
+}

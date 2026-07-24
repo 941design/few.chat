@@ -548,6 +548,112 @@ describe('AC-EDIT-7 (S4): edit/delete authorization on authenticated sender + ad
   });
 });
 
+// ─── AC-XCUT-4: arrival-order independence (S9 property tests) ─────────────
+//
+// The authorization outcome for an edit/delete signal must depend only on
+// the authenticated sender of the signal vs. the authenticated sender of the
+// target — never on whether the signal or its target materializes first in
+// storage, and never on the order in which multiple pending signals for the
+// same slot get resolved. This block re-runs AC-EDIT-7's own-author and
+// cross-author cases (already covered example-by-example above) as a
+// property over arrival order, asserting identically at both the
+// messageEdits/api.ts ChangeResult layer and the chatPersistence.ts storage
+// (.tombstoned) layer.
+
+describe('AC-XCUT-4 (S9): edit/delete arrival-order property — authorization outcome is independent of signal/target and pending-resolution order', () => {
+  const ORDERINGS = ['target-first', 'signal-first'] as const;
+
+  it('AC-XCUT-4 (property test over signal/target arrival order): delete authorization outcome is identical whether the signal arrives before or after its target, asserted at both messageEdits/api.ts (ChangeResult) AND chatPersistence.ts (storage truth)', async () => {
+    for (const ordering of ORDERINGS) {
+      // Case "authorized": own-author delete (alice deletes her own message).
+      {
+        const id = `xcut4-authorized-${ordering}`;
+        const sender: AuthenticatedSender = { pubkey: alicePubHex, authenticity: 'mls' };
+        const rumor = buildDeleteRumor(id, [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
+        let result: ChangeResultFixture;
+
+        if (ordering === 'target-first') {
+          await appendMessage(GROUP_ID, makeGroupTarget({ id, senderPubkey: alicePubHex }));
+          result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+        } else {
+          const bufferResult = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+          expect(bufferResult.kind).toBe('pending');
+          await appendMessage(GROUP_ID, makeGroupTarget({ id, senderPubkey: alicePubHex }));
+          result = await resolvePendingSignalsForSlot(GROUP_THREAD, id, alicePubHex);
+        }
+
+        expect(result.kind).toBe('delete');
+        const { messages } = await loadMessages(GROUP_ID);
+        expect(messages.find((m) => m.id === id)?.tombstoned).toBe(true);
+      }
+
+      // Case "unauthorized": cross-author delete (mallory deletes alice's
+      // message), mallory is not a registered admin (fail-closed empty set).
+      {
+        const id = `xcut4-unauthorized-${ordering}`;
+        const sender: AuthenticatedSender = { pubkey: malloryPubHex, authenticity: 'mls' };
+        const rumor = buildDeleteRumor(id, [], CHAT_MESSAGE_KIND, 1_000, malloryPrivHex);
+        let result: ChangeResultFixture;
+
+        if (ordering === 'target-first') {
+          await appendMessage(GROUP_ID, makeGroupTarget({ id, senderPubkey: alicePubHex }));
+          result = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+        } else {
+          const bufferResult = await applyDeleteEditSignal(GROUP_THREAD, rumor as any, sender);
+          expect(bufferResult.kind).toBe('pending');
+          await appendMessage(GROUP_ID, makeGroupTarget({ id, senderPubkey: alicePubHex }));
+          result = await resolvePendingSignalsForSlot(GROUP_THREAD, id, alicePubHex);
+        }
+
+        // 'target-first' correctly returns 'discarded' (rejected immediately
+        // against an already-known row) while 'signal-first' correctly
+        // returns 'noop' (buffered, then dropped on resolve) — two
+        // different, both-correct, pre-existing labels for "rejected"
+        // depending on whether the row was known immediately or resolved
+        // later from the pending buffer. That label difference is NOT an
+        // AC-XCUT-4 violation; the property under test is the storage-level
+        // outcome (no tombstone), asserted identically below.
+        expect(result.kind).not.toBe('delete');
+        const { messages } = await loadMessages(GROUP_ID);
+        expect(messages.find((m) => m.id === id)?.tombstoned).toBeFalsy();
+      }
+    }
+  });
+
+  it('AC-XCUT-4: resolution order across multiple pending signals for the same slot does not change the final outcome', async () => {
+    const RESOLUTION_ORDERINGS = ['high-then-low', 'low-then-high'] as const;
+
+    for (const ordering of RESOLUTION_ORDERINGS) {
+      const id = `xcut4-competing-${ordering}`;
+      // rev=50, mallory — will be authorization-rejected once resolved.
+      const rumorLow = buildDeleteRumor(id, [], CHAT_MESSAGE_KIND, 50, malloryPrivHex);
+      // rev=100, alice — the eventual real author, higher rev.
+      const rumorHigh = buildDeleteRumor(id, [], CHAT_MESSAGE_KIND, 100, alicePrivHex);
+
+      if (ordering === 'high-then-low') {
+        const bufferHigh = await applyDeleteEditSignal(GROUP_THREAD, rumorHigh as any, { pubkey: alicePubHex, authenticity: 'mls' });
+        expect(bufferHigh.kind).toBe('pending');
+        const bufferLow = await applyDeleteEditSignal(GROUP_THREAD, rumorLow as any, { pubkey: malloryPubHex, authenticity: 'mls' });
+        expect(bufferLow.kind).toBe('pending');
+      } else {
+        const bufferLow = await applyDeleteEditSignal(GROUP_THREAD, rumorLow as any, { pubkey: malloryPubHex, authenticity: 'mls' });
+        expect(bufferLow.kind).toBe('pending');
+        const bufferHigh = await applyDeleteEditSignal(GROUP_THREAD, rumorHigh as any, { pubkey: alicePubHex, authenticity: 'mls' });
+        expect(bufferHigh.kind).toBe('pending');
+      }
+
+      // Alice really is the row's author — only her (higher-rev, correctly
+      // authorized) signal should ever survive the buffer collapse.
+      await appendMessage(GROUP_ID, makeGroupTarget({ id, senderPubkey: alicePubHex }));
+      const result = await resolvePendingSignalsForSlot(GROUP_THREAD, id, alicePubHex);
+
+      expect(result.kind).toBe('delete');
+      const { messages } = await loadMessages(GROUP_ID);
+      expect(messages.find((m) => m.id === id)?.tombstoned).toBe(true);
+    }
+  });
+});
+
 // ─── AC-DEL-4: group send is MLS application rumor, never relay-facing ──────
 
 describe('AC-DEL-4 (group half): the delete/edit signal is an author-signed inner kind-5, sent via MLS, never relay-facing', () => {

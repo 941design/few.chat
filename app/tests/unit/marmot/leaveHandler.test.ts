@@ -206,4 +206,73 @@ describe('leaveHandler / LEAVE_INTENT', () => {
 
     expect(deps.enqueueLeave).toHaveBeenCalledOnce();
   });
+
+  // ---- AC-XCUT-3: interleaving-order independence (property test) --------
+
+  it('AC-XCUT-3 (property test over concurrent leave-intent interleavings): a removal is enqueued for a subject iff that subject\'s own leave-intent was sender-matched — never a function of interleaving order', async () => {
+    const VICTIM_PUBKEY = 'bb'.repeat(32);
+    const ATTACKER_PUBKEY = 'dd'.repeat(32);
+    const OTHER_SUBJECT_PUBKEY = 'ee'.repeat(32);
+    const ctx = makeCtx();
+
+    // Self-departure: subject === sender, MUST enqueue (GROUP_ID, MEMBER_PUBKEY).
+    const matched1 = {
+      rumor: makeLeaveRumor({
+        id: 'xcut-matched1',
+        pubkey: MEMBER_PUBKEY,
+        content: JSON.stringify({ pubkey: MEMBER_PUBKEY }),
+      }),
+      sender: makeSender(MEMBER_PUBKEY),
+    };
+    // Forced-removal shape (attacker naming a victim): subject !== sender,
+    // MUST NOT enqueue anything for the victim.
+    const mismatched = {
+      rumor: makeLeaveRumor({
+        id: 'xcut-mismatched',
+        pubkey: ATTACKER_PUBKEY,
+        content: JSON.stringify({ pubkey: VICTIM_PUBKEY }),
+      }),
+      sender: makeSender(ATTACKER_PUBKEY),
+    };
+    // A second, distinct sender-matched self-departure arriving mid-debounce.
+    const matched2 = {
+      rumor: makeLeaveRumor({
+        id: 'xcut-matched2',
+        pubkey: OTHER_SUBJECT_PUBKEY,
+        content: JSON.stringify({ pubkey: OTHER_SUBJECT_PUBKEY }),
+      }),
+      sender: makeSender(OTHER_SUBJECT_PUBKEY),
+    };
+    // A resend (distinct rumor id, same subject/sender) of matched1 — the
+    // handler itself has no idempotency, so this MUST enqueue again.
+    const duplicateMatched1 = {
+      rumor: makeLeaveRumor({
+        id: 'xcut-duplicate-matched1',
+        pubkey: MEMBER_PUBKEY,
+        content: JSON.stringify({ pubkey: MEMBER_PUBKEY }),
+      }),
+      sender: makeSender(MEMBER_PUBKEY),
+    };
+
+    const interleavings = [
+      [matched1, mismatched, matched2, duplicateMatched1],
+      [mismatched, matched2, matched1, duplicateMatched1],
+      [matched2, duplicateMatched1, mismatched, matched1],
+    ];
+
+    for (const order of interleavings) {
+      const deps = makeDeps();
+      const handler = createLeaveIntentHandler(deps);
+
+      for (const { rumor, sender } of order) {
+        await handler.handle(rumor, ctx, sender);
+      }
+
+      const calls = deps.enqueueLeave.mock.calls;
+      expect(calls.filter(([groupId, pk]) => groupId === GROUP_ID && pk === MEMBER_PUBKEY)).toHaveLength(2);
+      expect(calls.filter(([groupId, pk]) => groupId === GROUP_ID && pk === OTHER_SUBJECT_PUBKEY)).toHaveLength(1);
+      expect(calls.every(([, pk]) => pk !== VICTIM_PUBKEY)).toBe(true);
+      expect(deps.enqueueLeave).toHaveBeenCalledTimes(3);
+    }
+  });
 });

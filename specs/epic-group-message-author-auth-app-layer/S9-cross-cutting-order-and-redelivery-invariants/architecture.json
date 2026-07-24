@@ -1,0 +1,41 @@
+{
+  "module_name": "S9-cross-cutting-order-and-redelivery-invariants",
+  "purpose": "Integration story (is_integration_story: true, owns no single module). Verifies the epic's five whole-flow order-sensitivity guarantees (architecture.md's '## Order-Sensitive Composition' section) by adding one genuine property test per AC-XCUT-{1..5} to the five EXISTING handler-unit test files, driving the REAL already-landed producers from S1/S3/S4/S5/S7 through enumerated/seeded orderings — never re-implemented shadow logic, never a mock of a spanned producer. No production code is expected to change; if a property test surfaces a real invariant violation, this story stops and surfaces it rather than papering over it in production code.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/applicationRumorDispatcher.ts (Dispatcher) — AC-XCUT-1: createDispatcher, dedup LRU, sender-mismatch drop-before-markSeen ordering",
+    "app/src/lib/marmot/handlers/pollHandler.ts + app/src/lib/marmot/pollTally.ts (Poll) — AC-XCUT-2: createPollCloseHandler, computeTally purity over stored PollVote rows",
+    "app/src/lib/marmot/handlers/leaveHandler.ts (Leave) — AC-XCUT-3: createLeaveIntentHandler, payload.pubkey === sender.pubkey enqueue gate",
+    "app/src/lib/messageEdits/api.ts (Edits, 2nd hop) — AC-XCUT-4: applyDeleteEditSignal, resolvePendingSignalsForSlot, resolveKnownRowAgainstStores/signalBeats ordering",
+    "app/src/lib/marmot/chatPersistence.ts (Tombstone, 3rd hop) — AC-XCUT-4: tombstoneMessage's independent TombstoneAuthorization re-check, loadMessages readback",
+    "app/src/lib/marmot/handlers/profileHandler.ts (Profiles, forwarded) — AC-XCUT-5(a): createProfileHandler + groupStorage.ts's real mergeMemberProfile (LWW), loadMemberProfiles readback",
+    "app/src/lib/marmot/envelopeVerifier.ts (Shared verifier) — AC-XCUT-5(b): createOneShotGate one-shot consumption, exercised both directly (verifier-unit) and through profileHandler.ts's per-instance gate (handler-unit)",
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts"
+  ],
+  "dependencies_forbidden": [
+    "No new mocks-registry.json entry for any spanned producer above (FR-A7 / story-planner Mock Strategy integration-story exception) — Dispatcher/Poll/Leave/Edits/Tombstone/Profiles/Shared-verifier are exercised as real code, never stubbed."
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts — AC-XCUT-1 property test (interleaving generator: mismatch-first vs redelivery-first, sharing rumor id r)",
+    "app/tests/unit/marmot/pollHandler.test.ts — AC-XCUT-2 property test (vote arrival order/subset/duplication generator x forged close-payload generator)",
+    "app/tests/unit/marmot/leaveHandler.test.ts — AC-XCUT-3 property test (concurrent/interleaved leave-intent generator, matched vs mismatched subject)",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts — AC-XCUT-4 property test (signal-vs-target arrival-order generator, asserted at both applyDeleteEditSignal/resolvePendingSignalsForSlot AND chatPersistence.loadMessages storage truth)",
+    "app/tests/unit/marmot/profileHandler.test.ts — AC-XCUT-5 property tests (delivery-order generator over two profile envelopes for merge order-independence; one-shot-consumption order generator over self/forwarded copies sharing one inner id)"
+  ],
+  "carve_out": {
+    "is_integration_story": true,
+    "note": "dependencies_allowed spans the union of this story's owned ACs' (AC-XCUT-1..5) 'Spans modules:' lines in acceptance-criteria.md: Dispatcher, Poll, Leave, Edits (2nd hop), Tombstone (3rd hop), Profiles (forwarded), Shared verifier — corroborated against, not sourced from, architecture.md's '## Order-Sensitive Composition' list. This is intentional cross-module reach per story-planner.md principle 5's exemption and the integration-architect Step 1/1.5 carve-outs; it grants no license to re-implement logic owned by Dispatcher/Poll/Leave/Edits/Tombstone/Profiles/Shared-verifier."
+  },
+  "seam": {
+    "cross_story": false
+  }
+}

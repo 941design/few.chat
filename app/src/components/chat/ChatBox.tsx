@@ -500,8 +500,15 @@ export default function ChatBox({
     msg: ChatMessage,
   ) {
     if (structured?.type === 'poll_open' && allowPollMessages) {
-      const creatorDisplay = profileMap[structured.creatorPubkey]?.nickname
-        ?? truncateNpub(pubkeyToNpub(structured.creatorPubkey));
+      // F1 (Stage-2 review, epic: group-message-author-auth-app-layer S6):
+      // attribute the creator to the protocol-authenticated sender, never
+      // the self-reported `creatorPubkey` payload field — mirrors
+      // poll_close/group_renamed/member_admitted/call_notice above. For
+      // legitimate traffic sender === creator, so this is behavior-
+      // preserving for real polls; it only closes the spoof where a
+      // non-creator sends poll_open with a forged creatorPubkey.
+      const creatorDisplay = profileMap[msg.senderPubkey]?.nickname
+        ?? truncateNpub(pubkeyToNpub(msg.senderPubkey));
       return <PollChatAnnouncement creatorName={creatorDisplay} title={structured.title} />;
     }
     if (structured?.type === 'poll_close' && allowPollMessages) {
@@ -573,8 +580,13 @@ export default function ChatBox({
       return <MemberAdmittedChatAnnouncement admitterDisplay={admitterDisplay} memberDisplay={memberDisplay} />;
     }
     if (structured?.type === 'call_notice') {
-      const initiatorDisplay = profileMap[structured.initiator]?.nickname
-        ?? truncateNpub(pubkeyToNpub(structured.initiator));
+      // AC-ANNOUNCE-4 (epic: group-message-author-auth-app-layer S6): actor is
+      // ALWAYS the protocol-authenticated sender — the payload's self-reported
+      // `initiator` field is parsed (parseStructured.ts keeps it on the wire)
+      // but never read for attribution, mirroring group_renamed/member_admitted
+      // above.
+      const initiatorDisplay = profileMap[msg.senderPubkey]?.nickname
+        ?? truncateNpub(pubkeyToNpub(msg.senderPubkey));
       const text = structured.event === 'started'
         ? copy.calls.callStartedNotice(initiatorDisplay)
         : copy.calls.callEndedNotice;

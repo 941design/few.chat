@@ -73,6 +73,24 @@
       "category": "SPEC",
       "ac_id": "AC-ANNOUNCE-5",
       "question": "Show the production code and handler-unit test(s) proving AC-ANNOUNCE-5: a group_renamed announcement is accepted (rendered, display-only) only when sender.pubkey is a current group admin per GroupAdminsProvider; confirm a non-admin sender's group_renamed is rejected and that the group name shown elsewhere in the UI still derives from the MLS metadata commit, not this announcement."
+    },
+    {
+      "question_id": "VQ-S6-012",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The story's `scope.includes` (stories.json) named only chatHandler.ts, parseStructured.ts, and chatHandler.test.ts, but the implementation also touched app/src/lib/marmot/registerHandlers.ts, app/src/context/MarmotContext.tsx, app/src/lib/messageEdits/api.ts, app/src/lib/marmot/handlers/pollHandler.ts (+ new pollTally.ts), app/src/components/chat/ChatBox.tsx, and app/tests/unit/marmot/registerHandlers.test.ts. Is each of these touches genuinely necessary (composition-root wiring for the four new ChatHandlerDeps fields has no alternative location; the ChatBox.tsx call_notice fix is required by AC-ANNOUNCE-4's literal 'not rendered as the actor' wording, which chatHandler.ts alone cannot satisfy since it never controls rendering) rather than incidental scope creep? Note S5's architecture.json recorded an identical 'coordinator-authorized scope expansion' for the same two composition-root files (registerHandlers.ts, MarmotContext.tsx) — is this a recurring staleness in how scope.includes is derived for stories whose ACs require new dep-wiring at the composition root?"
+    },
+    {
+      "question_id": "VQ-S6-013",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The poll_close ingest-gate rewrites ChatMessage.content to embed a recomputed tally (F1, S5 Stage-2 review), reusing a `computeTally` function newly extracted from pollHandler.ts into app/src/lib/marmot/pollTally.ts. Does app/tests/unit/marmot/pollHandler.test.ts still pass unmodified after the extraction (proving the refactor is behavior-preserving), and does a chatHandler.test.ts case prove the persisted poll_close content's results/totalVoters are computed from deps.loadVotes — not copied from the rumor's self-reported payload — even when the two diverge?"
+    },
+    {
+      "question_id": "VQ-S6-014",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "chatHandler.ts's gateAnnouncement() wraps every deps.isGroupAdmin/isGroupMember/getPoll/loadVotes call in `.catch(() => <fail-closed value>)`. Does a chatHandler.test.ts case actually exercise a REJECTING (throwing) isGroupAdmin/isGroupMember mock and assert the announcement is dropped with zero side effects (not merely that the promise resolves), confirming VQ-S6-006's fail-closed requirement holds at the implementation site, not just in the injected deps' own default behavior?"
     }
   ]
 }

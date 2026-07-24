@@ -580,6 +580,21 @@ function isAdminPubkey(admins: string[], pubkeyHex: string): boolean {
 }
 
 /**
+ * S6 (epic: group-message-author-auth-app-layer) exposes the ALREADY-
+ * REGISTERED GroupAdminsProvider (see registerGroupAdminsProvider above) for
+ * chatHandler's enum-announcement admin-actor gate, so the announcement
+ * ingest gate consults the exact same admin set as the announcement-
+ * immutability delete/edit gate — not a second, independently-instantiated
+ * lookup. Fail-closed inherited from groupAdminsFor/isAdminPubkey: an
+ * unregistered provider, a non-group threadKey, or a throwing/rejecting
+ * provider all resolve to `false` (deny), never `true`.
+ */
+export async function isRegisteredGroupAdmin(groupId: string, pubkeyHex: string): Promise<boolean> {
+  const admins = await groupAdminsFor(groupId);
+  return isAdminPubkey(admins, pubkeyHex);
+}
+
+/**
  * AC-IMMUT-4/5: authorizes a delete/tombstone signal against its target's
  * CURRENT content. For a GROUP-thread informative announcement, ordinary
  * authorship is irrelevant — only current-admin sourcing authorizes it. For
