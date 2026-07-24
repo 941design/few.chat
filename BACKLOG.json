@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-24T06:29:16Z",
+  "updated_at": "2026-07-24T12:20:41Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -627,6 +627,32 @@
       "behavior": "loadVotes(pollId) returns all locally-stored votes under that pollId regardless of group; computeTally counts them all. Legit pollIds are random UUIDs so accidental collision is nil, but a crafted poll_open can set any pollId.",
       "approach": "Group-scope the vote store key (few:poll-votes:{groupId}:{pollId}) or persist groupId on PollVote and filter in loadVotes; migrate existing rows. Beyond the app-layer-auth epic's poll-story scope.",
       "success_signal": "A vote cast in group B for a pollId reused from group A does not appear in group A's recomputed tally"
+    },
+    {
+      "slug": "own-send-message-echo-no-longer",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/handlers/chatHandler.ts"
+      },
+      "text": "Own-send message echo no longer suppressed at the dispatcher — appendMessage fires twice (AC-AR-22 regressed by author-auth app-layer epic)",
+      "created_at": "2026-07-24",
+      "motivation": "AC-AR-22 (groups-dispatch-isolation e2e) guards the invariant that a user's own-sent message is written to IDB exactly once: the own-send relay echo must be dropped before the dispatcher calls appendMessage. The dispatcher rework in commits 8c2b2ff/1924c9b broke it. Currently masked at the UI by a second storage-level dedup (one row, one bubble), but it is a lost correctness guarantee and a latent double-processing/perf risk, and the epic's own updated unit tests do not catch it.",
+      "behavior": "After sending a message the onChatIdbWrite counter fires twice (writeCount=2, expected 1). groups-dispatch-isolation.spec.ts:205 fails deterministically — confirmed across the full gate, a 47-test re-run, and in isolation as the very first test on a freshly-wiped relay (so not relay pollution). IDB row count and rendered bubble count both remain 1.",
+      "approach": "Owner decision required: is the own-send echo reaching the dispatcher an unintended regression (restore marmot-ts #sentEventIds / chatHandler own-send suppression) or an intended new dispatcher semantic (then update the AC-AR-22 expectation, as was done for the sibling stale imprint test)? Resolve against the epic's intended dispatcher design before changing code. Start from chatHandler.ts and applicationRumorDispatcher.ts diffs in 8c2b2ff/1924c9b.",
+      "success_signal": "groups-dispatch-isolation.spec.ts:205 passes on a clean relay (writeCount=1)"
+    },
+    {
+      "slug": "group-reaction-badge-no-longer-propagates",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/handlers/reactionHandler.ts"
+      },
+      "text": "Group reaction badge no longer propagates — Bob's reaction never renders (AC-40 regressed by author-auth app-layer epic)",
+      "created_at": "2026-07-24",
+      "motivation": "AC-40 (group reactions, story-06) requires a peer's reaction to render as a badge on the reacted message. The reaction receive/apply path was reworked in commits 8c2b2ff/1924c9b (reactionHandler.ts, reactions/api.ts, dispatcher). The e2e regressed while the epic's unit tests pass — the mocked-unit / assembled-system blind spot.",
+      "behavior": "After Bob reacts to Alice's message, the reaction-badge testid never renders. groups-reactions.spec.ts:163 fails in isolation on a freshly-wiped relay while its 6 sibling reaction tests pass (so group setup and other reaction scenarios work), which isolates the break to this cross-peer reaction badge path. Cross-peer reaction timing means the exact break point still warrants owner confirmation.",
+      "approach": "Owner decision required: confirm whether the reaction apply/render is genuinely broken (fix product) or the e2e expectation is stale under new dispatcher semantics (update the test). Start from the reactionHandler.ts and reactions/api.ts diffs in 8c2b2ff/1924c9b.",
+      "success_signal": "groups-reactions.spec.ts:163 passes on a clean relay (badge renders on both peers)"
     }
   ],
   "archive": [
