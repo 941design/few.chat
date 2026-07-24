@@ -6,7 +6,8 @@
  * the message through because Bob is a group member.
  *
  * Assertions:
- *   a. Alice's notification bell counter increments (badge shows >= 1).
+ *   a. Alice's Contacts-domain nav pill increments (a DM is a Contacts-domain
+ *      event; `contacts-nav-badge` shows >= 1).
  *   b. The message renders in Alice's DM thread with Bob.
  *
  * This is the "gate is not too tight" regression guard — it proves the whitelist
@@ -18,7 +19,7 @@
  *   3. Alice invites Bob by npub
  *   4. Bob receives the Welcome and joins (group appears in his list)
  *   5. Bob DMs Alice via publishDirectMessage
- *   6. Alice's bell increments and message renders
+ *   6. Alice's Contacts nav pill increments and message renders
  *
  * Requires: make e2e-up (strfry relay at ws://localhost:7777).
  */
@@ -146,17 +147,17 @@ test.describe.serial('DM walled garden: group member allowed (AC-TEST-5)', () =>
     await expect(bobPage.getByText('Walled Garden Test Group')).toBeVisible({ timeout: 90_000 });
   });
 
-  test('Bob DMs Alice via publishDirectMessage; Alice bell increments and message renders', async () => {
-    // Alice navigates to /contacts to mount the bell watcher
+  test('Bob DMs Alice via publishDirectMessage; Alice Contacts pill increments and message renders', async () => {
+    // Alice navigates to /contacts to mount the unread watcher
     await alicePage.goto('/contacts');
     await alicePage.waitForLoadState('networkidle');
     await waitForBridge(alicePage);
 
-    // Record the CURRENT badge count as baseline — invite/Welcome events from the
-    // prior test steps may have already created notifications. The assertion is that
-    // the count INCREASES by at least 1 after Bob sends, not that it starts at 0.
+    // Record the CURRENT Contacts nav-pill count as baseline — prior-DM events
+    // may already be counted. The assertion is that the count INCREASES by at
+    // least 1 after Bob sends, not that it starts at 0.
     const initialBadgeCount = await alicePage.evaluate(() => {
-      const badge = document.querySelector('[data-testid="notification-badge"]');
+      const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
       if (!badge) return 0;
       return parseInt((badge.textContent ?? '0').trim(), 10);
     });
@@ -180,10 +181,10 @@ test.describe.serial('DM walled garden: group member allowed (AC-TEST-5)', () =>
       },
     );
 
-    // Assertion (a): Alice's bell counter must increment above the baseline
+    // Assertion (a): Alice's Contacts nav pill must increment above the baseline
     await alicePage.waitForFunction(
       (baseline) => {
-        const badge = document.querySelector('[data-testid="notification-badge"]');
+        const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
         if (!badge) return false;
         const count = parseInt((badge.textContent ?? '0').trim(), 10);
         return count > baseline;

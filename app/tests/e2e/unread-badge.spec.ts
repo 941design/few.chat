@@ -5,13 +5,14 @@ import { bootIdentity } from './helpers/contact-card';
 /**
  * E2E: per-contact unread-message badge on the Contacts list row.
  *
- * The read/unread pipeline (mark-as-read on open, bell decrement) already
- * existed and is covered by notification-bell.spec.ts and the DM detail-view
- * specs. The surface added by this feature is presentational: each Contacts
- * list row shows a count badge reading the same live `directMessages` map the
- * bell sums. These tests drive that map through the app's own `__fewUnread`
- * bridge (the same deterministic hook notification-bell.spec.ts uses — no raw
- * relay, no hand-signed events) and assert the row badge reflects it.
+ * The read/unread pipeline (mark-as-read on open, count decrement) already
+ * existed and is covered by the DM gift-wrap spec (dm-giftwrap-bell.spec.ts)
+ * and the DM detail-view specs. The surface exercised here is presentational:
+ * each Contacts list row shows a count badge reading the same live
+ * `directMessages` map the nav count pills sum. These tests drive that map
+ * through the app's own `__fewUnread` bridge (the same deterministic hook the
+ * DM gift-wrap spec uses — no raw relay, no hand-signed events) and assert the
+ * row badge reflects it.
  *
  * The group list row renders the identical shared `UnreadCountBadge` reading
  * `counts[group.id]`; that shared component is proven here and by the unit

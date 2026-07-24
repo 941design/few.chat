@@ -1,0 +1,7 @@
+{
+  "story_id": "S9", "status": "done", "final_outcome": "accepted", "architect_skipped": true,
+  "modules_touched": ["e2e coverage"],
+  "files_modified": ["app/tests/e2e/dm-giftwrap-bell.spec.ts","app/tests/e2e/dm-feedback-channel.spec.ts","app/tests/e2e/dm-pairing-pending-confirmation.spec.ts","app/tests/e2e/groups-notification-domain-invariants.spec.ts","app/tests/e2e/groups-join-request-live.spec.ts","app/tests/e2e/dm-walled-garden-group-member-allowed.spec.ts","app/tests/e2e/dm-walled-garden-stranger-blocked.spec.ts","app/tests/e2e/groups-awaiting-confirmation.spec.ts","app/tests/e2e/groups-ever-known-survives-leave.spec.ts","app/tests/e2e/groups-invite-link.spec.ts","app/tests/e2e/groups-pull-only-invitation-accept.spec.ts","app/tests/e2e/groups-pull-only-invitation-decline.spec.ts","app/tests/e2e/groups-welcome.spec.ts","app/tests/e2e/unread-badge.spec.ts"],
+  "files_created": [], "remediation_rounds": 0, "completed_at": "2026-07-24T13:55:00Z",
+  "retrospective": {"skipped": false, "notes": "14 specs repointed to new signals (contacts-nav-badge / groups-nav-badge / card pills) preserving intent; tsc 0 errors; grep confirms zero dead testids. COVERAGE REDUCTION (accepted, bell removal consequence): dm-feedback-channel AC-NOTIFY-2 'bell row deep-links to /feedback' dropped — no non-bell affordance replaces per-row routing. Full make test-e2e-all pending (gate).", "lead_clarifications": []}
+}

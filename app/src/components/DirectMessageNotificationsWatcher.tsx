@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { initDirectMessageCounts, initPendingContactCounts } from '@/src/lib/unreadStore';
+import { startInviteExpirySweep } from '@/src/lib/marmot/inviteExpirySweep';
 import { readStoredContacts } from '@/src/lib/contacts';
 import type { StoredContact } from '@/src/lib/contacts';
 import { useMarmot } from '@/src/context/MarmotContext';
@@ -59,6 +60,17 @@ export default function DirectMessageNotificationsWatcher() {
   useEffect(() => {
     blockedPeersRef.current = loadBlockedPeers();
   }, [groups, knownPeersRevision, blockedPeersRevision]);
+
+  // Invite-link expiry sweep, rehomed from the deleted NotificationBell (epic:
+  // obsolete-notification-bell, INV-B / TRAP 1). This watcher is mounted exactly
+  // once by Layout, so the sweep runs from a single mount-stable host. Runs one
+  // cycle on mount, then every 60s; the returned stop function clears the
+  // interval on unmount. Independent of the identity gate below — the sweep
+  // operates on locally-persisted invite links and needs no signer.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    return startInviteExpirySweep();
+  }, []);
 
   useEffect(() => {
     if (!hydrated || !pubkeyHex || !privateKeyHex) return;

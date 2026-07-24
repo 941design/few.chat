@@ -1,0 +1,64 @@
+{
+  "story_id": "S4",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S4-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Per the Mock Strategy FR-A7 exception, does app/tests/unit/marmot/inviteExpirySweepInvariants.test.ts call the REAL, already-landed S2/S3 implementations (the relocated inviteExpirySweep.ts cycle and DirectMessageNotificationsWatcher.tsx's mount+interval effect), with no vi.mock/spy substitution of either producer and no re-implementation of their migrate/sweep logic inline in the test file?"
+    },
+    {
+      "question_id": "VQ-S4-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story's diff touch only app/tests/unit/marmot/inviteExpirySweepInvariants.test.ts, per stories.json's scope.excludes 'any production code change — pure verification against S2/S3's already-landed implementation'? If any of the three invariants fails against the real S2/S3 code, is that surfaced as a finding against S2 or S3 rather than patched from within S4?"
+    },
+    {
+      "question_id": "VQ-S4-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could this integration story's verification surface be deleted and rewritten without modifying any file outside its `dependencies_allowed` list (the union of its owned ACs' `Spans modules:` set: inviteExpirySweep, sweep host)? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S4-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do each of the three property tests (AC-SWEEP-3/4/5) genuinely quantify over a generator of mount/unmount/tick sequences and interleavings — including simultaneous double-mount for AC-SWEEP-3, multiple mounts/remounts/ticks before migration for AC-SWEEP-4, and a lifecycle interleaving spanning more than one 60s window for AC-SWEEP-5 — rather than each being a single hand-picked sequence relabeled as a property test?"
+    },
+    {
+      "question_id": "VQ-S4-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Is this test file the FIRST point in the epic where the real S2 (inviteExpirySweep) and real S3 (sweep host) code are exercised together in the same test run against the same real cycle invocation — i.e. do S2's and S3's own per-story unit tests only prove single-invocation/isolated correctness, with the concurrent/repeated-invocation guarantees genuinely new here?"
+    },
+    {
+      "question_id": "VQ-S4-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Do the three property tests reset/isolate their own IDB expiry-stamp state (or use a fresh in-memory backing) between runs, so a failure or pass in one test cannot leak stale state into another and bias its verdict?"
+    },
+    {
+      "question_id": "VQ-S4-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SWEEP-3",
+      "question": "For AC-SWEEP-3 (migrate-before-sweep ordering: for any sequence of mount/unmount/tick events including simultaneous double-mount, every runInviteExpiryCycle invocation MUST complete migrate before sweep, with no sweep step observing un-migrated legacy state): show a test that fires at least a double-mount scenario plus a normal single-mount scenario, asserts migrate always precedes sweep within each invocation (e.g. via call-order instrumentation on the two real internal steps or their observable side effects), and confirm it is not a single-sequence test relabeled as a property."
+    },
+    {
+      "question_id": "VQ-S4-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SWEEP-4",
+      "question": "For AC-SWEEP-4 (at-most-once expiry notification: for any invite link that becomes expired, across any number of mounts/remounts/ticks before it is next migrated, at most one expiry notification/badge increment MUST be produced): show a test that fires multiple cycle invocations (e.g. double-mount plus two-or-more ticks) against the same expired-but-not-yet-migrated link and asserts the badge/notification increment for that link is exactly 1, not 0 or 2+ — the test must genuinely force repeated cycles against the same not-yet-migrated link, not run them sequentially with a migrate in between."
+    },
+    {
+      "question_id": "VQ-S4-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SWEEP-5",
+      "question": "For AC-SWEEP-5 (60s cadence survives remount: for any lifecycle interleaving that never removes the sweep host from the tree, at least one runInviteExpiryCycle invocation MUST occur within every 60s window): show a fake-timer test that simulates at least one remount event (e.g. re-render/re-mount after rehoming) interleaved with multiple 60s advances, and asserts no window longer than 60s elapses without an invocation across the whole interleaving — not just a plain mount-then-tick-forever sequence with no remount exercised."
+    }
+  ]
+}

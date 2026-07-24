@@ -131,8 +131,9 @@ test.describe.serial('Pull-only invitation: Decline (AC-TEST-2)', () => {
     await expect(bobPage.getByText(GROUP_NAME)).toHaveCount(0);
   });
 
-  test('Alice DMs Bob after decline; Bob bell stays at 0', async () => {
-    // Bob navigates to /contacts so the bell watcher and DM bridge mount
+  test('Alice DMs Bob after decline; Bob Contacts pill stays at 0', async () => {
+    // Bob navigates to /contacts so the unread watcher and DM bridge mount
+    // (a DM is a Contacts-domain event, surfacing on `contacts-nav-badge`)
     await bobPage.goto('/contacts');
     await bobPage.waitForLoadState('networkidle');
     await bobPage.waitForFunction(
@@ -141,9 +142,9 @@ test.describe.serial('Pull-only invitation: Decline (AC-TEST-2)', () => {
       { timeout: 15_000 },
     );
 
-    // Record baseline bell count (should be 0 after a fresh clearAppState boot)
+    // Record baseline Contacts pill count (should be 0 after a fresh clearAppState boot)
     const baselineBadge = await bobPage.evaluate(() => {
-      const badge = document.querySelector('[data-testid="notification-badge"]');
+      const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
       if (!badge) return 0;
       return parseInt((badge.textContent ?? '0').trim(), 10);
     });
@@ -165,10 +166,10 @@ test.describe.serial('Pull-only invitation: Decline (AC-TEST-2)', () => {
     // Wait 15 s for any potential relay delivery and gate processing
     await bobPage.waitForTimeout(15_000);
 
-    // Regression coverage (kept from the pre-S2 spec): Bob's bell counter must
-    // remain at the baseline (Alice is a stranger — she never became a known peer)
+    // Regression coverage (kept from the pre-S2 spec): Bob's Contacts pill count
+    // must remain at the baseline (Alice is a stranger — she never became a known peer)
     const afterBadge = await bobPage.evaluate(() => {
-      const badge = document.querySelector('[data-testid="notification-badge"]');
+      const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
       if (!badge) return 0;
       return parseInt((badge.textContent ?? '0').trim(), 10);
     });

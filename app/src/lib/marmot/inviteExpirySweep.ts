@@ -169,3 +169,52 @@ export async function runInviteExpiryCycle(
     // Non-fatal — the badge simply keeps its previous derived value.
   }
 }
+
+/**
+ * How often the sweep re-checks for newly-expired invite links while the app is
+ * open. Rehomed here from `NotificationBell` (epic: obsolete-notification-bell,
+ * TRAP 1) — it belongs with the sweep, not with whatever component happens to
+ * host the interval.
+ */
+export const INVITE_EXPIRY_SWEEP_INTERVAL_MS = 60_000;
+
+/** Injectable collaborators for `startInviteExpirySweep` (defaults to the real ones). */
+export interface InviteExpirySweepScheduleDeps {
+  now: () => number;
+  setInterval: (callback: () => void, ms: number) => ReturnType<typeof setInterval>;
+  clearInterval: (handle: ReturnType<typeof setInterval>) => void;
+  run: (now: number) => void;
+}
+
+/**
+ * Start the periodic expiry-notification cycle: run one cycle immediately, then
+ * once every {@link INVITE_EXPIRY_SWEEP_INTERVAL_MS}. Returns a stop function
+ * that cancels the interval.
+ *
+ * Rehomed out of `NotificationBell` when the bell was deleted (epic:
+ * obsolete-notification-bell, INV-B / TRAP 1). The bell mounted twice
+ * (desktop + mobile), so the sweep ran on a double mount; `runInviteExpirySweep`
+ * latches concurrent callers onto one in-flight promise and stamps
+ * before bumping, so the cycle is idempotent and double-mount-safe. Its new
+ * host (`DirectMessageNotificationsWatcher`) mounts exactly once, which is
+ * strictly simpler; the safety guarantees hold either way.
+ *
+ * Collaborators are injectable so the schedule (fire-once-then-every-60s, and
+ * stop-cancels-further-runs) is unit-testable with a fake clock/scheduler — this
+ * repo has no jsdom/renderHook precedent, so the schedulable behaviour is
+ * extracted here rather than asserted through a mounted component.
+ */
+export function startInviteExpirySweep(
+  deps: Partial<InviteExpirySweepScheduleDeps> = {},
+): () => void {
+  const now = deps.now ?? Date.now;
+  const setIntervalFn =
+    deps.setInterval ?? ((cb: () => void, ms: number) => setInterval(cb, ms));
+  const clearIntervalFn =
+    deps.clearInterval ?? ((handle: ReturnType<typeof setInterval>) => clearInterval(handle));
+  const run = deps.run ?? ((n: number) => { void runInviteExpiryCycle(n); });
+
+  run(now());
+  const handle = setIntervalFn(() => run(now()), INVITE_EXPIRY_SWEEP_INTERVAL_MS);
+  return () => clearIntervalFn(handle);
+}

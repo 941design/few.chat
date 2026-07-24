@@ -15,6 +15,7 @@ import { loadMessages } from '@/src/lib/marmot/chatPersistence';
 import { formatThreadPreviewText } from '@/src/lib/messageEdits/messageActionUi';
 import { useUnreadCounts } from '@/src/lib/unreadStore';
 import UnreadCountBadge from '@/src/components/UnreadCountBadge';
+import { groupCardTotal } from '@/src/lib/notificationCounts';
 import { BADGE_ACCENT } from '@/src/lib/badgeAccent';
 
 type GroupCardProps = {
@@ -23,8 +24,15 @@ type GroupCardProps = {
 
 export default function GroupCard({ group }: GroupCardProps) {
   const copy = useCopy();
-  const { counts } = useUnreadCounts();
-  const unreadCount = counts[group.id] ?? 0;
+  // Group card pill = unread messages + pending join requests + invite-link
+  // expiries for this group (epic: obsolete-notification-bell, AC-CARD-3). This
+  // is a net-new aggregate — the card previously showed only the `counts`
+  // (unread messages) slice. The clear semantics per slice are unchanged
+  // (opening the chat clears only messages; approving a request / opening
+  // manage-links clears those), so opening a group with unread messages AND
+  // pending requests drops the pill by only the message count (AC-CLEAR-7).
+  const slices = useUnreadCounts();
+  const unreadCount = groupCardTotal(slices, group.id);
   const memberCount = group.memberPubkeys.length;
   const nearLimit = memberCount >= 45;
 

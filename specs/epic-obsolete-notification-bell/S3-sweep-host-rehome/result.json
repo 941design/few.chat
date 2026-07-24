@@ -1,0 +1,12 @@
+{
+  "story_id": "S3",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": true,
+  "modules_touched": ["sweep host", "inviteExpirySweep"],
+  "files_modified": ["app/src/components/DirectMessageNotificationsWatcher.tsx", "app/src/lib/marmot/inviteExpirySweep.ts"],
+  "files_created": ["app/tests/unit/inviteExpirySweepSchedule.test.ts"],
+  "remediation_rounds": 0,
+  "completed_at": "2026-07-24T13:27:00Z",
+  "retrospective": {"skipped": false, "notes": "Added pure injectable startInviteExpirySweep + INVITE_EXPIRY_SWEEP_INTERVAL_MS to inviteExpirySweep.ts (co-located with the cycle it schedules), mounted it once in DirectMessageNotificationsWatcher. Fake-clock regression test is state-discriminating (fails if the interval is dropped or the immediate run removed) — INV-B guard.", "lead_clarifications": []}
+}

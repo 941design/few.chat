@@ -1,0 +1,245 @@
+{
+  "epic_name": "obsolete-notification-bell",
+  "created_at": "2026-07-24T13:00:00Z",
+  "total_stories": 9,
+  "dependency_notes": "Linear-ish chain: S1 (notificationCounts derivation) is the pure-function foundation every render-site story consumes via the NotificationCountsAPI seam. S2/S3 rehome TRAP 1 (the expiry sweep) independently of S1 and of each other — S2 relocates the pure buildInviteExpiryRows helper out of NotificationBell.tsx into inviteExpirySweep.ts (a judgment call: architecture.md's module map leaves 'expiry-rows home' as 'wherever it relocates'; inviteExpirySweep.ts is the cohesive home since the helper's only consumer-invariant, AC-PARITY-3, is about the inviteExpiries slice the sweep module already owns), while S3 adds the mount+60s-interval call to the sweep host (DirectMessageNotificationsWatcher.tsx). Both land before S8 (bell deletion) per TRAP 1. S4 is the FR-A7 integration story: acceptance-criteria.md's Cross-Cutting Invariants section carries AC-SWEEP-3/4/5, each with a 'Spans modules: inviteExpirySweep, sweep host' line, which map to S2 and S3 respectively (their owning_module values) — so S4's dependency set is exactly {S2, S3} and it runs immediately after them, verified against S2/S3's real, already-landed code per the Mock Strategy FR-A7 exception (no mocks). S5 (nav pills) depends only on S1 and lands next so the cross-route surface (TRAP 2) exists before S8 deletes the bell. S6/S7 (group and contact card pills) also depend only on S1 and are independent of each other and of S5; they are split into two stories rather than one because architecture.md's module map lists GroupCard and 'contacts list' as two distinct modules, and each story stays inside its own. CLEAR-family ACs are distributed to whichever story makes the full card+nav decrement observable: AC-CLEAR-1/3/5/7 to S6 (group-entity clears), AC-CLEAR-2/4 to S7 (contact-entity clears), AC-CLEAR-6 to S5 (a nav-only parity check — the invitation accept/decline lifecycle itself is unchanged, so no new wiring is needed beyond the nav pill existing). S8 (bell removal) depends on S2, S3, S5, S6, S7 (sweep rehomed + full replacement surface built, per TRAP 1 and TRAP 2) and shares owning_module 'Layout nav' with S5 — an intentional, spec-directed exception to the one-owning-module-per-story-name rule (both stories touch Layout.tsx, but at deliberately different times so the story graph enforces 'pills before bell dies'; a single merged story could not express that ordering constraint against a partially-implemented feature). S9 (e2e rewire) depends on everything and runs last; its production-code surface is test files only, so it consumes no seam. Its owning_module, 'e2e coverage', is inferred — architecture.md's module map has no row for the test suite itself; flagged in the retrospective rather than left silently absent, since the schema requires a non-empty owning_module for every non-integration story.",
+  "mock_resolution_plan": "No temporary mocks are introduced by this epic. All cross-story data flows through the NotificationCountsAPI seam (pure functions called with live unreadStore/pendingInvitations snapshots) or through already-registered production mark/clear functions (clearPendingContact, markInviteExpiriesRead, etc.) that simply move call sites, per Decision 5.",
+  "seams": [
+    {
+      "data": "notificationCounts derivation functions (groupCardTotal, contactCardTotal, contactsDomainTotal, groupsDomainTotal)",
+      "contract": {
+        "type_name": "NotificationCountsAPI",
+        "fields": [
+          { "name": "groupCardTotal", "type": "(slices: UnreadSlices, groupId: string) => number" },
+          { "name": "contactCardTotal", "type": "(slices: UnreadSlices, peer: string) => number" },
+          { "name": "contactsDomainTotal", "type": "(slices: UnreadSlices) => number" },
+          { "name": "groupsDomainTotal", "type": "(slices: UnreadSlices, pendingInvitationCount: number) => number" }
+        ],
+        "invariants": [
+          "pure — no React import, no store import at module load beyond types; callers always pass a snapshot",
+          "sum(contactCardTotal(slices, peer) for every peer with nonzero directMessages or pendingContacts) === contactsDomainTotal(slices) (AC-PARITY-1)",
+          "sum(groupCardTotal(slices, groupId) for every joined group) + pendingInvitationCount === groupsDomainTotal(slices, pendingInvitationCount) (AC-PARITY-2)",
+          "groupsDomainTotal's pendingInvitationCount addend is always the caller-supplied pendingInvitations-store value, never read from an unreadStore slice"
+        ]
+      },
+      "source": { "story": "S1", "artifact": "app/src/lib/notificationCounts.ts" },
+      "intermediaries": [],
+      "destination": { "story": "S5", "artifact": "Layout.tsx nav pill render sites (desktop + mobile maps)" }
+    }
+  ],
+  "cross_cutting_acs": [
+    { "ac_id": "AC-SWEEP-3", "spanned_by": ["S2", "S3"] },
+    { "ac_id": "AC-SWEEP-4", "spanned_by": ["S2", "S3"] },
+    { "ac_id": "AC-SWEEP-5", "spanned_by": ["S2", "S3"] }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "name": "notification-counts-derivation",
+      "title": "Pure notificationCounts.ts derivation module",
+      "description": "Adds app/src/lib/notificationCounts.ts, a pure, no-React module exposing groupCardTotal(slices, groupId), contactCardTotal(slices, peer), contactsDomainTotal(slices), and groupsDomainTotal(slices, pendingInvitationCount). This is the foundation every render-site story (nav pills, group card pills, contact card pills) consumes via the NotificationCountsAPI seam — no component computes an aggregate inline. Unit tests (vitest, app/tests/unit, no jsdom per project convention) assert the four sum formulas directly and the two count-parity invariants (AC-PARITY-1/2) as properties over arbitrary slice snapshots, not single hand-picked examples.",
+      "acceptance_criteria": ["AC-NAV-1", "AC-NAV-2", "AC-CARD-1", "AC-CARD-2", "AC-PARITY-1", "AC-PARITY-2"],
+      "scope": {
+        "includes": [
+          "app/src/lib/notificationCounts.ts",
+          "app/tests/unit/notificationCounts.test.ts"
+        ],
+        "excludes": [
+          "render-site wiring in Layout.tsx, GroupCard.tsx, contacts.tsx/UserCard.tsx (S5, S6, S7)",
+          "expiry sweep rehoming (S2, S3)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "pending",
+      "owning_module": "notificationCounts",
+      "creates_seam": true,
+      "lighter_path": false
+    },
+    {
+      "id": "S2",
+      "name": "relocate-invite-expiry-rows",
+      "title": "Relocate buildInviteExpiryRows out of NotificationBell.tsx",
+      "description": "Moves the pure buildInviteExpiryRows(inviteExpiries, groups, unknownGroupLabel) helper and its InviteExpiryRow type from NotificationBell.tsx into app/src/lib/marmot/inviteExpirySweep.ts (the chosen new home — architecture.md leaves the exact location open; inviteExpirySweep.ts is the cohesive owner since the helper's guaranteed invariant, sum(rows) === sum(inviteExpiries), is about the inviteExpiries slice that module's sweep logic already produces). NotificationBell.tsx (still mounted until S8) is updated to import the relocated function rather than defining it locally, so the bell keeps working unchanged in the interim. app/tests/unit/notificationBellInviteExpiryRows.test.ts has its import path updated only — the test body and its sum(rows) === sum(inviteExpiries) assertion are unchanged, still passing.",
+      "acceptance_criteria": ["AC-REMOVE-4", "AC-PARITY-3"],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/inviteExpirySweep.ts",
+          "app/src/components/NotificationBell.tsx",
+          "app/tests/unit/notificationBellInviteExpiryRows.test.ts"
+        ],
+        "excludes": [
+          "deleting NotificationBell.tsx wholesale (S8)",
+          "sweep host mount/interval wiring (S3)"
+        ]
+      },
+      "complexity": "low",
+      "status": "pending",
+      "owning_module": "inviteExpirySweep",
+      "lighter_path": false
+    },
+    {
+      "id": "S3",
+      "name": "sweep-host-rehome",
+      "title": "Rehome the 60s expiry sweep to DirectMessageNotificationsWatcher",
+      "description": "TRAP 1 mandatory fix. Adds a mount + 60-second-interval effect to app/src/components/DirectMessageNotificationsWatcher.tsx (mounted exactly once by Layout.tsx) that calls runInviteExpiryCycle, independently of NotificationBell.tsx's own still-live copy of the same effect (safe to coexist temporarily — the cycle is idempotent and already double-mount-safe by design, per inviteExpirySweep.ts's own doc comment). NotificationBell.tsx's copy is removed only when the bell itself is deleted in S8, so expiry detection is never without a live source. A controllable-clock unit test (vi.useFakeTimers, no jsdom) asserts the cycle fires on mount and again after each 60s tick for as long as the host stays mounted, and fails if the interval is removed — the load-bearing INV-B regression test, since there is no UI symptom if the sweep silently stops.",
+      "acceptance_criteria": ["AC-SWEEP-1", "AC-SWEEP-2"],
+      "scope": {
+        "includes": [
+          "app/src/components/DirectMessageNotificationsWatcher.tsx",
+          "app/tests/unit/marmot/directMessageNotificationsWatcherSweep.test.ts"
+        ],
+        "excludes": [
+          "removing NotificationBell.tsx's own sweep call (S8)",
+          "buildInviteExpiryRows relocation (S2)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "pending",
+      "owning_module": "sweep host",
+      "lighter_path": false
+    },
+    {
+      "id": "S4",
+      "name": "sweep-cross-cutting-invariants",
+      "title": "Cross-cutting sweep invariants: migrate-before-sweep, at-most-once, cadence-survives-remount",
+      "description": "FR-A7 integration story. Owns AC-SWEEP-3/4/5, the three property-phrased ACs acceptance-criteria.md derived from architecture.md's Order-Sensitive Composition signal, each carrying 'Spans modules: inviteExpirySweep, sweep host'. Runs immediately after S2 and S3 land, verified against their real, already-implemented code (never mocked, per the Mock Strategy FR-A7 exception). Three whole-flow property tests, each quantified over a generator of mount/remount/interleaving sequences rather than one hand-picked case: (1) for any sequence of sweep-host mount/unmount/tick events including simultaneous double-mount, every runInviteExpiryCycle invocation completes migrate before sweep; (2) for any number of mounts/remounts/ticks before a given expired link is next migrated, at most one expiry notification/badge increment is produced for that link; (3) for any lifecycle interleaving that never removes the sweep host from the tree, at least one cycle invocation occurs within every 60s window. Exempt from the one-module-per-story rule by design (FR-A7) — this licenses reaching across S2's and S3's modules to verify the assembled whole, not re-implementing either.",
+      "acceptance_criteria": ["AC-SWEEP-3", "AC-SWEEP-4", "AC-SWEEP-5"],
+      "scope": {
+        "includes": [
+          "app/tests/unit/marmot/inviteExpirySweepInvariants.test.ts"
+        ],
+        "excludes": [
+          "any production code change — pure verification against S2/S3's already-landed implementation"
+        ]
+      },
+      "complexity": "high",
+      "status": "pending",
+      "is_integration_story": true,
+      "lighter_path": false
+    },
+    {
+      "id": "S5",
+      "name": "nav-domain-pills",
+      "title": "Contacts + Groups domain nav pills (desktop + mobile)",
+      "description": "Adds the Contacts nav pill (new — navItems[0] carries no badge today) showing contactsDomainTotal(slices), and extends the existing Groups nav badge (testid groups-invitation-badge / groups-invitation-badge-mobile, today driven only by pendingInvitationCount) to show groupsDomainTotal(slices, pendingInvitationCount) — the OIN-1-resolved merged number. Both pills are added to Layout.tsx's desktop nav map (~196-240) and mobile nav map (~379-425) independently, each null-below-1 and capped 99+ per UnreadCountBadge's existing behavior. New pill aria-labels added to i18n.ts (en+de). AC-CLEAR-6 (invitation accept/decline decrements the Groups nav pill by exactly 1) requires no new wiring — the pendingInvitations store's accept/decline self-clear is unchanged — it becomes observable the moment this pill exists. e2e proof of AC-NAV-3..8's rendering correctness is delivered by S9's rewrite of groups-notification-domain-invariants.spec.ts and dm-giftwrap-bell.spec.ts (AC-ETE-2), which assert against the testids this story introduces; this story's own dev-time verification uses the existing window.__fewUnread test bridge (unreadStore.ts) plus manual dev-server check.",
+      "acceptance_criteria": ["AC-NAV-3", "AC-NAV-4", "AC-NAV-5", "AC-NAV-6", "AC-NAV-7", "AC-NAV-8", "AC-CLEAR-6"],
+      "scope": {
+        "includes": [
+          "app/src/components/Layout.tsx",
+          "app/src/lib/i18n.ts"
+        ],
+        "excludes": [
+          "card pills (S6, S7)",
+          "deleting the bell mounts (S8, later story sharing this file)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "pending",
+      "owning_module": "Layout nav",
+      "consumes_seams": ["NotificationCountsAPI"],
+      "lighter_path": false
+    },
+    {
+      "id": "S6",
+      "name": "group-card-pills",
+      "title": "Group card pill becomes full group aggregate (messages + requests + expiries)",
+      "description": "GroupCard.tsx's pill switches from counts[group.id]-only to groupCardTotal(slices, group.id) — net-new composition (join requests and expiries have no existing card badge precedent). Wires the two action-item clear triggers this exposes for the first time on a card: approving/denying a join request (handleApproveRequest/handleDenyRequest, groups.tsx ~406-427, backed by approveJoinRequest/denyJoinRequest in MarmotContext.tsx) now clears that group's joinRequests entry; opening manage-links (groups.tsx ~1108, already calling markInviteExpiriesRead) is verified to still clear inviteExpiries per its existing, preserved trigger. Also asserts the shared zero-render/99+-cap pill behavior (AC-CARD-5/6, owned here since GroupCard is the first of the two card types) and that InvitationCard never carries a groupCardTotal pill (AC-CARD-7, it has no groupId).",
+      "acceptance_criteria": ["AC-CARD-3", "AC-CARD-5", "AC-CARD-6", "AC-CARD-7", "AC-CLEAR-1", "AC-CLEAR-3", "AC-CLEAR-5", "AC-CLEAR-7"],
+      "scope": {
+        "includes": [
+          "app/src/components/groups/GroupCard.tsx",
+          "app/pages/groups.tsx",
+          "app/src/context/MarmotContext.tsx"
+        ],
+        "excludes": [
+          "contact card pills (S7)",
+          "nav pill rendering (S5)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "pending",
+      "owning_module": "GroupCard",
+      "consumes_seams": ["NotificationCountsAPI"],
+      "lighter_path": false
+    },
+    {
+      "id": "S7",
+      "name": "contact-card-pills",
+      "title": "Contact card pill becomes full contact aggregate (DMs + pending, folded)",
+      "description": "contacts.tsx's per-row pill (via UserCard's actions slot) switches from directMessages[peer]-only to contactCardTotal(slices, peer), folding pendingContacts into the single number per OIN-2 (no separate pending marker — 2 unread + pending renders 3). Verifies the existing clearPendingContact call sites (contacts.tsx ~108/252, PendingConfirmationPrompt.tsx, profile.tsx) continue to clear only the pending contribution, leaving directMessages untouched (AC-CLEAR-4), and that the maintainer-DM (/feedback) special-case peer surfaces through this same mechanism with no bespoke path (AC-CARD-8).",
+      "acceptance_criteria": ["AC-CARD-4", "AC-CARD-8", "AC-CLEAR-2", "AC-CLEAR-4"],
+      "scope": {
+        "includes": [
+          "app/pages/contacts.tsx",
+          "app/src/components/UserCard.tsx",
+          "app/src/components/contacts/PendingConfirmationPrompt.tsx",
+          "app/pages/profile.tsx"
+        ],
+        "excludes": [
+          "group card pills (S6)",
+          "nav pill rendering (S5)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "pending",
+      "owning_module": "contacts list",
+      "consumes_seams": ["NotificationCountsAPI"],
+      "lighter_path": false
+    },
+    {
+      "id": "S8",
+      "name": "bell-removal",
+      "title": "Delete NotificationBell.tsx, its two mounts, and its i18n keys",
+      "description": "Deletes app/src/components/NotificationBell.tsx outright (its buildInviteExpiryRows and sweep call were already relocated in S2/S3, so this is now a pure deletion with no orphaned logic). Removes both Layout.tsx mounts (desktop ~275, mobile ~299). Deletes the six bell-only i18n keys (notificationsLabel, noNotifications, directMessageNotification, joinRequestNotification, pendingContactNotification, inviteExpiryNotification) from both en and de, while confirming the shared unreadMessages key and UnreadCountBadge's aria-label resolution survive untouched. Deletes app/tests/e2e/notification-bell.spec.ts wholesale. Depends on S2 and S3 (sweep fully rehomed — TRAP 1) and on S5/S6/S7 (the full pill replacement surface exists — TRAP 2, no cross-route or per-entity signal is lost mid-sequence). Shares owning_module 'Layout nav' with S5 by deliberate exception: both touch Layout.tsx, but at different points in the story graph so 'pills before bell dies' is an enforceable ordering rather than an unstated assumption inside one merged story.",
+      "acceptance_criteria": ["AC-REMOVE-1", "AC-REMOVE-2", "AC-REMOVE-3", "AC-ETE-1"],
+      "scope": {
+        "includes": [
+          "app/src/components/NotificationBell.tsx",
+          "app/src/components/Layout.tsx",
+          "app/src/lib/i18n.ts",
+          "app/tests/e2e/notification-bell.spec.ts"
+        ],
+        "excludes": [
+          "repointing the other 14 e2e specs that reference notification-badge (S9)"
+        ]
+      },
+      "complexity": "medium",
+      "status": "pending",
+      "owning_module": "Layout nav",
+      "lighter_path": false
+    },
+    {
+      "id": "S9",
+      "name": "e2e-coverage-rewire",
+      "title": "Rewrite and repoint e2e coverage against nav-pill and card-pill testids",
+      "description": "The heavy, last story. Rewrites the five bell-specific specs (dm-giftwrap-bell.spec.ts whole-file, dm-feedback-channel.spec.ts's maintainer-routing block, dm-pairing-pending-confirmation.spec.ts whole-file, groups-notification-domain-invariants.spec.ts whole-file, groups-join-request-live.spec.ts's INV-2 negative case) to assert against the new nav-pill and card-pill testids while preserving the same underlying ring/clear behavior each exercised before. Repoints the nine oracle-only specs (groups-awaiting-confirmation, groups-ever-known-survives-leave, groups-invite-link, groups-join-request-live, groups-pull-only-invitation-accept, groups-pull-only-invitation-decline, groups-welcome, dm-walled-garden-group-member-allowed, dm-walled-garden-stranger-blocked) from polling notification-badge to a surviving signal (the new nav pill or existing list state), unchanged in intent. Confirms unread-badge.spec.ts continues to pass unmodified or extended. Pass bar is the full 60-test make test-e2e-all (Docker) with no regression outside this epic's scope. No production code changes — test files only, so owning_module ('e2e coverage') is an inferred label: architecture.md's module map has no row for the test suite itself (flagged as a planning-time gap, not a silent assumption).",
+      "acceptance_criteria": ["AC-ETE-2", "AC-ETE-3", "AC-ETE-4", "AC-ETE-5"],
+      "scope": {
+        "includes": [
+          "app/tests/e2e/dm-giftwrap-bell.spec.ts",
+          "app/tests/e2e/dm-feedback-channel.spec.ts",
+          "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
+          "app/tests/e2e/groups-notification-domain-invariants.spec.ts",
+          "app/tests/e2e/groups-join-request-live.spec.ts",
+          "app/tests/e2e/groups-awaiting-confirmation.spec.ts",
+          "app/tests/e2e/groups-ever-known-survives-leave.spec.ts",
+          "app/tests/e2e/groups-invite-link.spec.ts",
+          "app/tests/e2e/groups-pull-only-invitation-accept.spec.ts",
+          "app/tests/e2e/groups-pull-only-invitation-decline.spec.ts",
+          "app/tests/e2e/groups-welcome.spec.ts",
+          "app/tests/e2e/dm-walled-garden-group-member-allowed.spec.ts",
+          "app/tests/e2e/dm-walled-garden-stranger-blocked.spec.ts",
+          "app/tests/e2e/unread-badge.spec.ts"
+        ],
+        "excludes": [
+          "deleting notification-bell.spec.ts (already done in S8)"
+        ]
+      },
+      "complexity": "high",
+      "status": "pending",
+      "owning_module": "e2e coverage",
+      "lighter_path": false
+    }
+  ],
+  "story_order": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"]
+}

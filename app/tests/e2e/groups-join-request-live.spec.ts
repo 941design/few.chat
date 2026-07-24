@@ -131,22 +131,24 @@ test.describe.serial('Join request live-refreshes an already-open group detail v
     await expect(pageB.getByTestId(`outbound-request-card-${nonce!.slice(0, 6)}`)).toBeVisible({ timeout: 30_000 });
   });
 
-  test('User A sees the live inline join-request row, and the bell stays dark for the group on screen (INV-2)', async () => {
+  test('User A sees the live inline join-request row, and the Groups pill stays dark for the group on screen (INV-2)', async () => {
     // Arrival proof: the inline join-request row at the top of the member list
     // on the ALREADY-OPEN group detail page must update live — no goto/reload of
     // pageA above or below this line. Pre-fix, this timed out because the
-    // join-request callback only updated the bell store, never the
+    // join-request callback only updated the unread store, never the
     // `pendingRequests` React state the member list renders these rows from.
     // This positive assertion also proves the rumor was received and processed,
-    // so the negative bell assertion below is not racing an unarrived event.
+    // so the negative pill assertion below is not racing an unarrived event.
     await expect(pageA.locator('[data-testid^="pending-request-row-"]').first()).toBeVisible({ timeout: 60_000 });
 
     // notification-domain-invariants (INV-2): the join request is for the group
-    // whose detail is currently OPEN, so the bell must NOT ring — the request
-    // surfaces in the inline row above instead. The event has already been
-    // processed (the row rendered), so a badge would be visible by now if
-    // the bell were (wrongly) ringing. Pre-invariant, this badge appeared.
+    // whose detail is currently OPEN, so the Groups count pill must NOT rise —
+    // the request surfaces in the inline row above instead. A join request is a
+    // Groups-domain event, so it would show on `groups-nav-badge`. The event has
+    // already been processed (the row rendered), so the pill would be present by
+    // now if it were (wrongly) rising. The pill is absent (count 0) at a domain
+    // total of 0. Pre-invariant, this badge appeared.
     await dismissErrorOverlay(pageA);
-    await expect(pageA.getByTestId('notification-badge')).toHaveCount(0);
+    await expect(pageA.getByTestId('groups-nav-badge')).toHaveCount(0);
   });
 });

@@ -1,0 +1,82 @@
+{
+  "created_at": "2026-07-24T12:39:39Z",
+  "focuses": ["architecture-and-sweep-rehoming", "tests-testids-i18n"],
+  "key_facts": {
+    "stores": {
+      "unreadStore": {
+        "path": "app/src/lib/unreadStore.ts",
+        "hook": "useUnreadCounts() -> { counts, joinRequests, directMessages, inviteExpiries, pendingContacts, totalUnread }",
+        "note": "module-level useSyncExternalStore; totalUnread (836-841) sums ALL five slices flat — must be decomposed into per-domain subtotals instead of used wholesale",
+        "mark_clear_fns": {
+          "counts": "incrementUnread:261, markAsRead:270 (also called groups.tsx:57), clearUnreadGroup:284",
+          "joinRequests": "incrementJoinRequest:342, markJoinRequestsRead:351, clearJoinRequestGroup:379 — NO existing card badge; bell was only consumer",
+          "pendingContacts": "incrementPendingContact:432, markPendingContactRead:443, clearPendingContact:454 (also contacts.tsx:35)",
+          "inviteExpiries": "incrementInviteExpiry:509, markInviteExpiriesRead:524(async), clearInviteExpiries:555 (also groups.tsx)",
+          "directMessages": "incrementDirectMessage:567, markDirectMessagesRead:578, clearDirectMessageContact:599"
+        },
+        "test_bridge": "window.__fewUnread exposed at unreadStore.ts:799-807 at module scope — survives bell deletion; primary e2e driver"
+      },
+      "pendingInvitations": {
+        "path": "app/src/lib/pendingInvitations.ts",
+        "note": "SEPARATE localStorage store (lp_pendingInvitations_v1), own useSyncExternalStore. Layout.tsx:91-96 reads it as pendingInvitationCount. Independently consumable via subscribe/getSnapshot/countPendingInvitations.",
+        "self_clear": "accept/decline -> welcomeSubscription.ts removePendingInvitation() at :1320,:1335 (accept) and :1438 (decline, unconditional/finally). No new wiring needed for invitations to leave the Groups total."
+      }
+    },
+    "sweep": {
+      "fn": "runInviteExpiryCycle(now, deps) in app/src/lib/marmot/inviteExpirySweep.ts:144-171 (migrate -> sweep -> derive)",
+      "only_call_site": "NotificationBell.tsx:117,119 (mount + 60s interval) — deleting bell WITHOUT rehoming silently stops expiry migration/sweep/badge derivation app-wide (TRAP 1 / INV-B)",
+      "concurrency": "sweepInFlight latch + stamp-before-bump makes it idempotent and double-mount-safe by design (doc names 'two NotificationBell instances') — safe from any single-mount host",
+      "rehome_host": "DirectMessageNotificationsWatcher.tsx (mounted exactly once at Layout.tsx:115, established once-mounted-watcher pattern) — RECOMMENDED. Alt: Layout.tsx directly (mounted once). MarmotContext historically scoped-out."
+    },
+    "render_sites": {
+      "GroupCard": "app/src/components/groups/GroupCard.tsx:78-81 — currently only counts slice via UnreadCountBadge; join-requests + expiries are NET-NEW composition here",
+      "UserCard": "app/src/components/UserCard.tsx — presentational, badges passed via `actions` slot; contact pill composed by caller",
+      "contacts_list": "app/pages/contacts.tsx:51 (useUnreadCounts.directMessages), pill at :193-198 in UserCard actions; pendingContacts not shown per-card today",
+      "layout_nav": "desktop map :196-240 (invitation badge :212-234 testid groups-invitation-badge, showBadge :201); mobile map :379-425 (badge :401-419 testid groups-invitation-badge-mobile). Both fold ONLY pendingInvitationCount today. Contacts nav item = navItems[0] :102 — no badge yet.",
+      "bell_mounts_to_delete": "Layout.tsx:275 (desktop), :299 (mobile)",
+      "groups_list": "app/pages/groups.tsx:1236-1260 — invitations render as InvitationCard (no groupId/GroupCard); joined groups render as GroupCard; both feed Groups nav total but only joined slices attach to a card"
+    },
+    "domain_sums": {
+      "contacts_nav_total": "sum(directMessages) + sum(pendingContacts)",
+      "groups_nav_total": "sum(counts) + sum(joinRequests) + sum(inviteExpiries) + pendingInvitationCount (from pendingInvitations.ts, NOT unreadStore)",
+      "group_card": "counts[id] + joinRequests[id] + inviteExpiries[id]",
+      "contact_card": "directMessages[peer] + (pendingContacts[peer]>0 ? its value : 0)  // pending folds into number, OIN-2"
+    }
+  },
+  "tests": {
+    "unit": {
+      "must_relocate": "app/tests/unit/notificationBellInviteExpiryRows.test.ts imports buildInviteExpiryRows from NotificationBell.tsx:76 — pure fn + its 'sum(rows)==sum(inviteExpiries)' invariant must move to the new expiry-rendering home; update import, don't delete",
+      "keep_untouched": "unreadStore.test.ts + ~24 unreadStore-dependent unit tests (none import NotificationBell); UnreadCountBadge unaffected"
+    },
+    "e2e": {
+      "delete": "app/tests/e2e/notification-bell.spec.ts (fast bucket, whole file — asserts bell UI + 'No new messages'/'N new direct message' literals)",
+      "keep": "app/tests/e2e/unread-badge.spec.ts (fast bucket — already the card-pill spec; template for new pill tests: contact-unread-badge-*, group-unread-badge-*)",
+      "rewrite_bell_specific": [
+        "dm-giftwrap-bell.spec.ts (whole file, AC-22, notification-badge raw query)",
+        "dm-feedback-channel.spec.ts:118-165 (maintainer routes to /feedback)",
+        "dm-pairing-pending-confirmation.spec.ts (whole file, pending-contact bell item)",
+        "groups-notification-domain-invariants.spec.ts (whole file, INV-1/INV-2)",
+        "groups-join-request-live.spec.ts:134-150 (INV-2 negative case)"
+      ],
+      "repoint_oracle_only": "9 specs poll notification-badge ONLY as a 'relay event landed' oracle, no bell-UI interest: groups-awaiting-confirmation, groups-ever-known-survives-leave, groups-invite-link, groups-join-request-live, groups-pull-only-invitation-accept, groups-pull-only-invitation-decline, groups-welcome, dm-walled-garden-group-member-allowed, dm-walled-garden-stranger-blocked. Each needs a replacement signal (poll the new nav pill / list state).",
+      "bucket_trap": "buckets split by FILENAME glob groups-*/dm-*; a new relay-dependent pill spec MUST be named groups-*/dm-* or it lands in the fast bucket and never sees the relay (memory e2e_bucket_naming_relay_trap)",
+      "gate": "pass bar is full 60-test make test-e2e-all (Docker). notification-badge appears across ~14 specs total."
+    }
+  },
+  "i18n": {
+    "delete_bell_only": ["notificationsLabel", "noNotifications", "directMessageNotification", "joinRequestNotification", "pendingContactNotification", "inviteExpiryNotification"],
+    "keep_shared": "unreadMessages (also used by UnreadCountBadge.tsx:29 aria-label)",
+    "location": "app/src/lib/i18n.ts type 16-22, en 635-641, de 1202-1208"
+  },
+  "testid_conventions": {
+    "card_pills": "<feature>-unread-badge-<entityId>: contact-unread-badge-<pubkey>, group-unread-badge-<groupId>; renders nothing at 0, caps 99+",
+    "nav_badge": "groups-invitation-badge (desktop) / groups-invitation-badge-mobile (mobile) at Layout.tsx:230,:416",
+    "double_dom": "Layout renders desktop nav + mobile drawer nav => two DOM instances of any nav badge; specs use .locator visible/first"
+  },
+  "surprises": [
+    "notification-badge is a shared e2e ORACLE for 9 non-bell specs — deleting the bell breaks them; biggest hidden scope",
+    "GroupCard has no join-request/expiry badge precedent — net-new per-card composition",
+    "Groups domain total unions TWO separate stores (unreadStore + pendingInvitations)",
+    "buildInviteExpiryRows pure fn + test must relocate, not delete"
+  ]
+}

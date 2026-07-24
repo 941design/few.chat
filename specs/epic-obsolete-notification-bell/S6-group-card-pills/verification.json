@@ -1,0 +1,99 @@
+{
+  "story_id": "S6",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S6-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does GroupCard.tsx's pill genuinely call groupCardTotal(slices, group.id) from the seam, replacing the prior counts[group.id]-only read entirely — not left as counts[group.id] with joinRequests/inviteExpiries added via a separate, parallel, possibly-inconsistent calculation?"
+    },
+    {
+      "question_id": "VQ-S6-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Do the new join-request clear triggers (handleApproveRequest/handleDenyRequest in groups.tsx) call the real, already-registered approveJoinRequest/denyJoinRequest functions in MarmotContext.tsx (not a locally reimplemented clear), and does the manage-links clear trigger continue to call the existing markInviteExpiriesRead unchanged?"
+    },
+    {
+      "question_id": "VQ-S6-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `GroupCard` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S6-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Is there real test coverage (not merely manual/dev-server inspection) asserting: the three-term aggregate composition (counts+joinRequests+inviteExpiries) for a group with nonzero values in all three fields, the zero-render case, and the 99+ cap case — or is any of these left unverified because GroupCard is normally only reachable via a mounted-component test this project's conventions avoid (no jsdom/renderHook)?"
+    },
+    {
+      "question_id": "VQ-S6-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Is AC-CARD-7 (InvitationCard MUST NOT carry a groupCardTotal pill) verified as a deliberate exclusion — i.e. is there a check that InvitationCard's render path never calls groupCardTotal at all (it has no groupId to key on), rather than merely 'InvitationCard happens not to show a badge today'?"
+    },
+    {
+      "question_id": "VQ-S6-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Are handleApproveRequest/handleDenyRequest scoped strictly to the group whose join request was acted on — i.e. does approving/denying group A's request never clear group B's joinRequests entry, verified by a test with two groups both carrying pending join requests?"
+    },
+    {
+      "question_id": "VQ-S6-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-3",
+      "question": "For AC-CARD-3 (each GroupCard's pill MUST equal groupCardTotal(slices, groupId)): show (a) the production render code, (b) a test with nonzero counts/joinRequests/inviteExpiries for one group asserting the displayed pill text equals the summed total, and (c) confirmation this is not a mock-spy proxy asserting only that groupCardTotal was called."
+    },
+    {
+      "question_id": "VQ-S6-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-5",
+      "question": "For AC-CARD-5 (a group or contact card pill MUST NOT render when the entity's total is 0): show evidence for a zero-total group that no pill DOM element is present."
+    },
+    {
+      "question_id": "VQ-S6-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-6",
+      "question": "For AC-CARD-6 (a group or contact card pill MUST display 99+ once the entity's total exceeds 99): show evidence for a >99-total group that the displayed text is exactly '99+'."
+    },
+    {
+      "question_id": "VQ-S6-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-7",
+      "question": "For AC-CARD-7 (InvitationCard MUST NOT carry a groupCardTotal pill; its only contribution is the +1 to groupsDomainTotal via pendingInvitationCount): show the InvitationCard render path and confirm no groupCardTotal call or pill element appears anywhere in it."
+    },
+    {
+      "question_id": "VQ-S6-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-1",
+      "question": "For AC-CLEAR-1 (opening a group's chat MUST clear only that group's counts entry, leaving joinRequests and inviteExpiries unaffected): show a test with a group carrying nonzero counts, joinRequests, and inviteExpiries, asserting that after opening the chat, only counts is cleared — card pill and Groups nav pill drop by exactly the counts amount, not the full aggregate."
+    },
+    {
+      "question_id": "VQ-S6-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-3",
+      "question": "For AC-CLEAR-3 (approving/denying a join request MUST clear that group's joinRequests entry; merely opening the chat MUST NOT clear it): show (a) the real approve/deny handler clearing joinRequests, (b) a test asserting opening the chat alone leaves joinRequests untouched, and (c) a separate test asserting approve/deny does clear it."
+    },
+    {
+      "question_id": "VQ-S6-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-5",
+      "question": "For AC-CLEAR-5 (opening a group's manage-links view MUST clear that group's inviteExpiries entry via the existing, preserved markInviteExpiriesRead trigger): show evidence this trigger still fires correctly after this story's card-pill changes, decrementing both the card pill and the Groups nav pill."
+    },
+    {
+      "question_id": "VQ-S6-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-7",
+      "question": "For AC-CLEAR-7 (opening a group with a combined pill of 5 unread + 2 join requests = 7 MUST clear only the message portion, dropping the pill to 2, not disappearing while join requests remain): show a test with exactly this 5+2 fixture, asserting the post-open pill value is 2 (not 0, not still 7), and that the card pill element is still present (not hidden) because a nonzero join-request count remains."
+    }
+  ]
+}

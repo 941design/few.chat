@@ -23,7 +23,6 @@ import { useThemeStyles } from '@/src/hooks/useThemeStyles';
 import { useDynamicBanner } from '@/src/hooks/useDynamicBanner';
 import { useAppTheme } from '@/src/hooks/useMoodTheme';
 import ThemeIcon from '@/src/components/ThemeIcon';
-import NotificationBell from '@/src/components/NotificationBell';
 import { headerIconChipStyle } from '@/src/components/headerIconChip';
 import DirectMessageNotificationsWatcher from '@/src/components/DirectMessageNotificationsWatcher';
 import PendingPairingIntentWatcher from '@/src/components/PendingPairingIntentWatcher';
@@ -33,6 +32,8 @@ import { IncomingCallModal } from '@/src/components/calls/IncomingCallModal';
 import { CallScreen } from '@/src/components/calls/CallScreen';
 import { rememberContactsFromGroups } from '@/src/lib/contacts';
 import { subscribe as subscribePendingInvitations, getSnapshot as getPendingInvitationsSnapshot } from '@/src/lib/pendingInvitations';
+import { useUnreadCounts } from '@/src/lib/unreadStore';
+import { contactsDomainTotal, groupsDomainTotal } from '@/src/lib/notificationCounts';
 
 function getPendingInvitationsServerSnapshot() {
   return [] as ReturnType<typeof getPendingInvitationsSnapshot>;
@@ -94,6 +95,20 @@ export default function Layout({ children }: LayoutProps) {
     getPendingInvitationsServerSnapshot,
   );
   const pendingInvitationCount = pendingInvitations.length;
+
+  // Domain notification totals for the nav pills that replaced the notification
+  // bell (epic: obsolete-notification-bell). The Contacts pill sums DM unread +
+  // pending contacts; the Groups pill sums group unread + join requests + invite
+  // expiries + pending invitations — OIN-1: the received-invitation count merges
+  // into the single Groups number rather than staying a separate badge.
+  const { counts, joinRequests, directMessages, inviteExpiries, pendingContacts } = useUnreadCounts();
+  const navSlices = { counts, joinRequests, directMessages, inviteExpiries, pendingContacts };
+  const navBadgeCount = (href: string): number =>
+    href === '/groups'
+      ? groupsDomainTotal(navSlices, pendingInvitationCount)
+      : href === '/contacts'
+        ? contactsDomainTotal(navSlices)
+        : 0;
 
   // Hide the imprint footer on the two open-chat pages (see helper above).
   const hideImprintFooter = shouldHideImprintFooter(router.pathname, router.query.id);
@@ -197,8 +212,9 @@ export default function Layout({ children }: LayoutProps) {
               <HStack as="ul" spacing={2} listStyleType="none">
                 {navItems.map((item) => {
                   const isActive = router.pathname === item.href;
-                  const isGroups = item.href === '/groups';
-                  const showBadge = isGroups && pendingInvitationCount > 0;
+                  const badgeCount = navBadgeCount(item.href);
+                  const showBadge = badgeCount > 0;
+                  const badgeTestId = item.href === '/groups' ? 'groups-nav-badge' : 'contacts-nav-badge';
                   return (
                     <Box as="li" key={item.href}>
                       <NextLink href={item.href} passHref legacyBehavior>
@@ -227,9 +243,9 @@ export default function Layout({ children }: LayoutProps) {
                               h="16px"
                               borderRadius="full"
                               px="4px"
-                              data-testid="groups-invitation-badge"
+                              data-testid={badgeTestId}
                             >
-                              {pendingInvitationCount > 99 ? '99+' : pendingInvitationCount}
+                              {badgeCount > 99 ? '99+' : badgeCount}
                             </Box>
                           )}
                         </Link>
@@ -272,7 +288,6 @@ export default function Layout({ children }: LayoutProps) {
                   )}
                 </Link>
               </NextLink>
-              <NotificationBell />
               <NextLink href="/profile" passHref legacyBehavior>
                 <Link _hover={{ textDecoration: 'none' }}>
                   <Box
@@ -296,7 +311,6 @@ export default function Layout({ children }: LayoutProps) {
 
             {/* Mobile actions */}
             <HStack spacing={1} display={{ base: 'flex', md: 'none' }}>
-              <NotificationBell />
               <NextLink href="/info" passHref legacyBehavior>
                 <Link
                   aria-label={copy.layout.nav.info}
@@ -378,8 +392,9 @@ export default function Layout({ children }: LayoutProps) {
               </Box>
               {navItems.map((item) => {
                 const isActive = router.pathname === item.href;
-                const isGroups = item.href === '/groups';
-                const showBadge = isGroups && pendingInvitationCount > 0;
+                const badgeCount = navBadgeCount(item.href);
+                const showBadge = badgeCount > 0;
+                const badgeTestId = item.href === '/groups' ? 'groups-nav-badge-mobile' : 'contacts-nav-badge-mobile';
                 return (
                   <Box as="li" key={item.href} w="100%">
                     <NextLink href={item.href} passHref legacyBehavior>
@@ -413,9 +428,9 @@ export default function Layout({ children }: LayoutProps) {
                             h="16px"
                             borderRadius="full"
                             px="4px"
-                            data-testid="groups-invitation-badge-mobile"
+                            data-testid={badgeTestId}
                           >
-                            {pendingInvitationCount > 99 ? '99+' : pendingInvitationCount}
+                            {badgeCount > 99 ? '99+' : badgeCount}
                           </Box>
                         )}
                       </Link>

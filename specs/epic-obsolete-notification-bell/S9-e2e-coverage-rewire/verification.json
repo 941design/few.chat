@@ -1,0 +1,71 @@
+{
+  "story_id": "S9",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S9-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do the rewritten specs (dm-giftwrap-bell, dm-feedback-channel's maintainer block, dm-pairing-pending-confirmation, groups-notification-domain-invariants, groups-join-request-live's INV-2 case) genuinely assert against the new nav-pill/card-pill testids' displayed values, or was any assertion weakened/removed — e.g. replaced with a looser 'element exists' check — merely to force a pass rather than to preserve the same ring/clear behavior each file exercised before?"
+    },
+    {
+      "question_id": "VQ-S9-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story's diff touch only e2e spec files under app/tests/e2e/ — no production source change — consistent with its scope and its owning_module being an inferred, test-suite-only label (architecture.md's module map has no row for the e2e suite itself)?"
+    },
+    {
+      "question_id": "VQ-S9-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `e2e coverage` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md? Note: architecture.md has no explicit dependencies_allowed entry for this inferred module — if this gap forced an undeclared cross-module assumption, name it."
+    },
+    {
+      "question_id": "VQ-S9-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Run a repo-wide grep for `notification-bell`, `notification-badge`, `notification-dropdown`, and `notification-item-` across every file this story touches (and any it doesn't but should have) — does zero rewritten or repointed spec still query any of these four strings? Provide the grep command and its (empty) output as evidence, run against the post-implementation tree specifically, not just eyeballed in the diff."
+    },
+    {
+      "question_id": "VQ-S9-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Do all nine oracle-only specs (groups-awaiting-confirmation, groups-ever-known-survives-leave, groups-invite-link, groups-join-request-live, groups-pull-only-invitation-accept, groups-pull-only-invitation-decline, groups-welcome, dm-walled-garden-group-member-allowed, dm-walled-garden-stranger-blocked) still confirm 'the relay event landed' as their original intent — i.e. does each poll a signal (new nav pill or existing list state) that is causally downstream of the same relay event it polled notification-badge for before, not a weaker proxy that could pass even if the event never arrived?"
+    },
+    {
+      "question_id": "VQ-S9-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Do all new/repointed relay-dependent specs remain correctly bucketed by filename (groups-*/dm-*, per architecture.md's bucket-by-filename trap) — i.e. did no rewrite accidentally rename a file out of its bucket, and does no spec that now depends on Docker/relay infrastructure carry a filename that would route it into the non-relay fast bucket?"
+    },
+    {
+      "question_id": "VQ-S9-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ETE-2",
+      "question": "For AC-ETE-2 (the five listed specs MUST be rewritten to assert against new nav/card-pill testids, none may retain a query against the four bell-testid strings, while preserving the same underlying ring/clear behavior each exercised before): show, for each of the five files, the specific testid(s) it now queries and confirm each still exercises the same real ring/clear event it did pre-rewrite, not a reduced-scope version."
+    },
+    {
+      "question_id": "VQ-S9-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ETE-3",
+      "question": "For AC-ETE-3 (the nine oracle-only specs MUST be repointed to a surviving signal, continuing to pass unchanged in intent): show, for each of the nine files, the old notification-badge poll and its replacement, and confirm a full run of each individually passes."
+    },
+    {
+      "question_id": "VQ-S9-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ETE-4",
+      "question": "For AC-ETE-4 (unread-badge.spec.ts MUST continue to pass, unmodified or extended): show whether this file was left unmodified or extended, and provide its pass result from the full suite run."
+    },
+    {
+      "question_id": "VQ-S9-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ETE-5",
+      "question": "For AC-ETE-5 (the full 60-test make test-e2e-all suite MUST pass, no regression outside this epic's scope): provide the full-suite run's pass/fail summary — not a filtered subset per this project's e2e-gate convention (make test-e2e-fast/groups/image-sharing runs are dev-iteration aids only, never the pass criterion) — and confirm any pre-existing chronic flake, if invoked to explain a failure, is documented as such rather than assumed without checking against known baseline flake behavior."
+    }
+  ]
+}

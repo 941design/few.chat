@@ -260,7 +260,8 @@ test.describe.serial('Group-invite welcome screen — first-time visitor', () =>
       .poll(
         async () => {
           await dismissErrorOverlay(pageAdmin);
-          const badge = pageAdmin.getByTestId('notification-badge').first();
+          // A join request is a Groups-domain event → `groups-nav-badge`.
+          const badge = pageAdmin.getByTestId('groups-nav-badge').first();
           return badge.isVisible();
         },
         { timeout: 60_000, intervals: [3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000] },
@@ -512,7 +513,7 @@ test.describe('Group-invite welcome screen — fresh session, already-named firs
       // fix isn't just a UI-only disable but that no blank requesterName was
       // ever transmitted (AC-GROUP-3/AC-NAME-1's actual invariant). Reuses
       // the SAME admin session already open above (no relay-timing gap from
-      // a fresh boot). Mirrors the AC-GROUP-1..4 test's notification-badge
+      // a fresh boot). Mirrors the AC-GROUP-1..4 test's groups-nav-badge
       // poll above to avoid a relay-propagation race.
       await pageAdmin.goto('/groups/');
       await expect(
@@ -522,7 +523,8 @@ test.describe('Group-invite welcome screen — fresh session, already-named firs
         .poll(
           async () => {
             await dismissErrorOverlay(pageAdmin);
-            const badge = pageAdmin.getByTestId('notification-badge').first();
+            // A join request is a Groups-domain event → `groups-nav-badge`.
+            const badge = pageAdmin.getByTestId('groups-nav-badge').first();
             return badge.isVisible();
           },
           { timeout: 60_000, intervals: [3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000] },

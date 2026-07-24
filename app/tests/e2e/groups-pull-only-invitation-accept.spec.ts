@@ -144,8 +144,9 @@ test.describe.serial('Pull-only invitation: Accept (AC-TEST-1)', () => {
     await expect(bobPage.locator('[data-testid^="invitation-card-"]', { hasText: GROUP_NAME })).toHaveCount(0);
   });
 
-  test('Alice DMs Bob; Bob bell increments and message renders', async () => {
-    // Bob navigates to /contacts so the bell watcher mounts
+  test('Alice DMs Bob; Bob Contacts pill increments and message renders', async () => {
+    // Bob navigates to /contacts so the unread watcher mounts (a DM is a
+    // Contacts-domain event, surfacing on `contacts-nav-badge`)
     await bobPage.goto('/contacts');
     await bobPage.waitForLoadState('networkidle');
     await bobPage.waitForFunction(
@@ -155,7 +156,7 @@ test.describe.serial('Pull-only invitation: Accept (AC-TEST-1)', () => {
     );
 
     const initialBadgeCount = await bobPage.evaluate(() => {
-      const badge = document.querySelector('[data-testid="notification-badge"]');
+      const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
       if (!badge) return 0;
       return parseInt((badge.textContent ?? '0').trim(), 10);
     });
@@ -174,10 +175,10 @@ test.describe.serial('Pull-only invitation: Accept (AC-TEST-1)', () => {
       { bobPub: USER_B.pubkeyHex, content: DM_CONTENT },
     );
 
-    // Bob's bell increments above the baseline
+    // Bob's Contacts pill increments above the baseline
     await bobPage.waitForFunction(
       (baseline) => {
-        const badge = document.querySelector('[data-testid="notification-badge"]');
+        const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
         if (!badge) return false;
         return parseInt((badge.textContent ?? '0').trim(), 10) > baseline;
       },

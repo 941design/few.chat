@@ -1,0 +1,92 @@
+{
+  "story_id": "S5",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S5-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do the new Contacts and Groups nav pills in Layout.tsx genuinely call contactsDomainTotal(slices) / groupsDomainTotal(slices, pendingInvitationCount) from the notificationCounts seam on each render, or is either pill a stand-in that reads a hardcoded value or a locally-recomputed inline sum that happens to match today's fixture?"
+    },
+    {
+      "question_id": "VQ-S5-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Do both the desktop nav map (~Layout.tsx:196-240) and the mobile nav map (~Layout.tsx:379-425) call the same notificationCounts seam functions independently (each its own call), rather than one deriving its badge text from the other's already-rendered DOM or a single shared render-time variable that could silently desync between the two maps?"
+    },
+    {
+      "question_id": "VQ-S5-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Layout nav` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S5-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Since this story's own dev-time verification uses the window.__fewUnread test bridge plus a manual dev-server check (per stories.json's description) rather than a jsdom-mounted component test, what concrete evidence was captured (bridge invocation + observed pill values, or a screenshot) for each of AC-NAV-3 through AC-NAV-8, and is e2e proof genuinely deferred to S9 rather than silently left unverified in the interim?"
+    },
+    {
+      "question_id": "VQ-S5-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does AC-CLEAR-6 hold with zero new wiring — i.e. does the pendingInvitations store's existing accept/decline self-clear (unchanged) actually decrement the new Groups nav pill by exactly 1 the moment it exists, with no bespoke clear-handling code added in this story that would indicate the 'no new wiring needed' premise was wrong?"
+    },
+    {
+      "question_id": "VQ-S5-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Are the new pill aria-labels added to both `en` and `de` in i18n.ts (per project convention), with no hardcoded English string left in Layout.tsx for either the desktop or mobile pill?"
+    },
+    {
+      "question_id": "VQ-S5-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-3",
+      "question": "For AC-NAV-3 (desktop Contacts nav pill MUST render contactsDomainTotal(slices)): show (a) the render-site code in Layout.tsx's desktop nav map, (b) the bridge-based or manual evidence the displayed text matches the seam's return value for a nonzero snapshot, and (c) confirmation this is not merely 'the seam function exists' with no render-site assertion."
+    },
+    {
+      "question_id": "VQ-S5-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-4",
+      "question": "For AC-NAV-4 (mobile Contacts nav pill MUST render contactsDomainTotal(slices) independently of the desktop DOM instance): show evidence the mobile pill (~Layout.tsx:379-425) was checked as its own DOM node with its own value, not inferred from the desktop pill's correctness."
+    },
+    {
+      "question_id": "VQ-S5-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-5",
+      "question": "For AC-NAV-5 (desktop Groups nav pill MUST render groupsDomainTotal(slices, pendingInvitationCount)): show the render-site code and evidence the pill reflects the merged OIN-1 total (counts+joinRequests+inviteExpiries+pendingInvitationCount), not just the pre-epic pendingInvitationCount-only value."
+    },
+    {
+      "question_id": "VQ-S5-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-6",
+      "question": "For AC-NAV-6 (mobile Groups nav pill, independent DOM instance): show evidence the mobile Groups pill was checked as its own node reflecting the same merged total as desktop."
+    },
+    {
+      "question_id": "VQ-S5-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-7",
+      "question": "For AC-NAV-7 (pill MUST NOT render when the domain aggregate is 0, all four pill instances): show evidence for at least one zero-aggregate case per nav item (Contacts and Groups, desktop and mobile) that no pill DOM element is present, not merely that its text is '0'."
+    },
+    {
+      "question_id": "VQ-S5-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-8",
+      "question": "For AC-NAV-8 (pill MUST display 99+ once the aggregate exceeds 99, matching UnreadCountBadge's existing cap behavior): show evidence for at least one >99 case per nav item that the displayed text is exactly '99+', not the raw number, and that this reuses UnreadCountBadge's existing cap logic rather than a separately-reimplemented cap."
+    },
+    {
+      "question_id": "VQ-S5-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-6",
+      "question": "For AC-CLEAR-6 (accepting/declining a received group invitation MUST remove it from the pendingInvitations store and decrement the Groups nav pill by exactly 1): show evidence that after an accept or decline, the pill's displayed value decreases by exactly 1 for that invitation, not merely that the pendingInvitations store's list length decreased — the pill's own reactivity to that store change must be shown, not assumed."
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "story_id": "S2",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S2-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does the relocated buildInviteExpiryRows in app/src/lib/marmot/inviteExpirySweep.ts contain the exact same row-construction logic as the pre-relocation version in NotificationBell.tsx (same fields, same unknownGroupLabel fallback, same handling of a groupId absent from the current groups list), or was any behavior altered, simplified, or dropped during the move — e.g. a shortcut that returns a frozen row shape or drops the unknown-group fallback?"
+    },
+    {
+      "question_id": "VQ-S2-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does NotificationBell.tsx (still mounted until S8) now import buildInviteExpiryRows from inviteExpirySweep.ts rather than defining it locally, and does inviteExpirySweep.ts export it as part of its public surface rather than as an unexported/internal helper reachable only by accident?"
+    },
+    {
+      "question_id": "VQ-S2-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `inviteExpirySweep` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S2-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/notificationBellInviteExpiryRows.test.ts, after its import path update, still call the real relocated buildInviteExpiryRows (not a re-implemented or mocked copy inline in the test file) and still assert the sum(rows) === sum(inviteExpiries) invariant end-to-end against real fixture data, not merely assert the import resolves?"
+    },
+    {
+      "question_id": "VQ-S2-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Is this relocation genuinely logic-preserving — i.e. does spec.md's 'unchanged logic' decision hold, with zero behavioral diff between the pre- and post-relocation buildInviteExpiryRows other than its module location and NotificationBell.tsx's import statement?"
+    },
+    {
+      "question_id": "VQ-S2-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does the relocated InviteExpiryRow type move together with the function (single source of truth), rather than NotificationBell.tsx retaining its own duplicate/divergent copy of the type after the function itself moved?"
+    },
+    {
+      "question_id": "VQ-S2-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REMOVE-4",
+      "question": "For AC-REMOVE-4 (buildInviteExpiryRows MUST be relocated to a module outside NotificationBell.tsx, not deleted, and notificationBellInviteExpiryRows.test.ts MUST have its import updated and continue to pass): show (a) the relocated production function in its new file, (b) the updated test file's import line and a passing test run, and (c) confirmation the test genuinely exercises the relocated function's real logic, not a stub."
+    },
+    {
+      "question_id": "VQ-S2-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PARITY-3",
+      "question": "For AC-PARITY-3 (a groupId present in inviteExpiries but absent from the current groups list MUST remain reachable/clearable and MUST NOT silently inflate groupsDomainTotal beyond what a subsequent clear can zero out): show (a) the relocated buildInviteExpiryRows handling this case (the unknown-group fallback), (b) a test fixture with such an orphaned groupId asserting sum(rows) === sum(inviteExpiries) still holds, and (c) confirmation this is not a mock-spy test that only checks the function was called with the orphaned id."
+    }
+  ]
+}

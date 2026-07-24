@@ -1,0 +1,7 @@
+{
+  "story_id": "S7", "status": "done", "final_outcome": "accepted", "architect_skipped": true,
+  "modules_touched": ["contacts list"],
+  "files_modified": ["app/pages/contacts.tsx"], "files_created": [],
+  "remediation_rounds": 0, "completed_at": "2026-07-24T13:36:30Z",
+  "retrospective": {"skipped": false, "notes": "Contact row pill now contactCardTotal(slices, peer) = directMessages+pendingContacts folded (OIN-2). Kept contact-unread-badge-<pubkey> testid. AC-CARD-8 maintainer peer flows through same mechanism (no bespoke path). CLEAR-2/4 preserved store behaviors.", "lead_clarifications": []}
+}

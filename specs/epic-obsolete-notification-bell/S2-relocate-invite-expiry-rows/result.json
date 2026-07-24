@@ -1,0 +1,17 @@
+{
+  "story_id": "S2",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": true,
+  "modules_touched": ["inviteExpirySweep"],
+  "files_modified": ["app/src/components/NotificationBell.tsx", "app/tests/unit/inviteExpiryRows.test.ts"],
+  "files_created": ["app/src/lib/inviteExpiryRows.ts"],
+  "files_renamed": ["app/tests/unit/notificationBellInviteExpiryRows.test.ts -> app/tests/unit/inviteExpiryRows.test.ts"],
+  "remediation_rounds": 0,
+  "completed_at": "2026-07-24T13:23:00Z",
+  "retrospective": {
+    "skipped": false,
+    "notes": "Relocated buildInviteExpiryRows to app/src/lib/inviteExpiryRows.ts; bell imports it until S8 deletes the bell. Finding: in the pill UI there is no per-expiry-row rendering, so this fn has no production RENDER consumer post-bell; the runtime AC-PARITY-3 guarantee (no stuck expiry count) rests on the sweep's initInviteExpiries re-derivation (S3). Kept as tested pure helper preserving the sum(rows)==sum(inviteExpiries) parity invariant as a regression guard + candidate future cleanup.",
+    "lead_clarifications": []
+  }
+}

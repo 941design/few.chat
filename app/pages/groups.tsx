@@ -639,6 +639,23 @@ function GroupDetailView({ id }: { id: string }) {
     void router.replace({ pathname: router.pathname, query: nextQuery }, undefined, { shallow: true });
   }, [manageLinksParam, group, id, manageLinksDisclosure, router]);
 
+  // AC-CLEAR-5 (epic: obsolete-notification-bell): opening the manage-invite-links
+  // overlay for the current group acknowledges that group's expiry notifications.
+  // This trigger previously lived in the deleted notification bell's expiry-row
+  // onClick (which deep-linked to `?manageLinks=1` AND called markInviteExpiriesRead).
+  // Without it, a current group whose only notification is an expired invite link
+  // would keep a stuck card/nav pill — opening the group clears only chat messages
+  // (markAsRead), and the redirect-branch clear at the bottom of this component
+  // fires only for a stale groupId ABSENT from the list. Keyed on the disclosure
+  // opening for the resolved current group; covers both the deep-link and the
+  // in-view "Manage links" button. markInviteExpiriesRead persists
+  // expiryAcknowledged so the badge stays cleared across sweep re-derives.
+  const manageLinksOpen = manageLinksDisclosure.isOpen;
+  useEffect(() => {
+    if (!manageLinksOpen || !id || group?.id !== id) return;
+    void markInviteExpiriesRead(id);
+  }, [manageLinksOpen, id, group]);
+
   if (!ready) {
     return (
       <Box data-testid="group-detail-loading" py={8} textAlign="center">

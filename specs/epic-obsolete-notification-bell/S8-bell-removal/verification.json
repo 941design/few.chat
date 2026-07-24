@@ -1,0 +1,71 @@
+{
+  "story_id": "S8",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S8-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is app/src/components/NotificationBell.tsx's deletion a genuine, complete removal — no re-export shim left behind, no dangling `import NotificationBell` anywhere in the repo (grep for the identifier), and no orphaned dead code referencing its former exports?"
+    },
+    {
+      "question_id": "VQ-S8-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Did S2 (buildInviteExpiryRows relocation), S3 (sweep rehoming), S5 (nav pills), S6 (group card pills), and S7 (contact card pills) all land before this deletion, per this story's declared dependency set — i.e. is there no window where the bell is deleted but the sweep or the replacement pill surface is still missing (TRAP 1 / TRAP 2)?"
+    },
+    {
+      "question_id": "VQ-S8-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `Layout nav` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md? Note: Layout nav is shared with S5 by deliberate exception to the one-owning-module-per-story rule — confirm this story's diff touches only the bell-mount-removal and i18n-key-deletion portions, not S5's pill-addition portions."
+    },
+    {
+      "question_id": "VQ-S8-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does a repo-wide search confirm zero remaining references to `data-testid=\"notification-bell\"`, `notification-dropdown`, or `notification-item-*` in any source or test file (not counting S9's not-yet-updated e2e specs, which are this story's explicit scope exclusion), and does app/tests/e2e/notification-bell.spec.ts no longer exist on disk?"
+    },
+    {
+      "question_id": "VQ-S8-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Was this deletion sequenced strictly after the replacement surface was complete (per spec.md's TRAP1/TRAP2-driven story order), rather than deleted first and the replacement backfilled — i.e. does the git history / story_order show S2, S3, S5, S6, S7 landing before S8's commit?"
+    },
+    {
+      "question_id": "VQ-S8-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "After deleting the six bell-only i18n keys, does the shared `unreadMessages` key still exist in both `en` and `de`, and does UnreadCountBadge.tsx's aria-label still resolve through it without error (no runtime i18n lookup failure)?"
+    },
+    {
+      "question_id": "VQ-S8-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REMOVE-1",
+      "question": "For AC-REMOVE-1 (NotificationBell.tsx MUST NOT exist in the repository): confirm via file-existence check that the file is absent, and that no re-creation under a different filename retains the same component."
+    },
+    {
+      "question_id": "VQ-S8-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REMOVE-2",
+      "question": "For AC-REMOVE-2 (no element with the three bell testids MUST render anywhere, desktop or mobile): show that both Layout.tsx mounts (formerly ~275 desktop, ~299 mobile) are removed, and that a grep for the three testid strings across app/src and app/pages returns no production-code hits."
+    },
+    {
+      "question_id": "VQ-S8-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REMOVE-3",
+      "question": "For AC-REMOVE-3 (the six bell-only i18n keys MUST NOT exist in either en or de; unreadMessages MUST still exist and still back UnreadCountBadge's aria-label): show the i18n.ts diff removing all six keys from both language objects, and confirm unreadMessages remains present and referenced by UnreadCountBadge.tsx."
+    },
+    {
+      "question_id": "VQ-S8-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ETE-1",
+      "question": "For AC-ETE-1 (app/tests/e2e/notification-bell.spec.ts MUST NOT exist after this epic): confirm via file-existence check that the spec file is deleted, and that no other e2e spec file was renamed to preserve its bell-only assertions under a different name — which would violate the intent, not just the letter, of this AC."
+    }
+  ]
+}

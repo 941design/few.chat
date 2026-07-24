@@ -1,0 +1,92 @@
+{
+  "story_id": "S1",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S1-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do groupCardTotal, contactCardTotal, contactsDomainTotal, and groupsDomainTotal in app/src/lib/notificationCounts.ts genuinely compute their sums from the slices object passed at call time (real property reads and addition), or is any of the four a stand-in that returns a hardcoded/frozen value, silently ignores one of its declared addends, or is verified only by a tautological test (asserting the function returns whatever the test computed the same way, instead of an independently-derived expected value)?"
+    },
+    {
+      "question_id": "VQ-S1-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Is notificationCounts.ts genuinely pure per architecture.md's Boundary rules — no React import, no store import at module load beyond types, no read of unreadStore.ts's or pendingInvitations.ts's live snapshot from inside the module itself (snapshots are always passed in by the caller)?"
+    },
+    {
+      "question_id": "VQ-S1-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `notificationCounts` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S1-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do app/tests/unit/notificationCounts.test.ts's assertions for AC-PARITY-1 and AC-PARITY-2 hold as properties over multiple/arbitrary generated slice snapshots (varying peer counts, group counts, zero/nonzero mixes), not a single hand-picked fixture relabeled as a property test? Show the generator and at least two distinct snapshot shapes exercised per invariant."
+    },
+    {
+      "question_id": "VQ-S1-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Is notificationCounts.ts actually consumed as the single source of aggregate computation — i.e. does no file in this epic's scope compute a card or nav total by inline-summing store fields itself, which would defeat the 'extract-a-pure-function so every render site shares one derivation' purpose stated in architecture.md's module map?"
+    },
+    {
+      "question_id": "VQ-S1-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Do the four exported functions have narrow, explicit input types (no `any`) matching the NotificationCountsAPI contract's field types in stories.json's seams entry, so a caller passing a malformed snapshot fails to typecheck rather than silently producing NaN or undefined at runtime?"
+    },
+    {
+      "question_id": "VQ-S1-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-1",
+      "question": "For AC-NAV-1 (contactsDomainTotal(slices) MUST return sum(directMessages) + sum(pendingContacts) for any slice snapshot): show (a) the production implementation of contactsDomainTotal, (b) the unit test(s) that assert this sum against an independently-computed expected value for at least one nonzero snapshot, and (c) confirmation the test is not a mock-spy proxy that merely checks the function was called — it must assert the returned number."
+    },
+    {
+      "question_id": "VQ-S1-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-NAV-2",
+      "question": "For AC-NAV-2 (groupsDomainTotal(slices, pendingInvitationCount) MUST return sum(counts)+sum(joinRequests)+sum(inviteExpiries)+pendingInvitationCount, with the fourth addend sourced from the caller-supplied argument, never read from an unreadStore slice): show (a) the production implementation, (b) a test asserting the full four-term sum, and (c) a test specifically proving the function does NOT read pendingInvitationCount from any unreadStore slice internally — e.g. by passing a slices object with no matching field and confirming the passed-in argument alone determines the result."
+    },
+    {
+      "question_id": "VQ-S1-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-1",
+      "question": "For AC-CARD-1 (groupCardTotal(slices, groupId) MUST return counts[groupId]+joinRequests[groupId]+inviteExpiries[groupId]): show (a) the production implementation, (b) a test with nonzero values in all three fields for the same groupId asserting the summed result, and (c) confirmation the test is not a proxy that only checks one of the three fields is read."
+    },
+    {
+      "question_id": "VQ-S1-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-2",
+      "question": "For AC-CARD-2 (contactCardTotal(slices, peer) MUST fold directMessages[peer]+pendingContacts[peer] into one number — e.g. 2 unread + nonzero pending = 3, never a separate pending marker): show (a) the production implementation, (b) a test with the exact 2-unread-plus-pending example asserting the result is 3 (not a tuple or object with two fields), and (c) confirmation no other code in this story's scope reintroduces a separate pending count anywhere in the return shape."
+    },
+    {
+      "question_id": "VQ-S1-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PARITY-1",
+      "question": "For AC-PARITY-1 (sum of contactCardTotal(slices,peer) across every peer with nonzero directMessages or pendingContacts MUST equal contactsDomainTotal(slices), no peer double-counted or dropped): show a property test that generates a slices snapshot with multiple peers (some with only directMessages, some with only pendingContacts, some with both, some with neither), computes both sides independently, and asserts equality — not a single one-peer example."
+    },
+    {
+      "question_id": "VQ-S1-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PARITY-2",
+      "question": "For AC-PARITY-2 (sum of groupCardTotal across every joined group PLUS pending received invitation count MUST equal groupsDomainTotal(slices,pendingInvitationCount), the one documented nav-vs-card exception): show a property test with multiple groups plus a nonzero pendingInvitationCount, asserting the sum-plus-invitations equals the nav total, and confirm the test would fail if pendingInvitationCount were counted twice (once via a card and once via the nav addend) or dropped entirely."
+    },
+    {
+      "question_id": "VQ-S1-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PARITY-1",
+      "question": "Dedicated NotificationCountsAPI seam-contract check (consumed beyond this story by S5/S6/S7 per stories.json's seams entry): does the implementation match the declared contract exactly — (a) all four functions carry the declared type_name/field signatures (groupCardTotal(slices,groupId)=>number, contactCardTotal(slices,peer)=>number, contactsDomainTotal(slices)=>number, groupsDomainTotal(slices,pendingInvitationCount)=>number), with no additional required parameters or altered return shape; (b) all four return plain non-negative integers (no NaN/undefined for a well-formed snapshot, no capping/formatting — capping belongs to the render-site UnreadCountBadge, not this module); (c) groupsDomainTotal's formula is exactly sum(counts)+sum(joinRequests)+sum(inviteExpiries)+pendingInvitationCount with the fourth term always the caller-supplied argument; and (d) the module is pure per the seam's stated invariant (no React import, no store import at module load beyond types)? A downstream story (S5/S6/S7) implemented against a drifted version of this contract would fail silently until integration."
+    }
+  ]
+}

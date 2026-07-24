@@ -1,0 +1,267 @@
+{
+  "epic_name": "obsolete-notification-bell",
+  "status": "done",
+  "phase": "COMPLETE",
+  "created_at": "2026-07-24T12:39:39Z",
+  "updated_at": "2026-07-24T14:20:00Z",
+  "pre_existing_dirty_files": [
+    ".serena/project.yml",
+    "specs/obsolete-notification-bell-spec-request.md"
+  ],
+  "completed_stories": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9"
+  ],
+  "escalated_stories": [],
+  "phase_history": [
+    {
+      "phase": "SPEC_VALIDATED",
+      "timestamp": "2026-07-24T12:39:39Z",
+      "trigger": "validation_passed"
+    }
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "aa3df1fe0ee02197f3aa4b06e436aacf61978a8a",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "unknown"
+  },
+  "ownership_ledger_path": "ownership-ledger.json",
+  "manual_validation": [],
+  "ac_closure": [
+    {
+      "ac_id": "AC-NAV-1",
+      "status": "met",
+      "evidence": "notificationCounts.test.ts"
+    },
+    {
+      "ac_id": "AC-NAV-2",
+      "status": "met",
+      "evidence": "notificationCounts.test.ts"
+    },
+    {
+      "ac_id": "AC-NAV-3",
+      "status": "met",
+      "evidence": "groups-notification-domain-invariants + nav specs (e2e)"
+    },
+    {
+      "ac_id": "AC-NAV-4",
+      "status": "met",
+      "evidence": "nav renders desktop+mobile (Layout both maps)"
+    },
+    {
+      "ac_id": "AC-NAV-5",
+      "status": "met",
+      "evidence": "e2e groups-nav-badge asserts"
+    },
+    {
+      "ac_id": "AC-NAV-6",
+      "status": "met",
+      "evidence": "mobile map"
+    },
+    {
+      "ac_id": "AC-NAV-7",
+      "status": "met",
+      "evidence": "pill absent at 0 (UnreadCountBadge)"
+    },
+    {
+      "ac_id": "AC-NAV-8",
+      "status": "met",
+      "evidence": "99+ cap (UnreadCountBadge)"
+    },
+    {
+      "ac_id": "AC-CARD-1",
+      "status": "met",
+      "evidence": "notificationCounts.test.ts"
+    },
+    {
+      "ac_id": "AC-CARD-2",
+      "status": "met",
+      "evidence": "notificationCounts.test.ts fold"
+    },
+    {
+      "ac_id": "AC-CARD-3",
+      "status": "met",
+      "evidence": "GroupCard groupCardTotal + e2e"
+    },
+    {
+      "ac_id": "AC-CARD-4",
+      "status": "met",
+      "evidence": "contacts.tsx contactCardTotal + unread-badge.spec"
+    },
+    {
+      "ac_id": "AC-CARD-5",
+      "status": "met",
+      "evidence": "UnreadCountBadge null<=0"
+    },
+    {
+      "ac_id": "AC-CARD-6",
+      "status": "met",
+      "evidence": "UnreadCountBadge 99+"
+    },
+    {
+      "ac_id": "AC-CARD-7",
+      "status": "met",
+      "evidence": "InvitationCard has no groupCardTotal pill"
+    },
+    {
+      "ac_id": "AC-CARD-8",
+      "status": "met",
+      "evidence": "maintainer via same mechanism (dm-feedback-channel e2e)"
+    },
+    {
+      "ac_id": "AC-PARITY-1",
+      "status": "met",
+      "evidence": "notificationCounts.test.ts parity"
+    },
+    {
+      "ac_id": "AC-PARITY-2",
+      "status": "met",
+      "evidence": "notificationCounts.test.ts parity"
+    },
+    {
+      "ac_id": "AC-PARITY-3",
+      "status": "met",
+      "evidence": "inviteExpiryRows.test.ts sum invariant + sweep re-derive"
+    },
+    {
+      "ac_id": "AC-CLEAR-1",
+      "status": "met",
+      "evidence": "groups-notification-domain-invariants e2e"
+    },
+    {
+      "ac_id": "AC-CLEAR-2",
+      "status": "met",
+      "evidence": "e2e"
+    },
+    {
+      "ac_id": "AC-CLEAR-3",
+      "status": "met",
+      "evidence": "join-request-live INV-2 e2e"
+    },
+    {
+      "ac_id": "AC-CLEAR-4",
+      "status": "met",
+      "evidence": "dm-pairing e2e confirm clears"
+    },
+    {
+      "ac_id": "AC-CLEAR-5",
+      "status": "met",
+      "evidence": "markInviteExpiriesRead now fires on manage-links open for current group (groups.tsx, added post-Codex-review); previously bell-hosted"
+    },
+    {
+      "ac_id": "AC-CLEAR-6",
+      "status": "met",
+      "evidence": "pendingInvitations self-clear + reactive"
+    },
+    {
+      "ac_id": "AC-CLEAR-7",
+      "status": "met",
+      "evidence": "groupCardTotal partial-clear semantics"
+    },
+    {
+      "ac_id": "AC-SWEEP-1",
+      "status": "met",
+      "evidence": "inviteExpirySweepSchedule.test.ts"
+    },
+    {
+      "ac_id": "AC-SWEEP-2",
+      "status": "met",
+      "evidence": "inviteExpirySweepSchedule.test.ts state-discriminating"
+    },
+    {
+      "ac_id": "AC-SWEEP-3",
+      "status": "met",
+      "evidence": "sweepCrossCuttingInvariants.test.ts"
+    },
+    {
+      "ac_id": "AC-SWEEP-4",
+      "status": "met",
+      "evidence": "sweepCrossCuttingInvariants.test.ts real sweep at-most-once"
+    },
+    {
+      "ac_id": "AC-SWEEP-5",
+      "status": "met",
+      "evidence": "sweepCrossCuttingInvariants.test.ts cadence"
+    },
+    {
+      "ac_id": "AC-REMOVE-1",
+      "status": "met",
+      "evidence": "NotificationBell.tsx deleted"
+    },
+    {
+      "ac_id": "AC-REMOVE-2",
+      "status": "met",
+      "evidence": "grep: no bell testids"
+    },
+    {
+      "ac_id": "AC-REMOVE-3",
+      "status": "met",
+      "evidence": "6 i18n keys removed, unreadMessages kept"
+    },
+    {
+      "ac_id": "AC-REMOVE-4",
+      "status": "met",
+      "evidence": "inviteExpiryRows.ts + relocated test"
+    },
+    {
+      "ac_id": "AC-ETE-1",
+      "status": "met",
+      "evidence": "notification-bell.spec.ts deleted"
+    },
+    {
+      "ac_id": "AC-ETE-2",
+      "status": "met",
+      "evidence": "5 specs rewritten (e2e green)"
+    },
+    {
+      "ac_id": "AC-ETE-3",
+      "status": "met",
+      "evidence": "9 oracle specs repointed (e2e green)"
+    },
+    {
+      "ac_id": "AC-ETE-4",
+      "status": "met",
+      "evidence": "unread-badge.spec passes"
+    },
+    {
+      "ac_id": "AC-ETE-5",
+      "status": "met",
+      "evidence": "changed specs green on clean relay; full-gate flaky per project note"
+    }
+  ],
+  "gate_runs": [
+    {
+      "gate_id": "mutation",
+      "outcome": "skipped",
+      "skip_reason": "no mutation tooling configured; pure modules covered by unit+parity+property tests"
+    },
+    {
+      "gate_id": "e2e",
+      "outcome": "fired_pass",
+      "detail": "fast bucket 67 pass; 13 changed relay specs pass on clean relay (1 dirty-relay flake confirmed passing on retry)"
+    },
+    {
+      "gate_id": "pre_commit_review",
+      "outcome": "fired_remediated",
+      "detail": "Codex working-tree review: 2 P2 findings re invite-expiry clearability. Finding 2 (current-group manage-links clear) FIXED (groups.tsx markInviteExpiriesRead on overlay open, 69 unit tests green). Finding 1 (stale/foreign-group expiry unreachable) disclosed as narrow residual -> backlog follow-up.",
+      "structural_findings": {
+        "surfaced": 2,
+        "acted": 1,
+        "disclosed_unacted": 1
+      }
+    }
+  ],
+  "review_notes": [
+    "Codex P2 Finding 1: a groupId in inviteExpiries but absent from the current groups list (e.g. backup-restore of a non-member group's on-disk expired links) contributes to the Groups nav pill with no reachable clear affordance now that the bell's unknown-group row is gone. Primary path (leaving a group) already clears via leaveGroupImpl; residual is a rare restore edge. Disclosed + backlog follow-up rather than over-building a stale-expiry UI.",
+    "Coverage reduction (accepted, bell-removal consequence): dm-feedback-channel AC-NOTIFY-2 'bell row deep-links to /feedback' dropped \u2014 no non-bell per-row routing affordance replaces it."
+  ]
+}

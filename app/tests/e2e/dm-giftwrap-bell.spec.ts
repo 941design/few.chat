@@ -1,17 +1,20 @@
 /**
- * E2E: DM gift-wrapped bell — AC-22
+ * E2E: DM gift-wrapped notification — AC-22
  *
  * Two-context scenario (Alice = recipient with closed chat, Bob = sender).
  *
  *   1. Alice and Bob boot on /groups/ and establish a shared MLS group
  *      (required by the DM walled-garden gate).
- *   2. Alice navigates to /contacts — the bell watcher is mounted.
+ *   2. Alice navigates to /contacts — the unread watcher is mounted.
  *   3. Bob calls window.__fewPublishDm to send a NIP-17 gift-wrapped DM to Alice.
- *   4. Assert Alice's bell badge becomes ≥ 1 without Alice ever opening the chat.
+ *   4. Assert Alice's Contacts-domain nav pill becomes ≥ 1 without Alice ever
+ *      opening the chat (a DM is a Contacts-domain event).
  *   5. Alice navigates to the DM thread → message renders.
  *
- * This exercises the full relay → NDK subscription → bell watcher subscription
- * (kind-1059 branch) → bell badge pipeline end-to-end.
+ * This exercises the full relay → NDK subscription → unread watcher subscription
+ * (kind-1059 branch) → Contacts nav pill pipeline end-to-end. (The old flat
+ * notification bell was removed; a DM now surfaces on the `contacts-nav-badge`
+ * count pill instead.)
  *
  * Uses deterministic alice/bob keypairs from helpers/auth-helpers.ts.
  * Requires the strfry relay harness: make e2e-up.
@@ -76,7 +79,7 @@ async function bootUserOnGroups(
   return { context, page };
 }
 
-test.describe.serial('DM gift-wrapped bell — AC-22', () => {
+test.describe.serial('DM gift-wrapped notification — AC-22', () => {
   let aliceCtx: BrowserContext;
   let bobCtx: BrowserContext;
   let alicePage: Page;
@@ -98,20 +101,21 @@ test.describe.serial('DM gift-wrapped bell — AC-22', () => {
   });
 
   test(
-    'AC-22: alice receives a NIP-17 gift-wrapped DM from bob; bell badge increments; '
+    'AC-22: alice receives a NIP-17 gift-wrapped DM from bob; Contacts nav pill increments; '
     + 'opening the chat renders the message',
     async () => {
       const RUMOR_CONTENT = `hello-from-bob-giftwrap-${Date.now()}`;
 
-      // ── 1. Alice navigates to /contacts to mount the bell watcher ───────────
+      // ── 1. Alice navigates to /contacts to mount the unread watcher ─────────
       await alicePage.goto('/contacts');
       await alicePage.waitForLoadState('networkidle');
       await waitForBridge(alicePage);
       await dismissErrorOverlay(alicePage);
 
-      // Record baseline badge count (may be > 0 from group setup notifications)
+      // Record baseline Contacts nav-pill count (may be > 0 from group setup).
+      // A DM is a Contacts-domain event, so it surfaces on `contacts-nav-badge`.
       const initialBadgeCount = await alicePage.evaluate(() => {
-        const badge = document.querySelector('[data-testid="notification-badge"]');
+        const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
         if (!badge) return 0;
         return parseInt((badge.textContent ?? '0').trim(), 10);
       });
@@ -129,10 +133,10 @@ test.describe.serial('DM gift-wrapped bell — AC-22', () => {
         { alicePub: USER_A.pubkeyHex, content: RUMOR_CONTENT },
       );
 
-      // ── 3. Wait for Alice's bell badge to increment above baseline ────────────
+      // ── 3. Wait for Alice's Contacts nav pill to increment above baseline ─────
       await alicePage.waitForFunction(
         (baseline) => {
-          const badge = document.querySelector('[data-testid="notification-badge"]');
+          const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
           if (!badge) return false;
           const count = parseInt((badge.textContent ?? '0').trim(), 10);
           return count > baseline;

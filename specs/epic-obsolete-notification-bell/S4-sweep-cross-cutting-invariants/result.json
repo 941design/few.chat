@@ -1,0 +1,13 @@
+{
+  "story_id": "S4",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": true,
+  "is_integration_story": true,
+  "modules_touched": ["inviteExpirySweep", "sweep host"],
+  "files_modified": [],
+  "files_created": ["app/tests/unit/sweepCrossCuttingInvariants.test.ts"],
+  "remediation_rounds": 0,
+  "completed_at": "2026-07-24T13:27:30Z",
+  "retrospective": {"skipped": false, "notes": "Property tests over orderings/interleavings: AC-SWEEP-3 (migrate-before-sweep, generator over migrate outcome x repetition x concurrency), AC-SWEEP-4 (at-most-once via REAL runInviteExpiryCycle against in-memory idb mock, ~9 invocations incl. double-mount -> count stays 1), AC-SWEEP-5 (cadence survives 3 mount epochs). Only idb+react mocked; SUT not re-implemented.", "lead_clarifications": []}
+}

@@ -1,10 +1,15 @@
 /**
- * E2E: notification bell domain invariants (epic: notification-domain-invariants).
+ * E2E: notification domain invariants (epic: notification-domain-invariants).
  *
  *   INV-1 (off-domain rings): a change event whose target entity is NOT the one
- *     currently open in a detail view MUST ring the bell.
+ *     currently open in a detail view MUST raise the domain's count pill.
  *   INV-2 (on-domain updates): a change event whose target entity IS the one
- *     currently open MUST NOT ring the bell; the open view updates instead.
+ *     currently open MUST NOT raise the pill; the open view updates instead.
+ *
+ * The old flat notification bell was removed and replaced by per-domain nav
+ * count pills: a group event surfaces on `groups-nav-badge`, a DM on
+ * `contacts-nav-badge`. This spec therefore measures each invariant against the
+ * pill for the domain of the event under test.
  *
  * Granularity is per-entity: viewing group X suppresses only X's events; viewing
  * the DM thread with a peer suppresses only that peer's DMs. This spec drives the
@@ -32,13 +37,17 @@ async function waitForBridge(page: Page) {
   await page.waitForFunction(() => !!(window as any).__fewUnread, null, { timeout: 10_000 });
 }
 
-/** Current numeric value of the notification badge (0 when absent). */
-async function badgeCount(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const badge = document.querySelector('[data-testid="notification-badge"]');
+/**
+ * Current numeric value of a domain nav count pill (0 when absent). Pass the
+ * pill for the domain of the event under test — `groups-nav-badge` for group
+ * events, `contacts-nav-badge` for DMs.
+ */
+async function badgeCount(page: Page, testId: string): Promise<number> {
+  return page.evaluate((id) => {
+    const badge = document.querySelector(`[data-testid="${id}"]`);
     if (!badge) return 0;
     return parseInt((badge.textContent ?? '0').trim(), 10) || 0;
-  });
+  }, testId);
 }
 
 async function bootUserOnGroups(
@@ -79,7 +88,7 @@ async function openGroupDetail(page: Page): Promise<void> {
   await expect(page.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
 }
 
-test.describe.serial('Notification bell — domain invariants', () => {
+test.describe.serial('Notification pills — domain invariants', () => {
   let aliceCtx: BrowserContext;
   let bobCtx: BrowserContext;
   let alicePage: Page;
@@ -100,15 +109,15 @@ test.describe.serial('Notification bell — domain invariants', () => {
     await createGroupAndInvite(alicePage, USER_B.npub, bobPage, GROUP_NAME);
   });
 
-  test('INV-2: a group message while that group is OPEN renders in the chat but does NOT ring the bell', async () => {
+  test('INV-2: a group message while that group is OPEN renders in the chat but does NOT raise the Groups pill', async () => {
     // Both view the group detail. Alice's entry marks the group read, so its
-    // contribution to the badge is 0; capture whatever baseline remains.
+    // contribution to the Groups pill is 0; capture whatever baseline remains.
     await openGroupDetail(alicePage);
     await openGroupDetail(bobPage);
     await waitForBridge(alicePage);
     // Let ContactStore/live subscriptions settle before measuring baseline.
     await expect(alicePage.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
-    const baseline = await badgeCount(alicePage);
+    const baseline = await badgeCount(alicePage, 'groups-nav-badge');
 
     const content = `group-inv2-${Date.now()}`;
     await bobPage.getByTestId('chat-input').fill(content);
@@ -119,26 +128,26 @@ test.describe.serial('Notification bell — domain invariants', () => {
       alicePage.locator('[data-testid^="msg-"]').filter({ hasText: content }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
-    // INV-2: the group is on screen, so the bell must not have moved.
+    // INV-2: the group is on screen, so the Groups pill must not have moved.
     await dismissErrorOverlay(alicePage);
-    expect(await badgeCount(alicePage)).toBe(baseline);
+    expect(await badgeCount(alicePage, 'groups-nav-badge')).toBe(baseline);
   });
 
-  test('INV-1: a group message while Alice is on the LIST rings the bell', async () => {
+  test('INV-1: a group message while Alice is on the LIST raises the Groups pill', async () => {
     // Alice leaves the detail for the list — no group is the active view now.
     await alicePage.goto('/groups/');
     await expect(alicePage.getByTestId('groups-list')).toBeVisible({ timeout: 60_000 });
     await waitForBridge(alicePage);
-    const baseline = await badgeCount(alicePage);
+    const baseline = await badgeCount(alicePage, 'groups-nav-badge');
 
     const content = `group-inv1-${Date.now()}`;
     await bobPage.getByTestId('chat-input').fill(content);
     await bobPage.getByTestId('chat-input').press('Enter');
 
-    // INV-1: the bell must climb above the baseline.
+    // INV-1: the Groups pill must climb above the baseline.
     await alicePage.waitForFunction(
       (base) => {
-        const badge = document.querySelector('[data-testid="notification-badge"]');
+        const badge = document.querySelector('[data-testid="groups-nav-badge"]');
         const n = badge ? parseInt((badge.textContent ?? '0').trim(), 10) || 0 : 0;
         return n > base;
       },
@@ -147,7 +156,7 @@ test.describe.serial('Notification bell — domain invariants', () => {
     );
   });
 
-  test('INV-2: a DM while that thread is OPEN renders in the thread but does NOT ring the bell', async () => {
+  test('INV-2: a DM while that thread is OPEN renders in the thread but does NOT raise the Contacts pill', async () => {
     // Alice opens the DM thread with Bob — this peer is now the active view.
     await alicePage.goto(`/contacts?id=${USER_B.pubkeyHex}`);
     await expect(alicePage.getByTestId('contact-detail-page')).toBeVisible({ timeout: 30_000 });
@@ -158,11 +167,12 @@ test.describe.serial('Notification bell — domain invariants', () => {
     // React StrictMode double-invokes the setActiveView effect on mount
     // (set -> clear -> set, all in one tick); if the incoming DM's async
     // gift-wrap handler checks isActiveView('dm', peer) during that momentary
-    // clear window it wrongly sees "no active view" and rings the bell. This is
+    // clear window it wrongly sees "no active view" and counts the DM. This is
     // a dev-only churn — in production ContactChat mounts once with no re-set —
     // so a short settle makes the active-view registration stable first.
     await alicePage.waitForTimeout(2_000);
-    const baseline = await badgeCount(alicePage);
+    // A DM is a Contacts-domain event, so measure the Contacts nav pill.
+    const baseline = await badgeCount(alicePage, 'contacts-nav-badge');
 
     const content = `dm-inv2-${Date.now()}`;
     await bobPage.waitForFunction(() => typeof (window as any).__fewPublishDm === 'function', null, { timeout: 10_000 });
@@ -176,11 +186,11 @@ test.describe.serial('Notification bell — domain invariants', () => {
       alicePage.locator('[data-testid^="msg-"]').filter({ hasText: content }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
-    // INV-2: the thread is on screen, so the bell must not have moved. The DM
-    // watcher runs on its own subscription, so give it a bounded window to
-    // (wrongly) fire — the count must stay at baseline throughout.
+    // INV-2: the thread is on screen, so the Contacts pill must not have moved.
+    // The DM watcher runs on its own subscription, so give it a bounded window
+    // to (wrongly) fire — the count must stay at baseline throughout.
     await expect
-      .poll(async () => badgeCount(alicePage), { timeout: 6_000, intervals: [1_000, 1_000, 1_000, 1_000, 1_000] })
+      .poll(async () => badgeCount(alicePage, 'contacts-nav-badge'), { timeout: 6_000, intervals: [1_000, 1_000, 1_000, 1_000, 1_000] })
       .toBe(baseline);
   });
 });

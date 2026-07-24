@@ -14,19 +14,19 @@
  * acceptance-criteria.md AC-OBS-2), after a Stage-1 review found the
  * original wording unsatisfiable: this app only persists a contact's
  * message content once their conversation has been opened at least once (a
- * pre-existing, out-of-epic-scope DM-pipeline property), so the bell cannot
- * reconcile held messages at `confirmContact` time — there is nothing
+ * pre-existing, out-of-epic-scope DM-pipeline property), so the unread count
+ * cannot reconcile held messages at `confirmContact` time — there is nothing
  * persisted yet to reconcile against. The amended AC instead requires the
- * held messages AND the bell to both catch up correctly the next time the
- * user OPENS the contact's conversation, within the same session (no
+ * held messages AND the unread count to both catch up correctly the next time
+ * the user OPENS the contact's conversation, within the same session (no
  * leave-and-re-enter required). Both tests below assert this end-to-end
  * after confirming: they navigate to the contact's conversation and check
  * both that the held messages render (already-existing coverage) AND that
- * the bell's badge count has cleared once the thread has been viewed — this
+ * the notification count has cleared once the thread has been viewed — this
  * app's normal "opening a thread marks it read" behavior
  * (`ContactChat`'s `markDirectMessagesRead` mount effect), which is what
  * the amended AC-OBS-2 relies on rather than a special immediate-on-confirm
- * reconciliation. AC-OBS-1 (bell stays silent while still pending) is
+ * reconciliation. AC-OBS-1 (no unread count raised while still pending) is
  * covered separately, before confirm.
  *
  * Extends the contact-pairing-code epic's `dm-pairing-*.spec.ts` two-browser-
@@ -52,11 +52,11 @@ import { waitForAdmission } from './helpers/pairing';
 /**
  * Read a contact's `lastSeenAt` from `lp_contacts_v1` (contacts.ts /
  * STORAGE_KEYS.contacts). `rememberContact(peer)` bumps this on EVERY inbound
- * DM event the bell watcher processes — including one from a still-pending
+ * DM event the unread watcher processes — including one from a still-pending
  * peer, since `rememberContact` fires unconditionally ahead of the
  * pending-confirmation gate (spec.md, `directMessageNotifications.ts`
  * Technical Approach). Used as a proxy for "the live gift-wrap event reached
- * and was processed by A's bell watcher", without depending on message
+ * and was processed by A's unread watcher", without depending on message
  * CONTENT ever being locally persisted — see the note on
  * `waitForLastSeenAtBump` below for why content persistence is the wrong
  * signal here.
@@ -75,16 +75,24 @@ async function readContactLastSeenAt(page: Page, peerHex: string): Promise<strin
   }, peerHex);
 }
 
-/** Read the notification bell's badge count (0 when the badge is absent). */
+/**
+ * Read the Contacts-domain nav pill count (0 when the pill is absent).
+ *
+ * The old flat notification bell was removed; a DM or a pending contact now
+ * surfaces on the `contacts-nav-badge` count pill, whose total is
+ * (unread DMs) + (pending contacts). In this spec only peer B is involved and
+ * A has no other contacts/groups, so this total equals B's own contribution —
+ * the exact scalar the removed bell badge used to show here.
+ */
 async function readBadgeCount(page: Page): Promise<number> {
   return page.evaluate(() => {
-    const badge = document.querySelector('[data-testid="notification-badge"]');
+    const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
     if (!badge) return 0;
     return parseInt((badge.textContent ?? '0').trim(), 10);
   });
 }
 
-test.describe('Pending contact confirmation — message hold, bell delay, confirmation UI', () => {
+test.describe('Pending contact confirmation — message hold, notification-count delay, confirmation UI', () => {
   test.beforeAll(async () => {
     await computeTestKeypairs();
   });
@@ -94,7 +102,7 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
   });
 
   test(
-    'a pending contact\'s messages ring no bell (AC-OBS-1); the contacts-list confirm action clears the pending badge (AC-UX-1); no message is lost and the bell correctly clears once the thread is opened post-confirm (AC-MSG-1, AC-OBS-2)',
+    'a pending contact\'s messages raise no unread count (AC-OBS-1); the contacts-list confirm action clears the pending badge (AC-UX-1); no message is lost and the notification count correctly clears once the thread is opened post-confirm (AC-MSG-1, AC-OBS-2)',
     async ({ browser }) => {
       // ── 1. A (issuer) shares a code; B (scanner) scans it once. B is
       // admitted immediately (unaffected by this epic); A ends up with a
@@ -113,23 +121,21 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
 
       // ── 2. AC-BADGE-1 (epic: pending-contact-notification): the contacts
       // list shows B with Confirm + Reject and NO "Pending" badge (removed as
-      // redundant). AC-E2E-1: A's notification bell shows a pending-contact
-      // item; AC-E2E-2: no DM bell entry for B while pending. ──────────────
+      // redundant). AC-E2E-1: A's pending contact surfaces as a count;
+      // AC-E2E-2: that count is the pending flag only, no DM. ──────────────
       await a.page.reload();
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
       await expect(a.page.getByTestId(`contact-pending-reject-${USER_B.pubkeyHex}`)).toBeVisible();
       await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
 
-      // AC-E2E-1: the bell rings for the pending contact (a distinct item that
-      // deep-links to /contacts); AC-E2E-2: no DM bell item for B yet.
-      // NotificationBell is mounted twice (desktop header + mobile menu), so
-      // scope to the visible instance (mirrors dm-feedback-channel.spec.ts).
-      await a.page.getByTestId('notification-bell').locator('visible=true').first().click();
-      await expect(
-        a.page.getByTestId(`notification-pending-contact-${USER_B.pubkeyHex}`).locator('visible=true').first(),
-      ).toBeVisible({ timeout: 15_000 });
-      await expect(a.page.getByTestId(`notification-dm-${USER_B.pubkeyHex}`)).toHaveCount(0);
-      await a.page.keyboard.press('Escape');
+      // AC-E2E-1: the pending contact registers as a count — B's card pill
+      // (`contact-unread-badge`) shows 1 (the pending flag, folded into the
+      // per-contact number) and the Contacts-domain nav pill total is 1.
+      // AC-E2E-2: that 1 is the pending flag ONLY — no DM has been counted yet.
+      // (The old notification bell + its per-item dropdown rows were removed and
+      // replaced by these count pills.)
+      await expect(a.page.getByTestId(`contact-unread-badge-${USER_B.pubkeyHex}`)).toHaveText('1', { timeout: 15_000 });
+      expect(await readBadgeCount(a.page)).toBe(1);
 
       const baselineLastSeenAt = await readContactLastSeenAt(a.page, USER_B.pubkeyHex);
 
@@ -145,34 +151,35 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await b.page.getByTestId('chat-send-btn').click();
       await expect(b.page.locator('[data-testid^="msg-"]').filter({ hasText: msg2 })).toBeVisible({ timeout: 15_000 });
 
-      // ── 4. AC-OBS-1: wait until A's LIVE bell watcher has genuinely
+      // ── 4. AC-OBS-1: wait until A's LIVE unread watcher has genuinely
       // processed at least one of B's events — proven by `lastSeenAt`
       // advancing, since `rememberContact` fires unconditionally ahead of
-      // the pending-confirmation gate — THEN assert the bell never bumped.
+      // the pending-confirmation gate — THEN assert no DM was counted.
       // A's B-contact's message CONTENT is not expected to be locally
       // persisted yet at this point: like any brand-new DM thread (pending
       // or not), content is only fetched from the relay and persisted the
       // first time that peer's ContactChat mounts (see this repo's existing
-      // dm-giftwrap-bell.spec.ts, which proves the bell bumps for a normal
+      // dm-giftwrap-bell.spec.ts, which proves the count bumps for a normal
       // contact via the SAME live-only path, with no IDB write required).
       await expect.poll(
         async () => readContactLastSeenAt(a.page, USER_B.pubkeyHex),
         { timeout: 30_000 },
       ).not.toBe(baselineLastSeenAt);
-      // AC-DM-1 / AC-E2E-2: B's DMs did NOT bump the DM pill while pending —
-      // B's per-contact unread badge is absent. The total notification badge is
-      // 1 (the pending-contact bell item from step 2), NOT the held DMs.
-      await expect(a.page.getByTestId(`contact-unread-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
+      // AC-DM-1 / AC-E2E-2: B's held DMs were NOT counted while pending — B's
+      // card pill stays at 1 (the pending flag only, never climbing to fold in
+      // the two held DMs) and the Contacts nav-pill total stays 1.
+      await expect(a.page.getByTestId(`contact-unread-badge-${USER_B.pubkeyHex}`)).toHaveText('1');
       expect(await readBadgeCount(a.page)).toBe(1);
 
       // ── 5. AC-BADGE-1 / AC-DM-3: confirm from the LIST row. B becomes an
       // ordinary confirmed contact (Confirm control gone), the pending-contact
-      // bell clears, and the unread pill for the two held DMs appears
+      // count clears, and the unread pill for the two held DMs appears
       // IMMEDIATELY — before A ever opens the thread (AC-E2E-3). ────────────
       await a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`).click();
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
-      // The pending-contact bell item clears and the DM pill (2 held messages)
-      // is revealed on confirm — total badge settles at 2 with no chat open.
+      // The pending flag clears (−1) and the two held DMs are revealed as unread
+      // (+2) on confirm — B's card pill and the Contacts nav total both settle
+      // at 2 with no chat open.
       await expect.poll(async () => readBadgeCount(a.page), { timeout: 15_000 }).toBe(2);
       await expect(a.page.getByTestId(`contact-unread-badge-${USER_B.pubkeyHex}`)).toHaveText('2', { timeout: 15_000 });
 
@@ -186,9 +193,9 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await expect(a.page.locator('[data-testid^="msg-"]').filter({ hasText: msg2 })).toBeVisible({ timeout: 15_000 });
 
       // ── 7. AC-OBS-2 (amended 2026-07-15): now that A has opened B's
-      // conversation post-confirm, the bell must correctly reflect that
-      // both held messages have been seen — i.e. the badge clears, via this
-      // app's normal open-marks-read behavior (`ContactChat`'s
+      // conversation post-confirm, the notification count must correctly
+      // reflect that both held messages have been seen — i.e. the count clears,
+      // via this app's normal open-marks-read behavior (`ContactChat`'s
       // `markDirectMessagesRead` mount effect). This proves the confirm
       // path doesn't leave B's held messages permanently stuck as unread. ─
       await expect.poll(
@@ -199,7 +206,7 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
   );
 
   test(
-    'a pending contact has no openable detail page — a direct URL redirects to the list; confirming inline then opening the now-confirmed contact shows held messages and clears the bell (AC-MSG-2, AC-OBS-2)',
+    'a pending contact has no openable detail page — a direct URL redirects to the list; confirming inline then opening the now-confirmed contact shows held messages and clears the notification count (AC-MSG-2, AC-OBS-2)',
     async ({ browser }) => {
       const a = await bootIdentity(browser, USER_A, 'Alice-Pending-Detail');
       const cardLink = await getShareCardLink(a.page);
@@ -243,8 +250,8 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
 
       // Now B is a normal contact: the detail page opens, AC-MSG-2's held
-      // message renders, and opening the thread clears the bell (AC-OBS-2, via
-      // ContactChat's open-marks-read mount effect).
+      // message renders, and opening the thread clears the notification count
+      // (AC-OBS-2, via ContactChat's open-marks-read mount effect).
       await a.page.goto(`/contacts?id=${USER_B.pubkeyHex}`);
       await expect(a.page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
       await expect(a.page.locator('[data-testid^="msg-"]').filter({ hasText: heldMsg })).toBeVisible({ timeout: 15_000 });
@@ -272,8 +279,8 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
       await a.page.reload();
 
       // The pending row carries an inline Confirm + Reject and NO "Pending"
-      // badge (AC-BADGE-1). AC-E2E-1: the pending-contact bell rang (total
-      // notification badge is 1 — the pending item, no DMs in this flow).
+      // badge (AC-BADGE-1). AC-E2E-1: the pending contact registered as a count
+      // (Contacts nav-pill total is 1 — the pending flag, no DMs in this flow).
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toBeVisible({ timeout: 15_000 });
       await expect(a.page.getByTestId(`contact-pending-badge-${USER_B.pubkeyHex}`)).toHaveCount(0);
       await expect.poll(async () => readBadgeCount(a.page), { timeout: 15_000 }).toBe(1);
@@ -291,8 +298,8 @@ test.describe('Pending contact confirmation — message hold, bell delay, confir
 
       // Blocked: the pending row leaves the default list (blocked contacts are
       // hidden unless "show hidden" is toggled), the contact is durably
-      // archived in storage, AND the pending-contact bell entry clears — no
-      // stranded contribution to the badge total (AC-E2E-4 / AC-LIFE-4).
+      // archived in storage, AND the pending-contact count clears — no
+      // stranded contribution to the nav-pill total (AC-E2E-4 / AC-LIFE-4).
       await expect(a.page.getByTestId(`contact-pending-confirm-${USER_B.pubkeyHex}`)).toHaveCount(0, { timeout: 15_000 });
       await expect.poll(async () => readBadgeCount(a.page), { timeout: 15_000 }).toBe(0);
       const archived = await a.page.evaluate((hex) => {

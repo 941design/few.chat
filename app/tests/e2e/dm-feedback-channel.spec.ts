@@ -11,8 +11,13 @@
  *      the configured maintainer key is ADMITTED — not dropped — because the
  *      maintainer key is seeded into knownPeers at startup (AC-REPLY-2). The
  *      reply lands in the Feedback thread (AC-REPLY-1).
- *   3. Activating the maintainer's bell notification routes to /feedback, not a
- *      generic contact chat (AC-NOTIFY-2).
+ *   3. (Removed with the notification bell) The maintainer's bell entry used to
+ *      deep-link to /feedback rather than a generic contact chat (AC-NOTIFY-2).
+ *      The bell + its dropdown rows no longer exist — a maintainer reply now
+ *      only bumps the Contacts-domain nav pill (`contacts-nav-badge`), with no
+ *      per-row routing affordance. That AC-NOTIFY-2 assertion is dropped; the
+ *      still-valid part (the reply increments the Contacts total and lands in
+ *      the Feedback thread) is preserved below.
  *   4. The maintainer key never appears in the contacts list, even after a
  *      reply created a contact record (AC-CONTACT-1).
  *
@@ -115,17 +120,18 @@ test.describe.serial('Feedback channel — reply path + UI wiring', () => {
     await createGroupAndInvite(alicePage, USER_C.npub, helperPage, 'Feedback WG Group');
   });
 
-  test('A maintainer reply is admitted, routes to /feedback, and the maintainer stays out of contacts (AC-REPLY-1/2, AC-NOTIFY-2, AC-CONTACT-1)', async () => {
+  test('A maintainer reply is admitted, routes to /feedback, and the maintainer stays out of contacts (AC-REPLY-1/2, AC-CONTACT-1)', async () => {
     const REPLY = `maintainer-reply-${Date.now()}`;
 
-    // Alice mounts the bell watcher.
+    // Alice mounts the unread watcher.
     await alicePage.goto('/contacts');
     await alicePage.waitForLoadState('networkidle');
     await waitForBridge(alicePage);
     await dismissErrorOverlay(alicePage);
 
+    // Baseline of the Contacts-domain nav pill (a DM is a Contacts-domain event).
     const baseline = await alicePage.evaluate(() => {
-      const b = document.querySelector('[data-testid="notification-badge"]');
+      const b = document.querySelector('[data-testid="contacts-nav-badge"]');
       return b ? parseInt((b.textContent ?? '0').trim(), 10) : 0;
     });
 
@@ -142,10 +148,11 @@ test.describe.serial('Feedback channel — reply path + UI wiring', () => {
       { alicePub: USER_A.pubkeyHex, content: REPLY },
     );
 
-    // AC-REPLY-2: the reply is ADMITTED (not dropped) — bell increments.
+    // AC-REPLY-2: the reply is ADMITTED (not dropped) — the Contacts-domain
+    // nav pill increments.
     await alicePage.waitForFunction(
       (base) => {
-        const b = document.querySelector('[data-testid="notification-badge"]');
+        const b = document.querySelector('[data-testid="contacts-nav-badge"]');
         if (!b) return false;
         return parseInt((b.textContent ?? '0').trim(), 10) > base;
       },
@@ -153,15 +160,12 @@ test.describe.serial('Feedback channel — reply path + UI wiring', () => {
       { timeout: 30_000 },
     );
 
-    // AC-NOTIFY-2: the maintainer's bell entry links to /feedback, not /contacts.
-    // The layout renders both a desktop and a mobile bell; click the visible one.
-    await alicePage.getByTestId('notification-bell').locator('visible=true').first().click();
-    const dmEntry = alicePage.getByTestId(`notification-dm-${USER_B.pubkeyHex}`).first();
-    await expect(dmEntry).toBeVisible({ timeout: 15_000 });
-    const href = await dmEntry.getAttribute('href');
-    // Next.js static export rewrites to a trailing slash; the routing target is
-    // the feedback surface, never a generic /contacts?id= chat.
-    expect(href).toMatch(/^\/feedback\/?$/);
+    // AC-NOTIFY-2 (DROPPED): the maintainer's bell entry used to deep-link to
+    // /feedback rather than a generic /contacts?id= chat. The notification bell
+    // and its per-DM dropdown rows were removed and replaced by count pills, so
+    // there is no longer a per-row routing affordance to assert. The app
+    // provides no equivalent non-bell affordance for this, so no replacement
+    // routing assertion is added here — see this file's header note.
 
     // AC-REPLY-1: the reply renders in the Feedback thread.
     await alicePage.goto('/feedback');

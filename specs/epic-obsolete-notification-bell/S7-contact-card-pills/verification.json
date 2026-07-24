@@ -1,0 +1,71 @@
+{
+  "story_id": "S7",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S7-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does the contacts.tsx / UserCard.tsx pill genuinely call contactCardTotal(slices, peer) and render its single folded number, or does it still render directMessages[peer] as the primary badge with pendingContacts surfaced through a separate, parallel marker that OIN-2 was supposed to eliminate?"
+    },
+    {
+      "question_id": "VQ-S7-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Do the existing clearPendingContact call sites (contacts.tsx ~108/252, PendingConfirmationPrompt.tsx, profile.tsx) remain the sole production path for clearing a peer's pendingContacts entry, with no new duplicate clear path introduced by this story's card-pill wiring?"
+    },
+    {
+      "question_id": "VQ-S7-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `contacts list` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S7-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Is there real, non-manual test coverage for the fold behavior (2 unread + nonzero pending = 3, single number) and for clearPendingContact leaving directMessages untouched, given this project's no-jsdom/no-renderHook convention — or is this left to inspection only?"
+    },
+    {
+      "question_id": "VQ-S7-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "For AC-CARD-8 (the maintainer-DM /feedback special-case peer MUST surface through the same contactCardTotal/contactsDomainTotal mechanism, no bespoke exemption): is there a positive check that the maintainer peer's pubkey takes no different code path anywhere in contacts.tsx/UserCard.tsx's pill rendering — not merely the absence of an obviously-labeled special case?"
+    },
+    {
+      "question_id": "VQ-S7-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does folding directMessages and pendingContacts into one number (AC-CARD-2/OIN-2) preserve enough information elsewhere in the UI (e.g. via existing per-item chat/pending state, not the pill itself) that a user isn't left unable to distinguish 'unread messages' from 'awaiting your confirmation' entirely, per the design intent behind OIN-2's resolution?"
+    },
+    {
+      "question_id": "VQ-S7-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-4",
+      "question": "For AC-CARD-4 (each contact row's pill MUST equal contactCardTotal(slices, peer)): show (a) the production render code in the UserCard actions slot, (b) a test with nonzero directMessages and pendingContacts for one peer asserting the pill equals their sum, and (c) confirmation this is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S7-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CARD-8",
+      "question": "For AC-CARD-8 (maintainer-DM peer surfaces through the same mechanism): show a test using the actual maintainer /feedback peer pubkey asserting its pill is computed by the same contactCardTotal call as any other peer, with no branch keyed on that specific pubkey in the render path."
+    },
+    {
+      "question_id": "VQ-S7-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-2",
+      "question": "For AC-CLEAR-2 (opening a DM thread MUST clear only that peer's directMessages entry, leaving pendingContacts unaffected): show a test with a peer carrying nonzero directMessages and pendingContacts, asserting that after opening the DM thread, only directMessages is cleared."
+    },
+    {
+      "question_id": "VQ-S7-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CLEAR-4",
+      "question": "For AC-CLEAR-4 (confirming/rejecting a pending contact MUST clear that peer's pendingContacts entry; merely opening the DM thread MUST NOT clear it): show (a) the real clearPendingContact call clearing pendingContacts, (b) a test asserting opening the DM thread alone leaves pendingContacts untouched, and (c) a separate test asserting confirm/reject does clear it."
+    }
+  ]
+}

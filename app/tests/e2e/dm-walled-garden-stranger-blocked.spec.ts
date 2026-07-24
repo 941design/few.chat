@@ -5,9 +5,14 @@
  * a NIP-17 gift-wrapped DM via `publishDirectMessage` (the app's DM helper).
  *
  * Assertions:
- *   a. Alice's notification bell stays at 0 (badge never appears).
- *   b. No `notification-dm-<malloryPub>` row appears in the dropdown.
- *   c. `few:messages:dm:<malloryHex>` key is absent from idb-keyval after a wait.
+ *   a. Alice's Contacts-domain nav pill stays at 0 (a blocked stranger DM is
+ *      never counted, so `contacts-nav-badge` never appears).
+ *   b. `few:messages:dm:<malloryHex>` key is absent from idb-keyval after a wait.
+ *
+ * (The old notification bell + its per-DM dropdown rows were removed; a DM now
+ * surfaces only on the `contacts-nav-badge` count pill. The former "no per-DM
+ * dropdown row appears" assertion no longer has a surface to check, so it is
+ * folded into "the Contacts pill was never counted".)
  *
  * Uses the two-context pattern from dm-giftwrap-bell.spec.ts.
  * Mallory = USER_C (seedHex: 'cc'.repeat(16)) — the third deterministic identity.
@@ -44,7 +49,7 @@ test.describe('DM walled garden: stranger blocked (AC-TEST-4)', () => {
 
   test(
     'AC-TEST-4: Mallory (USER_C, no shared group with Alice) DMs Alice via publishDirectMessage; '
-    + 'Alice bell stays at 0, no DM thread appears, no IDB key created',
+    + 'Alice Contacts pill stays at 0, no DM thread appears, no IDB key created',
     async ({ browser }) => {
       const ALICE_NICK = 'alice-walled-garden';
       const MALLORY_NICK = 'mallory-stranger';
@@ -84,14 +89,15 @@ test.describe('DM walled garden: stranger blocked (AC-TEST-4)', () => {
         },
       );
 
-      // ── 2. Alice navigates to /contacts to mount the bell watcher ───────────
+      // ── 2. Alice navigates to /contacts to mount the unread watcher ─────────
       await alicePage.goto('/contacts');
       await alicePage.waitForLoadState('networkidle');
       await waitForBridge(alicePage);
 
-      // Get baseline badge count (may be non-zero if messages exist from other tests)
+      // Baseline Contacts nav-pill count (may be non-zero if DMs from other tests
+      // are already counted). A DM is a Contacts-domain event.
       const startBadgeCount = await alicePage.evaluate(() => {
-        const b = document.querySelector('[data-testid="notification-badge"]');
+        const b = document.querySelector('[data-testid="contacts-nav-badge"]');
         return b ? parseInt((b.textContent ?? '0').trim(), 10) : 0;
       });
 
@@ -156,25 +162,21 @@ test.describe('DM walled garden: stranger blocked (AC-TEST-4)', () => {
         },
       );
 
-      // ── 4. Wait 5 seconds — Alice's bell must stay at 0 ──────────────────────
+      // ── 4. Wait 5 seconds — Alice's Contacts pill must stay at 0 ─────────────
       await alicePage.waitForTimeout(5_000);
 
-      // Assertion (a): badge count must not increase (stranger DM must be blocked/dropped)
+      // Assertion (a): the Contacts nav-pill count must not increase (stranger DM
+      // must be blocked/dropped, so it is never counted). The pill is absent
+      // (count 0) at a domain total of 0. This also subsumes the removed
+      // "no per-DM dropdown row" check — there is no longer a per-DM row
+      // surface; not being counted here is the equivalent guarantee.
       const afterBadgeCount = await alicePage.evaluate(() => {
-        const b = document.querySelector('[data-testid="notification-badge"]');
+        const b = document.querySelector('[data-testid="contacts-nav-badge"]');
         return b ? parseInt((b.textContent ?? '0').trim(), 10) : 0;
       });
       expect(afterBadgeCount).toBe(startBadgeCount);
 
-      // ── 5. Assertion (b): no notification-dm-<malloryPub> row in dropdown ───
-      // Open the bell to see what notifications (if any) are listed
-      const bellButton = alicePage.getByTestId('notification-bell').first();
-      await bellButton.click();
-      await expect(
-        alicePage.getByTestId(`notification-dm-${USER_C.pubkeyHex}`),
-      ).toHaveCount(0);
-
-      // ── 6. Assertion (c): no few:messages:dm:<malloryHex> IDB key ─────────
+      // ── 5. Assertion (b): no few:messages:dm:<malloryHex> IDB key ─────────
       const malloryKey = await readIdbRecord(
         alicePage,
         'keyval-store',

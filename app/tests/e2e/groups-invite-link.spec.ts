@@ -141,12 +141,13 @@ test.describe.serial('Invite link flow — generate, join request, approve', () 
       pageA.getByTestId('groups-empty-state').or(pageA.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 60_000 });
 
-    // Wait for the notification bell to show a badge
+    // Wait for the Groups nav pill to show a count (a join request is a
+    // Groups-domain event, so it surfaces on `groups-nav-badge`).
     await expect
       .poll(
         async () => {
           await dismissErrorOverlay(pageA);
-          const badge = pageA.getByTestId('notification-badge').first();
+          const badge = pageA.getByTestId('groups-nav-badge').first();
           return badge.isVisible();
         },
         { timeout: 60_000, intervals: [3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000] },
@@ -325,7 +326,7 @@ test.describe.serial('Invite link flow — nameless invitee gate, nickname trans
       .poll(
         async () => {
           await dismissErrorOverlay(pageAdmin);
-          const badge = pageAdmin.getByTestId('notification-badge').first();
+          const badge = pageAdmin.getByTestId('groups-nav-badge').first();
           return badge.isVisible();
         },
         { timeout: 60_000, intervals: [3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000] },

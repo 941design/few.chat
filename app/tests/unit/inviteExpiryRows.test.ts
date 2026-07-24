@@ -1,14 +1,15 @@
 /**
- * Unit tests for `NotificationBell.tsx`'s `buildInviteExpiryRows` — the pure
- * row-building function extracted for gate-remediation Finding 3 (epic
- * invite-link-lifecycle).
+ * Unit tests for `buildInviteExpiryRows` — the pure row-building function
+ * originally extracted for gate-remediation Finding 3 (epic
+ * invite-link-lifecycle) and relocated to `@/src/lib/inviteExpiryRows`
+ * when the notification bell was removed (epic: obsolete-notification-bell,
+ * AC-REMOVE-4).
  *
- * `NotificationBell.tsx` is a component file (Chakra/Next imports) — this
- * repo has no jsdom/@testing-library/renderHook precedent (see
+ * This repo has no jsdom/@testing-library/renderHook precedent (see
  * `groupsManageLinksDeepLink.test.ts`'s identical extraction rationale for
- * `groups.tsx`), so the row-building logic worth testing directly is
- * extracted into an exported, dependency-free pure function. Neither React
- * nor the bell component is mounted here.
+ * `groups.tsx`), so the row-building logic worth testing directly lives in an
+ * exported, dependency-free pure function. Neither React nor any component is
+ * mounted here.
  *
  * Before the fix, the bell's row list was filtered to the admin's current
  * `groups` list — the same source `unreadGroups`/`joinRequestGroups` use.
@@ -22,7 +23,7 @@
  * regardless of which groupIds are present in `groups`.
  */
 import { describe, it, expect } from 'vitest';
-import { buildInviteExpiryRows } from '@/src/components/NotificationBell';
+import { buildInviteExpiryRows } from '@/src/lib/inviteExpiryRows';
 
 const UNKNOWN_LABEL = 'Group not found.';
 

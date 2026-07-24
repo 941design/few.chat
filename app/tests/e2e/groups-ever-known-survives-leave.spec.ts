@@ -5,7 +5,7 @@
  * Bob accepts). Alice DMs Bob — message lands. Alice then leaves the group.
  * After membership change settles:
  *   a. Alice DMs Bob again.
- *   b. Bob's bell increments.
+ *   b. Bob's Contacts nav pill increments (a DM is a Contacts-domain event).
  *   c. The message renders in Bob's DM thread (Alice is in knownPeers, not just groups).
  *   d. Bob's contact list still contains Alice.
  *   e. Bob's IDB DM thread with Alice still exists.
@@ -118,7 +118,7 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
   });
 
   test('Alice DMs Bob; message lands (baseline — both in group)', async () => {
-    // Bob navigates to /contacts to mount the bell watcher
+    // Bob navigates to /contacts to mount the unread watcher
     await bobPage.goto('/contacts');
     await bobPage.waitForLoadState('networkidle');
     await bobPage.waitForFunction(
@@ -128,7 +128,7 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
     );
 
     const baselineBadge = await bobPage.evaluate(() => {
-      const badge = document.querySelector('[data-testid="notification-badge"]');
+      const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
       if (!badge) return 0;
       return parseInt((badge.textContent ?? '0').trim(), 10);
     });
@@ -148,7 +148,7 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
 
     await bobPage.waitForFunction(
       (baseline) => {
-        const badge = document.querySelector('[data-testid="notification-badge"]');
+        const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
         if (!badge) return false;
         return parseInt((badge.textContent ?? '0').trim(), 10) > baseline;
       },
@@ -182,11 +182,11 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
     await alicePage.waitForTimeout(5_000);
   });
 
-  test('AC-TEST-7(a-d): Alice DMs Bob after leaving; bell increments; message renders; contact retained', async () => {
-    // This test sends a DM and waits for relay propagation + bell update (up to 60s),
+  test('AC-TEST-7(a-d): Alice DMs Bob after leaving; Contacts pill increments; message renders; contact retained', async () => {
+    // This test sends a DM and waits for relay propagation + pill update (up to 60s),
     // so it needs more than the default 2-minute timeout.
     test.setTimeout(180_000);
-    // Bob back on /contacts so the bell watcher is active
+    // Bob back on /contacts so the unread watcher is active
     await bobPage.goto('/contacts');
     await bobPage.waitForLoadState('networkidle');
     await bobPage.waitForFunction(
@@ -196,7 +196,7 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
     );
 
     const preLeaveBadge = await bobPage.evaluate(() => {
-      const badge = document.querySelector('[data-testid="notification-badge"]');
+      const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
       if (!badge) return 0;
       return parseInt((badge.textContent ?? '0').trim(), 10);
     });
@@ -210,10 +210,10 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
       { bobPub: USER_B.pubkeyHex, content: DM_CONTENT_2 },
     );
 
-    // AC-TEST-7(b): Bob's bell increments (Alice is in knownPeers — still allowed)
+    // AC-TEST-7(b): Bob's Contacts pill increments (Alice is in knownPeers — still allowed)
     await bobPage.waitForFunction(
       (baseline) => {
-        const badge = document.querySelector('[data-testid="notification-badge"]');
+        const badge = document.querySelector('[data-testid="contacts-nav-badge"]');
         if (!badge) return false;
         return parseInt((badge.textContent ?? '0').trim(), 10) > baseline;
       },

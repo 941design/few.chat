@@ -13,13 +13,7 @@ export type Copy = {
     languageLabel: string;
     mobileMenuLabel: string;
     profileNamePlaceholder: string;
-    notificationsLabel: string;
-    noNotifications: string;
     unreadMessages: (count: number) => string;
-    joinRequestNotification: (count: number) => string;
-    directMessageNotification: (count: number) => string;
-    inviteExpiryNotification: (count: number) => string;
-    pendingContactNotification: string;
     backupNeededLabel: string;
     imprintLink: string;
   };
@@ -632,13 +626,7 @@ const copy: Record<LanguageCode, Copy> = {
       languageLabel: 'Language',
       mobileMenuLabel: 'Toggle navigation menu',
       profileNamePlaceholder: 'You',
-      notificationsLabel: 'Notifications',
-      noNotifications: 'No new messages',
       unreadMessages: (count: number) => count === 1 ? '1 new message' : `${count} new messages`,
-      joinRequestNotification: (count: number) => count === 1 ? '1 join request' : `${count} join requests`,
-      directMessageNotification: (count: number) => count === 1 ? '1 new direct message' : `${count} new direct messages`,
-      inviteExpiryNotification: (count: number) => count === 1 ? '1 invite link expired' : `${count} invite links expired`,
-      pendingContactNotification: 'New contact — confirm or reject',
       backupNeededLabel: 'Backup needed',
       imprintLink: 'Imprint',
     },
@@ -1199,13 +1187,7 @@ const copy: Record<LanguageCode, Copy> = {
       languageLabel: 'Sprache',
       mobileMenuLabel: 'Navigationsmenü umschalten',
       profileNamePlaceholder: 'Du',
-      notificationsLabel: 'Benachrichtigungen',
-      noNotifications: 'Keine neuen Nachrichten',
       unreadMessages: (count: number) => count === 1 ? '1 neue Nachricht' : `${count} neue Nachrichten`,
-      joinRequestNotification: (count: number) => count === 1 ? '1 Beitrittsanfrage' : `${count} Beitrittsanfragen`,
-      directMessageNotification: (count: number) => count === 1 ? '1 neue Direktnachricht' : `${count} neue Direktnachrichten`,
-      inviteExpiryNotification: (count: number) => count === 1 ? '1 Einladungslink abgelaufen' : `${count} Einladungslinks abgelaufen`,
-      pendingContactNotification: 'Neuer Kontakt — bestätigen oder ablehnen',
       backupNeededLabel: 'Sicherung erforderlich',
       imprintLink: 'Impressum',
     },

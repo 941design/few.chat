@@ -111,13 +111,14 @@ function pathWithQueryOf(url: string): string {
   return u.pathname + u.search;
 }
 
-/** Poll for the admin's notification bell to pick up a join request. */
+/** Poll for the admin's Groups nav pill to pick up a join request. */
 async function waitForJoinRequestNotification(page: Page): Promise<void> {
+  // A join request is a Groups-domain event, so it surfaces on `groups-nav-badge`.
   await expect
     .poll(
       async () => {
         await dismissErrorOverlay(page);
-        return page.getByTestId('notification-badge').first().isVisible();
+        return page.getByTestId('groups-nav-badge').first().isVisible();
       },
       { timeout: 60_000, intervals: [3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000] },
     )

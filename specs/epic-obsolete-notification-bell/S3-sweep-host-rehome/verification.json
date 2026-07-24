@@ -1,0 +1,57 @@
+{
+  "story_id": "S3",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S3-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does DirectMessageNotificationsWatcher.tsx's new mount+interval effect genuinely call the real runInviteExpiryCycle export (not a locally re-implemented copy, not a no-op stand-in that only logs), and does the accompanying unit test assert the real function was invoked with real fake-timer advancement, not a spy that always resolves regardless of whether the interval fired?"
+    },
+    {
+      "question_id": "VQ-S3-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the new effect in the sweep host call runInviteExpiryCycle through inviteExpirySweep.ts's existing exported entry point (the declared seam), with no inline reimplementation of the migrate/sweep/derive steps inside DirectMessageNotificationsWatcher.tsx itself?"
+    },
+    {
+      "question_id": "VQ-S3-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `sweep host` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S3-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/marmot/directMessageNotificationsWatcherSweep.test.ts use vi.useFakeTimers (no jsdom, per project convention) to assert runInviteExpiryCycle fires once on mount AND again after each subsequent 60-second tick for multiple ticks, and does the test genuinely FAIL if the interval registration is deleted or the tick duration is changed — i.e. is it load-bearing, not a tautological assertion that passes regardless of the interval's presence?"
+    },
+    {
+      "question_id": "VQ-S3-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Per spec.md's TRAP 1 mandatory fix and architecture.md's note that the cycle is 'already idempotent/double-mount-safe,' does the sweep host's new copy of the effect coexist safely with NotificationBell.tsx's still-live copy during the interim (both call the same idempotent cycle, no double-counting of a single expiry, no conflicting IDB writes) — and is this coexistence actually exercised by a test, or only asserted in prose?"
+    },
+    {
+      "question_id": "VQ-S3-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does the new interval effect clear its interval (clearInterval / effect cleanup) on unmount of DirectMessageNotificationsWatcher.tsx, so the sweep host cannot leak a running interval past the component's lifecycle?"
+    },
+    {
+      "question_id": "VQ-S3-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SWEEP-1",
+      "question": "For AC-SWEEP-1 (on mount of the sweep host, runInviteExpiryCycle MUST fire at least once, independently of NotificationBell.tsx): show (a) the mount effect's production code, (b) a test asserting the real function is called on mount with no bell component present in the test, and (c) confirmation this is not a mock-spy proxy that only checks a call count without confirming which function was called."
+    },
+    {
+      "question_id": "VQ-S3-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SWEEP-2",
+      "question": "For AC-SWEEP-2 (after mount, runInviteExpiryCycle MUST continue firing on a 60-second interval for as long as the host remains mounted, and a controllable-clock test MUST fail if the interval is removed or the host unmounted without replacement): show (a) the interval registration code, (b) the fake-timer test advancing multiple 60s ticks and asserting call count increments each time, and (c) evidence the test was run against a deliberately-broken variant (interval removed) and observed to fail, confirming it is state-discriminating rather than a false-green."
+    }
+  ]
+}

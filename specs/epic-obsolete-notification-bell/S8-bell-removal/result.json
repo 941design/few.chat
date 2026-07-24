@@ -1,0 +1,8 @@
+{
+  "story_id": "S8", "status": "done", "final_outcome": "accepted", "architect_skipped": true,
+  "modules_touched": ["Layout nav"],
+  "files_modified": ["app/src/components/Layout.tsx", "app/src/lib/i18n.ts"],
+  "files_deleted": ["app/src/components/NotificationBell.tsx", "app/tests/e2e/notification-bell.spec.ts"],
+  "remediation_rounds": 0, "completed_at": "2026-07-24T13:40:00Z",
+  "retrospective": {"skipped": false, "notes": "Deleted NotificationBell.tsx + both Layout mounts + import; removed 6 bell-only i18n keys from type+en+de (kept shared unreadMessages); deleted notification-bell.spec.ts. Full unit suite 4269 pass. Typecheck 0 errors.", "lead_clarifications": []}
+}

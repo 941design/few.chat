@@ -1,0 +1,12 @@
+{
+  "story_id": "S5",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": true,
+  "modules_touched": ["Layout nav"],
+  "files_modified": ["app/src/components/Layout.tsx"],
+  "files_created": [],
+  "remediation_rounds": 0,
+  "completed_at": "2026-07-24T13:33:00Z",
+  "retrospective": {"skipped": false, "notes": "Both nav maps now compute a per-item domain total via navBadgeCount() -> contactsDomainTotal / groupsDomainTotal. OIN-1: the old groups-invitation-badge (invitations only) is replaced by groups-nav-badge showing the merged Groups total; new contacts-nav-badge added. Testids: contacts-nav-badge[-mobile], groups-nav-badge[-mobile]. AC-CLEAR-6 rides the existing pendingInvitations self-clear + reactive subscription. NOTE for S9: existing specs referencing groups-invitation-badge[-mobile] must be repointed.", "lead_clarifications": []}
+}

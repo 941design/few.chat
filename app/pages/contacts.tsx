@@ -33,6 +33,7 @@ import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useProfile } from '@/src/context/ProfileContext';
 import { commonGroups, confirmContact, getContact, listContacts, rememberContactsFromGroups } from '@/src/lib/contacts';
 import { useUnreadCounts, clearPendingContact, reconcileConfirmedContactDirectMessageCount } from '@/src/lib/unreadStore';
+import { contactCardTotal } from '@/src/lib/notificationCounts';
 import { isMaintainerPubkey } from '@/src/config/maintainer';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
@@ -48,7 +49,7 @@ function ContactListView() {
   // page-local `contactsRevision` state below (which covers the group-change /
   // manual-confirm bumps).
   const { groups, ready, contactsRevision: contactsSignal } = useMarmot();
-  const { directMessages } = useUnreadCounts();
+  const unreadSlices = useUnreadCounts();
   const [showHidden, setShowHidden] = useState(false);
   // Revision counter forces a re-read of localStorage after rememberContactsFromGroups runs.
   const [contactsRevision, setContactsRevision] = useState(0);
@@ -192,8 +193,12 @@ function ContactListView() {
                   ) : null}
                   actions={
                     <>
+                      {/* Contact card pill = unread DMs + pending-contact flag
+                          folded into one number (epic: obsolete-notification-bell,
+                          AC-CARD-4, OIN-2). A pending contact with 2 unread DMs
+                          shows 3 — no separate pending marker. */}
                       <UnreadCountBadge
-                        count={directMessages[contact.pubkeyHex.toLowerCase()] ?? 0}
+                        count={contactCardTotal(unreadSlices, contact.pubkeyHex.toLowerCase())}
                         testId={`contact-unread-badge-${contact.pubkeyHex}`}
                       />
                       {/* Blocked wins over pending (spec.md Design Decision 9):

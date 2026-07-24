@@ -1,0 +1,7 @@
+{
+  "story_id": "S6", "status": "done", "final_outcome": "accepted", "architect_skipped": true,
+  "modules_touched": ["GroupCard"],
+  "files_modified": ["app/src/components/groups/GroupCard.tsx"], "files_created": [],
+  "remediation_rounds": 0, "completed_at": "2026-07-24T13:36:00Z",
+  "retrospective": {"skipped": false, "notes": "GroupCard pill now groupCardTotal(slices, id) = counts+joinRequests+inviteExpiries. Kept existing group-unread-badge-<id> testid (now aggregate). CLEAR-1/3/5/7 are preserved store behaviors (mark/clear fire at existing view/action sites); pill reflects them. Verified via e2e (S9) + browser.", "lead_clarifications": []}
+}

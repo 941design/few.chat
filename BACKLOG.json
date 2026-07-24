@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-24T12:20:41Z",
+  "updated_at": "2026-07-24T14:38:00Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -239,6 +239,11 @@
     },
     {
       "path": "specs/epic-group-message-author-auth-app-layer/",
+      "status": "DONE",
+      "next_action": "completed 2026-07-24"
+    },
+    {
+      "path": "specs/epic-obsolete-notification-bell/",
       "status": "DONE",
       "next_action": "completed 2026-07-24"
     }
@@ -653,6 +658,20 @@
       "behavior": "After Bob reacts to Alice's message, the reaction-badge testid never renders. groups-reactions.spec.ts:163 fails in isolation on a freshly-wiped relay while its 6 sibling reaction tests pass (so group setup and other reaction scenarios work), which isolates the break to this cross-peer reaction badge path. Cross-peer reaction timing means the exact break point still warrants owner confirmation.",
       "approach": "Owner decision required: confirm whether the reaction apply/render is genuinely broken (fix product) or the e2e expectation is stale under new dispatcher semantics (update the test). Start from the reactionHandler.ts and reactions/api.ts diffs in 8c2b2ff/1924c9b.",
       "success_signal": "groups-reactions.spec.ts:163 passes on a clean relay (badge renders on both peers)"
+    },
+    {
+      "slug": "stale-foreign-group-invite-expiry-count",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/notificationCounts.ts",
+        "line": 87
+      },
+      "text": "Stale/foreign-group invite-expiry count has no reachable clear affordance after bell removal",
+      "created_at": "2026-07-24",
+      "motivation": "The notification bell's expiry rows used to render an 'unknown group' clearable deep-link for a groupId present in the inviteExpiries slice but absent from the current groups list. That row was deleted with the bell (epic obsolete-notification-bell). The Groups nav pill still sums ALL inviteExpiries keys, so such a stale/foreign entry inflates the pill with no UI path to clear it. Codex review Finding 1 (P2).",
+      "behavior": "A groupId in inviteExpiries but not in the current groups list (e.g. backup-restore of a non-member group's on-disk expired links) contributes to groupsDomainTotal but has no card and no bell row; markInviteExpiriesRead is only reachable via the ?id=X&manageLinks=1 redirect branch (groups.tsx:1108), which nothing links to anymore. Leaving a group already clears via leaveGroupImpl, so this is a narrow restore-only residual.",
+      "approach": "Options: (a) prune inviteExpiries keys for groups absent from the current list during the sweep derive step or on groups-list load (guard transient not-ready states); (b) a small stale-expiry acknowledge affordance on the groups list; (c) WONTFIX given rarity. Prefer (a) with a readiness guard.",
+      "success_signal": "A restored/foreign groupId expiry either self-clears on next sweep or exposes a one-click acknowledge; the Groups nav pill never shows an unclearable expiry."
     }
   ],
   "archive": [
