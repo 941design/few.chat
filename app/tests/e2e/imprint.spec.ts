@@ -17,13 +17,16 @@ test.describe('Imprint page', () => {
       'href',
       'mailto:markus@rotheric.com',
     );
+    // VAT ID is populated (§27a UStG), so its section renders with the number.
+    await expect(imprint.getByRole('heading', { name: /VAT ID/i })).toBeVisible();
+    await expect(imprint).toContainText('DE463560219');
   });
 
-  test('omits empty optional sections (phone, VAT)', async ({ page }) => {
+  test('omits empty optional sections (phone)', async ({ page }) => {
     await page.goto('/imprint');
     const imprint = page.getByTestId('imprint-page');
-    // IMPRINT.phone and IMPRINT.vatId are empty, so their sections must not render.
-    await expect(imprint.getByRole('heading', { name: /VAT ID/i })).toHaveCount(0);
+    // IMPRINT.phone is empty, so its section must not render. (VAT is populated
+    // — its presence is asserted by "renders the injected legal facts" above.)
     await expect(imprint).not.toContainText(/Phone:/i);
   });
 });
