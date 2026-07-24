@@ -9,6 +9,7 @@ export type Copy = {
       groups: string;
       settings: string;
       info: string;
+      profile: string;
     };
     languageLabel: string;
     mobileMenuLabel: string;
@@ -622,6 +623,7 @@ const copy: Record<LanguageCode, Copy> = {
         groups: 'Groups',
         settings: 'Settings',
         info: 'How few.chat works',
+        profile: 'Profile',
       },
       languageLabel: 'Language',
       mobileMenuLabel: 'Toggle navigation menu',
@@ -1183,6 +1185,7 @@ const copy: Record<LanguageCode, Copy> = {
         groups: 'Gruppen',
         settings: 'Einstellungen',
         info: 'Wie funktioniert few.chat?',
+        profile: 'Profil',
       },
       languageLabel: 'Sprache',
       mobileMenuLabel: 'Navigationsmenü umschalten',

@@ -26,6 +26,12 @@ type ProfileSummaryProps = {
   nameTestId?: string;
   /** Overrides the avatar wrapper's `data-testid` (default `profile-avatar-thumb`). */
   avatarTestId?: string;
+  /**
+   * Render the avatar alone, dropping the display-name element. Used by the
+   * mobile header where the avatar is a compact shorthand for the profile and
+   * there is no room for the name. `alt` still carries the name for a11y.
+   */
+  hideName?: boolean;
 };
 
 export default function ProfileSummary({
@@ -34,6 +40,7 @@ export default function ProfileSummary({
   size = 'md',
   nameTestId = 'profile-display-name',
   avatarTestId = 'profile-avatar-thumb',
+  hideName = false,
 }: ProfileSummaryProps) {
   const displayName = profile.nickname || fallbackName;
   const avatarSize = size === 'sm' ? '44px' : '64px';
@@ -70,17 +77,19 @@ export default function ProfileSummary({
         )}
       </Box>
 
-      <VStack align="start" spacing={0}>
-        <Box>
-          <Text
-            fontWeight="bold"
-            fontSize={nameSize}
-            data-testid={nameTestId}
-          >
-            {displayName}
-          </Text>
-        </Box>
-      </VStack>
+      {!hideName && (
+        <VStack align="start" spacing={0}>
+          <Box>
+            <Text
+              fontWeight="bold"
+              fontSize={nameSize}
+              data-testid={nameTestId}
+            >
+              {displayName}
+            </Text>
+          </Box>
+        </VStack>
+      )}
     </HStack>
   );
 }

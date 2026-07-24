@@ -8,7 +8,8 @@ import {
   Text,
   Container,
   useDisclosure,
-  Collapse,
+  Fade,
+  SlideFade,
   IconButton,
 } from '@chakra-ui/react';
 import NextLink from 'next/link';
@@ -112,6 +113,10 @@ export default function Layout({ children }: LayoutProps) {
 
   // Hide the imprint footer on the two open-chat pages (see helper above).
   const hideImprintFooter = shouldHideImprintFooter(router.pathname, router.query.id);
+  // The mobile bottom tab bar hides on those same open-chat pages: the message
+  // composer owns the bottom of the viewport there, so a fixed tab bar would
+  // collide with it. Condition is identical to the footer's, reused verbatim.
+  const hideBottomNav = hideImprintFooter;
 
   const navItems = [
     { label: copy.layout.nav.contacts, href: '/contacts', icon: 'contacts' },
@@ -126,7 +131,25 @@ export default function Layout({ children }: LayoutProps) {
   return (
     // Flex column + a growing <main> pins the footer to the bottom of the
     // viewport even when the page content is short (sticky-footer pattern).
-    <Box minH="100vh" bg="appBg" display="flex" flexDirection="column">
+    <Box
+      minH="100vh"
+      bg="appBg"
+      display="flex"
+      flexDirection="column"
+      // Clear the fixed mobile bottom bar so the footer / last row of content
+      // is never hidden behind it. Only when the bar is shown, and only on
+      // mobile (the bar is md:none). Includes the iOS safe-area inset the bar
+      // itself also pads by, so the reserved space matches the bar's height.
+      sx={
+        hideBottomNav
+          ? undefined
+          : {
+              '@media (max-width: 47.99em)': {
+                paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))',
+              },
+            }
+      }
+    >
       <DirectMessageNotificationsWatcher />
       <PendingPairingIntentWatcher />
       <ProfileHealWatcher />
@@ -145,6 +168,12 @@ export default function Layout({ children }: LayoutProps) {
         aria-label="Main navigation"
         {...navStyle}
       >
+        {/* Header-row wrapper — the positioned ancestor the banner decor fills.
+            Bounding the banner to THIS box (not the whole <nav>) keeps the
+            dynamic-banner art on the header row only; when the mobile hamburger
+            expands the <nav>, the banner no longer stretches down behind the
+            menu (which then sits on the nav's own opaque surfaceBg). */}
+        <Box position="relative">
         {/* Gate on `hydrated`: until the saved theme is read from storage the
             app renders the DEFAULT theme (spring), and rendering its banner here
             would flash the wrong theme's art for a beat before the saved
@@ -309,59 +338,98 @@ export default function Layout({ children }: LayoutProps) {
               </NextLink>
             </HStack>
 
-            {/* Mobile actions */}
+            {/* Mobile actions — avatar (leftmost) + hamburger (rightmost);
+                Info/Settings live in the dropdown. */}
             <HStack spacing={1} display={{ base: 'flex', md: 'none' }}>
-              <NextLink href="/info" passHref legacyBehavior>
+              <NextLink href="/profile" passHref legacyBehavior>
                 <Link
-                  aria-label={copy.layout.nav.info}
-                  {...headerIconChipStyle}
-                  color={router.pathname === '/info' ? 'brand.500' : 'textMuted'}
-                  data-testid="mobile-header-info-link"
+                  aria-label={copy.layout.nav.profile}
+                  display="inline-flex"
+                  alignItems="center"
+                  borderRadius="full"
+                  _focusVisible={{ boxShadow: 'outline' }}
+                  _hover={{ textDecoration: 'none' }}
+                  data-testid="mobile-header-profile-avatar"
                 >
-                  <ThemeIcon name="info" size={20} aria-hidden />
+                  {/* Avatar-only shorthand for the profile — no name, to fit the
+                      compact mobile header row. ProfileSummary's avatar is its
+                      own bordered circle, so no chip wrapper is needed. The full
+                      Profile row (with name) still lives in the dropdown below. */}
+                  <ProfileSummary
+                    profile={profile}
+                    fallbackName={copy.layout.profileNamePlaceholder}
+                    size="sm"
+                    hideName
+                  />
                 </Link>
               </NextLink>
-              <NextLink href="/settings" passHref legacyBehavior>
-                <Link
-                  aria-label={copy.layout.nav.settings}
+              <Box position="relative">
+                <IconButton
+                  onClick={onToggle}
+                  variant="unstyled"
                   {...headerIconChipStyle}
-                  color={router.pathname === '/settings' ? 'brand.500' : 'textMuted'}
-                  data-testid="mobile-header-settings-link"
-                >
-                  <ThemeIcon name="settings" size={20} aria-hidden />
-                  {!backedUp && (
-                    <Box
-                      as="span"
-                      position="absolute"
-                      top="6px"
-                      right="6px"
-                      w="8px"
-                      h="8px"
-                      borderRadius="full"
-                      bg="orange.400"
-                      data-testid="gear-backup-dot-mobile"
-                    />
-                  )}
-                </Link>
-              </NextLink>
-              <IconButton
-                onClick={onToggle}
-                variant="unstyled"
-                {...headerIconChipStyle}
-                color="textMuted"
-                aria-label={copy.layout.mobileMenuLabel}
-                data-testid="mobile-menu-btn"
-                icon={
-                  <Text fontSize="xl" lineHeight="1">
-                    {isOpen ? '\u2715' : '\u2630'}
-                  </Text>
-                }
-              />
+                  color="textMuted"
+                  aria-label={copy.layout.mobileMenuLabel}
+                  data-testid="mobile-menu-btn"
+                  icon={
+                    <Text fontSize="xl" lineHeight="1">
+                      {isOpen ? '✕' : '☰'}
+                    </Text>
+                  }
+                />
+                {!backedUp && !isOpen && (
+                  <Box
+                    as="span"
+                    position="absolute"
+                    top="6px"
+                    right="6px"
+                    w="8px"
+                    h="8px"
+                    borderRadius="full"
+                    bg="orange.400"
+                    aria-label={copy.layout.backupNeededLabel}
+                    data-testid="mobile-menu-backup-dot"
+                    pointerEvents="none"
+                  />
+                )}
+              </Box>
             </HStack>
           </Flex>
+          </Container>
+        </Box>
 
-          {/* Mobile nav dropdown */}
-          <Collapse in={isOpen} animateOpacity>
+        {/* Mobile nav dropdown — OVERLAY. Absolutely positioned just below the
+            header so opening it floats OVER the page content instead of pushing
+            it down; the content stays in place. Rendered outside the header
+            wrapper on its own opaque surfaceBg + shadow, so the banner art never
+            bleeds through the menu rows. A tap-scrim (a sibling of <nav>, below)
+            dims the content and closes the menu on an outside tap. */}
+        <Box
+          position="absolute"
+          top="100%"
+          left={0}
+          right={0}
+          display={{ base: 'block', md: 'none' }}
+          zIndex={1}
+          // Clip the slide so the panel appears to emerge from under the header
+          // rather than floating in from above it. `pb` leaves room for the
+          // panel's drop shadow, which `overflow: hidden` would otherwise crop.
+          overflow="hidden"
+          pb={2}
+        >
+          <SlideFade
+            in={isOpen}
+            offsetY="-100%"
+            unmountOnExit
+            transition={{ enter: { duration: 0.2 }, exit: { duration: 0.2 } }}
+          >
+            <Box
+              bg="surfaceBg"
+              borderBottomWidth="1px"
+              borderBottomColor="borderSubtle"
+              boxShadow="lg"
+            >
+              <Container maxW="container.xl">
             <VStack
               as="ul"
               listStyleType="none"
@@ -412,6 +480,7 @@ export default function Layout({ children }: LayoutProps) {
                         aria-current={isActive ? 'page' : undefined}
                         onClick={onToggle}
                       >
+                        <ThemeIcon name={item.icon} size={20} aria-hidden />
                         {item.label}
                         {showBadge && (
                           <Box
@@ -438,10 +507,90 @@ export default function Layout({ children }: LayoutProps) {
                   </Box>
                 );
               })}
+              {/* Info + Settings also live in the dropdown so it lists every
+                  destination, not only the two promoted to the bottom bar. */}
+              <Box as="li" key="/info" w="100%">
+                <NextLink href="/info" passHref legacyBehavior>
+                  <Link
+                    display="flex"
+                    alignItems="center"
+                    gap={2}
+                    py={2}
+                    px={3}
+                    borderRadius="md"
+                    fontWeight={router.pathname === '/info' ? 'semibold' : 'normal'}
+                    color={router.pathname === '/info' ? 'brand.500' : 'textMuted'}
+                    bg={router.pathname === '/info' ? 'surfaceMutedBg' : 'transparent'}
+                    _hover={{ bg: 'surfaceMutedBg', textDecoration: 'none' }}
+                    aria-current={router.pathname === '/info' ? 'page' : undefined}
+                    onClick={onToggle}
+                    data-testid="mobile-nav-info-link"
+                  >
+                    <ThemeIcon name="info" size={20} aria-hidden />
+                    {copy.layout.nav.info}
+                  </Link>
+                </NextLink>
+              </Box>
+              <Box as="li" key="/settings" w="100%">
+                <NextLink href="/settings" passHref legacyBehavior>
+                  <Link
+                    display="flex"
+                    alignItems="center"
+                    gap={2}
+                    py={2}
+                    px={3}
+                    borderRadius="md"
+                    position="relative"
+                    fontWeight={router.pathname === '/settings' ? 'semibold' : 'normal'}
+                    color={router.pathname === '/settings' ? 'brand.500' : 'textMuted'}
+                    bg={router.pathname === '/settings' ? 'surfaceMutedBg' : 'transparent'}
+                    _hover={{ bg: 'surfaceMutedBg', textDecoration: 'none' }}
+                    aria-current={router.pathname === '/settings' ? 'page' : undefined}
+                    onClick={onToggle}
+                    data-testid="mobile-nav-settings-link"
+                  >
+                    <ThemeIcon name="settings" size={20} aria-hidden />
+                    {copy.layout.nav.settings}
+                    {!backedUp && (
+                      <Box
+                        as="span"
+                        w="8px"
+                        h="8px"
+                        borderRadius="full"
+                        bg="orange.400"
+                        aria-label={copy.layout.backupNeededLabel}
+                        data-testid="mobile-nav-settings-backup-dot"
+                      />
+                    )}
+                  </Link>
+                </NextLink>
+              </Box>
             </VStack>
-          </Collapse>
-        </Container>
+              </Container>
+            </Box>
+          </SlideFade>
+        </Box>
       </Box>
+
+      {/* Tap-scrim for the mobile nav overlay — a full-viewport backdrop that
+          dims the page and closes the menu on an outside tap. Sits below the
+          <nav> (zIndex 10, which carries the dropdown) so the header and menu
+          stay interactive above it, and above the page content it covers. */}
+      {/* Fade (not a bare `isOpen &&`) so the backdrop eases in AND out —
+          `unmountOnExit` keeps it in the DOM through the fade-out before it
+          leaves, matching the menu's slide timing for a coordinated feel. */}
+      <Fade in={isOpen} unmountOnExit transition={{ enter: { duration: 0.2 }, exit: { duration: 0.2 } }}>
+        <Box
+          display={{ base: 'block', md: 'none' }}
+          position="fixed"
+          inset={0}
+          zIndex={5}
+          bg="blackAlpha.500"
+          onClick={onToggle}
+          data-testid="mobile-nav-scrim"
+          aria-hidden
+        />
+      </Fade>
 
       {/* Main Content */}
       {contentPanelStyle ? (
@@ -458,6 +607,87 @@ export default function Layout({ children }: LayoutProps) {
           <StorageWarning />
           {children}
         </Container>
+      )}
+
+      {/* Mobile bottom tab bar — the two primary domains (Contacts, Groups)
+          promoted to a native-feeling fixed bar. Mobile only (hidden at md+,
+          where the desktop nav already carries them). Hidden on the open-chat
+          pages so it does not collide with the message composer. The header
+          hamburger still lists every destination, these two included. */}
+      {!hideBottomNav && (
+        <Box
+          as="nav"
+          aria-label={copy.layout.mobileMenuLabel}
+          display={{ base: 'flex', md: 'none' }}
+          position="fixed"
+          bottom={0}
+          left={0}
+          right={0}
+          zIndex={10}
+          bg="surfaceBg"
+          borderTopWidth="1px"
+          borderTopColor="borderSubtle"
+          sx={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          data-testid="mobile-bottom-nav"
+        >
+          <HStack as="ul" listStyleType="none" spacing={0} w="100%">
+            {navItems.map((item) => {
+              const isActive = router.pathname === item.href;
+              const badgeCount = navBadgeCount(item.href);
+              const showBadge = badgeCount > 0;
+              const badgeTestId = item.href === '/groups' ? 'groups-bottomnav-badge' : 'contacts-bottomnav-badge';
+              return (
+                <Box as="li" key={item.href} flex="1">
+                  <NextLink href={item.href} passHref legacyBehavior>
+                    <Link
+                      aria-label={item.label}
+                      aria-current={isActive ? 'page' : undefined}
+                      display="flex"
+                      flexDirection="column"
+                      alignItems="center"
+                      justifyContent="center"
+                      gap={0.5}
+                      py={2}
+                      position="relative"
+                      color={isActive ? 'brand.500' : 'textMuted'}
+                      _hover={{ color: 'brand.500', textDecoration: 'none' }}
+                    >
+                      <Box position="relative">
+                        <ThemeIcon name={item.icon} size={22} aria-hidden />
+                        {showBadge && (
+                          <Box
+                            as="span"
+                            position="absolute"
+                            top="-4px"
+                            right="-8px"
+                            display="inline-flex"
+                            alignItems="center"
+                            justifyContent="center"
+                            bg="orange.500"
+                            color="white"
+                            fontSize="2xs"
+                            fontWeight="bold"
+                            lineHeight="1"
+                            minW="16px"
+                            h="16px"
+                            borderRadius="full"
+                            px="4px"
+                            data-testid={badgeTestId}
+                          >
+                            {badgeCount > 99 ? '99+' : badgeCount}
+                          </Box>
+                        )}
+                      </Box>
+                      <Text fontSize="2xs" fontWeight={isActive ? 'semibold' : 'normal'}>
+                        {item.label}
+                      </Text>
+                    </Link>
+                  </NextLink>
+                </Box>
+              );
+            })}
+          </HStack>
+        </Box>
       )}
 
       {/* Footer — legal links at the very bottom of every page, except the two
