@@ -1,0 +1,155 @@
+{
+  "epic_name": "mobile-qr-scanner",
+  "status": "done",
+  "phase": "COMPLETE",
+  "created_at": "2026-07-24T18:21:28Z",
+  "updated_at": "2026-07-24T21:48:34Z",
+  "pre_existing_dirty_files": [
+    ".serena/project.yml"
+  ],
+  "completed_stories": [
+    "S1",
+    "S2"
+  ],
+  "escalated_stories": [],
+  "phase_history": [
+    {
+      "phase": "SPEC_VALIDATED",
+      "timestamp": "2026-07-24T18:21:28Z",
+      "trigger": "validation_passed"
+    },
+    {
+      "phase": "IMPLEMENTING",
+      "timestamp": "2026-07-24T18:31:26Z",
+      "trigger": "planning_complete"
+    },
+    {
+      "phase": "COMPLETE",
+      "timestamp": "2026-07-24T21:48:34Z",
+      "trigger": "all_stories_done_gates_passed"
+    }
+  ],
+  "plugin_sha": "f5e4524c7b9618d99914da272f8e8e9745ed9057",
+  "consumer_sha": "9a77a7317bee22935efa08cbee30d71283a355c3",
+  "models": {
+    "lead": "sonnet",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "ownership_ledger_path": "ownership-ledger.json",
+  "reviewer_agent_id": "ac666765453fc6d03",
+  "ac_closure": [
+    {
+      "ac_id": "AC-ROUTE-1",
+      "status": "met",
+      "evidence": "qr-scan-destination.test.ts: all card forms → /add#c="
+    },
+    {
+      "ac_id": "AC-ROUTE-2",
+      "status": "met",
+      "evidence": "qr-scan-destination.test.ts: group invite → /groups?join&admin&name preserved"
+    },
+    {
+      "ac_id": "AC-ROUTE-3",
+      "status": "met",
+      "evidence": "qr-scan-destination.test.ts: tampered-signature card → null (sev-10 examiner YES)"
+    },
+    {
+      "ac_id": "AC-ROUTE-4",
+      "status": "met",
+      "evidence": "qr-scan-destination.test.ts: 8 missing/malformed param cases → null"
+    },
+    {
+      "ac_id": "AC-ROUTE-5",
+      "status": "met",
+      "evidence": "qr-scan-destination.test.ts: arbitrary URL/text/embedded-#c= → null"
+    },
+    {
+      "ac_id": "AC-ROUTE-6",
+      "status": "met",
+      "evidence": "qr-scan-destination.test.ts: non-few.chat origins accepted (origin-agnostic)"
+    },
+    {
+      "ac_id": "AC-FAB-1",
+      "status": "met",
+      "evidence": "mobile-qr-scanner-fab.spec.ts: visible mobile viewport, hidden desktop"
+    },
+    {
+      "ac_id": "AC-FAB-2",
+      "status": "met",
+      "evidence": "QrScanFab.tsx: centered, zIndex 20 > bar 10, safe-area inset (e2e asserts visible)"
+    },
+    {
+      "ac_id": "AC-FAB-3",
+      "status": "met",
+      "evidence": "mobile-qr-scanner-fab.spec.ts: FAB absent in hamburger overlay; navItems unchanged"
+    },
+    {
+      "ac_id": "AC-FAB-4",
+      "status": "met",
+      "evidence": "Layout.tsx: shares hideBottomNav predicate; e2e asserts open-chat gating"
+    },
+    {
+      "ac_id": "AC-SCAN-1",
+      "status": "met",
+      "evidence": "classifyCameraError 11 tests + canUseCameraQrScanner 6 tests; DOM-render residual is e2e-unreachable framework limit"
+    },
+    {
+      "ac_id": "AC-SCAN-2",
+      "status": "met",
+      "evidence": "resolveScanDestination 44 tests + handleRawScan wiring verified; real-camera decode is MV-1 manual"
+    },
+    {
+      "ac_id": "AC-SCAN-3",
+      "status": "met",
+      "evidence": "handleRawScan null branch verified: fixed message, no raw content, keeps scanning"
+    },
+    {
+      "ac_id": "AC-INTL-1",
+      "status": "met",
+      "evidence": "scannerCopy.i18n.test.ts: EN+DE parity, no hardcoded strings"
+    },
+    {
+      "ac_id": "AC-PRIV-1",
+      "status": "met",
+      "evidence": "structural: grep 0 relay/publish/kind-0 imports on scan→navigate path"
+    }
+  ],
+  "manual_validation": [
+    {
+      "ac_id": "MV-1",
+      "status": "waived",
+      "evidence": "User-waived at DONE interlock (2026-07-24): physical-device QR scan deferred. Automated coverage strong — resolveScanDestination 44 tests (both destinations, signature, origin-agnostic, never-throws), classifyCameraError 11 tests, canUseCameraQrScanner 6 tests, wiring code-verified, e2e FAB spec 4/4. Only the literal camera→decode step is unverified (Playwright cannot feed synthetic QR)."
+    }
+  ],
+  "gate_runs": [
+    {
+      "gate_id": "mutation",
+      "outcome": "fired_remediated",
+      "detail": "qr.ts score 0.94 (113 killed/7 survived); 2 real gaps closed (+12 tests); 7 equivalent survivors; 4 modules skipped (React chrome/i18n)"
+    },
+    {
+      "gate_id": "e2e",
+      "outcome": "fired_pass",
+      "detail": "epic-own spec mobile-qr-scanner-fab.spec.ts 4/4 pass (non-relay bucket). Full 60-test Docker gate not run per user (chronically-red flakes). One pre-existing unrelated non-relay failure update-detection.spec.ts (dual-<nav>, from mobile-nav epic 9a77a73) backlogged, not a regression."
+    },
+    {
+      "gate_id": "pre_commit_review",
+      "outcome": "fired_remediated",
+      "detail": "Opus resumable whole-assembly clean across S1+S2 + 6 remediation rounds; Fable cross-vendor (Codex substitute — Codex env-unavailable this session) clean, explicit ship. Codex caught 1 P2 on its one working pass (fixed); Fable caught 4 then 3 correctness/hardening findings other reviewers missed (all fixed).",
+      "structural_findings": {
+        "surfaced": 9,
+        "acted": 7,
+        "disclosed_unacted": 2
+      }
+    }
+  ],
+  "mutation_gate_residuals": [
+    {
+      "module": "app/src/lib/qr.ts",
+      "residuals": [
+        "7 equivalent survivors: redundant empty-string guards, parseWebUrl http-protocol defense-in-depth redundancy, group-invite early-return backstopped downstream, regex i-flag unobservable (generateNonce lowercase-only)"
+      ]
+    }
+  ]
+}

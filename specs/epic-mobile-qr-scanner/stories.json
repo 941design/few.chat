@@ -1,0 +1,128 @@
+{
+  "epic_name": "mobile-qr-scanner",
+  "created_at": "2026-07-24T18:30:00Z",
+  "total_stories": 2,
+  "story_order": [
+    "S1",
+    "S2"
+  ],
+  "dependency_notes": "S2 depends on S1 only through the frozen ScanDestination seam contract (below): resolveScanDestination's return-shape (string | null and the two path forms it produces). S1 is independently unit-testable (no DOM, no router) against qr.ts. S2 cannot be independently verified until S1 lands, since its onScan handler calls the real resolveScanDestination export — implemented sequentially per story_order, not in parallel, per the epic's non-goal of parallel story implementation.",
+  "mock_resolution_plan": "No temporary mocks introduced by either story. S2 consumes S1's real resolveScanDestination directly (it is a pure, already-testable function by the time S2 lands) rather than mocking it, and reuses the existing NpubQrScanner/canUseCameraQrScanner surface as-is.",
+  "seams": [
+    {
+      "data": "ScanDestination",
+      "contract": {
+        "type_name": "ScanDestination",
+        "fields": [
+          {
+            "name": "value",
+            "type": "string",
+            "optional": false
+          },
+          {
+            "name": "returns",
+            "type": "string | null",
+            "optional": false
+          }
+        ],
+        "invariants": [
+          "resolveScanDestination(value) returns '/add#c=<payload>' (the same form buildShareUrl's fragment produces) only when normaliseScanPayload(value) -> parseContactCard succeeds, including signature verification; a signature-failing card returns null, never a downgraded/bare result",
+          "resolveScanDestination(value) returns '/groups?join=<hex>&admin=<npub>&name=<name>' only when value parses as an absolute URL whose pathname is the /groups/ invite path AND carries a well-formed hex join nonce AND an admin value that decodes via npubToPubkeyHex AND a non-empty name; all three parameters are preserved verbatim in the returned path",
+          "the group-invite branch does not compare the URL's origin against 'few.chat' or any fixed origin — only the pathname and required params gate acceptance",
+          "resolveScanDestination(value) returns null for every value that satisfies neither branch (arbitrary text, unrelated URLs, empty string, a /groups/ URL missing any required param, malformed join/admin)",
+          "resolveScanDestination is synchronous, pure, and DOM-free: no router, no window, no network access, and it never throws for any string input"
+        ]
+      },
+      "source": {
+        "story": "S1",
+        "artifact": "app/src/lib/qr.ts#resolveScanDestination"
+      },
+      "destination": {
+        "story": "S2",
+        "artifact": "app/src/components/QrScanFab.tsx (onScan handler)"
+      }
+    }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "name": "scan-classification-destination-routing",
+      "title": "Scan classification & destination routing (lib)",
+      "description": "New resolveScanDestination(value: string): string | null in app/src/lib/qr.ts, plus a new minimal, pattern-based group-invite shape validator placed beside the existing normaliseScanPayload/parseContactCard seam. Card branch delegates decode + signature verification to normaliseScanPayload (no new card-parsing code, per DD2); group-invite branch is new — recognises an absolute URL whose pathname is the /groups/ invite path, carrying a valid hex join nonce, an admin value that decodes via npubToPubkeyHex, and a non-empty name, WITHOUT pinning the origin to few.chat (DD3/DD6). Returns null for anything else. Fully unit-testable, no DOM, mirroring the qr.test.ts / qr.mutation-gaps.test.ts precedent.",
+      "acceptance_criteria": [
+        "AC-ROUTE-1",
+        "AC-ROUTE-2",
+        "AC-ROUTE-3",
+        "AC-ROUTE-4",
+        "AC-ROUTE-5",
+        "AC-ROUTE-6"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/qr.ts",
+          "app/tests/unit/qr-scan-destination.test.ts"
+        ],
+        "excludes": [
+          "any change to normaliseScanPayload's or parseContactCard's existing decode/signature-verification logic (reused as-is, DD2)",
+          "the FAB, camera scanner wiring, and i18n copy (S2)",
+          "any change to contactCard.ts, nostrKeys.ts, or marmot/inviteLinkGeneration.ts (reused as shape reference only)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "test_fixtures": [],
+      "status": "done",
+      "owning_module": "QR lib",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Placed inline in qr.ts rather than a sibling scanRouting.ts (spec allows either) — keeps the load-bearing seam next to normaliseScanPayload, the function it wraps, and avoids a second tiny module for a two-branch dispatch the spec explicitly says is not meant to grow into a registry (Out of Scope). New dedicated test file (qr-scan-destination.test.ts) rather than extending qr.test.ts/qr.mutation-gaps.test.ts, to keep the new routing-seam's test surface separately auditable from the pre-existing card-decode tests it does not modify."
+    },
+    {
+      "id": "S2",
+      "name": "mobile-fab-scanner-entry-point",
+      "title": "Mobile FAB scanner entry point (UI)",
+      "description": "New QrScanFab component (fixed, horizontally-centered, elevated above the bottom tab bar, zIndex > 10, env(safe-area-inset-bottom) honored, display={{base:'flex', md:'none'}}, gated by the same !hideBottomNav predicate as the bottom bar) wired into Layout.tsx, deliberately bypassing navItems so it never appears in the hamburger overlay. Tapping it opens the camera scanner (NpubQrScanner, guarded by canUseCameraQrScanner()); a decoded payload is routed through S1's resolveScanDestination — on a non-null result, router.push to the destination and close the scanner; on null, show the unrecognised-link message and keep scanning. Adds the new 'scanner' i18n namespace (EN + DE) consumed via useCopy(), with no hardcoded strings.",
+      "acceptance_criteria": [
+        "AC-FAB-1",
+        "AC-FAB-2",
+        "AC-FAB-3",
+        "AC-FAB-4",
+        "AC-SCAN-1",
+        "AC-SCAN-2",
+        "AC-SCAN-3",
+        "AC-INTL-1",
+        "AC-PRIV-1"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/components/QrScanFab.tsx",
+          "app/src/components/Layout.tsx",
+          "app/src/lib/i18n.ts",
+          "app/tests/unit/scannerCopy.i18n.test.ts",
+          "app/tests/e2e/mobile-qr-scanner-fab.spec.ts"
+        ],
+        "excludes": [
+          "resolveScanDestination and the group-invite validator (S1, consumed as a dependency)",
+          "any change to NpubQrScanner.tsx's or NpubQrModal.tsx's internal decode/camera logic (reused as-is per architecture.md; a thin app-level wrapper is permitted, not a semantic edit)",
+          "any change to add.tsx's or groups.tsx's inbound deep-link resolution (out of scope per spec)",
+          "desktop scanner entry point, hamburger/header entry, navItems changes (Non-Goals)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "test_fixtures": [],
+      "status": "done",
+      "owning_module": "Navigation UI",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "ScanDestination"
+      ],
+      "notes": "QrScanFab extracted as its own component (architecture.md module map lists this as an option) rather than an inline Layout.tsx block, to keep the camera-open/onScan-routing logic unit-approachable and mirror the existing NpubQrModal/NpubQrButton separation. AC-FAB-1..4's visibility/positioning assertions are CSS/JSX props with no jsdom precedent in this repo (see layoutImprintFooter.test.ts's rationale) — the route-visibility half (AC-FAB-4) reuses the exact same hideBottomNav/shouldHideImprintFooter predicate the bottom bar already uses, so no new predicate is needed there; the remaining rendering assertions (AC-FAB-1..3, AC-SCAN-1..3) are the natural target for a new non-relay-bucket Playwright spec (mobile viewport, no strfry dependency — canUseCameraQrScanner() is false headless, exercising the unavailable-message path; the real camera->decode->navigate path is MV-1, manual-only). AC-INTL-1 follows the addContactByNpub.i18n.test.ts precedent (exact en+de string assertions). Test-file choices are implementation-time decisions, not re-litigated here."
+    }
+  ],
+  "updated_at": "2026-07-24T18:30:00Z"
+}

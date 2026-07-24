@@ -1,0 +1,21 @@
+{
+  "story_id": "S2",
+  "captured_at": "2026-07-24T21:10:00Z",
+  "tests": {
+    "command": "make test-unit",
+    "status": "PASS",
+    "test_files": 221,
+    "tests_passed": 4313,
+    "tests_skipped": 1,
+    "tests_total": 4314
+  },
+  "lint": {
+    "command": "npx next lint (app/)",
+    "status": "NO_LINT",
+    "note": "No ESLint config present in the repo (no .eslintrc*, no eslint devDependency, no Makefile lint target). `next lint` prompts interactively to scaffold one. Recorded as NO_LINT baseline per the NO_TESTS-style tolerance."
+  },
+  "typecheck": {
+    "command": "npx tsc --noEmit (app/)",
+    "status": "clean"
+  }
+}

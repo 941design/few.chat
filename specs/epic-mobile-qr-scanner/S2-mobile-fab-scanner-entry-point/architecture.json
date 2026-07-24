@@ -1,0 +1,41 @@
+{
+  "module_name": "Navigation UI",
+  "purpose": "Mobile chrome addition: a standalone floating action button (QrScanFab) that opens the camera scanner and routes a decoded QR payload to its destination via the QR lib's resolveScanDestination seam, without joining the existing navItems-driven bottom bar / hamburger overlay.",
+  "public_api": [
+    {
+      "name": "QrScanFab",
+      "signature": "export default function QrScanFab(props: { hidden: boolean }): JSX.Element | null",
+      "description": "Mobile-only FAB (display base:flex, md:none). `hidden` is the caller-supplied !hideBottomNav gate (Layout.tsx passes the same predicate the bottom tab bar uses, AC-FAB-4). Renders null when hidden. Owns its own open/close + scan-error state; opens a Modal containing the reused NpubQrScanner camera surface; on a decoded value, calls resolveScanDestination and either router.push+close (match) or shows the unrecognised-link message and keeps scanning (no match, AC-SCAN-3)."
+    }
+  ],
+  "private_files": [
+    "app/src/components/QrScanFab.tsx"
+  ],
+  "owned_data": [
+    "FAB render block (Layout.tsx standalone insertion point)",
+    "scanner-open / scan-rejected local component state (QrScanFab)"
+  ],
+  "dependencies_allowed": [
+    "app/src/lib/qr.ts#resolveScanDestination (QR lib, declared seam)",
+    "app/src/components/groups/NpubQrScanner.tsx (Scanner UI, declared seam, onScan/onRawScan string contract)",
+    "app/src/lib/i18n.ts (new `scanner` namespace, via useCopy())",
+    "next/router (useRouter, for router.push to the resolved destination)"
+  ],
+  "dependencies_forbidden": [
+    "app/src/lib/contactCard.ts, nostrKeys.ts, marmot/inviteLinkGeneration.ts — no direct card/invite parsing; resolveScanDestination is the sole classification entry point",
+    "any relay-publish / NDK-publish call (AC-PRIV-1, structural)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/scannerCopy.i18n.test.ts",
+    "app/tests/e2e/mobile-qr-scanner-fab.spec.ts"
+  ],
+  "deviation_notice": {
+    "summary": "S2's design requires one small, additive, backward-compatible edit to app/src/components/groups/NpubQrScanner.tsx — a file NOT listed in stories.json's scope.includes for S2. Flagged here per the anti-pattern guidance rather than silently widened.",
+    "why": "architecture.md's declared seam describes `onScan(payload: string)` as carrying the raw decoded QR string for `resolveScanDestination` to classify. In the actual (pre-existing, unmodified-by-S1) NpubQrScanner implementation, `onScan` only fires AFTER an internal `normaliseScanPayload` gate succeeds — a card/npub-only check that unconditionally REJECTS every group-invite URL (parseContactCard has no branch for a `/groups/` URL) before `onScan` is ever called. Reusing NpubQrScanner completely unmodified therefore makes AC-SCAN-2's group-invite routing structurally unreachable — the FAB would show 'unrecognised' for every valid group-invite QR, not because resolveScanDestination rejects it, but because the scanner component itself never hands it over.",
+    "change_made": "Added two new OPTIONAL props to NpubQrScannerProps: `onRawScan?: (raw: string) => boolean` (when provided, the component skips its own normaliseScanPayload gate and hands every decoded raw string to this callback instead, stopping the camera only when it returns true) and `startingMessage?: string` (overrides the hardcoded `copy.groups.qrStartingCamera` starting-camera text, defaulting to it when omitted). Both are additive and default to the exact pre-existing behavior when omitted — every other NpubQrScanner/NpubQrModal call site (ShareContactCard, settings.tsx) is untouched and behaviorally identical. QrScanFab is the first (and only) caller to pass `onRawScan`/`startingMessage`.",
+    "scope_impact": "Widens S2's touched-file set by one file beyond scope.includes. No other file in NpubQrScanner.tsx's existing dependents changes behavior. Recorded here for the lead/Decider's record per the Anti-pattern guidance's escalation path — this could not be resolved by narrowing a gate command (it is a functional gap, not a lint/test blast-radius issue), and no team channel was available mid-run to pre-clear it, so it is surfaced as a flagged, minimal, reasoned deviation rather than silently absorbed."
+  }
+}

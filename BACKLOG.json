@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-24T14:38:00Z",
+  "updated_at": "2026-07-24T21:48:34Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -244,6 +244,11 @@
     },
     {
       "path": "specs/epic-obsolete-notification-bell/",
+      "status": "DONE",
+      "next_action": "completed 2026-07-24"
+    },
+    {
+      "path": "specs/epic-mobile-qr-scanner/",
       "status": "DONE",
       "next_action": "completed 2026-07-24"
     }
@@ -672,6 +677,19 @@
       "behavior": "A groupId in inviteExpiries but not in the current groups list (e.g. backup-restore of a non-member group's on-disk expired links) contributes to groupsDomainTotal but has no card and no bell row; markInviteExpiriesRead is only reachable via the ?id=X&manageLinks=1 redirect branch (groups.tsx:1108), which nothing links to anymore. Leaving a group already clears via leaveGroupImpl, so this is a narrow restore-only residual.",
       "approach": "Options: (a) prune inviteExpiries keys for groups absent from the current list during the sweep derive step or on groups-list load (guard transient not-ready states); (b) a small stale-expiry acknowledge affordance on the groups list; (c) WONTFIX given rarity. Prefer (a) with a readiness guard.",
       "success_signal": "A restored/foreign groupId expiry either self-clears on next sweep or exposes a one-click acknowledge; the Groups nav pill never shows an unclearable expiry."
+    },
+    {
+      "slug": "update-detection-spec-ts-banner-non",
+      "scope": "app",
+      "anchor": {
+        "path": "app/tests/e2e/update-detection.spec.ts"
+      },
+      "text": "update-detection.spec.ts 'banner is non-blocking' fails Playwright strict-mode: page.locator('nav') matches two <nav> landmarks (header + mobile bottom tab bar)",
+      "created_at": "2026-07-24",
+      "motivation": "Pre-existing e2e failure introduced by the mobile-nav epic (commit 9a77a73) that added a second as='nav' landmark (the bottom tab bar); surfaced while running the non-relay bucket during the mobile-qr-scanner epic. Not caused by the QR scanner (adds no <nav>).",
+      "behavior": "The 'banner is non-blocking' test uses page.locator('nav'), which now resolves to two elements, triggering a Playwright strict-mode violation and failing the test.",
+      "approach": "Scope the locator to the header nav (e.g. a data-testid or role+name), not the bare 'nav' tag. One-line test-selector fix.",
+      "success_signal": "update-detection.spec.ts passes in the non-relay bucket"
     }
   ],
   "archive": [

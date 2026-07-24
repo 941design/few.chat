@@ -1,0 +1,49 @@
+{
+  "module_name": "QR lib",
+  "purpose": "Pure scan-payload classification + destination resolution: given a decoded QR-scan string, classify it as a contact/pairing card or a group invite and return the app-relative destination to navigate to, or null. Owns the existing generation + card-validation seam plus the new group-invite shape validator.",
+  "public_api": [
+    {
+      "name": "resolveScanDestination",
+      "signature": "resolveScanDestination(value: string): string | null",
+      "description": "The ScanDestination seam (stories.json seams[0]). Card branch delegates to normaliseScanPayload -> parseContactCard (decode + signature verification, unchanged). Group-invite branch is new: shape-validates an absolute URL whose pathname is the /groups/ invite path, a well-formed hex join nonce, an admin that decodes via npubToPubkeyHex, and a non-empty name — origin-agnostic (AC-ROUTE-6). Returns '/add#c=<payload>', '/groups?join=&admin=&name=', or null. Synchronous, pure, DOM-free, never throws."
+    },
+    {
+      "name": "normaliseScanPayload",
+      "signature": "normaliseScanPayload(value: string): string | null",
+      "description": "Existing (unmodified) — card decode + signature verification seam this story's card branch delegates to."
+    },
+    {
+      "name": "canUseCameraQrScanner",
+      "signature": "canUseCameraQrScanner(): boolean",
+      "description": "Existing (unmodified) — camera capability probe, consumed by S2."
+    },
+    {
+      "name": "generateQrDataUrl",
+      "signature": "generateQrDataUrl(value: string, errorCorrectionLevel?: QrErrorCorrectionLevel): Promise<string>",
+      "description": "Existing (unmodified) — QR generation seam, unrelated to this story."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/qr.ts (private helpers: extractCardLinkPayload, parseGroupInviteUrl, CARD_LINK_FRAGMENT_MARKER, GROUP_INVITE_PATHNAME, INVITE_JOIN_NONCE_HEX_LENGTH, INVITE_JOIN_NONCE_PATTERN — none exported)"
+  ],
+  "owned_data": [
+    "resolveScanDestination (new)",
+    "group-invite shape validator (new, private: parseGroupInviteUrl)"
+  ],
+  "dependencies_allowed": [
+    "app/src/lib/contactCard.ts (parseContactCard, via normaliseScanPayload — pre-existing)",
+    "app/src/lib/nostrKeys.ts (npubToPubkeyHex — pre-existing import, reused by the new validator)"
+  ],
+  "dependencies_forbidden": [
+    "app/src/components/** (Navigation UI, Scanner UI — no router, no window, no DOM)",
+    "app/src/lib/marmot/inviteLinkGeneration.ts (shape reference only, not an import — the validator re-derives the pathname/param pattern locally rather than importing the generator)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/qr-scan-destination.test.ts (new)",
+    "app/tests/unit/qr.test.ts (pre-existing, unmodified, must stay green)",
+    "app/tests/unit/qr.mutation-gaps.test.ts (pre-existing, unmodified, must stay green)"
+  ]
+}

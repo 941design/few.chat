@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { normaliseScanPayload, canUseCameraQrScanner } from '@/src/lib/qr';
+import { normaliseNpubPayload, normaliseScanPayload, canUseCameraQrScanner } from '@/src/lib/qr';
 import { pubkeyToNpub } from '@/src/lib/nostrKeys';
 
 /**
@@ -27,6 +27,31 @@ describe('normaliseScanPayload — trims surrounding whitespace (mutation gate)'
   it('trims a padded nostr:-prefixed npub down to the bare npub', () => {
     expect(normaliseScanPayload(`  nostr:${sampleNpub}  `)).toBe(sampleNpub);
   });
+});
+
+/**
+ * Both `normaliseNpubPayload` and `normaliseScanPayload` strip an optional
+ * `nostr:` URI prefix and then trim the REMAINDER — so `nostr:` followed by
+ * interior whitespace before the npub still normalises down to the bare npub.
+ * The tests above only cover the OUTER trim (`  nostr:npub  `); because
+ * `nostr:npub` has no gap after the colon, they never exercise this inner
+ * trim, and dropping it survived the mutation gate on both functions. This is
+ * a metamorphic whitespace-insensitivity property: for any run of interior
+ * whitespace after the prefix, the normalised result is prefix- and
+ * whitespace-free. (Contact-card-exchange / mobile-qr-scanner mutation gate.)
+ */
+const interiorWhitespaceVariants = [' ', '  ', '\t', '\n', ' \t ', '\r\n  '];
+
+describe.each([
+  ['normaliseNpubPayload', normaliseNpubPayload],
+  ['normaliseScanPayload', normaliseScanPayload],
+] as const)('%s — interior whitespace after the nostr: prefix normalises away (mutation gate)', (_name, normalise) => {
+  it.each(interiorWhitespaceVariants)(
+    'reduces "nostr:<ws><npub>" to the bare npub for interior whitespace %j',
+    (interiorWhitespace) => {
+      expect(normalise(`nostr:${interiorWhitespace}${sampleNpub}`)).toBe(sampleNpub);
+    },
+  );
 });
 
 describe('canUseCameraQrScanner — capability probe branches (mutation gate)', () => {

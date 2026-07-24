@@ -599,6 +599,15 @@ export type Copy = {
     callStartedNotice: (callerName: string) => string;
     callEndedNotice: string;
   };
+  scanner: {
+    fabAriaLabel: string;
+    title: string;
+    hint: string;
+    startingCamera: string;
+    permissionDenied: string;
+    unavailable: string;
+    unrecognisedLink: string;
+  };
 };
 
 export function normalizeLanguage(input?: string | null): LanguageCode {
@@ -1175,6 +1184,15 @@ const copy: Record<LanguageCode, Copy> = {
       callStartedNotice: (callerName: string) => `${callerName} started a call`,
       callEndedNotice: 'Call ended',
     },
+    scanner: {
+      fabAriaLabel: 'Scan QR code',
+      title: 'Scan QR Code',
+      hint: 'Point the camera at a few.chat contact card or group invite QR code.',
+      startingCamera: 'Starting camera...',
+      permissionDenied: 'Camera permission was denied.',
+      unavailable: 'QR scanning is unavailable on this device or browser.',
+      unrecognisedLink: "This QR code isn't a few.chat contact card or group invite.",
+    },
   },
   de: {
     appName: 'few.chat',
@@ -1735,6 +1753,15 @@ const copy: Record<LanguageCode, Copy> = {
       ipPrivacyHelp: 'Medien über TURN leiten, um IP vor Teilnehmern zu verbergen (erhöht Latenz).',
       callStartedNotice: (callerName: string) => `${callerName} hat einen Anruf gestartet`,
       callEndedNotice: 'Anruf beendet',
+    },
+    scanner: {
+      fabAriaLabel: 'QR-Code scannen',
+      title: 'QR-Code scannen',
+      hint: 'Richte die Kamera auf eine few.chat-Kontaktkarte oder einen Gruppeneinladungs-QR-Code.',
+      startingCamera: 'Kamera wird gestartet...',
+      permissionDenied: 'Kamerazugriff wurde verweigert.',
+      unavailable: 'QR-Scan ist auf diesem Gerät oder Browser nicht verfügbar.',
+      unrecognisedLink: 'Dieser QR-Code ist keine few.chat-Kontaktkarte oder Gruppeneinladung.',
     },
   },
 };

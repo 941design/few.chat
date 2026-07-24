@@ -1,0 +1,184 @@
+{
+  "epic": "mobile-qr-scanner",
+  "concepts": [
+    {
+      "id": "scan-destination-contract",
+      "name": "resolveScanDestination string|null return-shape contract (card + group-invite branches)",
+      "owning_module": "QR lib",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "qr-lib-dom-purity",
+      "name": "QR lib stays DOM-free and pure — no router, no window navigation inside it",
+      "owning_module": "QR lib",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "group-invite-origin-agnostic-validation",
+      "name": "Group-invite shape validation does not pin the origin to few.chat — only /groups/ path + required params gate acceptance",
+      "owning_module": "QR lib",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "fab-bypasses-navitems",
+      "name": "The scanner FAB is a standalone render block that bypasses navItems, so it never leaks into the hamburger overlay",
+      "owning_module": "Navigation UI",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "fab-shares-bottomnav-gating",
+      "name": "The scanner FAB reuses the bottom tab bar's !hideBottomNav route-visibility predicate rather than defining its own",
+      "owning_module": "Navigation UI",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "scanner-ui-unmodified-semantics",
+      "name": "NpubQrScanner / NpubQrModal are consumed as-is; a non-group framing gets a thin app-level wrapper, never an edit to the group component's semantics",
+      "owning_module": "Scanner UI",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "scanner-i18n-namespace",
+      "name": "Scanner-facing copy lives under a dedicated 'scanner' i18n namespace (not groups.qr*/scanQr) with mandatory en+de parity, consumed only via useCopy()",
+      "owning_module": "i18n",
+      "type": "naming_scheme",
+      "added_by_story": null
+    }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "surfaces_touched": [
+        "app/src/lib/qr.ts (resolveScanDestination + extractCardLinkPayload + parseGroupInviteUrl)",
+        "app/tests/unit/qr-scan-destination.test.ts",
+        "app/src/lib/qr.ts (parseWebUrl helper + URL-shape card gate)"
+      ],
+      "remediation_note": "Codex P2 (arbitrary-domain URL embedding a valid #c= payload) closed by pathname-gating the card branch to /add|/add/; nostr:-npub preserved via http/https protocol allowlist rather than constructor-catch."
+    },
+    {
+      "id": "S2",
+      "surfaces_touched": [
+        "app/src/components/QrScanFab.tsx (new — FAB + scanner modal + raw-scan classification wiring)",
+        "app/src/components/groups/NpubQrScanner.tsx (additive onRawScan/startingMessage props)",
+        "app/src/components/Layout.tsx (standalone QrScanFab render, hidden=hideBottomNav)",
+        "app/src/lib/i18n.ts (new scanner namespace, EN+DE)",
+        "app/tests/unit/scannerCopy.i18n.test.ts",
+        "app/tests/e2e/mobile-qr-scanner-fab.spec.ts",
+        "app/tests/unit/groups/npubQrScannerOnScanOptional.test.ts (type-contract + legacy-path regression pins)",
+        "app/tests/unit/groups/cameraErrorClassification.test.ts (11 tests; AC-SCAN-1 classification)"
+      ]
+    }
+  ],
+  "reviewer_state": {
+    "last_story_reviewed": "S2",
+    "model_at": "2026-07-24T18:30:00Z",
+    "whole_assembly": "clean; epic ready to finalize (6 remediation rounds, all reviewed clean)"
+  },
+  "observations": [
+    {
+      "concept": "card-link-fragment-marker",
+      "type": "duplicated_invariant",
+      "owning_module": "Contact card codec (contactCard.ts)",
+      "note": "#c= marker now declared in 3 modules (contactCard.ts owner, addDeepLink.ts, qr.ts). Enforced by convention. S1-scope forbids exporting from contactCard.ts; promote to one exported constant in a later story that can touch the codec. ALSO: /add pathname now encoded in qr.ts (CARD_LINK_PATHNAME) — third convention-coupled surface; promote marker + path to shared exports in a future story that can touch contactCard.ts.",
+      "surfaced_by_story": "S1",
+      "severity": 4,
+      "acted": false
+    },
+    {
+      "concept": "card-payload-extraction",
+      "type": "duplicated_invariant",
+      "owning_module": "Contact card codec (contactCard.ts)",
+      "note": "extractCardLinkPayload re-slices #c= payload that parseContactCard already computes internally. No behavioral bug (identical rule); forked copy. Same root cause as marker duplication.",
+      "surfaced_by_story": "S1",
+      "severity": 3,
+      "acted": false
+    },
+    {
+      "concept": "scanner-ui-unmodified-semantics",
+      "type": "reviewed_exception",
+      "owning_module": "Scanner UI (NpubQrScanner)",
+      "note": "S2 edited the shared NpubQrScanner directly with two ADDITIVE optional props (onRawScan/startingMessage) — outside S2 scope.includes but a sound reviewed exception: the internal card-only normaliseScanPayload gate structurally rejects group-invite URLs, making AC-SCAN-2 unreachable via unmodified onScan. Existing onScan/normaliseScanPayload/qrStartingCamera semantics preserved byte-for-byte for omitting callers. Ledger concept partially superseded — reconciled, not silent drift. REMEDIATION: onScan made optional; QrScanFab omits it; camera-effect deps now referentially stable — mid-scan restart RESOLVED (Finding 1). Regression-pinned by npubQrScannerOnScanOptional.test.ts.",
+      "surfaced_by_story": "S2",
+      "severity": 3,
+      "acted": true
+    },
+    {
+      "concept": "qrscanfab-fab-visible-over-hamburger",
+      "type": "product_visual_open_question",
+      "owning_module": "Navigation UI",
+      "note": "FAB (z20) stays visible over the open hamburger scrim (z5), consistent with the bottom bar (z10) which also stays above the scrim. AC-FAB-3 (never a hamburger ITEM) holds structurally. Whether the FAB should recede when the menu is open is a product-visual call, not a defect. Surfaced to user.",
+      "surfaced_by_story": "S2",
+      "severity": 2,
+      "acted": false
+    },
+    {
+      "concept": "npubqrscanner-both-handlers-optional",
+      "type": "contract_loosened",
+      "owning_module": "Scanner UI (NpubQrScanner)",
+      "note": "onScan now optional (fix for camera-restart) means the type permits omitting BOTH onScan and onRawScan (degenerate scanner). No such caller exists; internal component. Not worth a discriminated-union rework. Track only if a future caller supplies neither.",
+      "surfaced_by_story": "S2",
+      "severity": 2,
+      "acted": false
+    },
+    {
+      "concept": "camera-error-classification-monotonic",
+      "type": "invariant",
+      "owning_module": "Scanner UI (NpubQrScanner)",
+      "note": "classifyCameraError haystack is err.name ∪ err.message — a superset of the original err.message-only check — so classification is monotonic toward permission-denied; the regression direction (permission-denied → unavailable) is structurally impossible. Guard against any future change that narrows the haystack. AC-SCAN-1 test-gap CLOSED (cameraErrorClassification.test.ts, 11 tests).",
+      "surfaced_by_story": "S2",
+      "severity": 1,
+      "acted": true
+    },
+    {
+      "concept": "card-branch-marker-gate",
+      "type": "validation_rule",
+      "owning_module": "QR lib",
+      "note": "Card branch gated on the c= marker (post-nostr-strip): a marker-bearing value must be an absolute http(s) URL with pathname /add or /add/ or it is rejected (falls through to group, then null). Closes nostr:/ftp: scheme-wrapper bypasses a scheme-only gate missed (Fable F2). Guard against reintroducing a not-a-web-URL means card-shaped assumption.",
+      "surfaced_by_story": "S2",
+      "severity": 3,
+      "acted": true
+    },
+    {
+      "concept": "add-samepage-hashnav-full-reload",
+      "type": "invariant",
+      "owning_module": "Navigation UI",
+      "note": "Navigating /add to /add with only a changed hash requires window.location.assign (full reload) because add.tsx deep-link effect is settledRef-gated and excludes the hash from deps; router.push alone is a silent dead-end (Fable F1). Any refactor of add.tsx deep-link effect or QrScanFab nav must preserve this.",
+      "surfaced_by_story": "S2",
+      "severity": 5,
+      "acted": true
+    },
+    {
+      "concept": "resolvescandestination-tail-duplication",
+      "type": "maintainability",
+      "owning_module": "QR lib",
+      "note": "Card-resolution tail duplicated across marker and marker-free branches. Non-blocking DRY nit; could hoist behind a single isCardShape boolean. Left as-is.",
+      "surfaced_by_story": "S2",
+      "severity": 2,
+      "acted": false
+    },
+    {
+      "concept": "join-invite-card-keyed-on-nonce",
+      "type": "invariant",
+      "owning_module": "Groups landing / Navigation UI",
+      "note": "A query-param-driven full-screen component holding mount-persistent terminal state (JoinRequestCard sent latch) MUST be keyed on the invite-identity param (joinNonce) so a same-route invite change forces a clean remount. The FAB is the first surface that can change ?join= without a route change (Fable confirm Finding A). Mirrors OutboundJoinRequestCard key={record.nonce}.",
+      "surfaced_by_story": "S2",
+      "severity": 5,
+      "acted": true
+    },
+    {
+      "concept": "add-samepage-reload-conditional",
+      "type": "invariant",
+      "owning_module": "Navigation UI",
+      "note": "The same-page /add reload must be CONDITIONAL on destinationPath === currentPath (byte-identical live pathname vs parsed destination pathname). An unconditional reload races and cancels a genuine cross-document assign (Fable confirm Finding B, verified empirically). Handles both trailing-slash-present and -absent live URL shapes.",
+      "surfaced_by_story": "S2",
+      "severity": 4,
+      "acted": true
+    }
+  ]
+}

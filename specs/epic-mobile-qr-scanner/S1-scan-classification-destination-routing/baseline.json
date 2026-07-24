@@ -1,0 +1,20 @@
+{
+  "story_id": "S1",
+  "captured_at": "2026-07-24T20:33:00Z",
+  "command": "make test-unit",
+  "status": "PASS",
+  "test_files": 220,
+  "tests_passed": 4269,
+  "tests_skipped": 1,
+  "tests_total": 4270,
+  "tests_failed": 0,
+  "lint": {
+    "status": "NO_LINT",
+    "note": "No .eslintrc*/eslint.config* present in app/. `npx next lint` prompts an interactive first-time-setup wizard rather than running against existing config — no lint gate currently exists in this repo to baseline against."
+  },
+  "typecheck": {
+    "status": "clean",
+    "command": "npx tsc --noEmit -p tsconfig.json",
+    "note": "Zero errors at baseline."
+  }
+}

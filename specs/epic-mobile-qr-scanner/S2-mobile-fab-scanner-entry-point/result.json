@@ -1,0 +1,51 @@
+{
+  "story_id": "S2",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-24T20:11:20Z",
+  "files_created": [
+    "app/src/components/QrScanFab.tsx",
+    "app/tests/unit/scannerCopy.i18n.test.ts",
+    "app/tests/e2e/mobile-qr-scanner-fab.spec.ts",
+    "specs/epic-mobile-qr-scanner/S2-mobile-fab-scanner-entry-point/architecture.json",
+    "specs/epic-mobile-qr-scanner/S2-mobile-fab-scanner-entry-point/baseline.json",
+    "specs/epic-mobile-qr-scanner/S2-mobile-fab-scanner-entry-point/result.json"
+  ],
+  "files_modified": [
+    "app/src/components/Layout.tsx",
+    "app/src/components/groups/NpubQrScanner.tsx",
+    "app/src/lib/i18n.ts",
+    "specs/epic-mobile-qr-scanner/S2-mobile-fab-scanner-entry-point/verification.json"
+  ],
+  "tests_added": {
+    "unit": 3,
+    "e2e": 4
+  },
+  "test_counts": {
+    "baseline": 4314,
+    "final": 4317
+  },
+  "mocks": [],
+  "remediation_rounds": 1,
+  "modules_touched": [
+    "Navigation UI"
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Two things made this harder than a routine 'add a FAB' story would suggest, both surfaced only by actually tracing/probing rather than trusting the story brief or architecture.md at face value. First: architecture.md's declared onScan(payload) seam assumes NpubQrScanner hands the caller the RAW decoded QR string for resolveScanDestination to classify. Reading the actual NpubQrScanner.tsx showed onScan only fires AFTER an internal normaliseScanPayload gate succeeds — a card/npub-only check that structurally rejects every group-invite URL (parseContactCard has no branch for a /groups/ path) before onScan is ever called. Reusing NpubQrScanner completely unmodified, as scope.includes literally requires (it lists only QrScanFab.tsx/Layout.tsx/i18n.ts/two test files, not NpubQrScanner.tsx), would have made AC-SCAN-2's group-invite routing structurally unreachable. Resolving this required a minimal, additive, backward-compatible prop addition (onRawScan/startingMessage) to a file outside scope.includes — a genuine architecture/scope conflict, not an implementation-detail choice, so it is flagged prominently in architecture.json's deviation_notice and verification.json's VQ-S2-016 rather than silently absorbed. Second: the story brief assumed canUseCameraQrScanner() reads false headless, so the e2e spec would exercise the unavailable-message branch. A direct in-page Playwright probe (matching this repo's actual chromium launch args, --use-fake-device-for-media-stream --use-fake-ui-for-media-stream, shared with the calls e2e suite) showed the opposite: isSecureContext is true, a fake videoinput device is enumerated, and getUserMedia succeeds — so the camera actually starts under this project's e2e config, and the unavailable/permission-denied branches are structurally unreachable by any spec in this Playwright project as currently configured. The e2e spec was written against the empirically verified behavior instead (documented inline with the probe evidence) rather than the brief's assumption, which would have produced a spec that either always failed or silently asserted nothing meaningful.",
+    "surprised_by": "Full make test-e2e-fast (71 tests, all non-relay specs together, not just the new 4) surfaced one pre-existing, unrelated failure: update-detection.spec.ts's 'banner is non-blocking' test hits a Playwright strict-mode violation because page.locator('nav') now resolves to two <nav> elements (the header nav and the mobile bottom tab bar's Box as=\"nav\" data-testid=\"mobile-bottom-nav\"). Confirmed via `git show HEAD:app/src/components/Layout.tsx` that both as=\"nav\" landmarks already existed before any change in this story, from the prior mobile-nav epic (commit 9a77a73) — QrScanFab.tsx adds no <nav> element. Not fixed here (touching update-detection.spec.ts or Layout.tsx's landmark semantics is outside S2's scope.includes and unrelated to its ACs); flagged in verification.json VQ-S2-019 for backlog routing.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [
+      "be4185f578923b6d26636125503068875fe9d592"
+    ],
+    "absorbed_from": [
+      {
+        "agent": "dev",
+        "note": "dev's spawn returned a skipped (routine) retrospective — implementation matched the handed-off spec exactly on the first pass, including the additive NpubQrScanner.tsx prop change and the camera-fake-device e2e behavior, with zero debugging cycles. No substantive flag to fold in beyond confirming both of the architect's pre-implementation findings held under real test runs."
+      }
+    ],
+    "lead_clarifications": []
+  },
+  "review_remediation": "Opus findings remediated: (1) camera-restart from unstable onScan (onScan made optional, placeholder removed); (2) onRawScan JSDoc corrected. Examiner PARTIALs (AC-SCAN-1/2 missing_test) remediated: classifyCameraError extracted + 11 unit tests; canUseCameraQrScanner already 6-test covered. All 19 VQs now YES. AC-SCAN-2 real-camera decode remains MV-1 manual (un-automatable: Playwright cannot feed synthetic QR). NpubQrScanner edit (out-of-scope additive props) lead-authorized. Codex unavailable this session (env failure)."
+}

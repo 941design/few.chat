@@ -28,6 +28,7 @@ import { headerIconChipStyle } from '@/src/components/headerIconChip';
 import DirectMessageNotificationsWatcher from '@/src/components/DirectMessageNotificationsWatcher';
 import PendingPairingIntentWatcher from '@/src/components/PendingPairingIntentWatcher';
 import ProfileHealWatcher from '@/src/components/ProfileHealWatcher';
+import QrScanFab from '@/src/components/QrScanFab';
 import { IncomingCallWatcher } from '@/src/components/calls/IncomingCallWatcher';
 import { IncomingCallModal } from '@/src/components/calls/IncomingCallModal';
 import { CallScreen } from '@/src/components/calls/CallScreen';
@@ -689,6 +690,12 @@ export default function Layout({ children }: LayoutProps) {
           </HStack>
         </Box>
       )}
+
+      {/* Mobile QR scan FAB (epic: mobile-qr-scanner, story S2). Standalone
+          block, not a navItems entry — navItems drives both the bottom tab
+          bar above and the hamburger overlay, and this must not appear in
+          the hamburger. Shares the bottom tab bar's exact visibility gate. */}
+      <QrScanFab hidden={hideBottomNav} />
 
       {/* Footer — legal links at the very bottom of every page, except the two
           open-chat pages (DM thread, group chat) where the composer owns the

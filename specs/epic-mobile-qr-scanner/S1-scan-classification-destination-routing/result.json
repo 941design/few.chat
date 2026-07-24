@@ -1,0 +1,40 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-24T19:02:02Z",
+  "modules_touched": [
+    "QR lib"
+  ],
+  "files_created": [
+    "app/tests/unit/qr-scan-destination.test.ts",
+    "specs/epic-mobile-qr-scanner/S1-scan-classification-destination-routing/architecture.json",
+    "specs/epic-mobile-qr-scanner/S1-scan-classification-destination-routing/baseline.json",
+    "specs/epic-mobile-qr-scanner/S1-scan-classification-destination-routing/result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/qr.ts",
+    "specs/epic-mobile-qr-scanner/S1-scan-classification-destination-routing/verification.json"
+  ],
+  "tests_added": {
+    "unit": 40
+  },
+  "test_counts": {
+    "baseline": 4270,
+    "final": 4310
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story text described the card branch as returning `/add#c=${payload}` where `payload` is `normaliseScanPayload`'s return value, but `normaliseScanPayload` actually returns the trimmed/`nostr:`-stripped INPUT itself, not an extracted card payload — for a full `https://few.chat/add#c=<payload>` link input it returns the whole link string unchanged. A literal reading would have produced a double-wrapped destination (`/add#c=https://few.chat/add#c=<payload>`) for that one input form while still passing the bare-npub and raw-payload cases, since those two happen to have `normaliseScanPayload`'s output equal the payload already. Neither `normaliseScanPayload`'s docstring nor the seam contract calls this out explicitly; it only became visible by reading the function body and tracing what `stripped` actually contains for each of the four accepted forms. Added a small local `extractCardLinkPayload` helper (mirroring the same `#c=` marker-slice pattern already duplicated privately in both `contactCard.ts` and `addDeepLink.ts`) and a dedicated regression test asserting the full-link case is not double-wrapped.",
+    "surprised_by": "",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "review_remediation": "Codex P2 (arbitrary-domain URL embedding a valid #c= payload accepted) fixed in gate-remediation: card branch URL-shape-gated to /add|/add/ pathname (origin-agnostic). Opus re-review clean; Codex confirm re-run degraded (env failure). All 16 examiner VQs YES."
+}

@@ -1,0 +1,137 @@
+{
+  "story_id": "S2",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T20:30:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S2-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In QrScanFab/Layout.tsx, is every load-bearing check live rather than a placeholder — does the onScan handler call the real, imported resolveScanDestination export (not a local stub that always returns null or always returns a fixed destination); is canUseCameraQrScanner() the actual guard evaluated at render/tap time (not a frozen true/false constant); does the FAB's visibility genuinely read the shared hideBottomNav predicate (not a hardcoded display value that happens to match current routes); and are the new 'scanner' i18n strings real EN/DE copy rather than TODO/placeholder text?"
+    },
+    {
+      "question_id": "VQ-S2-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the Navigation UI module (Layout.tsx / QrScanFab.tsx) respect architecture.md's Boundary Rules — consuming resolveScanDestination as a pure string->string|null function without re-implementing any card/invite parsing itself, consuming NpubQrScanner only through its existing onScan(payload) string contract without editing the group component's internal decode/camera logic, and never adding the FAB to navItems (the shared array driving both the bottom bar and the hamburger overlay)?"
+    },
+    {
+      "question_id": "VQ-S2-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could Navigation UI be deleted and rewritten without modifying any file outside its dependencies_allowed list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S2-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do app/tests/unit/scannerCopy.i18n.test.ts and app/tests/e2e/mobile-qr-scanner-fab.spec.ts together give real coverage of the FAB's rendering, gating, and scan-routing behavior — following the repo's no-jsdom/no-renderHook convention (pure-function extraction for logic, Playwright for DOM-level assertions) — and are the onScan-routing tests exercising resolveScanDestination for real (per S1's export) rather than a mock-spy that always returns a canned value, so a regression in S1's routing logic would actually be caught by S2's tests?"
+    },
+    {
+      "question_id": "VQ-S2-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the shipped behavior match the epic's design decisions as a whole — DD1 (navigate straight to the resolved destination, no intermediate in-scanner confirmation step), DD4 (the FAB is its own fixed, centered, elevated element bypassing navItems entirely, not a slot added to the existing bottom-bar item list), and DD6 (an unrecognised value shows the unrecognised-link message and the scanner keeps scanning rather than closing or erroring)?"
+    },
+    {
+      "question_id": "VQ-S2-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Does the scan-to-navigate flow uphold the project's privacy invariant (CLAUDE.md) and reject-safely on untrusted decoded content — no relay publish or kind-0/profile broadcast triggered anywhere in the FAB-open-to-navigate path; on an unrecognised/rejected scan, is the raw decoded string never rendered, logged, or persisted (only a generic unrecognised-link message shown); and on camera-permission-denied or camera-unavailable, is no camera stream data or raw decode content exposed in the fallback UI?"
+    },
+    {
+      "question_id": "VQ-S2-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FAB-1",
+      "question": "Does the scanner FAB render only at the mobile breakpoint (Chakra display base visible, md hidden), matching the pattern of every other mobile-only surface in Layout.tsx, and never render at a desktop viewport? Show the production JSX prop and an e2e/unit assertion exercising both a mobile and a desktop viewport, not just a snapshot at one width."
+    },
+    {
+      "question_id": "VQ-S2-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FAB-2",
+      "question": "Is the FAB horizontally centered at the bottom of the viewport, positioned with a z-index above the bottom tab bar's zIndex 10, and does it honor env(safe-area-inset-bottom)? Show the actual CSS/style props and confirm via test or documented manual check that the FAB visually sits above (not behind) the bottom bar."
+    },
+    {
+      "question_id": "VQ-S2-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FAB-3",
+      "question": "Is the FAB absent from the hamburger overlay and confirmed to not be a member of navItems (the hamburger menu's item set is provably unchanged by this epic)? Show a diff or test asserting navItems' length/contents are unchanged and that the hamburger overlay's rendered item list does not include the FAB."
+    },
+    {
+      "question_id": "VQ-S2-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-FAB-4",
+      "question": "Does the FAB reuse the exact same hideBottomNav (or equivalent route-visibility) predicate the bottom tab bar already uses, so it is hidden on /contacts and /groups routes carrying a non-empty id query — the same routes that hide the bottom bar? Show the shared predicate being called (not a re-implemented copy) and a test exercising both an open-chat route (hidden) and a non-chat route (visible)."
+    },
+    {
+      "question_id": "VQ-S2-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SCAN-1",
+      "question": "Does tapping the FAB open the camera scanner guarded by canUseCameraQrScanner(), surfacing the unavailable message (not a broken camera view) when that guard is false, and surfacing a distinct permission-denied message on a camera-permission denial? Show both code paths and tests exercising canUseCameraQrScanner() === false and a simulated permission-denial, asserting the two messages are distinct and neither leaves a blank/broken view."
+    },
+    {
+      "question_id": "VQ-S2-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SCAN-2",
+      "question": "On decoding a valid few.chat card QR, does the app router.push to the card destination (/add#c=…) and close the scanner; on decoding a valid group invite QR, does it router.push to /groups?join=…&admin=…&name=… and close the scanner? Show the onScan handler's branch calling resolveScanDestination and router.push, and a test for each of the two destination kinds asserting both the navigation target and that the scanner UI closes."
+    },
+    {
+      "question_id": "VQ-S2-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SCAN-3",
+      "question": "On decoding a value resolveScanDestination rejects (returns null), does the app show the unrecognised-link message, refrain from navigating, refrain from surfacing the raw scanned content anywhere in the DOM, and keep the scanner running (not close it)? Show the null-branch handling code and a test asserting router.push was not called, the raw string is absent from rendered output, and the scanner remains active/listening afterward."
+    },
+    {
+      "question_id": "VQ-S2-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-INTL-1",
+      "question": "Are all scanner-facing strings (FAB aria-label, scanner title/hint, starting-camera, permission-denied, unavailable, unrecognised-link) defined under a dedicated scanner i18n namespace with both en and de entries, consumed exclusively via useCopy() with zero hardcoded user-visible strings in QrScanFab.tsx/the scanner wrapper? Show the i18n.ts namespace entries for both languages and the component call sites, and confirm scannerCopy.i18n.test.ts asserts exact string presence for both locales (following the addContactByNpub.i18n.test.ts precedent)."
+    },
+    {
+      "question_id": "VQ-S2-015",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-PRIV-1",
+      "question": "Does the feature perform zero relay publishes and broadcast zero profile metadata across the entire FAB-tap-to-navigate flow — QR decoding happens purely locally (camera -> qr-scanner, in-page), and navigation to /add or /groups triggers only the pre-existing, already-audited inbound flows with no new kind-0 or other relay-write call introduced by this story? Show a structural trace (call graph or grep across the new/changed files) confirming no relay-publish/NDK-publish call exists in the new code, since this is a negative/structural assertion that cannot be proven by a single example test alone."
+    },
+    {
+      "question_id": "VQ-S2-016",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The implementation edits app/src/components/groups/NpubQrScanner.tsx (a file NOT listed in S2's stories.json scope.includes) to add two optional props, `onRawScan?: (raw: string) => boolean` and `startingMessage?: string`, because the pre-existing `onScan`/`normaliseScanPayload` gate structurally rejects every group-invite URL before `onScan` ever fires (parseContactCard has no branch for a `/groups/` URL), making AC-SCAN-2's group-invite routing unreachable if NpubQrScanner were reused completely unmodified. Verify: (a) both new props are genuinely optional with the exact pre-existing behavior preserved byte-for-byte when omitted — check NpubQrModal.tsx's two production render sites (ShareContactCard.tsx, pages/settings.tsx) still pass only `mode='display'` and are unaffected; (b) the onRawScan branch correctly short-circuits BEFORE normaliseScanPayload runs, and correctly gates `handledRef`/`scanner.stop()` on the boolean return; (c) this is the only cross-scope-boundary file touched, and no other file outside stories.json's scope.includes for S2 was modified."
+    },
+    {
+      "question_id": "VQ-S2-017",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "During implementation, an in-page probe against this repo's actual Playwright config (chromium launched with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`, shared with the calls e2e suite) showed `canUseCameraQrScanner()` evaluates true and `getUserMedia({video:true})` succeeds under a fake `videoinput` device — meaning the camera-unavailable and permission-denied branches of AC-SCAN-1 are structurally UNREACHABLE in this project's e2e harness (the fake device always 'has a camera' and the fake UI flag auto-grants permission). `mobile-qr-scanner-fab.spec.ts` was written to assert only the reachable positive half (scanner opens, real translated title/hint render, no error alert, video element visible) rather than the unavailable-message path the original story brief assumed. Verify: (a) this finding is accurate — re-run or re-derive it independently rather than trusting the claim at face value; (b) the negative branches (unavailableMessage/permissionDeniedMessage props, the try/catch in NpubQrScanner's startScanner) are still structurally correct by code reading even though no automated test exercises them in this repo's current e2e config; (c) whether this is worth a `base:learnings` entry or a BACKLOG finding so a future story doesn't re-discover it from scratch (e.g. a future story needing to actually test the unavailable/permission-denied UI would need either a Playwright project override without the fake-device args, or a manual QA step)."
+    },
+    {
+      "question_id": "VQ-S2-018",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SCAN-2",
+      "question": "Because the real camera decode path cannot be driven in Playwright (MV-1, manual-only) and unit tests cannot render QrScanFab (no-jsdom convention), the onRawScan -> resolveScanDestination -> router.push wiring in QrScanFab.tsx has NO test coverage exercising it end-to-end with a real decoded value — coverage rests entirely on (a) S1's qr-scan-destination.test.ts unit-testing resolveScanDestination itself in isolation, and (b) code reading of QrScanFab.handleRawScan's plain call-through. Verify by direct code reading that handleRawScan's branching (destination truthy -> setIsOpen(false) + router.push(destination); destination null -> setRejected(true), scanner keeps running) exactly matches AC-SCAN-2/AC-SCAN-3's required behavior, since this is the one load-bearing path in the whole story with no automated end-to-end proof."
+    },
+    {
+      "question_id": "VQ-S2-019",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "Running the full non-relay fast e2e bucket (`make test-e2e-fast`, 71 tests including the new 4) turned up one PRE-EXISTING failure unrelated to this story: `update-detection.spec.ts:70` ('banner is non-blocking — user can still interact with the app') fails on a Playwright strict-mode violation — `page.locator('nav')` resolves to 2 elements (the header nav and the mobile bottom tab bar's `<Box as=\"nav\" data-testid=\"mobile-bottom-nav\">`, both already present in HEAD before this story's changes, from the prior mobile-nav epic commit 9a77a73). Confirmed via `git show HEAD:app/src/components/Layout.tsx` that both `as=\"nav\"` elements predate every edit made in this story — QrScanFab.tsx adds no `<nav>` element. Verify this pre-existing-and-unrelated characterization independently (e.g. `git log -p` on Layout.tsx / update-detection.spec.ts) and confirm it is routed to the backlog as a separate finding rather than silently left undiscovered — this story does not fix it (out of scope.includes; fixing it would mean either changing update-detection.spec.ts's selector or Layout.tsx's landmark semantics, neither part of S2's ACs)."
+    },
+    {
+      "question_id": "VQ-S2-020",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "A bonus (not required by S2's task brief, which only asked for the fast non-relay bucket) full-relay `make test-e2e` run was attempted after implementation to sanity-check Layout.tsx's shared-file blast radius: 180 passed cleanly (spanning groups admin/pairing/walled-garden/DM flows) before the run degraded into 46 failed / 19 skipped / 107 did-not-run over its 50.7-minute duration. Root-caused via log inspection: 41 of the 46 failures are `Error: page.goto: Page crashed` / `page.reload: Page crashed` thrown from the shared `bootUser` test helper on a bare `page.goto('/')` or `page.reload()` — i.e. the Chromium renderer tab itself crashing (host memory/resource exhaustion), not an application assertion failure, and every occurrence traces to the same generic boot helper rather than anything QR-scanner-specific. This matches this project's own documented chronic e2e-infra fragility (a memory note already on file records '~4 rotating ~30s VM-latency timeouts' and 'host fd-exhaustion (ENFILE) reads as a red unit suite' as known, unrelated host-capacity issues). Also confirmed and cleaned up: a stray `next dev` process left running on port 3000 from an earlier manual probe during this same implementation session was alive for the full 50-minute duration, adding avoidable memory/CPU pressure on the host throughout. Verify independently: (a) that the 'Page crashed' signature is indeed host-resource exhaustion and not something the QrScanFab/NpubQrScanner/Layout.tsx changes could plausibly trigger (e.g. a memory leak in the new component, a render loop) — inspect the ~180 tests that DID pass cleanly first, spanning many pages/routes that also render the now-globally-mounted QrScanFab, as evidence against a leak; (b) whether this run should be retried on a less contended host/at a time with more headroom before treating the full relay gate as confirmed, since this attempt is genuinely inconclusive (neither a clean pass nor an attributable regression) rather than either a pass or a fail."
+    }
+  ]
+}

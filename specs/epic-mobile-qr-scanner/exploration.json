@@ -1,0 +1,55 @@
+{
+  "created_at": "2026-07-24T18:21:28Z",
+  "focuses": ["similar-features", "architecture", "testing-and-conventions"],
+  "findings": {
+    "mobile_nav": {
+      "file": "app/src/components/Layout.tsx",
+      "bottom_nav_block": "lines ~612-691 (Box as='nav', position fixed bottom, zIndex 10, safe-area-inset-bottom, data-testid mobile-bottom-nav)",
+      "nav_items": "navItems (lines ~121-124): Contacts, Groups only; drives BOTH bottom bar AND hamburger overlay",
+      "hamburger": "trigger 366-395, sliding panel 401-572 (lists Profile/Contacts/Groups/Info/Settings), scrim 582-593",
+      "mobile_detection": "Chakra responsive props display={{ base:'flex', md:'none' }}; no useBreakpoint/isMobile hook; one raw media query @media (max-width: 47.99em) at line 147",
+      "visibility_gating": "hideBottomNav (lines 54-60, 116-119) = router.pathname in {'/contacts','/groups'} AND non-empty id query -> bar hidden on open-chat routes",
+      "zindex_map": "header nav 10, hamburger dropdown 1 (rel to nav), scrim 5, bottom bar 10; new element needs zIndex >= bar (>10) to float above",
+      "slot_guidance": "New FAB must be a standalone render block bypassing navItems (else it leaks into hamburger). Gate with !hideBottomNav + display base/md:none."
+    },
+    "fewchat_link_shapes": {
+      "contact_card": {
+        "url_prefix": "https://few.chat/add#c=<base64url payload>",
+        "constants": "CARD_LINK_URL_PREFIX / CARD_LINK_FRAGMENT_MARKER '#c=' in src/lib/contactCard.ts:113,115 (fragment-only, never query param - DD9)",
+        "generated_by": "buildShareUrl (contactCard.ts) via shareCard.ts getOwnShareCard/buildOwnShareCardV2",
+        "parsed_by": "pages/add.tsx via addDeepLink.ts (readLocationHash/extractCardPayloadFromHash/resolveAddDeepLink) -> processContactInput.ts:131 (single parse chokepoint). Routes to /contacts?id=&added=1, &exists=1, or /profile?pairing=1&issuer= (nameless pairing scanner), governed by ADR-009",
+        "scanner_validator": "normaliseScanPayload in src/lib/qr.ts:40-52 accepts bare npub / nostr: npub / few.chat/add#c= link / raw base64url payload; delegates decode+sig verify to parseContactCard; signature-failing card -> null"
+      },
+      "group_invite": {
+        "url_shape": "https://<origin>/groups/?join=<hexNonce>&admin=<npub>&name=<groupName>",
+        "generated_by": "src/lib/marmot/inviteLinkGeneration.ts buildInviteUrl (46-56); resolveInviteBaseUrl uses live window.location.origin, FALLBACK_ORIGIN https://few.chat; path /groups/ trailing slash",
+        "parsed_by": "pages/groups.tsx:1089-1091 reads router.query.join/.admin/.name; first-visit JoinRequestCard, returning-user InviteAwaitingBanner (ADR-011)",
+        "no_shared_validator": "group-invite shape is NOT validated by any existing shared 'is this scannable' helper -> new minimal validator needed (S1)"
+      },
+      "excluded": "internal-only deep links not externally scannable: /groups?invite=<id>, /groups?id=<id>, ?manageLinks=1"
+    },
+    "existing_qr_infra": {
+      "libraries": "qrcode ^1.5.4 (generation), qr-scanner ^1.4.2 (camera decode)",
+      "generation": "generateQrDataUrl src/lib/qr.ts:74-84 (dynamic import qrcode; ECC-L long / ECC-M short)",
+      "scanner_component": "src/components/groups/NpubQrScanner.tsx - full impl: dynamic import qr-scanner, QrScanner.hasCamera(), <video muted playsInline>, preferredCamera environment, highlightScanRegion, maxScansPerSecond 8, permission-denied vs unavailable branching",
+      "scan_wrapper": "src/components/groups/NpubQrModal.tsx (mode 'display'|'scan'); NpubQrButton.tsx trigger",
+      "DORMANT": "mode='scan' has ZERO production callers. Both NpubQrModal render sites (ShareContactCard.tsx:141, pages/settings.tsx:894-901) hard-code mode='display'. copy.groups.scanQr/showQr referenced nowhere outside i18n.ts (dead copy). e2e *-scanner* specs simulate via page.goto('/add#c='+payload), not real camera.",
+      "camera_gate": "canUseCameraQrScanner() src/lib/qr.ts:86-89 gates on window.isSecureContext && navigator.mediaDevices?.getUserMedia",
+      "unit_tests": "tests/unit/qr.test.ts, tests/unit/cards/npubQrModal.test.ts, tests/unit/qr.mutation-gaps.test.ts"
+    },
+    "conventions": {
+      "i18n": "useCopy() from src/context/LanguageContext; all strings in src/lib/i18n.ts (EN ~616, DE ~1178); QR keys currently under groups namespace (137-144)",
+      "routing": "output:'export' + trailingSlash:true (next.config.mjs); NO [param].tsx dynamic segments; dynamic data via query params read off router.query per-page; deep-link resolution owned by destination page (add.tsx useEffect, groups.tsx inline reads) - no central dispatcher",
+      "helpers": "npubToPubkeyHex from src/lib/nostrKeys (used by normaliseNpubPayload)"
+    }
+  },
+  "decisions_from_user": {
+    "accept_set": "contact cards + group invites",
+    "landing": "navigate straight to destination (no intermediate confirm)",
+    "placement": "elevated center FAB above bottom bar"
+  },
+  "adr_constraints": {
+    "ADR-009": "issuer confirmation before admitting scanned contact - preserved: scanner routes to /add, existing flow enforces",
+    "ADR-011": "returning-user invite links land on /groups page - AC-ROUTE-2 routes there"
+  }
+}

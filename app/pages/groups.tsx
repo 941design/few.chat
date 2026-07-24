@@ -1147,7 +1147,18 @@ export default function GroupsPage() {
   // the old first-visit experience; only a confirmed returning user
   // (hydrated && !isFreshIdentity) reaches the new banner landing.
   if (joinNonce && joinAdmin && joinName && (isFreshIdentity || !hydrated)) {
-    return <JoinRequestCard nonce={joinNonce} adminNpub={joinAdmin} groupName={joinName} />;
+    // Gate-remediation (Finding A, epic mobile-qr-scanner): `key={joinNonce}`
+    // forces a remount whenever the invite changes while this branch stays
+    // mounted. The FAB (this epic) makes that reachable for the first time —
+    // it can `router.push` a NEW `?join=` invite while the visitor is still
+    // sitting on this full-screen card (the FAB is visible here: no `id`
+    // query on the invite-landing route, so `hideBottomNav` doesn't hide
+    // it). Without the key, JoinRequestCard's mount-persistent `sent`/
+    // `error`/name-draft state would leak across invites — e.g. a visitor
+    // who sent a request for invite A would see the terminal "request sent"
+    // alert for invite B, though nothing was ever sent for B. A remount
+    // correctly resets that state for the new invite.
+    return <JoinRequestCard key={joinNonce} nonce={joinNonce} adminNpub={joinAdmin} groupName={joinName} />;
   }
 
   // When ?invite=<id> is present, show the read-only invitation preview

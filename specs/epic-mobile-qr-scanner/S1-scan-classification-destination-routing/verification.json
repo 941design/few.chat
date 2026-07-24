@@ -1,0 +1,110 @@
+{
+  "story_id": "S1",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-24T20:30:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S1-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In app/src/lib/qr.ts, does resolveScanDestination avoid every vacuous/placeholder path — specifically: (a) does the card branch genuinely call normaliseScanPayload -> parseContactCard (including real signature verification) rather than a shortcut that returns a destination without verifying the signature; (b) is the new group-invite validator's hex-join check and npubToPubkeyHex(admin) check live logic, not a stub that always returns true or a frozen test-only constant; (c) is there no tautological assertion in the accompanying tests (e.g. asserting typeof result === 'string' without asserting the exact string) that would pass unchanged if the branch body were replaced with `return null`?"
+    },
+    {
+      "question_id": "VQ-S1-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does resolveScanDestination stay entirely within the QR lib module (app/src/lib/qr.ts) per architecture.md's Boundary Rules — no import of router, window, or any Navigation UI / Scanner UI module; does the card branch delegate to the existing normaliseScanPayload/parseContactCard seam rather than duplicating parse/verify logic (DD2); and is the group-invite validator placed beside normaliseScanPayload rather than introduced as a new top-level module or registry (per the Out-of-Scope 'no extensible link-registry' constraint)?"
+    },
+    {
+      "question_id": "VQ-S1-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could QR lib be deleted and rewritten without modifying any file outside its dependencies_allowed list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S1-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does app/tests/unit/qr-scan-destination.test.ts (or wherever the tests land) provide unit/property coverage of resolveScanDestination across the full input space named in the stories.json seam contract and AC-ROUTE-1..6 — valid card (bare npub, nostr:-prefixed, https://.../add#c=... link, raw base64url payload), valid group invite, signature-failing card, group-invite missing each of join/admin/name individually, malformed admin/join, arbitrary text/URLs, empty string, and a non-few.chat-origin invite URL — and is the test suite an independent exercise of the exported function rather than a shadow-init that re-implements resolveScanDestination's body inside the test file?"
+    },
+    {
+      "question_id": "VQ-S1-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the implementation match the epic's stated design decisions as a coherent whole — DD1 (route to the exact generator URL forms, no re-implementation of /add or /groups inbound resolution), DD2 (card branch reuses normaliseScanPayload/parseContactCard verbatim, no new card-parsing code), and DD3 (group-invite validation is new, minimal, pattern-based, and explicitly does not pin origin to few.chat) — with evidence drawn from the actual qr.ts diff, not from the story description alone?"
+    },
+    {
+      "question_id": "VQ-S1-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Given resolveScanDestination parses attacker-controlled, camera-decoded external input as a URL and as hex/npub values, does the implementation handle every malformed variant defensively — no uncaught throw from `new URL(value)` on garbage input, no unbounded/ReDoS-prone regex applied to an arbitrary-length string, npubToPubkeyHex decode failures caught and treated as null rather than propagating an exception — and is there a test asserting resolveScanDestination never throws for any string input (per the seam contract's 'never throws' invariant), evidenced by an actual fuzz-style or malformed-input test case, not just a docstring claim?"
+    },
+    {
+      "question_id": "VQ-S1-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-1",
+      "question": "For every value form AC-ROUTE-1 names (bare npub, nostr:-prefixed npub, https://few.chat/add#c=<payload> link, raw base64url card payload) that parseContactCard accepts, does resolveScanDestination return the exact `/add#c=<payload>` deep-link form? Show the production branch that produces this string and the test(s) that exercise each named value form end-to-end (not a single representative case standing in for all four), and confirm the test is not a mock-spy proxy over parseContactCard."
+    },
+    {
+      "question_id": "VQ-S1-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-2",
+      "question": "For a well-formed group-invite URL (pathname is the /groups/ invite path, valid hex join nonce, admin decodes via npubToPubkeyHex, non-empty name), does resolveScanDestination return the exact `/groups?join=…&admin=…&name=…` string with all three parameters preserved verbatim from the input? Show the production code performing this construction and the test asserting the exact returned string (field-by-field), not merely that a non-null value was returned."
+    },
+    {
+      "question_id": "VQ-S1-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-3",
+      "question": "Does a card value whose signature fails verification return null from resolveScanDestination, with no downgraded/bare-pubkey fallback path? Show the production code path proving verification failure short-circuits to null (not to a partial destination), and a test that constructs a value with a deliberately invalid signature and asserts strict null."
+    },
+    {
+      "question_id": "VQ-S1-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-4",
+      "question": "Does resolveScanDestination return null for a group-invite-shaped URL missing join, admin, or name (each tested individually), for an admin that is not a valid npub, and for a join that is not a well-formed nonce? Show the validator logic performing each check and one test per missing/malformed parameter (not a single combined case), confirming no partial-match acceptance."
+    },
+    {
+      "question_id": "VQ-S1-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-5",
+      "question": "Does resolveScanDestination return null for plain text, a random https:// URL unrelated to few.chat, an empty string, and a /groups/ URL with no invite params? Show the fallback path producing null for each and the corresponding test cases, confirming none of these inputs accidentally satisfies the card or invite branch."
+    },
+    {
+      "question_id": "VQ-S1-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-6",
+      "question": "Does the group-invite branch accept a well-formed invite URL built from a non-few.chat origin (e.g. few-chat.pages.dev or a localhost dev origin) with identical acceptance behavior to a few.chat-origin URL, proving no origin comparison gates acceptance? Show the validator code confirming origin is never read/compared, and a test using an explicitly non-few.chat origin that still resolves successfully."
+    },
+    {
+      "question_id": "VQ-S1-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ROUTE-2",
+      "question": "Does the ScanDestination seam contract (stories.json#seams[0]) hold in full against the shipped resolveScanDestination — exact return-string shape for both branches ('/add#c=<payload>' and '/groups?join=<hex>&admin=<npub>&name=<name>'), the function's synchronous/pure/DOM-free signature (no router, no window, no network access anywhere in its call graph), and the 'never throws for any string input' invariant — verified by inspecting the actual exported function signature and call graph, not only by reading the story description? This is the seam S2 consumes without further verification of its shape; a gap here propagates undetected into S2."
+    },
+    {
+      "question_id": "VQ-S1-014",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "app/src/lib/qr.ts's normaliseScanPayload (existing, unmodified) returns the trimmed/nostr:-stripped INPUT itself, not an extracted payload — for a full https://.../add#c=<payload> link input it returns the whole link string, not just <payload>. resolveScanDestination therefore layers a new local helper, extractCardLinkPayload (qr.ts:86), which finds the '#c=' marker and slices the trailing substring before it is embedded in the '/add#c=' destination. Does the shipped code actually call extractCardLinkPayload on every card-branch return (qr.ts:154), and is there a regression test proving the full-link input form does NOT get double-wrapped (i.e. resolveScanDestination(buildShareUrl(payload)) !== '/add#c=https://few.chat/add#c=' + payload)? A naive implementation that embedded normaliseScanPayload's return value directly would silently double-wrap the full-link case while still passing the bare-npub and raw-payload cases — is that specific failure mode covered?"
+    },
+    {
+      "question_id": "VQ-S1-015",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "parseGroupInviteUrl (qr.ts:116) requires url.pathname to be EXACTLY '/groups/' (GROUP_INVITE_PATHNAME, qr.ts:96) — the trailing-slash form buildInviteUrl (marmot/inviteLinkGeneration.ts) always produces under this app's trailingSlash:true static-export config. Is this exact-match choice (rather than a trailing-slash-tolerant comparison) actually consistent with every real invite link the app itself ever generates, and does the test suite cover the boundary case of a '/groups' (no trailing slash) URL to confirm it is correctly rejected rather than silently accepted or silently mis-routed? Confirm this isn't an unverified assumption about a URL library's normalization behavter (e.g. does the WHATWG URL parser silently add/remove the trailing slash for some inputs before .pathname is read)."
+    },
+    {
+      "question_id": "VQ-S1-016",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "INVITE_JOIN_NONCE_PATTERN (qr.ts:102-103) hardcodes an exact 32-hex-character length, matching generateNonce()'s current 16-byte output (marmot/inviteLinkGeneration.ts, out of this story's scope to modify). This is an implicit cross-module contract enforced only by this regex, with no shared constant or import binding the two. Is this coupling documented clearly enough (code comment at qr.ts:99-101) that a future change to generateNonce()'s byte length would be caught by a human reading this file, given the group-invite validator is explicitly scoped as 'minimal, pattern-based' rather than importing the generator (DD3)? Is this an acceptable, deliberate scope boundary rather than a latent bug?"
+    }
+  ]
+}
