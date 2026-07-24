@@ -80,6 +80,13 @@ export const ICON_SETS: Record<string, Record<IconSetName, string>> = {
     filled: 'ph:users-three-fill',
     pixel: 'pixelarticons:group',
   },
+  scan: {
+    // Scanner viewfinder — idiomatic "scan a QR" affordance, deliberately
+    // distinct from the `qr-code` glyph used to *show* a QR (NpubQrButton).
+    line: 'lucide:scan-line',
+    filled: 'ph:scan-fill',
+    pixel: 'pixelarticons:scan',
+  },
   phone: {
     line: 'lucide:phone',
     filled: 'ph:phone-fill',

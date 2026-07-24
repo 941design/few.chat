@@ -3,7 +3,7 @@ import {
   Alert,
   AlertDescription,
   AlertIcon,
-  IconButton,
+  Box,
   Modal,
   ModalBody,
   ModalCloseButton,
@@ -14,24 +14,23 @@ import {
 } from '@chakra-ui/react';
 import { useRouter } from 'next/router';
 import { useCopy } from '@/src/context/LanguageContext';
+import ThemeIcon from '@/src/components/ThemeIcon';
 import NpubQrScanner from '@/src/components/groups/NpubQrScanner';
 import { resolveScanDestination } from '@/src/lib/qr';
 
-type QrScanFabProps = {
-  /**
-   * Same gate the mobile bottom tab bar uses (`!hideBottomNav` in
-   * Layout.tsx) — the FAB shares that route-visibility predicate verbatim
-   * rather than re-deriving it (AC-FAB-4).
-   */
-  hidden: boolean;
-};
-
 /**
- * Mobile-only floating action button that opens the camera scanner
- * (epic: mobile-qr-scanner, story S2). Deliberately rendered as a
- * standalone block from Layout.tsx rather than added to `navItems` — that
- * array drives BOTH the bottom tab bar AND the hamburger overlay, so
- * joining it would leak the scanner into the hamburger (AC-FAB-3).
+ * Mobile bottom-bar scanner tab that opens the camera scanner
+ * (epic: mobile-qr-scanner, story S2). Rendered as a centered slot INSIDE
+ * the bottom tab bar's list (between the two domain tabs) by Layout.tsx —
+ * NOT added to `navItems`, because that array drives BOTH the bottom bar
+ * AND the hamburger overlay, so joining it would leak the scanner into the
+ * hamburger (AC-FAB-3). Placement inside the bar's `!hideBottomNav` /
+ * `md:none` container is what gates its visibility (AC-FAB-1/AC-FAB-4) —
+ * it no longer carries its own route/breakpoint gate.
+ *
+ * Presented as a peer of the domain tabs (themed scan icon + label) rather
+ * than a floating action button, so it reads as part of the native-feeling
+ * tab bar instead of hovering over it.
  *
  * A decoded value is classified via the QR lib's `resolveScanDestination`
  * seam (S1): a match navigates and closes the scanner (AC-SCAN-2); a
@@ -45,7 +44,7 @@ type QrScanFabProps = {
  * raw string unfiltered, so `resolveScanDestination` — not `NpubQrScanner`
  * — is the sole classification authority.
  */
-export default function QrScanFab({ hidden }: QrScanFabProps) {
+export default function QrScanFab() {
   const copy = useCopy();
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
@@ -118,31 +117,35 @@ export default function QrScanFab({ hidden }: QrScanFabProps) {
     [router],
   );
 
-  if (hidden) return null;
-
   return (
     <>
-      <IconButton
-        onClick={handleOpen}
-        aria-label={copy.scanner.fabAriaLabel}
-        data-testid="qr-scan-fab"
-        display={{ base: 'flex', md: 'none' }}
-        position="fixed"
-        bottom="calc(4.75rem + env(safe-area-inset-bottom))"
-        left="50%"
-        transform="translateX(-50%)"
-        zIndex={20}
-        borderRadius="full"
-        w="56px"
-        h="56px"
-        minW="56px"
-        bg="brand.500"
-        color="white"
-        boxShadow="lg"
-        _hover={{ bg: 'brand.600' }}
-        _active={{ bg: 'brand.600' }}
-        icon={<Text fontSize="26px" lineHeight="1">📷</Text>}
-      />
+      {/* Centered tab slot — mirrors the domain-tab markup in Layout.tsx's
+          bottom bar (Box as="li" flex="1", column icon + 2xs label) so the
+          scanner reads as a peer tab, not a floating overlay. Visibility is
+          owned by the enclosing bar (`!hideBottomNav`, `md:none`). */}
+      <Box as="li" flex="1">
+        <Box
+          as="button"
+          type="button"
+          onClick={handleOpen}
+          aria-label={copy.scanner.fabAriaLabel}
+          data-testid="qr-scan-fab"
+          display="flex"
+          flexDirection="column"
+          alignItems="center"
+          justifyContent="center"
+          gap={0.5}
+          py={2}
+          w="100%"
+          bg="transparent"
+          color="textMuted"
+          _hover={{ color: 'brand.500' }}
+          _active={{ color: 'brand.500' }}
+        >
+          <ThemeIcon name="scan" size={22} aria-hidden />
+          <Text fontSize="2xs">{copy.scanner.tabLabel}</Text>
+        </Box>
+      </Box>
 
       <Modal isOpen={isOpen} onClose={handleClose} isCentered size="md">
         <ModalOverlay />

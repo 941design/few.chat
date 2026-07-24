@@ -14,6 +14,7 @@ describe('scanner i18n keys (mobile-qr-scanner FAB + camera scanner)', () => {
   it('English copy has all scanner namespace keys, non-empty and non-placeholder', () => {
     const en = getCopy('en');
     expect(en.scanner.fabAriaLabel).toBe('Scan QR code');
+    expect(en.scanner.tabLabel).toBe('Scan');
     expect(en.scanner.title).toBe('Scan QR Code');
     expect(en.scanner.hint).toBe('Point the camera at a few.chat contact card or group invite QR code.');
     expect(en.scanner.startingCamera).toBe('Starting camera...');
@@ -25,6 +26,7 @@ describe('scanner i18n keys (mobile-qr-scanner FAB + camera scanner)', () => {
   it('German copy has all scanner namespace keys, non-empty and non-placeholder', () => {
     const de = getCopy('de');
     expect(de.scanner.fabAriaLabel).toBe('QR-Code scannen');
+    expect(de.scanner.tabLabel).toBe('Scannen');
     expect(de.scanner.title).toBe('QR-Code scannen');
     expect(de.scanner.hint).toBe(
       'Richte die Kamera auf eine few.chat-Kontaktkarte oder einen Gruppeneinladungs-QR-Code.'

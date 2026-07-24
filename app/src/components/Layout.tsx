@@ -632,13 +632,14 @@ export default function Layout({ children }: LayoutProps) {
           data-testid="mobile-bottom-nav"
         >
           <HStack as="ul" listStyleType="none" spacing={0} w="100%">
-            {navItems.map((item) => {
+            {navItems.map((item, index) => {
               const isActive = router.pathname === item.href;
               const badgeCount = navBadgeCount(item.href);
               const showBadge = badgeCount > 0;
               const badgeTestId = item.href === '/groups' ? 'groups-bottomnav-badge' : 'contacts-bottomnav-badge';
               return (
-                <Box as="li" key={item.href} flex="1">
+                <React.Fragment key={item.href}>
+                <Box as="li" flex="1">
                   <NextLink href={item.href} passHref legacyBehavior>
                     <Link
                       aria-label={item.label}
@@ -685,17 +686,18 @@ export default function Layout({ children }: LayoutProps) {
                     </Link>
                   </NextLink>
                 </Box>
+                {/* Scanner tab, centered between the two domain tabs
+                    (Contacts | Scan | Groups). Rendered here inside the bar's
+                    list — NOT via navItems, so it never reaches the hamburger
+                    overlay (AC-FAB-3) — and gated by the enclosing bar's
+                    `!hideBottomNav` / `md:none` container (AC-FAB-1/4). */}
+                {index === 0 && <QrScanFab />}
+                </React.Fragment>
               );
             })}
           </HStack>
         </Box>
       )}
-
-      {/* Mobile QR scan FAB (epic: mobile-qr-scanner, story S2). Standalone
-          block, not a navItems entry — navItems drives both the bottom tab
-          bar above and the hamburger overlay, and this must not appear in
-          the hamburger. Shares the bottom tab bar's exact visibility gate. */}
-      <QrScanFab hidden={hideBottomNav} />
 
       {/* Footer — legal links at the very bottom of every page, except the two
           open-chat pages (DM thread, group chat) where the composer owns the

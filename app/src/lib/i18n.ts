@@ -601,6 +601,7 @@ export type Copy = {
   };
   scanner: {
     fabAriaLabel: string;
+    tabLabel: string;
     title: string;
     hint: string;
     startingCamera: string;
@@ -1186,6 +1187,7 @@ const copy: Record<LanguageCode, Copy> = {
     },
     scanner: {
       fabAriaLabel: 'Scan QR code',
+      tabLabel: 'Scan',
       title: 'Scan QR Code',
       hint: 'Point the camera at a few.chat contact card or group invite QR code.',
       startingCamera: 'Starting camera...',
@@ -1756,6 +1758,7 @@ const copy: Record<LanguageCode, Copy> = {
     },
     scanner: {
       fabAriaLabel: 'QR-Code scannen',
+      tabLabel: 'Scannen',
       title: 'QR-Code scannen',
       hint: 'Richte die Kamera auf eine few.chat-Kontaktkarte oder einen Gruppeneinladungs-QR-Code.',
       startingCamera: 'Kamera wird gestartet...',
