@@ -603,7 +603,6 @@ export type Copy = {
     fabAriaLabel: string;
     tabLabel: string;
     title: string;
-    hint: string;
     startingCamera: string;
     permissionDenied: string;
     unavailable: string;
@@ -1189,7 +1188,6 @@ const copy: Record<LanguageCode, Copy> = {
       fabAriaLabel: 'Scan QR code',
       tabLabel: 'Scan',
       title: 'Scan QR Code',
-      hint: 'Point the camera at a few.chat contact card or group invite QR code.',
       startingCamera: 'Starting camera...',
       permissionDenied: 'Camera permission was denied.',
       unavailable: 'QR scanning is unavailable on this device or browser.',
@@ -1760,7 +1758,6 @@ const copy: Record<LanguageCode, Copy> = {
       fabAriaLabel: 'QR-Code scannen',
       tabLabel: 'Scannen',
       title: 'QR-Code scannen',
-      hint: 'Richte die Kamera auf eine few.chat-Kontaktkarte oder einen Gruppeneinladungs-QR-Code.',
       startingCamera: 'Kamera wird gestartet...',
       permissionDenied: 'Kamerazugriff wurde verweigert.',
       unavailable: 'QR-Scan ist auf diesem Gerät oder Browser nicht verfügbar.',

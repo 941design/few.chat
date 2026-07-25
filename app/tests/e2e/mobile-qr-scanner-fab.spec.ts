@@ -64,7 +64,7 @@ test.describe('Mobile QR scanner FAB', () => {
     await expect(overlay.getByRole('link', { name: 'Groups' })).toBeVisible();
   });
 
-  test('tapping the FAB opens the scanner with real translated chrome and no broken view', async ({ page }) => {
+  test('tapping the FAB opens the scanner and it settles with no broken view', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');
 
@@ -72,8 +72,11 @@ test.describe('Mobile QR scanner FAB', () => {
 
     const modal = page.getByTestId('qr-scan-fab-modal');
     await expect(modal).toBeVisible();
-    await expect(modal.getByText('Scan QR Code')).toBeVisible();
-    await expect(modal.getByText('Point the camera at a few.chat contact card or group invite QR code.')).toBeVisible();
+    // The overlay deliberately carries no header/hint text (project UI rule —
+    // a live viewfinder is a self-explanatory "scan" affordance); the dialog's
+    // accessible name comes from ModalContent's aria-label, not a visible
+    // heading. So there is no chrome copy to assert here — correctness is the
+    // scanner mounting and settling (below).
 
     // Wait for the camera pipeline (fake device under this project's launch
     // args) to actually settle. `npub-qr-video` is a NON-gate: the <video>

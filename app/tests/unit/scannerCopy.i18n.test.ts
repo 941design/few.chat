@@ -3,7 +3,7 @@ import { getCopy } from '@/src/lib/i18n';
 
 /**
  * Epic: mobile-qr-scanner, story S2 (AC-INTL-1) — every scanner-facing
- * string (FAB aria-label, scanner title/hint, starting-camera,
+ * string (FAB aria-label, tab label, scanner title, starting-camera,
  * permission-denied, unavailable, unrecognised-link) lives under a
  * dedicated `scanner` i18n namespace with both `en` and `de` entries,
  * mirroring `addContactByNpub.i18n.test.ts`'s exact-string-assertion
@@ -16,7 +16,6 @@ describe('scanner i18n keys (mobile-qr-scanner FAB + camera scanner)', () => {
     expect(en.scanner.fabAriaLabel).toBe('Scan QR code');
     expect(en.scanner.tabLabel).toBe('Scan');
     expect(en.scanner.title).toBe('Scan QR Code');
-    expect(en.scanner.hint).toBe('Point the camera at a few.chat contact card or group invite QR code.');
     expect(en.scanner.startingCamera).toBe('Starting camera...');
     expect(en.scanner.permissionDenied).toBe('Camera permission was denied.');
     expect(en.scanner.unavailable).toBe('QR scanning is unavailable on this device or browser.');
@@ -28,9 +27,6 @@ describe('scanner i18n keys (mobile-qr-scanner FAB + camera scanner)', () => {
     expect(de.scanner.fabAriaLabel).toBe('QR-Code scannen');
     expect(de.scanner.tabLabel).toBe('Scannen');
     expect(de.scanner.title).toBe('QR-Code scannen');
-    expect(de.scanner.hint).toBe(
-      'Richte die Kamera auf eine few.chat-Kontaktkarte oder einen Gruppeneinladungs-QR-Code.'
-    );
     expect(de.scanner.startingCamera).toBe('Kamera wird gestartet...');
     expect(de.scanner.permissionDenied).toBe('Kamerazugriff wurde verweigert.');
     expect(de.scanner.unavailable).toBe('QR-Scan ist auf diesem Gerät oder Browser nicht verfügbar.');

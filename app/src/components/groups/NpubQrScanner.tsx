@@ -38,7 +38,9 @@ type NpubQrScannerProps = {
   invalidPayloadMessage: string;
   permissionDeniedMessage: string;
   unavailableMessage: string;
-  hint: string;
+  /** Optional helper line under the viewfinder; omitted when the action is
+   *  self-explanatory (see the QrScanFab overlay). */
+  hint?: string;
   /**
    * Called with the validated, normalised scan payload — a bare npub OR (epic:
    * contact-card-exchange, story S4) a contact-card onboarding link / raw card
@@ -237,9 +239,11 @@ export default function NpubQrScanner({
         )}
       </Box>
 
-      <Text fontSize="sm" color="textMuted">
-        {hint}
-      </Text>
+      {hint && (
+        <Text fontSize="sm" color="textMuted">
+          {hint}
+        </Text>
+      )}
     </VStack>
   );
 }

@@ -8,7 +8,6 @@ import {
   ModalBody,
   ModalCloseButton,
   ModalContent,
-  ModalHeader,
   ModalOverlay,
   Text,
 } from '@chakra-ui/react';
@@ -149,10 +148,13 @@ export default function QrScanFab() {
 
       <Modal isOpen={isOpen} onClose={handleClose} isCentered size="md">
         <ModalOverlay />
-        <ModalContent data-testid="qr-scan-fab-modal">
-          <ModalHeader>{copy.scanner.title}</ModalHeader>
+        {/* No visible header or hint text: a live camera viewfinder is a
+            self-explanatory "scan" affordance (project UI rule — keep info
+            texts to a minimum). `aria-label` keeps the dialog an accessible
+            name for screen readers without rendering a heading. */}
+        <ModalContent data-testid="qr-scan-fab-modal" aria-label={copy.scanner.title}>
           <ModalCloseButton />
-          <ModalBody pb={6}>
+          <ModalBody pt={10} pb={6}>
             {rejected && (
               <Alert status="warning" borderRadius="md" mb={4} data-testid="qr-scan-unrecognised">
                 <AlertIcon />
@@ -164,7 +166,6 @@ export default function QrScanFab() {
               permissionDeniedMessage={copy.scanner.permissionDenied}
               unavailableMessage={copy.scanner.unavailable}
               startingMessage={copy.scanner.startingCamera}
-              hint={copy.scanner.hint}
               onRawScan={handleRawScan}
             />
           </ModalBody>
