@@ -84,17 +84,25 @@ function makeDeps(targetExists = true): Deps {
   };
 }
 
+// S3 (marmot-ts 0.7.0 authenticated-sender migration): the dispatcher now
+// registers TWO listeners — 'authenticatedApplicationMessage' (message-
+// carrying) and 'unauthenticatedMessage' (diagnostic-only, AC-OBS-1). A
+// single shared `listener` variable would be silently overwritten by the
+// second .on() call; listeners are tracked per event name instead.
+// emitAsync now takes the payload shape the dispatcher expects
+// ({message, senderPubkey, senderLeafIndex}) rather than a raw Uint8Array.
 function makeFakeGroup() {
-  let listener: ((data: Uint8Array) => void) | null = null;
+  const listeners = new Map<string, (payload: never) => void | Promise<void>>();
   return {
-    on: vi.fn((_event: string, fn: (data: Uint8Array) => void) => {
-      listener = fn;
+    on: vi.fn((event: string, fn: (payload: never) => void | Promise<void>) => {
+      listeners.set(event, fn);
     }),
-    off: vi.fn((_event: string, _fn: (data: Uint8Array) => void) => {
-      listener = null;
+    off: vi.fn((event: string, _fn: (payload: never) => void | Promise<void>) => {
+      listeners.delete(event);
     }),
-    emitAsync: async (data: Uint8Array) => {
-      if (listener) await listener(data);
+    emitAsync: async (payload: { message: Uint8Array; senderPubkey: string; senderLeafIndex: number }) => {
+      const fn = listeners.get('authenticatedApplicationMessage');
+      if (fn) await fn(payload as never);
     },
   };
 }
@@ -203,12 +211,12 @@ describe('reactionHandler', () => {
 
     // First dispatch
     mockReturn = rumor;
-    await group.emitAsync(new Uint8Array());
+    await group.emitAsync({ message: new Uint8Array(), senderPubkey: rumor.pubkey, senderLeafIndex: 0 });
     await flushPromises();
 
     // Second dispatch with same id — dispatcher LRU should block it
     mockReturn = rumor;
-    await group.emitAsync(new Uint8Array());
+    await group.emitAsync({ message: new Uint8Array(), senderPubkey: rumor.pubkey, senderLeafIndex: 0 });
     await flushPromises();
 
     expect(deps.applyInboundRumor).toHaveBeenCalledOnce(); // only once, not twice

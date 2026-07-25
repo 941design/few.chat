@@ -1,0 +1,164 @@
+{
+  "epic_name": "marmot-ts-authenticated-sender-migration",
+  "status": "done",
+  "phase": "COMPLETE",
+  "created_at": "2026-07-25T10:44:23Z",
+  "updated_at": "2026-07-25T19:15:00Z",
+  "pre_existing_dirty_files": [
+    ".serena/project.yml",
+    "app/bug-reports/pending-invite-no-live-update-contract.json",
+    "app/bug-reports/pending-invite-no-live-update-report.md",
+    "app/bug-reports/pending-invite-no-live-update-result.json",
+    "app/bug-reports/pending-invite-no-live-update-state.json",
+    "app/tests/e2e/groups-pending-invite-live-idle.spec.ts",
+    "specs/marmot-ts-0.7.0-forward-migration-spec-request.md"
+  ],
+  "completed_stories": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5"
+  ],
+  "escalated_stories": [],
+  "phase_history": [
+    {
+      "phase": "SPEC_VALIDATED",
+      "timestamp": "2026-07-25T10:44:23Z",
+      "trigger": "validation_passed"
+    },
+    {
+      "phase": "COMPLETE",
+      "timestamp": "2026-07-25T18:55:00Z",
+      "trigger": "all_stories_done_gates_run"
+    }
+  ],
+  "plugin_sha": "f5e4524c7b9618d99914da272f8e8e9745ed9057",
+  "consumer_sha": "4f0852da74a4238808424b808b418c0ec610f136",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "ownership_ledger_path": "ownership-ledger.json",
+  "gate_runs": [
+    {
+      "gate_id": "e2e",
+      "outcome": "fired_pass",
+      "detail": "Epic own specs pass (AC-DEP-1 blackout-guard, AC-GATE-1 announcement-roster-gate 6/6, non-relay 70/71). Full relay bucket 324 passed / 5 pre-existing failures classified: AC-AR-22+AC-40 = documented prior-epic regressions (not worsened, own-send-skip preserved); 3 seedContact re-add timeouts = pre-existing contact-flow helper limitation, non-marmot. No migration-introduced regression. NB no baseline-worktree run performed; classification by error-context proof + causal analysis."
+    },
+    {
+      "gate_id": "mutation",
+      "outcome": "fired_remediated",
+      "detail": "3 logic modules audited (Stryker 9.6.1): applicationRumorDispatcher 0.930, epochResolver 0.725, storage 0.620; real_gap_count 0 on all; 5 gap-closing tests added; residuals classified equivalent/dead-code. Both order-sensitive modules (dispatcher, epochResolver) passed -> no FR-B1 escalation."
+    },
+    {
+      "gate_id": "pre_commit_review",
+      "outcome": "fired_remediated",
+      "structural_findings": {
+        "surfaced": 6,
+        "acted": 6,
+        "disclosed_unacted": 0
+      },
+      "detail": "Opus Stage-1: 5 comment-rot findings (handler trust-model comments still described the retired stub \u2014 2 asserted the OPPOSITE of the shipped MLS guarantee); all fixed. Codex Stage-2: 1 git+ssh-lockfile finding; addressed by switching the two fork pins to the git+https:// form matching the existing @rotheric/visuals convention (lock still normalizes to git+ssh per npm behavior, same as that dep)."
+    }
+  ],
+  "ac_closure": [
+    {
+      "ac_id": "AC-DEP-1",
+      "status": "met",
+      "evidence": "groups-blackout-guard e2e PASS (real relay)"
+    },
+    {
+      "ac_id": "AC-DEP-2",
+      "status": "met",
+      "evidence": "cold install resolves both forks (host; pnpm-precondition finding filed)"
+    },
+    {
+      "ac_id": "AC-DEP-3",
+      "status": "met",
+      "evidence": "npm ls single ts-mls + dist symbols"
+    },
+    {
+      "ac_id": "AC-KEY-1",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-KEY-2",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-KEY-3",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-KEY-4",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-SEAM-1",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-SEAM-2",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-SEAM-3",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-SEAM-4",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-GATE-1",
+      "status": "met",
+      "evidence": "groups-announcement-roster-gate e2e 6/6 PASS"
+    },
+    {
+      "ac_id": "AC-GATE-2",
+      "status": "met",
+      "evidence": "leaveHandler AC-FORCE-3 unit + announcement-gate e2e"
+    },
+    {
+      "ac_id": "AC-OBS-1",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-DOC-1",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-ORDER-1",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-ORDER-2",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-ORDER-3",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    },
+    {
+      "ac_id": "AC-ORDER-4",
+      "status": "met",
+      "evidence": "unit tests pass + examiner verified"
+    }
+  ],
+  "manual_validation": []
+}

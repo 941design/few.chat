@@ -207,7 +207,7 @@ once the person is confirmed, but that guard closes only when their profile arri
 the window after someone joins but before their profile reaches the admin, cancelling
 still removes them — and a join-requester who supplied no name has no interim profile
 to stand in for them, so that window is exactly when they look cancellable. This is a
-known footgun; removing a *confirmed* member is not possible at all (§8, §11).
+known footgun; removing a *confirmed* member is not possible at all (§8, §12).
 
 ---
 
@@ -294,7 +294,7 @@ in their own group.
   erased from your device.
 - **Blocked.** If you are the only admin and other members remain, the leave is
   **refused**; you are told you must first grant admin to another member. This prevents
-  a group being stranded with no one able to change its membership (§9). It does not
+  a group being stranded with no one able to change its membership (§10). It does not
   fix an admin who loses their key or abandons the app — the only defence there is to
   grant admin to trusted members early, and because grants are permanent, so are those.
 - **Confirm.** Any other member confirms and leaves. Leaving is **always immediate and
@@ -337,7 +337,44 @@ just join.
 
 ---
 
-## 9. The central trade-off
+## 9. Message authenticity: who really sent a message
+
+Every group message now carries a **cryptographically authenticated sender**. Who a
+message came from is read from the group's shared cryptographic state — the sender proven
+by the group's key material — not from a name the message claims for itself. A message
+whose claimed author does not match its authenticated sender is **dropped**: it is not
+shown under anyone's name and not stored. Honest messages — the overwhelming normal case,
+where the claimed author is the real sender — are unaffected and behave exactly as before.
+
+This is what makes the authority described elsewhere in this document real rather than
+advisory. An admin-only action, a "so-and-so has left" signal (§8), or an announcement
+attributed to a member is now backed by proof that that member actually sent it. Where a
+system message additionally names an actor *inside its body* — a leave naming its subject,
+an announcement naming who invited or admitted whom — the app checks that named actor
+against the authenticated sender and ignores the message if they disagree, so one member
+cannot act, or appear to act, on another member's behalf.
+
+- **What this guarantees:** a message shown as authored by someone was sent by them, or it
+  was dropped. A member cannot forge a message to appear to come from another member.
+- **What this does not add:** it is not deniability (a deliberate non-goal) and it does not
+  broadcast anything — authentication is derived from the group's existing encrypted state,
+  not from any new public signal. A dropped forgery is surfaced as a diagnostic, so a
+  member-on-member impersonation attempt is observable rather than silent.
+
+Legacy or non-authenticating messages remain readable and correctly attributed; nothing
+that a peer legitimately sent disappears.
+
+*This guarantee is provided by the marmot-ts library, which resolves the authenticated
+sender from the group's cryptographic state and drops mismatches at the library boundary.
+The app is pinned to the forks that carry it — `ts-mls` at
+`941design/ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13` (branch `feat/app-message-sender`)
+and `@internet-privacy/marmot-ts` at
+`941design/marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2` (branch
+`authenticated-sender`).*
+
+---
+
+## 10. The central trade-off
 
 - **What you gain:** membership and the group's name can only be changed by a small,
   trusted set of admins, not by anyone who happens to be a member.
@@ -354,7 +391,7 @@ members early; there is no recovery after the fact.
 
 ---
 
-## 10. Edge cases and how they resolve
+## 11. Edge cases and how they resolve
 
 **Inviting someone with no published identity keys.** The invitation is refused with an
 explanation that the person hasn't set up their identity; it is not silently lost.
@@ -399,7 +436,7 @@ destructive "abandon" outcome is never offered on unknown membership.
 **Two co-admins leaving at nearly the same moment.** The last-admin block is judged
 against each leaver's most-recently-known admin list, with no re-check at execution, so
 both can pass independently and leave the group with no admins — the read-only-for-
-membership state of §9. Keeping more than two admins avoids exposure to this window.
+membership state of §10. Keeping more than two admins avoids exposure to this window.
 (This follows from the leave logic rather than being a separately specified rule.)
 
 **A leaver's departure signal never reaches the group.** If the signal fails to send
@@ -434,7 +471,7 @@ blocked from leaving) are case-insensitive, so letter-casing never changes the o
 
 ---
 
-## 11. Deliberately out of scope
+## 12. Deliberately out of scope
 
 - **Demoting or revoking an admin** — contradicts the add-only invariant (§3.3).
 - **Retroactively demoting members of older all-admin groups** — forward-only; no
@@ -479,6 +516,10 @@ the shipped implementation, and the automated test suite:
 - `docs/adr/ADR-002` (mutual-contact graph and pull-only invitations) and
   `docs/adr/ADR-003` (last-writer-wins for MLS metadata; the basis for admin being
   add-only).
+- `docs/adr/ADR-012` (MLS sender binding in the fork) and
+  `specs/epic-marmot-ts-authenticated-sender-migration/` — the authenticated message
+  sender of §9: the library resolves who really sent each group message and drops any
+  message whose claimed author does not match, backing the roster and leave gates.
 - Implementation under `app/src/context/MarmotContext.tsx`, `app/src/lib/marmot/`
   (invite links, join requests, cancel, leave, grant, welcome subscription), and the
   group components and page under `app/src/components/groups/` and `app/pages/`.

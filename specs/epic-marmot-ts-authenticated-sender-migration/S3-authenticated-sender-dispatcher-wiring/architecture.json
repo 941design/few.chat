@@ -1,0 +1,76 @@
+{
+  "module_name": "applicationRumorDispatcher",
+  "purpose": "Single inbound-message listener seam for MLS group application rumors. Switches its event source from the raw 'applicationMessage' event to the library-authenticated 'authenticatedApplicationMessage' event, constructing sender.authenticity as the literal 'mls' directly from the library-supplied senderPubkey (never from an app-side resolver). Also widens epochResolver.ts's compile-time contract with the fork's IngestResult union and wires the library's unauthenticatedMessage diagnostic to a visible console.warn.",
+  "public_api": [
+    {
+      "name": "createDispatcher",
+      "signature": "createDispatcher(handlers: RumorHandler[]): Dispatcher",
+      "description": "Unchanged public factory. Internal listener wiring changes (Seam A); external contract identical."
+    },
+    {
+      "name": "Dispatcher.subscribe",
+      "signature": "subscribe(group: MarmotGroupLike, ctx: DispatcherContext): () => void",
+      "description": "BREAKING (Seam B1, retire): drops the optional third 'resolveSender' parameter. The listener now builds AuthenticatedSender directly from the authenticatedApplicationMessage event payload — there is no longer a channel for an app-side sender resolver. Registers exactly one message-carrying listener (authenticatedApplicationMessage) plus one diagnostic-only listener (unauthenticatedMessage, AC-OBS-1) per subscribe() call."
+    },
+    {
+      "name": "AuthenticatedSender",
+      "signature": "interface AuthenticatedSender { pubkey: string; authenticity: 'claimed' | 'mls' }",
+      "description": "Unchanged shape. The 'claimed' member stays in the union (existing handler unit tests construct 'claimed' senders directly to exercise handler logic independent of the dispatcher); production code post-migration only ever constructs 'mls'."
+    },
+    {
+      "name": "MarmotGroupLike",
+      "signature": "interface MarmotGroupLike { on(event:'authenticatedApplicationMessage', listener:(msg: AuthenticatedApplicationMessage)=>void): void; off(...): void; on(event:'unauthenticatedMessage', listener:(info: UnauthenticatedMessageInfo)=>void): void; off(...): void; }",
+      "description": "Widened structural type (was: applicationMessage-only, Uint8Array payload). Types imported from '@internet-privacy/marmot-ts' (AuthenticatedApplicationMessage, UnauthenticatedMessageInfo) rather than hand-duplicated, per architecture.md's exact-type-verbatim guidance."
+    },
+    {
+      "name": "EpochResolver / MlsGroupLike",
+      "signature": "interface MlsGroupLike { state: ClientState; ingest(events: NostrEvent[], options?): AsyncGenerator<IngestResult>; save(): Promise<void> }",
+      "description": "AC-SEAM-4: MlsGroupLike.ingest()'s return type now imports IngestResult (the exact union) from '@internet-privacy/marmot-ts' instead of a hand-pinned 0.5.1-shaped local union. Runtime classification of the two new rejected variants was ALREADY correct (the pre-existing 'other skipped/rejected: log and drop' fallthrough never added them to the future/retry buffer) — this is a type-only fix, made explicit with a dedicated branch and comment for AC-ORDER-2 auditability."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/epochResolver.ts"
+  ],
+  "owned_data": [
+    "Per-group LRU seen-id Set<string> (dedup dedup state, unchanged)"
+  ],
+  "dependencies_allowed": [
+    "@internet-privacy/marmot-ts (type-only: AuthenticatedApplicationMessage, UnauthenticatedMessageInfo, UnauthenticatedMessageReason, IngestResult; value: deserializeApplicationData, serializeClientState, deserializeClientState, getEpoch, getGroupMembers — all pre-existing)"
+  ],
+  "dependencies_forbidden": [
+    "React / app/src/context/** (dispatcher and epochResolver stay context-free per architecture.md §1)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [
+    "MarmotGroup#authenticatedApplicationMessage (replaces #applicationMessage)",
+    "MarmotGroup#unauthenticatedMessage (new, diagnostic-only, AC-OBS-1)"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/epochResolver.test.ts (unaffected — mocks use 'as never' casts, no compile-time coupling to the widened type)",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/reactionHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts (authorized migration cleanup)",
+    "app/tests/unit/marmot/readPreJoinGroupName.realMarmot.test.ts (authorized migration cleanup)",
+    "app/tests/e2e/groups-blackout-guard.spec.ts (new, AC-DEP-1)"
+  ],
+  "seam_decisions": {
+    "seam_B": {
+      "choice": "B1 — retire authenticatedSenderResolver.ts entirely",
+      "rationale": "architecture.md's recommended end-state. Confirmed by direct inspection: no e2e test (`grep -rl '__fewTest.*resolveAuthenticatedSender'` across app/tests) actually registers the app-side override hook — only a doc-comment cross-reference in groups-profile-send-fails-closed.spec.ts mentions it by name for an unrelated hook. Deleted: authenticatedSenderResolver.ts, tests/unit/marmot/authenticatedSenderResolver.test.ts, the SenderResolver type + resolveSender param on Dispatcher.subscribe, and MarmotContext.tsx's import/construction/pass-through of createAuthenticatedSenderResolver (lines ~47, ~1699-1703, ~1829)."
+    },
+    "seam_C": {
+      "choice": "library-cited (per architecture.md recommendation) — no app-choke-point drop e2e added",
+      "rationale": "buildRumor always stamps the local pubkey (verified in architecture.md §4/Seam C); the app cannot itself publish a divergent-sender rumor by design, so an app-driven e2e cannot exercise the library's MLS authentication check. The library's own drop is cited (AC-OBSERVABLE-1/AC-SURFACE-1 in the fork's own test suite), not re-proven here. The app's e2e (groups-blackout-guard.spec.ts) instead proves the PRIMARY, load-bearing guard: a legitimate cross-peer message survives on the fork (AC-DEP-1). The app-side choke-point drop (applicationRumorDispatcher.ts:113-122, now pure defense-in-depth) remains covered by the existing unit tests (applicationRumorDispatcher.test.ts's resolveSender-based mismatch scenarios), rewritten to construct a mismatched senderPubkey directly in the authenticatedApplicationMessage event payload rather than via the retired resolver hook."
+    }
+  },
+  "cross_cutting_notes": {
+    "AC_ORDER_risk_concentration": "This story's two files (applicationRumorDispatcher.ts, epochResolver.ts) are where architecture.md §6's four whole-flow guarantees concentrate risk, but the AC-ORDER-1..4 property tests themselves are owned by S4 (integration story) — see stories.json S3 scope.excludes. This story preserves: (1) resolve-before-markSeen ordering verbatim (AC-SEAM-3/AC-XCUT-1); (2) rejected:unauthenticated-sender/undeserializable classified terminal, not bufferable (AC-SEAM-4, epochResolver.ts); (3) epochResolver's onApplicationMessage callback stays a documented no-op in production (unchanged, welcomeSubscription.ts:1163-1168, verified untouched)."
+  }
+}

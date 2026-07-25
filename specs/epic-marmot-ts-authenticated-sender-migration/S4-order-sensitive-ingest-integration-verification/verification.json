@@ -1,0 +1,129 @@
+{
+  "story_id": "S4",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-25T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S4-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do the property/interleaving tests for the four AC-ORDER-* guarantees run against S3's REAL, already-implemented dispatcher/epochResolver/welcomeSubscription producers — never a mock or stub standing in for `ingest()`, the dispatcher's LRU, or welcomeSubscription's dedup set — per FR-A7's Mock Strategy exception? Show the test setup and confirm no jest.mock/vi.mock/hand-rolled fake replaces any of the three named modules."
+    },
+    {
+      "question_id": "VQ-S4-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story's diff touch only app/tests/unit/marmot/order-sensitive-ingest.property.test.ts (new test file, verification-only) with zero production-code changes to applicationRumorDispatcher.ts, epochResolver.ts, or welcomeSubscription.ts — confirming a gap found here is escalated as a defect against S2/S3 rather than silently patched in this story, per scope.excludes ('Any new production behavior... a genuine gap found here is a defect against S2/S3, not new scope')?"
+    },
+    {
+      "question_id": "VQ-S4-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could this integration story's verification surface be deleted and rewritten without modifying any file outside its dependencies_allowed list (the union of its owned ACs' Spans modules: set — applicationRumorDispatcher, epochResolver, welcomeSubscription)? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S4-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does each of the four property tests generate the FULL space of orderings/interleavings named in its AC (not a single hand-picked sequence) — e.g. AC-ORDER-1's {legitimate, mismatched-sharing-id, redelivery} across both dedup layers, AC-ORDER-3's arbitrary rollback/replay orderings within the 3s grace window — and does each test FAIL when run against a deliberately-reverted pre-fix build (a state-discriminating property, not a tautology that passes regardless of ordering)?"
+    },
+    {
+      "question_id": "VQ-S4-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does architecture.md §6's 'Risk concentration' note (epochResolver.ts:59-69's MlsGroupLike union gating all four behaviors) get exercised directly by at least one property test — i.e. does the test suite include a case where the union's classification of `rejected:unauthenticated-sender` vs `unreadable` is deliberately varied, proving the classification itself (not just the outer property) is under test?"
+    },
+    {
+      "question_id": "VQ-S4-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "For AC-ORDER-2 specifically: does the property test prove a `rejected:'unauthenticated-sender'` outcome is NEVER treated as retriable/bufferable for ANY position in the generated outcome sequence (not just a fixed last-position case) — i.e. is a forged-sender rumor incapable of being resurrected via the retry/buffer path under any interleaving, closing the class of attack where an attacker relies on retry logic to eventually get a rejected message accepted?"
+    },
+    {
+      "question_id": "VQ-S4-007",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do any of the four property tests, when reasoned against own-send echo suppression or reaction badge propagation (AC-AR-22 / AC-40), reveal an interaction between the order-sensitive ingest guarantees and those two known regressions — i.e. does this integration story's interleaving coverage incidentally touch the own-send-echo or reaction-badge code paths, and if so, do the regressions get worse under any tested ordering?"
+    },
+    {
+      "question_id": "VQ-S4-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ORDER-1",
+      "question": "For AC-ORDER-1: for any interleaving of {a sender-authenticated legitimate rumor, a sender-mismatched rumor sharing the same rumor id, and a redelivery of that id} across the dispatcher's per-group LRU dedup and welcomeSubscription's independent raw-event-id dedup set, is the mismatched rumor NEVER recorded in either dedup structure, and is the legitimate rumor processed exactly once regardless of arrival order? Provide the property test generator covering this ordering space, the production code paths in both dedup structures, and confirm the test is not a mock-spy proxy for either dedup set."
+    },
+    {
+      "question_id": "VQ-S4-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ORDER-2",
+      "question": "For AC-ORDER-2: for any sequence of ingest() outcomes containing at least one rejected:'unauthenticated-sender' at an arbitrary position among unreadable/skipped/processed results, is that result NEVER added to EpochResolver's retry buffer, and does welcomeSubscription's un-mark-on-buffered logic NEVER fire for it? Provide the property test generator, the production classification code in epochResolver.ts's IngestResult handling, and confirm the test is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S4-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ORDER-3",
+      "question": "For AC-ORDER-3: for any ordering of competing-commit rollback and replay within the 3s grace window, does every re-emitted application message route authenticity resolution exclusively through authenticatedApplicationMessage, with EpochResolver's onApplicationMessage callback remaining a zero-side-effect no-op for every replayed message regardless of replay order/count? Provide the property test, the production no-op callback code, and confirm the test asserts zero side effects (not merely that the callback returns undefined) across the generated replay orderings."
+    },
+    {
+      "question_id": "VQ-S4-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ORDER-4",
+      "question": "For AC-ORDER-4: for any interleaving where the same rumor id is observed by both welcomeSubscription's historical-sync path and the dispatcher's live subscription, do both paths agree on the authenticity outcome (both 'mls' or both the same rejection reason) and deliver to handlers at most once? Provide the property test generator covering overlapping/either-order arrivals, the production idempotency code relied on, and confirm the test is not a mock-spy proxy for either subscription path."
+    },
+    {
+      "question_id": "VQ-S4-012",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The implementation's `makeCombinedFakeGroup` fake has its scripted `ingest()` synchronously fire the corresponding group-level event ('authenticatedApplicationMessage'/'unauthenticatedMessage') BEFORE yielding its IngestResult, modeling S3's confirmed fact that both channels fire 'from identical adjacent lines' in the real library. Does this synchronous same-tick coupling introduce any ordering guarantee the REAL asynchronous library does not actually provide (i.e., could the real library's two emissions be separated by a microtask boundary in a way that would change any of the AC-ORDER-1/3/4 test outcomes if modeled more loosely)?"
+    },
+    {
+      "question_id": "VQ-S4-013",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "Two hand-applied mutations were used to falsify non-tautology (VQ-S4-004): (1) applicationRumorDispatcher.ts markSeen() moved before the choke-point drop — broke exactly the 2/6 'mismatched-first' AC-ORDER-1 dispatcher-layer orderings; (2) epochResolver.ts's 'rejected' branch changed to buffer like 'unreadable' — broke all 28 AC-ORDER-2 permutation/interleaving cases. Both were reverted immediately (diff-verified clean) after observing the expected failures. Do these two falsification results, taken together with the fact AC-ORDER-3's and AC-ORDER-4's tests were NOT separately hand-mutated, leave adequate confidence that AC-ORDER-3/4's tests are equally state-discriminating, or should a follow-up mutation pass target those two specifically?"
+    },
+    {
+      "question_id": "VQ-S4-014",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "welcomeSubscription.ts's seenIdsByGroup Map is a module-level singleton never reset between tests; this story's tests rely exclusively on crypto.randomUUID()-suffixed groupIds for isolation (mirroring the existing welcomeSubscription.test.ts convention) rather than an exported reset hook. Is there a scenario — e.g. two DIFFERENT real production groups whose groupId strings collide, or a groupId reused across a user's app lifetime — where this shared-across-tests module design could mask a genuine cross-group dedup leak that per-test UUID isolation is structurally unable to catch?"
+    },
+    {
+      "question_id": "VQ-S4-015",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-ORDER-3",
+      "question": "AC-ORDER-3's test varies replay COUNT (1, 2, 3 rollback cycles) but not the internal ORDER of multiple queued replay-window messages within a single cycle (architecture.json's test_design_decisions notes this is because replayQueue order is FIFO-by-insertion in the real code, not a free variable). Is 'independent of replay order' in the AC's own wording fully discharged by count-variation alone, or does it require a scenario where the read order of queued messages could genuinely differ (e.g. two DISTINCT competing-commit chains queuing into replayQueue in an interleaved fashion) that this story's cycles-are-sequential design does not construct?"
+    },
+    {
+      "question_id": "VQ-S4-016",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "ac_id": "AC-ORDER-3",
+      "question": "Round-1 remediation (VQ-S4-013 follow-up) applied two hand-mutations targeting AC-ORDER-3 specifically: (1) injecting an `authenticity` field into the rumor passed to `onApplicationMessage` inside `rollbackAndReplay` — broke all 3/3 rollback-count cases (the 'no authenticity key' assertion). (2) A first attempt at an 'extra spurious invocation' mutation (firing a bogus `onApplicationMessage` call for the winning-commit's `newState` result) was found to be UNREACHABLE dead code in this test's own outcome scenario (the replayed 'losing' commit's outcome is `skippedPastEpoch`, never `newState`, so no `processed`+`newState` result is ever yielded during replay here) — it passed all 50 tests for a reason unrelated to test quality. Redirected to a reachable mutation (duplicating the `onApplicationMessage?.(rumor)` call at the one branch replay actually exercises, `processed`+`applicationMessage`) — this DID initially pass all 50 tests undetected, because the original assertion was `toHaveBeenCalled()` (at least once) with no upper bound, revealing a genuine tautology gap. The test was strengthened in the same round to `expect(...mock.calls.length).toBe(count * 2)` (2 calls per cycle: one at initial ingest, one at replay — confirmed empirically, and structurally distinct from the dispatcher's 1-call-per-cycle count, which collapses via its own rumor-id LRU that EpochResolver's callback path lacks) and re-verified to catch the duplicate-invocation mutation (3/3 rollback-count cases failed as expected) before being reverted. Does this closed-loop finding-and-fix (mutation escaped → assertion tightened → mutation now caught → re-verified clean revert) provide adequate confidence in AC-ORDER-3's non-tautology, or does the initially-unreachable 'newState' mutation attempt suggest other reachable-but-unexercised branches in `rollbackAndReplay`/`flushFutureBuffer` (e.g. the `unreadable`/`rejected` result kinds during a REPLAY, as opposed to a first-pass `flushFutureBuffer` retry) warrant their own dedicated mutation pass in a future round?"
+    },
+    {
+      "question_id": "VQ-S4-017",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "ac_id": "AC-ORDER-4",
+      "question": "Round-1 remediation (VQ-S4-013 follow-up) applied one hand-mutation targeting AC-ORDER-4 specifically: moving `welcomeSubscription.ts`'s `markGroupSeen(processedIds, eventId)` call from BEFORE `await resolver.ingestEvent(...)` to AFTER it (breaking the synchronous mark-before-first-await race guard the code's own comment describes). This broke exactly 1/48 tests — the 'simultaneous: two overlapping live subscriptions... back-to-back (no await between)' case (2 ingests observed instead of 1) — and left the other 3 AC-ORDER-4 scenarios (historical-then-live, live-then-historical, historical-then-live-rejected) passing, as expected since those scenarios have an `await flushPromises()` between deliveries and would not race regardless of mark-timing. Is a single scenario-specific mutation (targeting only the exact race the 'simultaneous' test names) sufficient confidence for AC-ORDER-4 as a whole, or does the guarantee's broader claim ('historical-sync and live-subscription overlap... never diverge... at most once') warrant an additional mutation against the historical-vs-live PATH itself (e.g. mutating the historical-fetch loop's per-event `ingestNdkEvent` call site, as opposed to the live-subscription's `sub.on('event', ...)` call site, to confirm both entry points share — not merely coincidentally agree with — the same `processedIds` dedup instance)?"
+    },
+    {
+      "question_id": "VQ-S4-018",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "Round-1 remediation (VQ-S4-014 follow-up) added two tests: 'same groupId reused after dispose (simulated crash-recovery re-join)' and 'two independent groups... does not suppress'. Both pass against the real, unmutated code (no defect found — `seenIdsByGroup`'s per-groupId keying already provides the isolation VQ-S4-014 asked about). Non-tautology was verified two ways: (a) mutating `getGroupSeenIds` to return one SHARED `Set` across all groupIds broke exactly the 'two independent groups' test (1/2 new tests failed as expected; the reuse test, which does not exercise cross-group isolation, correctly did not fire) — confirming that test is state-discriminating; (b) the reuse test's own within-scenario assertions (a permanently-seen id stays deduped across dispose+resubscribe AND a genuinely-new post-rejoin id still dispatches) were both exercised by construction, not merely inferred. Given `seenIdsByGroup` is a real production Map never reset within a single browser session (by the module's own documented design, not a defect), does the story's characterization of this as 'intended cross-instance dedup, not a bug' hold, or does the reuse test's SAME-mlsGroup-object assumption (a real app restart would construct a NEW `MarmotGroup` instance reloaded from IndexedDB, not reuse the same JS object) understate a scenario this round did not construct: a stale `seenIdsByGroup` entry surviving a REAL page reload is impossible (module state resets), but a stale entry surviving an in-session group-object SWAP (e.g. groupStorage reloading a fresh `MarmotGroup` for the same groupId without a full page reload) was not separately tested?"
+    },
+    {
+      "question_id": "VQ-S4-019",
+      "phase": "post-impl",
+      "category": "TEST",
+      "ac_id": "AC-ORDER-3",
+      "question": "Round-1 remediation (VQ-S4-015) added a code comment on the AC-ORDER-3 describe block documenting the FIFO/insertion-order assumption of `replayQueue` and stating the test must be re-permuted if `replayQueue` ever becomes a reordering structure. This is a documentation-only change (no new test scenario) — does a code comment alone satisfy VQ-S4-015's underlying concern, or does 'independent of replay order' remain formally unverified for the case (raised in VQ-S4-015 itself) of two DISTINCT competing-commit chains queuing into `replayQueue` in an interleaved fashion, which the current one-queue-per-snapshot design may not even be able to construct (each `takeSnapshot` call replaces `this.snapshot` wholesale, so it is unclear a second, concurrent `replayQueue` can exist at all) — i.e., is the 'no free ordering variable to permute' claim itself an architectural fact worth confirming with EpochResolver's owner rather than an assumption this test file should carry alone?"
+    }
+  ]
+}

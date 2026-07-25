@@ -30,7 +30,7 @@ if (!globalThis.crypto?.subtle) {
 
 import { describe, it, expect } from 'vitest';
 import type { NostrEvent } from 'nostr-tools/pure';
-import { MarmotClient } from '@internet-privacy/marmot-ts';
+import { MarmotClient, generateKeyPackageSlot } from '@internet-privacy/marmot-ts';
 import type { GenericKeyValueStore, NostrNetworkInterface, PublishResponse } from '@internet-privacy/marmot-ts';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { unwrapGiftWrap, readPreJoinGroupData } from '@/src/lib/marmot/welcomeSubscription';
@@ -124,7 +124,10 @@ describe('readPreJoinGroupData — real marmot-ts (unmocked)', () => {
       groupStateStore: new InMemoryStore(),
       keyPackageStore: new InMemoryStore(),
       network,
-      clientId: 'test-invitee',
+      // The installed marmot-ts fork validates clientId as a MIP-00 slot
+      // identifier (`/^[0-9a-f]{64}$/`) — mint a conformant one instead of
+      // an arbitrary string literal.
+      clientId: generateKeyPackageSlot(),
     });
 
     // 1. Invitee publishes a REAL KeyPackage (kind 30443) — captured via the

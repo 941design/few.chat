@@ -1,0 +1,53 @@
+{
+  "module_name": "STORAGE_KEYS / storage",
+  "purpose": "Persist a once-minted, MIP-00-conformant 64-hex KeyPackage slot identifier (generateKeyPackageSlot()) and expose a pure load-or-generate accessor so MarmotContext.tsx can use a stable, non-throwing clientId at all three KeyPackage slot-resolution call sites (constructor, rotate, create), replacing the free-form 'few' literal that 0.6.0+ hex-validation now rejects.",
+  "public_api": [
+    {
+      "name": "STORAGE_KEYS.keyPackageSlot",
+      "signature": "keyPackageSlot: 'lp_keyPackageSlot_v1'",
+      "description": "New entry in the existing STORAGE_KEYS const map (app/src/types/index.ts), following the established lp_<name>_v1 namespacing convention. No collision with any existing key."
+    },
+    {
+      "name": "readOrCreateKeyPackageSlot",
+      "signature": "readOrCreateKeyPackageSlot(mintSlot: () => string): string",
+      "description": "Pure, synchronous, unit-testable helper in app/src/lib/storage.ts. Reads STORAGE_KEYS.keyPackageSlot via the existing readItem() helper. If the stored value is present AND matches /^[0-9a-f]{64}$/, returns it byte-identical (AC-KEY-3) without calling mintSlot or writing. Otherwise (absent on fresh install, OR present but non-conformant e.g. the legacy 'few' value) calls mintSlot() exactly once, persists the result via writeItem() BEFORE returning (so the write is synchronously observable to the caller before any subsequent MarmotClient construction), and returns it (AC-KEY-1, AC-KEY-2). mintSlot is injected by the caller (MarmotContext.tsx passes the real generateKeyPackageSlot from @internet-privacy/marmot-ts, dynamically imported there) rather than imported statically in storage.ts — this keeps storage.ts free of the marmot-ts/ts-mls dependency graph, mirroring MarmotContext.tsx's existing discipline of dynamically importing marmot-ts only inside the browser-gated init() effect (avoids pulling crypto-heavy code into every page bundle that transitively imports storage.ts, and avoids any SSR/static-export-time import-order risk)."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "localStorage key 'lp_keyPackageSlot_v1' (the persisted KeyPackage slot scalar)"
+  ],
+  "dependencies_allowed": [
+    "app/src/types/index.ts (STORAGE_KEYS)"
+  ],
+  "dependencies_forbidden": [
+    "@internet-privacy/marmot-ts (storage.ts stays dependency-free of marmot-ts; the mint function is injected by the caller, not imported here)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/storage.test.ts (readOrCreateKeyPackageSlot: fresh-mint-and-persist, legacy-non-hex-regenerates, byte-identical-reuse, format assertion)"
+  ],
+  "consumer_notes": {
+    "module": "MarmotContext.tsx (consumer, not owned by this module)",
+    "call_sites": [
+      {
+        "line": "~1219 (constructor)",
+        "change": "Before `new MarmotClient({...})`, call `const keyPackageSlot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);` (generateKeyPackageSlot imported via the same dynamic `await import('@internet-privacy/marmot-ts')` already present in init()). Pass `clientId: keyPackageSlot` instead of the literal 'few'."
+      },
+      {
+        "line": "~1390 (rotate, inside `client.groups.on('joined', ...)`, same init() closure so keyPackageSlot is in scope)",
+        "change": "Pass explicit `d: keyPackageSlot` to `client.keyPackages.rotate(pkg.keyPackageRef, { relays: getEffectiveRelays(), d: keyPackageSlot })`. Per the fork's RotateKeyPackageOptions.d contract, omitting `d` reuses the STORED entry's own `d`/identifier -- for a legacy locally-stored package that stored identifier is literally 'few', so an omitted `d` reproduces the throw. Passing the conformant hex slot explicitly forces the rotated package onto the conformant slot regardless of what the old package's stored identifier was, which resolves AC-KEY-4's silent-swallow loop (the console.debug catch branch stops firing for this case) without weakening or re-wrapping the catch itself."
+      },
+      {
+        "line": "~1410 (create)",
+        "change": "No code change. KeyPackageManager.clientId is now constructed from the conformant hex `keyPackageSlot` (via MarmotClient constructor at ~1219), so `client.keyPackages.create({ relays })` with no explicit `d` already resolves to the hex slot via the manager's documented fallback order (options.d -> this.clientId -> throw). Confirmed by reading client/key-package-manager.d.ts's `create()` doc comment."
+      },
+      {
+        "line": "2496 (keyPackages.list(), inside republishDiscoverability)",
+        "change": "No code change. Confirmed read-only (list() + filter, no create/rotate call) -- not a slot/mutation site, resolving architecture.md §7's open item."
+      }
+    ]
+  }
+}

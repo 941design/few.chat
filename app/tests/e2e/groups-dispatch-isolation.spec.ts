@@ -3,16 +3,19 @@
  *
  * Verifies that an own-send chat message produces exactly one IDB row and
  * exactly one rendered bubble — the structural outcome guaranteed by having a
- * single `group.on('applicationMessage')` subscriber.
+ * single message-carrying subscriber (marmot-ts 0.7.0 onward:
+ * `group.on('authenticatedApplicationMessage')`; pre-0.7.0 this was the raw
+ * `group.on('applicationMessage')` event — see AC-SEAM-2, epic
+ * marmot-ts-authenticated-sender-migration).
  *
  * AC-AR-21, AC-AR-22.
  *
  * Requires the strfry relay harness: make e2e-up / make test-e2e-groups.
  * Single-spec run: node scripts/run-e2e.mjs tests/e2e/groups-dispatch-isolation.spec.ts
  *
- * AC-AR-3 canary: if a future epic introduces a second applicationMessage subscriber,
- * the double-write symptom this test catches will surface immediately.
- * Verify manually: grep -r "group.on('applicationMessage'" app/src/ -l
+ * AC-AR-3 canary: if a future epic introduces a second message-carrying
+ * subscriber, the double-write symptom this test catches will surface
+ * immediately. Verify manually: grep -r "group.on('authenticatedApplicationMessage'" app/src/ -l
  * should return exactly one file: applicationRumorDispatcher.ts
  */
 

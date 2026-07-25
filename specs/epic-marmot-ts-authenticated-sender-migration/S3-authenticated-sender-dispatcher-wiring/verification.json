@@ -1,0 +1,243 @@
+{
+  "story_id": "S3",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-25T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S3-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is `sender.authenticity: 'mls'` built directly from the library-supplied `senderPubkey` on the `authenticatedApplicationMessage` event \u2014 not a frozen/hardcoded literal 'mls' string applied regardless of what the library reports, and not routed through the retired/inert `authenticatedSenderResolver` stub which always returned 'claimed'? Show the exact construction call site and confirm no code path can produce `authenticity:'mls'` without a genuine library-authenticated `senderPubkey`."
+    },
+    {
+      "question_id": "VQ-S3-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story's diff to MarmotContext.tsx touch only the dispatcher-wiring lines (:1699, :1824) \u2014 disjoint from S2's KeyPackage slot call sites (:1219, :1390, :1410) \u2014 and does chatHandler.ts / leaveHandler.ts receive zero production-code changes (verify-only per scope.excludes 'Re-implementing any app-layer attribution gate')?"
+    },
+    {
+      "question_id": "VQ-S3-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could 'applicationRumorDispatcher' be deleted and rewritten without modifying any file outside its dependencies_allowed list? If not, which cross-module dependencies exist (epochResolver.ts's MlsGroupLike widening, authenticatedSenderResolver.ts's retire/repurpose decision, MarmotContext.tsx's wiring lines) and do they flow through declared seam contracts in architecture.md (Seam A/B/C)?"
+    },
+    {
+      "question_id": "VQ-S3-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Does a unit test assert `group.on` is invoked exactly once for a message-carrying event across a subscribe() call (AC-SEAM-2), and does a separate unit test assert that for a sender-mismatched delivery, the rumor's id is absent from the per-group seen-id set (markSeen) and no handler was invoked (AC-SEAM-3) \u2014 using the real dispatcher module, not a mock that stubs markSeen or the listener registration away?"
+    },
+    {
+      "question_id": "VQ-S3-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the epochResolver.ts MlsGroupLike widening classify `rejected:unauthenticated-sender` as terminal (not bufferable, not retried) per architecture.md \u00a76 guarantee 2, and does `tsc` run against app/ with the fork installed report zero errors attributable to this interface (AC-SEAM-4)? Were Seam B (retire vs keep authenticatedSenderResolver) and Seam C (impersonation e2e layer) explicitly decided and recorded, per this story's scope.includes?"
+    },
+    {
+      "question_id": "VQ-S3-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "When the library's `unauthenticatedMessage` diagnostic fires for a dropped rumor, does the app log all four payload fields (senderPubkey, claimedPubkey, reason, event) via `console.warn`, visible with no DEBUG env var set \u2014 and is this the ONLY code path that can discard a sender-mismatched message, with no alternate drop path that skips this diagnostic?"
+    },
+    {
+      "question_id": "VQ-S3-007",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Do handlers/*.ts (chatHandler.ts's S6 gate, leaveHandler.ts:43's forced-removal guard) receive ZERO production-code changes from this story \u2014 i.e. these gates were verified, not re-implemented, per architecture.md \u00a72's 'No code change \u2014 verify only'? Show `git diff` for these two files is empty of production-logic changes (test-file changes only, if any)."
+    },
+    {
+      "question_id": "VQ-S3-008",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does the dispatcher/epochResolver rewiring change any code path involved in own-send echo suppression or reaction badge propagation (AC-AR-22 / AC-40 \u2014 findings own-send-message-echo-no-longer, group-reaction-badge-no-longer-propagates)? If the dispatcher's listener switch touches the same message-processing path those regressions live in, does a targeted test confirm neither regression is worsened by this story (not merely 'not touched')?"
+    },
+    {
+      "question_id": "VQ-S3-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEP-1",
+      "question": "For AC-DEP-1: does a group chat message sent by a second real browser-context peer (publish-through-the-app, per CLAUDE.md's e2e rule \u2014 no raw WebSocket.send) render in the first peer's chat view within the e2e's polling window, post-migration? Provide the production dispatcher wiring, the e2e test (app/tests/e2e/groups-blackout-guard.spec.ts) exercising two real signed-in browser contexts, and confirm the assertion is not a mock-spy proxy standing in for a real second peer."
+    },
+    {
+      "question_id": "VQ-S3-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEAM-1",
+      "question": "For AC-SEAM-1: for a group chat message from a second real peer, does the dispatcher construct sender.authenticity as the literal 'mls' (never 'claimed') before handing the message to handlers? Provide the production construction code, a test observing the AuthenticatedSender value each handler receives, and confirm it is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S3-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEAM-2",
+      "question": "For AC-SEAM-2: is there exactly one group.on(...) listener for inbound application messages after migration (authenticatedApplicationMessage only, no lingering applicationMessage listener on the same group)? Provide the production subscribe() code, the unit test asserting group.on is invoked exactly once, and confirm the test does not use a mock that hides a second real listener registration."
+    },
+    {
+      "question_id": "VQ-S3-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEAM-3",
+      "question": "For AC-SEAM-3: given a delivered event where resolved senderPubkey diverges from the deserialized rumor's pubkey, does the choke-point drop fire before markSeen, exactly preserving AC-XCUT-1's resolve-before-markSeen ordering verbatim? Provide the production code (applicationRumorDispatcher.ts:113-122 line ordering), a unit test asserting the rumor id is absent from the seen-id set and no handler was invoked, and confirm the test is not a mock-spy proxy that bypasses the real markSeen call."
+    },
+    {
+      "question_id": "VQ-S3-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEAM-4",
+      "question": "For AC-SEAM-4: does epochResolver.ts's MlsGroupLike interface compile against the fork's widened IngestResult union (processed w/ senderPubkey; rejected:unauthenticated-sender; rejected:undeserializable) with zero attributable tsc errors? Provide the widened interface, a `tsc` run against app/ with the fork installed, and the exact command + output showing zero errors for this interface."
+    },
+    {
+      "question_id": "VQ-S3-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-GATE-1",
+      "question": "For AC-GATE-1: does an invited/accepted/admitted announcement rumor whose body-carried actor pubkey diverges from the authenticated sender.pubkey still get rejected by the S6 gate (isGroupAdmin/isGroupMember in chatHandler.ts) post-migration \u2014 observable as no membership/roster change and no rendered announcement? Provide groups-announcement-roster-gate.spec.ts extended to run against the fork build, confirm chatHandler.ts itself received no production-code change (verify-only), and confirm the test is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S3-015",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-GATE-2",
+      "question": "For AC-GATE-2: does a leave_intent rumor whose body-carried subject pubkey diverges from the authenticated sender.pubkey fail to trigger leaveHandler.ts's enqueueLeave for that subject, with the forced-removal guard at leaveHandler.ts:43 continuing to gate on sender.pubkey (now backed by real library authentication)? Provide the test exercising this end-to-end against the fork build, confirm leaveHandler.ts received no production-code change (verify-only), and confirm the test is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S3-016",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-1",
+      "question": "For AC-OBS-1: when the library's unauthenticatedMessage diagnostic fires, does the app log all four payload fields (senderPubkey, claimedPubkey, reason, event) via a console.warn call visible with NO DEBUG environment variable set? Provide the production wiring code, a test asserting the console.warn call and its four fields with DEBUG unset, and confirm a debug-gated-only log is not the sole assertion target."
+    }
+  ],
+  "post_impl_answers": {
+    "answered_by": "base:integration-architect",
+    "answered_at": "2026-07-25T15:30:00Z",
+    "answers": [
+      {
+        "answers_question_id": "VQ-S3-001",
+        "phase": "post-impl",
+        "category": "QUALITY",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "sender.authenticity:'mls' is constructed at applicationRumorDispatcher.ts:117 as `const sender = { pubkey: senderPubkey, authenticity: 'mls' }`, where senderPubkey is destructured directly from the AuthenticatedApplicationMessage event payload (:94). No frozen literal path, and the retired authenticatedSenderResolver stub (which always returned 'claimed') is DELETED (git rm src/lib/marmot/authenticatedSenderResolver.ts). The only production code path that reaches this line is the group.on('authenticatedApplicationMessage', ...) listener \u2014 the fork emits that event ONLY for messages that passed its MLS #authenticateApplicationMessage receiver check (marmot-group.js:1080/1299, after verdict.ok). No path can produce authenticity:'mls' without a genuine library-authenticated senderPubkey.",
+        "ac_id": "AC-SEAM-1"
+      },
+      {
+        "answers_question_id": "VQ-S3-002",
+        "phase": "post-impl",
+        "category": "ARCHITECTURE",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "MarmotContext.tsx diff touches only the dispatcher-wiring region: the createAuthenticatedSenderResolver import (removed, ~:47), the resolver construction comment block (~:1698-1701 replaced with an S3 note, no slot lines), and the .subscribe(mlsGroup, dispatcherCtx) call (:1827, dropped 3rd arg). S2's slot call sites (:1219/:1390/:1410) are untouched (S2 already landed them). `git diff --stat` shows chatHandler.ts and leaveHandler.ts have ZERO changes (verify-only)."
+      },
+      {
+        "answers_question_id": "VQ-S3-003",
+        "phase": "post-impl",
+        "category": "ARCHITECTURE",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Cross-module deps all flow through declared seams: epochResolver.ts's MlsGroupLike widening (Seam A adjacent, AC-SEAM-4); authenticatedSenderResolver.ts retired (Seam B1 decision, recorded in architecture.json); MarmotContext.tsx's two wiring lines (Seam A composition). No file outside the dependencies_allowed list is modified."
+      },
+      {
+        "answers_question_id": "VQ-S3-004",
+        "phase": "post-impl",
+        "category": "TEST",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "applicationRumorDispatcher.test.ts (real module, deserializeApplicationData mocked at the marmot-ts boundary only) asserts: AC-SEAM-2 \u2014 `group.on.mock.calls.filter(e=='authenticatedApplicationMessage')` has length 1 and `...=='applicationMessage'` has length 0; AC-SEAM-3 \u2014 a sender-mismatched delivery leaves the rumor id absent from the seen-set (proven behaviorally: a later matched redelivery of the SAME id still dispatches, which is only possible if markSeen was never called) and handleSpy is not called. markSeen is the real LRU, not stubbed.",
+        "ac_id": "AC-SEAM-2/AC-SEAM-3"
+      },
+      {
+        "answers_question_id": "VQ-S3-005",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "epochResolver.ts's MlsGroupLike.ingest() now returns AsyncGenerator<IngestResult> (IngestResult imported from '@internet-privacy/marmot-ts'). A new `else if (result.kind === 'rejected')` branch in processEvent AND flushFutureBuffer classifies rejected (admin-policy | unauthenticated-sender | undeserializable) as terminal \u2014 never pushed to futureBuffer, never retried (contrast the 'unreadable' branch which buffers). `cd app && npx tsc --noEmit` exits 0 (was: 1 error at welcomeSubscription.ts:1170). Seam B (retire) and Seam C (library-cited) recorded in architecture.json seam_decisions.",
+        "ac_id": "AC-SEAM-4"
+      },
+      {
+        "answers_question_id": "VQ-S3-006",
+        "phase": "post-impl",
+        "category": "SECURITY",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "The library's unauthenticatedMessage event is wired at applicationRumorDispatcher.ts:150-157 to `console.warn('[marmot.unauthenticatedMessage]', {senderPubkey, claimedPubkey, reason, event})` \u2014 an unconditional console.warn, no DEBUG gate. This is the diagnostic for messages the LIBRARY dropped (they never reach the message listener). The app-side choke-point (:119-128) is a separate, defense-in-depth warn for the (expected-unreachable) case where a mismatched sender still reached the listener. Both drop paths log.",
+        "ac_id": "AC-OBS-1"
+      },
+      {
+        "answers_question_id": "VQ-S3-007",
+        "phase": "post-impl",
+        "category": "QUALITY",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "`git diff --stat -- app/src/lib/marmot/handlers/chatHandler.ts app/src/lib/marmot/handlers/leaveHandler.ts` is EMPTY \u2014 zero production-code (and zero test) changes to either handler. Their gates already authorize on sender.pubkey (chatHandler.ts:89/93/115/131/138/244; leaveHandler.ts:43). chatHandler.test.ts (41 tests) and leaveHandler.test.ts pass unchanged, exercising 'mls'/forged-actor scenarios that are now backed by real authentication.",
+        "ac_id": "AC-GATE-1/2"
+      },
+      {
+        "answers_question_id": "VQ-S3-008",
+        "phase": "post-impl",
+        "category": "QUALITY",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Own-send-skip is UNAFFECTED by the listener switch: the fork skips self-echoes at marmot-group.js:1012 and 1182 (`#sentEventIds.delete(event.id)` \u2192 yield skipped:self-echo) BEFORE any emit; both 'applicationMessage' (1079/1298) and 'authenticatedApplicationMessage' (1080/1299) are emitted from identical adjacent lines AFTER the skip. Switching which of the two the app listens to therefore cannot change own-send-skip semantics (AC-AR-22 not worsened). The delivered rumor stream is identical, so reaction-badge propagation (AC-40) is likewise not worsened. groups-dispatch-isolation.spec.ts (AC-AR-21/22 sentinel) header updated to the new event name; its assertions are unchanged.",
+        "ac_id": "AC-AR-22/AC-40"
+      },
+      {
+        "answers_question_id": "VQ-S3-009",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_WRITTEN_NOT_RUN",
+        "evidence": "New e2e app/tests/e2e/groups-blackout-guard.spec.ts (groups-* \u2192 relay bucket): two real browser.newContext() peers (Alice/Bob), Alice creates+invites, Bob accepts, Bob (SECOND peer) sends via chat-input/chat-send-btn (through the app, no raw WebSocket), assertion `expect(pageA.locator('text='+uniqueText)).toBeVisible()` proves Alice renders Bob's message \u2014 a real relay round-trip, not a mock-spy. Cannot RUN here (no docker relay); runs under `make test-e2e-groups` / the full e2e gate. tsc clean; written against groups-dispatch-isolation.spec.ts template + existing helpers.",
+        "ac_id": "AC-DEP-1"
+      },
+      {
+        "answers_question_id": "VQ-S3-010",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Production construction: applicationRumorDispatcher.ts:117. Unit test 'AC-SEAM-1: sender-matched rumor dispatches with sender built from the event payload's senderPubkey' asserts handler receives exactly `{pubkey: eventSenderPubkey, authenticity: 'mls'}` for a senderPubkey supplied ONLY in the event payload (leafIndex 7, distinct from any default) \u2014 real dispatcher module, not a mock-spy proxy. Literal 'claimed' can no longer be produced by any production path (resolver retired).",
+        "ac_id": "AC-SEAM-1"
+      },
+      {
+        "answers_question_id": "VQ-S3-011",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Production: applicationRumorDispatcher.ts:159 registers the sole message-carrying listener on 'authenticatedApplicationMessage'; :160 registers a diagnostic-only listener on 'unauthenticatedMessage'. `grep \"group.on('...'\" src/` returns exactly one message-carrying site (the dispatcher). Unit test AC-SEAM-2 asserts group.on called exactly once for 'authenticatedApplicationMessage' and zero times for 'applicationMessage'; the fake group tracks listeners in a Map keyed by event name so a hidden second real registration cannot be masked.",
+        "ac_id": "AC-SEAM-2"
+      },
+      {
+        "answers_question_id": "VQ-S3-012",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Production line ordering preserved verbatim: deserialize (:97) \u2192 isSeen dedup (:103) \u2192 build sender (:117) \u2192 choke-point mismatch drop+warn+return (:119-128) \u2192 markSeen (:130) \u2192 fan-out (:132). The mismatch return fires STRICTLY before markSeen. Unit tests ('AC-SEAM-1/AC-XCUT-1' and the two-ordering 'AC-XCUT-1' property test) assert a mismatched delivery leaves the id un-seen (proven by a later matched redelivery of the same id still dispatching) with no handler invoked \u2014 real markSeen LRU, not bypassed.",
+        "ac_id": "AC-SEAM-3"
+      },
+      {
+        "answers_question_id": "VQ-S3-013",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Widened interface at epochResolver.ts:59-77 (`ingest(...): AsyncGenerator<IngestResult>`, IngestResult imported). Command `cd app && npx tsc --noEmit` \u2192 exit 0, zero errors (the pre-existing welcomeSubscription.ts:1170 error attributable to this interface is gone). Full unit suite: 223 files / 4350 passed / 1 skipped / 0 failed.",
+        "ac_id": "AC-SEAM-4"
+      },
+      {
+        "answers_question_id": "VQ-S3-014",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_VERIFY_ONLY",
+        "evidence": "chatHandler.ts unchanged (empty git diff). chatHandler.test.ts's S6 describe block ('announcement actor rules + ingest gate', AC-ANNOUNCE-1..5) still passes: a non-admin/forged actor announcement is rejected (no row/version/unread/notification) because the gate calls isGroupAdmin(sender.pubkey) \u2014 now backed by real 'mls' authentication. groups-announcement-roster-gate.spec.ts (groups-* bucket) runs against the fork build at the e2e gate; not re-implemented, extended-coverage is the existing spec running post-migration. Not run here (no relay).",
+        "ac_id": "AC-GATE-1"
+      },
+      {
+        "answers_question_id": "VQ-S3-015",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_VERIFY_ONLY",
+        "evidence": "leaveHandler.ts unchanged (empty git diff). leaveHandler.test.ts's AC-FORCE-3 negative test ('payload.pubkey (victim) !== sender.pubkey (attacker) does NOT enqueue') passes: the forced-removal guard at leaveHandler.ts:43 (`if (payload.pubkey !== sender.pubkey.toLowerCase()) return;`) gates enqueueLeave on sender.pubkey, now the library-authenticated sender. Real handler, direct handle() call, not a mock-spy proxy.",
+        "ac_id": "AC-GATE-2"
+      },
+      {
+        "answers_question_id": "VQ-S3-016",
+        "phase": "post-impl",
+        "category": "SPEC",
+        "verdict": "ANSWERED_PASS",
+        "evidence": "Production wiring: applicationRumorDispatcher.ts:150-157. Two unit tests assert the console.warn call: 'AC-OBS-1: ... all four fields, visible with no DEBUG env var set' explicitly asserts process.env.DEBUG is undefined and warn called with all four fields; a second test asserts reason:'undeserializable' with an absent claimedPubkey is logged as `claimedPubkey: undefined` (not coerced). Not a debug-gated log \u2014 plain console.warn is the sole assertion target.",
+        "ac_id": "AC-OBS-1"
+      }
+    ]
+  }
+}

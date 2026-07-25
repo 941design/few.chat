@@ -1,0 +1,38 @@
+{
+  "captured_at": "2026-07-25T15:00:00Z",
+  "test": {
+    "command": "cd app && npx vitest run",
+    "status": "PRE_EXISTING_FAILURES",
+    "test_files": { "total": 224, "passed": 222, "failed": 2 },
+    "tests": { "total": 4351, "passed": 4348, "failed": 2, "skipped": 1 },
+    "pre_existing_failures": [
+      {
+        "file": "app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts",
+        "error": "d tag value \"test-invitee\" is not a valid MIP-00 slot identifier (must match /^[0-9a-f]{64}$/)",
+        "root_cause": "Fixture hardcodes a non-hex clientId literal ('test-invitee'); surfaced by S1's fork-pin bump. Same class as S2 fixed in production code. AUTHORIZED for this story to fix per the spawn brief's 'AUTHORIZED migration-cleanup' section (these 2 files are explicit additions to S3's file set)."
+      },
+      {
+        "file": "app/tests/unit/marmot/readPreJoinGroupName.realMarmot.test.ts",
+        "error": "same as above (identical fixture pattern)",
+        "root_cause": "same as above"
+      }
+    ]
+  },
+  "lint": {
+    "command": "npx next lint",
+    "status": "NO_LINT",
+    "note": "No ESLint config present in app/. Unchanged from S1/S2 baseline."
+  },
+  "typecheck": {
+    "command": "cd app && npx tsc --noEmit",
+    "status": "1 pre-existing error",
+    "pre_existing_errors": [
+      {
+        "file": "app/src/lib/marmot/welcomeSubscription.ts",
+        "line": 1170,
+        "error": "Argument of type 'MarmotGroup<undefined, undefined>' is not assignable to parameter of type 'MlsGroupLike' — epochResolver's hand-pinned IngestResult union (0.5.1 shape) vs the fork's widened IngestResult (UnauthenticatedIngestResult has no 'result' field).",
+        "root_cause": "epochResolver.ts's MlsGroupLike interface hand-pins the pre-0.7.0 IngestResult shape. This is exactly AC-SEAM-4 — the fix this story is scoped to deliver."
+      }
+    ]
+  }
+}

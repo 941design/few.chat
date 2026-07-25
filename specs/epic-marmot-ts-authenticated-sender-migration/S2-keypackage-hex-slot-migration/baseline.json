@@ -1,0 +1,41 @@
+{
+  "captured_at": "2026-07-25T14:30:00Z",
+  "test": {
+    "command": "make test-unit (vitest run)",
+    "status": "PRE_EXISTING_FAILURES",
+    "test_files": { "total": 224, "passed": 222, "failed": 2 },
+    "tests": { "total": 4346, "passed": 4343, "failed": 2, "skipped": 1 },
+    "pre_existing_failures": [
+      {
+        "file": "app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts",
+        "test": "readPreJoinGroupData — real marmot-ts (unmocked) > extracts the real name, description, and admin pubkeys from a genuine MLS Welcome produced by MarmotClient.groups.create + inviteByKeyPackageEvent",
+        "error": "d tag value \"test-invitee\" is not a valid MIP-00 slot identifier (must match /^[0-9a-f]{64}$/). MDK rejects non-conformant slots with \"d tag must be exactly 64 hex characters\". Use generateKeyPackageSlot() to mint one.",
+        "root_cause": "Test fixture hardcodes a free-form clientId literal ('test-invitee') when constructing a test MarmotClient/KeyPackageManager, unrelated to this story's edits. Same underlying hex-validation upgrade this epic (S1's fork pin bump) surfaced — this is the exact class of bug S2 fixes in production code, but this instance lives in a test-fixture file outside S2's scope.includes (app/src/context/MarmotContext.tsx, app/src/types/index.ts, app/src/lib/storage.ts only)."
+      },
+      {
+        "file": "app/tests/unit/marmot/readPreJoinGroupName.realMarmot.test.ts",
+        "test": "readPreJoinGroupName — real marmot-ts (unmocked) > extracts the real group name from a genuine MLS Welcome produced by MarmotClient.groups.create + inviteByKeyPackageEvent",
+        "error": "same as above (identical fixture pattern)",
+        "root_cause": "same as above"
+      }
+    ],
+    "note": "These 2 failures are already present before any S2 edit (captured pre-implementation) and are caused by S1's already-landed fork-pin bump (marmot-ts 0.6.0+ hex validation), not by this story. Fixing them requires editing test-fixture files outside S2's declared scope.includes/files list; scope.excludes explicitly forbids unrelated storage.ts/STORAGE_KEYS changes and the story's files list is limited to the 3 KeyPackage-slot files. Recorded as pre-existing baseline debt (mirrors the Step-0 NO_TESTS/lint/typecheck pre-existing-debt tolerance) rather than BASELINE_BLOCKED, since blocking would stall this story on a fix that is out of its scope to make and that a prior story (S1) already introduced as a known side effect of the dependency bump this whole epic depends on. Flagged to the lead for epic-level follow-up (likely a small fixture fix, unassigned to any current story)."
+  },
+  "lint": {
+    "command": "npx next lint",
+    "status": "NO_LINT",
+    "note": "No ESLint config present in app/ (.eslintrc*/eslint.config* absent); `next lint` prompts interactively to scaffold one rather than running against existing config. Not run/configured by this story."
+  },
+  "typecheck": {
+    "command": "cd app && npx tsc --noEmit",
+    "status": "1 pre-existing error",
+    "pre_existing_errors": [
+      {
+        "file": "app/src/lib/marmot/welcomeSubscription.ts",
+        "line": 1170,
+        "error": "Argument of type 'MarmotGroup<undefined, undefined>' is not assignable to parameter of type 'MlsGroupLike' ... IngestResult vs UnauthenticatedIngestResult mismatch",
+        "root_cause": "epochResolver's MlsGroupLike union hand-pins the pre-0.7.0 IngestResult shape (architecture.md §2/§5/§6, Risk concentration note). Owned by a different module (epochResolver) and a different story (S3/S4's scope per architecture.md's Module map), not S2's 3 files."
+      }
+    ]
+  }
+}

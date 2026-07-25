@@ -14,6 +14,7 @@ import {
   getEpoch,
   getGroupMembers,
 } from '@internet-privacy/marmot-ts';
+import type { IngestResult } from '@internet-privacy/marmot-ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,18 +56,24 @@ type EpochResolverCallbacks = {
   onMembersChanged?: (members: string[]) => void;
 };
 
-/** Minimal interface for the MarmotGroup methods we use. */
+/**
+ * Minimal interface for the MarmotGroup methods we use.
+ *
+ * AC-SEAM-4: `ingest()`'s return type is the fork's exact `IngestResult`
+ * union (imported, not hand-pinned) so this interface compiles against the
+ * 0.7.0 shape — including the two authenticated-sender `rejected` variants
+ * ('unauthenticated-sender' | 'undeserializable', which carry
+ * `senderPubkey`/`claimedPubkey` and no `result` field, unlike the
+ * pre-existing 'admin-policy' rejection). See processEvent/flushFutureBuffer
+ * below for the terminal (never-bufferable) classification of those two
+ * variants — architecture.md §6 guarantee 2.
+ */
 interface MlsGroupLike {
   state: import('ts-mls').ClientState;
   ingest(
     events: NostrEvent[],
     options?: { retryCount?: number; maxRetries?: number; _errors?: Array<{ eventId: string; error: unknown }> },
-  ): AsyncGenerator<
-    | { kind: 'processed'; result: { kind: 'applicationMessage'; message: Uint8Array } | { kind: 'newState' }; event: NostrEvent }
-    | { kind: 'unreadable'; event: NostrEvent; errors: unknown[] }
-    | { kind: 'skipped'; event: NostrEvent; reason: string }
-    | { kind: 'rejected'; result: unknown; event: NostrEvent }
-  >;
+  ): AsyncGenerator<IngestResult>;
   save(): Promise<void>;
 }
 
@@ -212,8 +219,17 @@ export class EpochResolver {
         // with a recorded commit, this might be a competing commit that was
         // lower — meaning we accepted the wrong one first.
         await this.handleSkippedPastEpoch(event);
+      } else if (result.kind === 'rejected') {
+        // AC-SEAM-4 / architecture.md §6 guarantee 2: terminal, never
+        // bufferable. This covers 'admin-policy' (a commit rejected by the
+        // admin-verification callback) and the two authenticated-sender
+        // rejections ('unauthenticated-sender' | 'undeserializable') alike —
+        // none of them is retried like an 'unreadable' event. The library's
+        // own 'unauthenticatedMessage' diagnostic event (wired in
+        // applicationRumorDispatcher.ts, AC-OBS-1) already surfaces the
+        // sender-authentication drop; nothing further is done here.
       }
-      // other skipped / rejected: log and drop
+      // other skipped reasons: log and drop
     }
 
     // After processing, notify members changed
@@ -324,8 +340,12 @@ export class EpochResolver {
       } else if (result.kind === 'unreadable') {
         // Still unreadable — keep in buffer
         this.futureBuffer.push(result.event);
+      } else if (result.kind === 'rejected') {
+        // AC-SEAM-4: terminal — a retried buffered event that comes back
+        // 'rejected' (admin-policy or sender-authentication) is dropped, not
+        // re-added to the buffer. See processEvent's matching branch above.
       }
-      // skipped / rejected: drop
+      // other skipped reasons: drop
     }
 
     this.capBuffer();

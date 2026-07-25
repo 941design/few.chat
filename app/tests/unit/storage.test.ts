@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   readSettings,
   readStoredLanguage,
@@ -6,7 +6,9 @@ import {
   readUserProfile,
   writeUserProfile,
   resetAllData,
+  readOrCreateKeyPackageSlot,
 } from '@/src/lib/storage';
+import { generateKeyPackageSlot } from '@internet-privacy/marmot-ts';
 import { STORAGE_KEYS } from '@/src/types';
 import { NICKNAME_MAX_BYTES } from '@/src/config/profile';
 
@@ -172,5 +174,127 @@ describe('corrupt data handling', () => {
   it('returns default when stored data is invalid JSON', () => {
     store[STORAGE_KEYS.settings] = 'not-json{{{';
     expect(readSettings()).toEqual({ theme: 'spring', language: 'en' });
+  });
+});
+
+// AC-KEY-1, AC-KEY-2, AC-KEY-3: the load-or-generate helper backing
+// MarmotContext.tsx's three KeyPackage slot-resolution call sites
+// (marmot-ts 0.7.0 hex-validates the `d` tag / clientId and throws on the
+// pre-migration free-form 'few' literal).
+describe('readOrCreateKeyPackageSlot', () => {
+  const HEX_64 = /^[0-9a-f]{64}$/;
+
+  it('mints and persists a hex slot on a fresh install (AC-KEY-1) using the real generateKeyPackageSlot()', () => {
+    expect(store[STORAGE_KEYS.keyPackageSlot]).toBeUndefined();
+
+    const slot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
+
+    expect(slot).toMatch(HEX_64);
+    // Persisted synchronously, before this function returns — a caller
+    // constructing a stateful client with `slot` immediately after is
+    // guaranteed the write already landed.
+    expect(store[STORAGE_KEYS.keyPackageSlot]).toBeDefined();
+    expect(JSON.parse(store[STORAGE_KEYS.keyPackageSlot])).toBe(slot);
+  });
+
+  it('regenerates a conformant slot when the persisted value is the legacy free-form "few" literal (AC-KEY-2)', () => {
+    store[STORAGE_KEYS.keyPackageSlot] = JSON.stringify('few');
+
+    const slot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
+
+    expect(slot).toMatch(HEX_64);
+    expect(slot).not.toBe('few');
+    expect(JSON.parse(store[STORAGE_KEYS.keyPackageSlot])).toBe(slot);
+  });
+
+  it('regenerates when the persisted value is any other non-conformant shape (too short, uppercase, non-hex)', () => {
+    for (const bad of ['ab'.repeat(31), 'A'.repeat(64), 'g'.repeat(64), '']) {
+      store[STORAGE_KEYS.keyPackageSlot] = JSON.stringify(bad);
+      const slot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
+      expect(slot).toMatch(HEX_64);
+    }
+  });
+
+  it('reuses a byte-identical persisted slot on every subsequent call, never regenerating (AC-KEY-3)', () => {
+    const first = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
+
+    // A mint function that would prove regeneration happened if called again.
+    let mintCalls = 0;
+    const mintSlot = () => {
+      mintCalls += 1;
+      return generateKeyPackageSlot();
+    };
+
+    const second = readOrCreateKeyPackageSlot(mintSlot);
+    const third = readOrCreateKeyPackageSlot(mintSlot);
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(mintCalls).toBe(0);
+  });
+
+  it('calls mintSlot at most once even when regenerating', () => {
+    store[STORAGE_KEYS.keyPackageSlot] = JSON.stringify('few');
+    let mintCalls = 0;
+    const mintSlot = () => {
+      mintCalls += 1;
+      return generateKeyPackageSlot();
+    };
+
+    readOrCreateKeyPackageSlot(mintSlot);
+
+    expect(mintCalls).toBe(1);
+  });
+});
+
+// When localStorage is unavailable (e.g. Safari private mode, storage disabled
+// or quota-blocked), the app must degrade gracefully: isStorageAvailable()
+// latches false, reads fall back to their defaults, and writes are silent
+// no-ops that never even reach localStorage.setItem.
+describe('storage unavailable (localStorage throws)', () => {
+  it('latches isStorageAvailable() false, reads return defaults, and writes are silent no-ops', async () => {
+    const throwing = {
+      getItem: vi.fn(() => {
+        throw new Error('SecurityError');
+      }),
+      setItem: vi.fn(() => {
+        throw new Error('QuotaExceededError');
+      }),
+      removeItem: vi.fn(() => {
+        throw new Error('SecurityError');
+      }),
+      clear: vi.fn(),
+      get length() {
+        return 0;
+      },
+      key: () => null,
+    };
+
+    // Fresh module instance so the module-scoped _storageAvailable memo starts
+    // unset and re-probes against the throwing localStorage.
+    vi.resetModules();
+    Object.defineProperty(globalThis, 'localStorage', { value: throwing, writable: true });
+    try {
+      const storage = await import('@/src/lib/storage');
+
+      // The availability probe calls setItem once, catches the throw, and latches false.
+      expect(storage.isStorageAvailable()).toBe(false);
+      const probeSetItemCalls = throwing.setItem.mock.calls.length;
+
+      // Reads degrade to defaults without throwing.
+      expect(storage.readSettings()).toEqual({ theme: 'spring', language: 'en' });
+      expect(storage.readStoredLanguage()).toBeUndefined();
+      expect(storage.readUserProfile()).toEqual({ nickname: '', avatar: null });
+
+      // Writes are guarded no-ops — they must NOT attempt any further setItem
+      // (which would throw) beyond the one-time availability probe.
+      expect(() => storage.writeSettings({ theme: 'spring', language: 'de' })).not.toThrow();
+      expect(() => storage.writeUserProfile({ nickname: 'X', avatar: null })).not.toThrow();
+      expect(throwing.setItem.mock.calls.length).toBe(probeSetItemCalls);
+    } finally {
+      // Restore the working mock + a clean module registry for any later suites.
+      vi.resetModules();
+      Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true });
+    }
   });
 });

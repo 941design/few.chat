@@ -44,13 +44,13 @@ import { purgeStrangerDmReactions } from '@/src/lib/reactions/api';
 import { loadKnownPeers, rememberKnownPeers, knownPeersMigrationComplete, markKnownPeersMigrationComplete } from '@/src/lib/knownPeers';
 import { MAINTAINER_PUBKEYS_HEX } from '@/src/config/maintainer';
 import { buildDispatcher } from '@/src/lib/marmot/registerHandlers';
-import { createAuthenticatedSenderResolver } from '@/src/lib/marmot/authenticatedSenderResolver';
 import { clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { applyInboundRumor } from '@/src/lib/reactions/api';
 import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider, isRegisteredGroupAdmin } from '@/src/lib/messageEdits/api';
 import { savePoll, saveVote, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
+import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import { useProfile } from '@/src/context/ProfileContext';
 import { useBackup } from '@/src/context/BackupContext';
@@ -328,12 +328,11 @@ export async function signProfileForInteractiveSend(
 }
 
 /**
- * Dev-only override hook (window.__fewTest precedent — mirrors
- * authenticatedSenderResolver.ts's resolveAuthenticatedSender override) that
- * lets E2E tests simulate a locked/absent signer on the INTERACTIVE profile-
- * send path (AC-SEND-10) without a real NIP-07 browser extension in the
- * Playwright harness. Gated NODE_ENV !== 'production' and re-read on every
- * call (not cached) so a production build can never be made to honor it.
+ * Dev-only override hook (window.__fewTest precedent) that lets E2E tests
+ * simulate a locked/absent signer on the INTERACTIVE profile-send path
+ * (AC-SEND-10) without a real NIP-07 browser extension in the Playwright
+ * harness. Gated NODE_ENV !== 'production' and re-read on every call (not
+ * cached) so a production build can never be made to honor it.
  */
 function readForcedProfileSignerFailureOverride(): boolean {
   if (process.env.NODE_ENV === 'production' || typeof window === 'undefined') return false;
@@ -1182,7 +1181,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        const { MarmotClient, GroupMediaStore } =
+        const { MarmotClient, GroupMediaStore, generateKeyPackageSlot } =
           await import('@internet-privacy/marmot-ts');
         const { connectNdk } = await import('@/src/lib/ndkClient');
         const { NdkNetworkAdapter } = await import('@/src/lib/marmot/NdkNetworkAdapter');
@@ -1205,6 +1204,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         const mediaBlobStore = idbCreateStore('few-media-blobs', 'blobs');
         const mediaFactory = () => new GroupMediaStore(new IdbKeyValueStoreBackend(mediaBlobStore));
 
+        const keyPackageSlot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
+
         const client = new MarmotClient({
           signer,
           // marmot-ts 0.5.x: backends are passed directly (KeyValueGroupStateBackend
@@ -1215,8 +1216,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           mediaFactory,
           // Default `d` slot for kind 30443 key package events. All key packages
           // from this client share a single addressable slot so relays replace
-          // the previous one on rotation.
-          clientId: 'few',
+          // the previous one on rotation. marmot-ts 0.6.0+ hex-validates this
+          // slot, so it is a persisted, once-minted 64-hex-char value (see
+          // readOrCreateKeyPackageSlot) rather than a free-form literal.
+          clientId: keyPackageSlot,
         });
 
         if (cancelled) return;
@@ -1387,7 +1390,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             try {
               const packages = await client.keyPackages.list();
               for (const pkg of packages.filter((p) => p.used)) {
-                await client.keyPackages.rotate(pkg.keyPackageRef, { relays: getEffectiveRelays() });
+                await client.keyPackages.rotate(pkg.keyPackageRef, { relays: getEffectiveRelays(), d: keyPackageSlot });
               }
               // Re-evaluate discoverability after rotation
               await updateDiscoverability(client);
@@ -1692,10 +1695,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             getActiveGroupId,
           };
 
-          // S1 (authenticated-sender seam): see authenticatedSenderResolver.ts for
-          // the resolver's behavior/doc-comment (per-call NODE_ENV/__fewTest
-          // re-evaluation, ADR-012 backbone note).
-          const resolveAuthenticatedSender = createAuthenticatedSenderResolver();
+          // S3 (authenticated-sender seam, ADR-012): the dispatcher builds
+          // sender.authenticity: 'mls' directly from the library's
+          // authenticatedApplicationMessage event — see
+          // applicationRumorDispatcher.ts. No app-side resolver is involved.
           const unsubDispatcher = buildDispatcher({
             // Chat
             appendMessage,
@@ -1821,7 +1824,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             setPollVersion,
             // S4 (AC-QUEUE-4): real enqueueLeave closure — replaces MOCK-S2-001 stub from S2.
             enqueueLeave,
-          }).subscribe(mlsGroup, dispatcherCtx, resolveAuthenticatedSender);
+          }).subscribe(mlsGroup, dispatcherCtx);
 
           // Combine both unsubscribe functions so cleanup tears down both listeners.
           subsMap.set(group.id, () => {

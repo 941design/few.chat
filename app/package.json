@@ -23,8 +23,8 @@
     "@hpke/hybridkem-x-wing": "^0.7.0",
     "@hpke/ml-kem": "^0.3.0",
     "@iconify/react": "^6.0.2",
-    "@internet-privacy/marmot-ts": "^0.5.1",
-    "@noble/post-quantum": "^0.5.2",
+    "@internet-privacy/marmot-ts": "git+https://github.com/941design/marmot-ts.git#cb0025c0ae3ffd053bf4a6ec528869716148ffb2",
+    "@noble/post-quantum": "^0.6.1",
     "@nostr-dev-kit/ndk": "3.0.3",
     "@rotheric/visuals": "git+https://github.com/rotheric/ink.git#visuals-v0.1.2",
     "@scure/bip39": "^1.4.0",
@@ -43,7 +43,7 @@
     "react": "^18",
     "react-dom": "^18",
     "react-markdown": "^10.1.0",
-    "ts-mls": "2.0.0-rc.10"
+    "ts-mls": "git+https://github.com/941design/ts-mls.git#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

@@ -110,8 +110,8 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // authorPubkey) — not a third-member relay, where authorPubkey (the signed
   // author) would still equal B but sender.pubkey (the authenticated transport
   // sender, S1 seam) would be the relayer instead (AC-PROD-4). NB sender.pubkey
-  // equals the claimed rumor.pubkey only under the S1 stub; it is the
-  // authenticated-sender seam value, never a raw rumor.pubkey read. Only
+  // is the MLS-authenticated transport sender (marmot-ts 0.7.0), never a raw
+  // rumor.pubkey read. Only
   // evaluated when profilePayload.signedEvent is present — otherwise authorPubkey
   // trivially falls back to sender.pubkey and this check would be vacuously true
   // for every unsigned/legacy rumor, mirroring AC-MARKER-6's gate below.

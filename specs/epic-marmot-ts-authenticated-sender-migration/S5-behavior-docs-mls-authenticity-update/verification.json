@@ -1,0 +1,50 @@
+{
+  "story_id": "S5",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-25T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S5-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is the new prose in docs/behavior/groups.md genuinely NEW content (not editing/rewording pre-existing sentences) — confirm via `git diff` that the AC-DOC-1 sentences are additions, not modifications of prior text, per this story's scope.includes ('Add new prose (not editing pre-existing text)')?"
+    },
+    {
+      "question_id": "VQ-S5-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story's diff touch only docs/behavior/groups.md, with zero changes to docs/design-rationales.md (excluded — no new UI design rule is introduced by this epic) and zero code changes (excluded — this story is documentation-only per scope.excludes)?"
+    },
+    {
+      "question_id": "VQ-S5-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could 'behavior docs' be deleted and rewritten without modifying any file outside its dependencies_allowed list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S5-004",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the version note in docs/behavior/groups.md name BOTH full fork SHAs written out completely — not truncated with an ellipsis the way acceptance-criteria.md's own shorthand prose does (`ts-mls#9f0c7bd…`) — i.e. `ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13` and `marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2` spelled out in full, since a doc reader cannot resolve a truncated SHA to an installable pin?"
+    },
+    {
+      "question_id": "VQ-S5-005",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does the new prose follow docs/behavior/'s writing standard (current behaviour only, state-not-UI, honest guarantees, sourced why — per the behavior-docs skill) rather than describing implementation mechanics — e.g. does it avoid naming internal file paths like applicationRumorDispatcher.ts in the user-facing behavior description?"
+    },
+    {
+      "question_id": "VQ-S5-006",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does this documentation-only story leave the existing prose describing own-send echo behavior or reaction badge propagation in docs/behavior/groups.md unchanged, and does the new 'mls' authenticity prose avoid implying an own-send-echo or reaction-badge guarantee that the code does not currently provide (AC-AR-22 / AC-40 are known, unresolved regressions)?"
+    },
+    {
+      "question_id": "VQ-S5-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DOC-1",
+      "question": "For AC-DOC-1: does docs/behavior/groups.md state, in newly-introduced prose, that inbound group application messages carry a library-authenticated sender (authenticity: 'mls') after this migration; describe the drop-not-render behavior for a sender-mismatched message; and record a version note naming both full pinned fork SHAs as the app's marmot-ts baseline? Per the AC's own verification mandate, use a POSITION-ANCHORED grep (e.g. grep -n against a line-number range, or a substring unique to the new sentence) against prose that only exists post-fix — NOT a bare token like `mls` or `authenticity` that could already appear elsewhere in the file's existing content (worked example: AC-STRUCT-4's false-green `grep 'category'` vs the tightened `grep -n 'not.*\"type\"'`). Show the exact grep command and confirm it returns no match on the pre-fix file and a match on the post-fix file."
+    }
+  ]
+}

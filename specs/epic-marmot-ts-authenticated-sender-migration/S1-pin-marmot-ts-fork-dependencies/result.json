@@ -1,0 +1,21 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": true,
+  "modules_touched": ["package pins"],
+  "files_modified": ["app/package.json", "app/package-lock.json"],
+  "remediation_rounds": 0,
+  "completed_at": "2026-07-25T11:20:00Z",
+  "implementation_notes": [
+    "Pinned ts-mls -> github:941design/ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13 (fork version 2.0.0-rc.14) and @internet-privacy/marmot-ts -> github:941design/marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2 (branch authenticated-sender, package version still 0.6.0).",
+    "THIRD dep change (necessary, not in original scope.includes): bumped @noble/post-quantum ^0.5.2 -> ^0.6.1. The fork's ts-mls rc.14 declares peerOptional @noble/post-quantum@0.6.1; the app has ZERO direct imports of @noble/post-quantum (grep-confirmed) — it is a supporting ML-KEM lib for ts-mls's PQ ciphersuites, so aligning the pin keeps PQ enabled at the fork's expected version with no app-source impact. Kept it in package.json (same file, in-scope) rather than an override.",
+    "AC-DEP-2 verified: npm install resolved both forks over HTTPS (host git-config rewrite git@github.com -> https://<token>@github.com; lockfile 'resolved' shows git+ssh:// which npm normalizes even on an HTTPS fetch — not a validity signal per learning verifying-private-npm-git-dependency-sandboxed). Install exit 0.",
+    "AC-DEP-3 verified: `npm ls ts-mls` shows exactly one physical copy (ts-mls@2.0.0-rc.14 at root, marmot-ts's dep deduped onto it); `find node_modules -name ts-mls` returns one dir. 0.7.0-unique symbols present in the BUILT dist: senderCredential (ts-mls/dist), authenticatedApplicationMessage + generateKeyPackageSlot (marmot-ts/dist) — proves the fork's code is actually installed, not a stale/registry copy.",
+    "REPRODUCIBILITY PRECONDITION (finding, flagged to lead): the ts-mls fork ships `packageManager: pnpm@11.1.2` and builds dist via a `prepare` (tsc) at install; npm delegates that build to pnpm via corepack, and pnpm 11 blocks git-dep build scripts (ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED). Unblocked on THIS host with `pnpm config set dangerouslyAllowAllBuilds true` (global). Any clean host / CI / the Makefile's `npm ci` (ensure-deps) path needs the same global pnpm setting, OR a durable fix on the fork side (commit dist/, or drop the packageManager field so npm builds it). Not committed to the repo because the failing pnpm runs in a temp clone dir that does not read the app-local .npmrc. AC-DEP-2 'cold install succeeds' holds on this host but carries this precondition."
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "lighter-path; no architect retro. Install-friction findings recorded as implementation_notes + a base:learnings entry."
+  }
+}

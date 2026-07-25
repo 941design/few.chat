@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-24T21:48:34Z",
+  "updated_at": "2026-07-25T15:14:57Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -251,6 +251,11 @@
       "path": "specs/epic-mobile-qr-scanner/",
       "status": "DONE",
       "next_action": "completed 2026-07-24"
+    },
+    {
+      "path": "specs/epic-marmot-ts-authenticated-sender-migration/",
+      "status": "DONE",
+      "next_action": "completed 2026-07-25"
     }
   ],
   "findings": [
@@ -292,19 +297,6 @@
       "behavior": "app/pages/feedback.tsx (profileMap ~lines 43-56) and app/pages/contacts.tsx ContactDetailView (profileMap ~lines 220-233) independently construct {[selfHex]:{...}, [peerHex]:{...}} MemberProfile maps; the self entry (nickname: ownProfile.nickname || truncateNpub(pubkeyToNpub(self)), avatar: ownProfile.avatar, updatedAt: new Date().toISOString()) is duplicated verbatim. Separately, ContactChat repeats the 'source === \"feedback\"' check three times (send markers, onReact gating, allowImageAttachments).",
       "approach": "1) Extract buildDmProfileMap({ selfHex, selfProfile, peerHex, peerNickname, peerAvatar, peerUpdatedAt? }) into a shared module (e.g. app/src/lib/contacts.ts or a profile helper) and call it from both feedback.tsx and contacts.tsx ContactDetailView — this is the high-value, low-risk extraction touching a pre-existing duplication. 2) Optionally hoist 'const isFeedback = source === \"feedback\"' in ContactChat for readability — but KEEP the three send-path gates (markers, onReact, allowImageAttachments + the paste/drop guards) as separate explicit checks: they guard independent send paths and their separateness is what makes each path auditable (do NOT merge them). 3) Do NOT introduce a <FeedbackChat> wrapper yet — wait for a second feedback-like surface; one call site does not justify the indirection.",
       "success_signal": "feedback.tsx and contacts.tsx ContactDetailView both call one buildDmProfileMap helper; no duplicated self-profile literal; the three feedback send-path gates remain separate and explicit."
-    },
-    {
-      "slug": "marmot-ts-0-5-1-drops",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/deleteEditHandler.ts"
-      },
-      "text": "marmot-ts 0.5.1 drops the MLS sender-leaf credential for application messages — inner rumor pubkey is not identity-bound to the authenticated sender",
-      "created_at": "2026-07-07",
-      "motivation": "AC-AUTH-2 group clause and the Marmot spec (group-messaging.md:43 'receivers validate the inner app event pubkey matches the MLS-authenticated identity') are UNMET: ts-mls returns only {message:Uint8Array} for applicationMessage (sender leaf dropped; proposals keep it), and unprotectPrivateMessage is not exported. Any current group member can forge the inner pubkey to impersonate another member — forged delete/edit (this epic) and forged kind-9/kind-7 (pre-existing). MLS still bars non-members.",
-      "behavior": "Group delete/edit authorizes on the self-asserted inner rumor pubkey (S3 pubkeysMatch vs target author); marmot-ts never verifies that pubkey against the sending MLS leaf, so a malicious member can forge another member's signal.",
-      "approach": "Upstream: get marmot-ts/ts-mls to surface the authenticated sender leaf credential pubkey for application messages, then verify rumor.pubkey === senderCredentialPubkey in applicationRumorDispatcher for ALL kinds (also closes the pre-existing kind-9/kind-7 impersonation hole). Product decision 2026-07-07: ship group edit/delete with documented group-member-attested trust; this finding tracks the upstream fix.",
-      "success_signal": "applicationRumorDispatcher rejects an application rumor whose inner pubkey != the MLS-authenticated sender leaf credential, proven by a forged-pubkey test"
     },
     {
       "slug": "share-contact-card-permanently-fails-when",

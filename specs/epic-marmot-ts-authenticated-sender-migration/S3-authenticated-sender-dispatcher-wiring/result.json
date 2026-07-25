@@ -1,0 +1,70 @@
+{
+  "story_id": "S3",
+  "story_name": "authenticated-sender-dispatcher-wiring",
+  "status": "done",
+  "final_outcome": "accepted",
+  "modules_touched": ["applicationRumorDispatcher", "epochResolver", "MarmotContext"],
+  "remediation_rounds": 0,
+  "implemented_by": "base:integration-architect",
+  "completed_at": "2026-07-25T15:30:00Z",
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The exact 0.7.0 ingest() result union and event payload shapes are not inferable from the installed 0.5.1-era app source; they had to be read from the fork's built .d.ts. The lead pre-supplied them in the brief, which removed the friction — without that, the architect would have had to reverse-engineer the union from node_modules.",
+    "surprised_by": "The fork emits BOTH applicationMessage and authenticatedApplicationMessage for the same authenticated message from adjacent lines, so listening to both would double-process — the single-listener switch (not addition) is load-bearing and easy to get subtly wrong.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "absorbed_from": [
+      {"agent": "dev", "note": "handler-test-helper updates for the new event payload shape delegated and verified; no substantive flag."}
+    ],
+    "lead_clarifications": []
+  },
+  "summary": "Wired the marmot-ts 0.7.0 library-authenticated MLS sender through the dispatcher seam. The single inbound-message listener now subscribes to 'authenticatedApplicationMessage' (not the raw 'applicationMessage' event) and builds sender.authenticity:'mls' directly from the library-supplied senderPubkey, replacing the inert 'claimed' stub. Widened epochResolver.ts's MlsGroupLike to the fork's IngestResult union (tsc now clean). Wired the library's unauthenticatedMessage diagnostic to a visible console.warn. Retired the authenticatedSenderResolver stub (Seam B1). Verified — without code change — that the S6 announcement gate (chatHandler.ts) and leaveHandler.ts's forced-removal guard now check a genuinely authenticated sender.",
+  "acceptance_criteria": {
+    "AC-SEAM-1": "DONE — sender {pubkey: senderPubkey, authenticity:'mls'} built directly from the event payload (applicationRumorDispatcher.ts:117). Unit-verified.",
+    "AC-SEAM-2": "DONE — exactly one message-carrying group.on('authenticatedApplicationMessage') listener; no lingering 'applicationMessage' listener. Unit test asserts on-call counts by event name.",
+    "AC-SEAM-3": "DONE — choke-point mismatch drop fires strictly before markSeen (verbatim AC-XCUT-1 ordering preserved). Unit-verified via matched-redelivery-still-dispatches.",
+    "AC-SEAM-4": "DONE — MlsGroupLike.ingest() returns AsyncGenerator<IngestResult>; rejected variants classified terminal (never bufferable) in processEvent + flushFutureBuffer. tsc --noEmit exit 0.",
+    "AC-GATE-1": "VERIFIED (no code change) — chatHandler.ts empty git diff; S6 gate tests pass, now backed by real 'mls' authentication. groups-announcement-roster-gate.spec.ts runs against the fork at the e2e gate.",
+    "AC-GATE-2": "VERIFIED (no code change) — leaveHandler.ts empty git diff; AC-FORCE-3 negative test passes; guard at :43 gates enqueueLeave on the authenticated sender.pubkey.",
+    "AC-OBS-1": "DONE — library unauthenticatedMessage event → unconditional console.warn('[marmot.unauthenticatedMessage]', {senderPubkey, claimedPubkey, reason, event}), no DEBUG gate. Two unit tests.",
+    "AC-DEP-1": "WRITTEN, NOT RUN HERE — app/tests/e2e/groups-blackout-guard.spec.ts (groups-* relay bucket): second real peer sends through the app, first peer renders it. Requires docker relay; runs at the full e2e gate."
+  },
+  "seam_decisions": {
+    "seam_B": "B1 — retired authenticatedSenderResolver.ts + its unit test + the SenderResolver type + resolveSender param + MarmotContext's createAuthenticatedSenderResolver import/construction/pass-through. No e2e depended on the __fewTest.resolveAuthenticatedSender override (grep-confirmed).",
+    "seam_C": "library-cited — the library's own drop is proven by marmot-ts's fork tests (AC-OBSERVABLE-1/AC-SURFACE-1), not re-proven; the app cannot publish a divergent-sender rumor (buildRumor stamps the local pubkey). The app e2e proves the blackout guard (a legit peer message survives), the load-bearing §2 test."
+  },
+  "own_send_skip_verification": "Confirmed against the installed fork (marmot-group.js): self-echoes are skipped at :1012/:1182 (#sentEventIds.delete → yield skipped:self-echo) BEFORE any emit; 'applicationMessage' (:1079/:1298) and 'authenticatedApplicationMessage' (:1080/:1299) fire from identical adjacent lines. Switching the listened event cannot change own-send-skip semantics — AC-AR-22 not worsened; AC-40 (reaction badge) sees the identical delivered rumor stream, not worsened.",
+  "files_changed": {
+    "production": [
+      "app/src/lib/marmot/applicationRumorDispatcher.ts (listener switch, direct 'mls' sender, unauthenticatedMessage diagnostic, dropped resolveSender/SenderResolver)",
+      "app/src/lib/marmot/epochResolver.ts (MlsGroupLike widened to IngestResult; terminal 'rejected' classification)",
+      "app/src/context/MarmotContext.tsx (dispatcher-wiring lines only: dropped resolver import/construction/3rd subscribe arg)"
+    ],
+    "production_deleted": [
+      "app/src/lib/marmot/authenticatedSenderResolver.ts (Seam B1 retire)"
+    ],
+    "verify_only_unchanged": [
+      "app/src/lib/marmot/handlers/chatHandler.ts (empty diff)",
+      "app/src/lib/marmot/handlers/leaveHandler.ts (empty diff)"
+    ],
+    "tests": [
+      "app/tests/unit/marmot/applicationRumorDispatcher.test.ts (rewritten for the new event contract; 14 tests incl. AC-SEAM-2 + 2 AC-OBS-1)",
+      "app/tests/unit/marmot/authenticatedSenderResolver.test.ts (deleted with the module)",
+      "app/tests/unit/marmot/leaveHandler.test.ts, pollHandler.test.ts, profileHandler.test.ts, profileRequestHandler.test.ts, reactionHandler.test.ts, groupMessageEdits.test.ts, registerHandlers.test.ts (fake-group helpers updated for the authenticatedApplicationMessage payload + two-listener registration)",
+      "app/tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts, readPreJoinGroupName.realMarmot.test.ts (authorized migration cleanup: 'test-invitee' → generateKeyPackageSlot())",
+      "app/tests/e2e/groups-blackout-guard.spec.ts (NEW, AC-DEP-1)",
+      "app/tests/e2e/groups-dispatch-isolation.spec.ts, groups-profile-send-fails-closed.spec.ts (header/comment updates for the retired resolver + renamed event; no assertion changes)"
+    ]
+  },
+  "verification": {
+    "typecheck": "cd app && npx tsc --noEmit → exit 0 (pre-existing welcomeSubscription.ts:1170 error resolved by AC-SEAM-4)",
+    "unit_suite": "cd app && npx vitest run → 223 test files, 4350 passed, 1 skipped, 0 failed (baseline was 224 files with 2 failing realMarmot fixtures; 224→223 is the deleted authenticatedSenderResolver.test.ts, the 2 fixtures now fixed)",
+    "e2e": "NOT RUN — the groups/relay bucket needs docker (strfry + blossom). groups-blackout-guard.spec.ts + groups-announcement-roster-gate.spec.ts (AC-GATE-1) must be validated at the full `make test-e2e-all` gate.",
+    "lint": "NO_LINT (no ESLint config in app/, unchanged from S1/S2)"
+  },
+  "notes_for_downstream": {
+    "S4": "AC-ORDER-1..4 property tests are S4's. Their risk concentrates in this story's two files. Preserved invariants: resolve-before-markSeen (AC-SEAM-3), terminal-not-bufferable rejected classification (epochResolver.ts), epochResolver.onApplicationMessage stays a no-op in production (welcomeSubscription.ts:1163-1168, untouched).",
+    "S5": "AC-DOC-1 (docs/behavior/groups.md 'mls' authenticity + drop-not-render + fork-SHA version note) is S5's — not touched here.",
+    "e2e_gate": "The definitive gate is the full 60-test suite. groups-blackout-guard.spec.ts is the primary load-bearing §2 blackout guard and MUST pass there before the epic is e2e-verified."
+  }
+}

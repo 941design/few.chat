@@ -1,0 +1,5 @@
+{
+  "decision": "lighter_path",
+  "architect_skipped": true,
+  "reason": "S5 targets only docs/behavior/groups.md (markdown, prose). stories.json marked it lighter_path=false solely because AC-DOC-1's text carries a cosmetic ellipsis truncating the fork SHAs (tripping the ac_complete '…' sub-check) — not genuine complexity. Lead authors the behaviour-doc section directly with full migration context (behavior-docs is lead-authorable per CLAUDE.md); examiner still runs."
+}

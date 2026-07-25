@@ -244,13 +244,21 @@ describe('Single-dispatch: applicationRumorDispatcher LRU dedup prevents double-
     const handler = createDeleteEditHandler(deps);
     const dispatcher = createDispatcher([handler]);
 
-    let listener: ((data: Uint8Array) => void | Promise<void>) | null = null;
+    // S3 (marmot-ts 0.7.0 authenticated-sender migration): the dispatcher now
+    // registers TWO listeners — 'authenticatedApplicationMessage'
+    // (message-carrying) and 'unauthenticatedMessage' (diagnostic-only,
+    // AC-OBS-1). A single shared `listener` variable would be silently
+    // overwritten by the second .on() call; listeners are tracked per event
+    // name instead. The payload now carries senderPubkey, sourced from the
+    // rumor's own pubkey so the dispatcher's sender-vs-rumor choke-point
+    // trivially matches (mirroring the old fallback sender).
+    const listeners = new Map<string, (payload: never) => void | Promise<void>>();
     const fakeGroup = {
-      on: (_e: string, fn: (data: Uint8Array) => void | Promise<void>) => {
-        listener = fn;
+      on: (event: string, fn: (payload: never) => void | Promise<void>) => {
+        listeners.set(event, fn);
       },
-      off: () => {
-        listener = null;
+      off: (event: string) => {
+        listeners.delete(event);
       },
     };
 
@@ -258,11 +266,12 @@ describe('Single-dispatch: applicationRumorDispatcher LRU dedup prevents double-
     mockDispatcherRumor = rumor;
 
     dispatcher.subscribe(fakeGroup as any, makeCtx());
-    expect(listener).not.toBeNull();
+    const listener = listeners.get('authenticatedApplicationMessage');
+    expect(listener).not.toBeUndefined();
 
     // Same rumor id "delivered" twice over the wire.
-    await listener!(new Uint8Array([1]));
-    await listener!(new Uint8Array([1]));
+    await listener!({ message: new Uint8Array([1]), senderPubkey: rumor.pubkey, senderLeafIndex: 0 } as never);
+    await listener!({ message: new Uint8Array([1]), senderPubkey: rumor.pubkey, senderLeafIndex: 0 } as never);
 
     expect(applySpy).toHaveBeenCalledTimes(1);
   });

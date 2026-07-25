@@ -1,0 +1,95 @@
+{
+  "story_id": "S2",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-25T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S2-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does the load-or-generate helper in storage.ts actually persist the minted slot to durable storage (localStorage via writeItem) before MarmotClient construction — not merely hold it in a module-level variable that would regenerate on the next launch and silently defeat AC-KEY-3's byte-identical-across-launches guarantee? Show the storage.ts helper's write call and confirm it fires before the `new MarmotClient({clientId})` construction at MarmotContext.tsx:1219."
+    },
+    {
+      "question_id": "VQ-S2-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does this story's diff to MarmotContext.tsx touch only the three KeyPackage slot resolution call sites (:1219 constructor, :1390 rotate, :1410 create) — disjoint from S3's dispatcher-wiring lines (:1699, :1824) — with no dispatcher/sender-authenticity code touched, per this story's scope.excludes ('Dispatcher/sender-authenticity wiring (Change 3) — owned by S3')?"
+    },
+    {
+      "question_id": "VQ-S2-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could 'STORAGE_KEYS / storage' be deleted and rewritten without modifying any file outside its dependencies_allowed list? If not, which cross-module dependencies exist (e.g. the three MarmotContext.tsx call sites that consume the load-or-generate helper) and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S2-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do the tests for this story exercise all three named scenarios — (a) fresh install with no persisted slot mints+persists a hex slot before MarmotClient construction, (b) startup with a legacy `clientId:'few'` regenerates a conformant hex slot, (c) two consecutive app initializations reuse the byte-identical persisted slot — against the real storage.ts helper and generateKeyPackageSlot(), not a mock that stubs the helper to always return a fixed hex string regardless of what was persisted?"
+    },
+    {
+      "question_id": "VQ-S2-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the migration's resolution for the MarmotContext.tsx:1390 rotate-path gap (locally stored KeyPackage with legacy identifier 'few') cause client.keyPackages.rotate() to resolve to a conformant hex slot and complete without throwing — not merely catch and swallow the throw more quietly than before?"
+    },
+    {
+      "question_id": "VQ-S2-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Is the STORAGE_KEYS entry `keyPackageSlot: 'lp_keyPackageSlot_v1'` namespaced/versioned consistently with the project's other `lp_*` storage-key conventions in app/src/types/index.ts, avoiding a key collision with any existing entry?"
+    },
+    {
+      "question_id": "VQ-S2-007",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does the KeyPackage slot migration change any code path touched by own-send echo suppression or reaction badge propagation (AC-AR-22 / AC-40)? Confirm via `git diff --stat` that this story's edits are confined to app/src/context/MarmotContext.tsx's three slot call sites, app/src/types/index.ts, and app/src/lib/storage.ts, with no dispatcher/handler file touched."
+    },
+    {
+      "question_id": "VQ-S2-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KEY-1",
+      "question": "For AC-KEY-1: on a fresh install (no persisted slot), does the app persist a generateKeyPackageSlot()-minted hex slot before constructing MarmotClient, and does at least one published kind-30443 KeyPackage event carry that hex slot as its `d`-tag? Provide the production code path, the test exercising it end-to-end (real generateKeyPackageSlot + real storage read/write, not a mock-spy proxy), and confirm this holds at all three slot-resolving call sites (:1219, :1390, :1410)."
+    },
+    {
+      "question_id": "VQ-S2-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KEY-2",
+      "question": "For AC-KEY-2: on startup with a persisted clientId of 'few' (or any non-hex value), does the app regenerate a conformant hex slot via generateKeyPackageSlot(), persist it, and use it for that and every subsequent launch, with KeyPackage publication succeeding without throwing? Provide the production code, the test exercising the legacy-value regeneration path end-to-end, and confirm the test is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S2-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KEY-3",
+      "question": "For AC-KEY-3: do two consecutive app initializations for the same install use a byte-identical persisted clientId (read, never regenerated) once a conformant hex slot exists — such that the addressable KeyPackage event published on launch 2 carries the same `d`-tag as launch 1? Provide the production code, an end-to-end test asserting byte-identical clientId across two real init cycles, and confirm it is not a mock-spy proxy."
+    },
+    {
+      "question_id": "VQ-S2-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KEY-4",
+      "question": "For AC-KEY-4: on a client.groups.on('joined') rotation where the locally stored KeyPackage's identifier is the legacy 'few', does client.keyPackages.rotate() resolve to a conformant hex slot and complete without throwing, and does the console.debug('[Marmot] Key package rotation failed:', ...) swallow branch NOT fire for this case? Provide the production code, a test exercising the legacy-'few' rotate path end-to-end (real rotate() call, not a mock-spy proxy), and evidence (e.g. a spy asserting the console.debug branch was never invoked) that the swallow did not fire."
+    },
+    {
+      "question_id": "VQ-S2-012",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "readOrCreateKeyPackageSlot(mintSlot: () => string) was implemented as a dependency-injected pure function (storage.ts does NOT statically import '@internet-privacy/marmot-ts'; MarmotContext.tsx destructures generateKeyPackageSlot from its existing dynamic `await import('@internet-privacy/marmot-ts')` inside init() and passes it in) rather than storage.ts importing generateKeyPackageSlot directly. Confirm `grep -n \"from '@internet-privacy/marmot-ts'\" app/src/lib/storage.ts` returns no import statement (comments only), and that this keeps storage.ts (imported broadly across many components/pages) out of the marmot-ts/ts-mls dependency graph rather than bloating unrelated page bundles or risking an SSR/static-export-time import-order issue. Was this the right call, or should storage.ts have imported generateKeyPackageSlot directly for simplicity given the function is pure and side-effect-free (uses only randomBytes, no crypto.subtle)?"
+    },
+    {
+      "question_id": "VQ-S2-013",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "The rotate call site now passes `d: keyPackageSlot` unconditionally on every rotation (not only when the stored entry's identifier is the legacy 'few'). In the steady state (post-migration, stored entry's identifier already equals the persisted keyPackageSlot), is this a no-op-equivalent to the previous omit-d behavior (RotateKeyPackageOptions.d falls back to the stored entry's own d, which is already keyPackageSlot) — or could there be a scenario (e.g. a stored entry from a different, still-conformant-but-different hex value, multi-slot edge case) where forcing d:keyPackageSlot silently overrides a legitimately different stored slot rather than only correcting the non-conformant legacy case?"
+    },
+    {
+      "question_id": "VQ-S2-014",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "readOrCreateKeyPackageSlot degrades to 'mint a fresh slot every call, persist nothing' when isStorageAvailable() is false (private-browsing quota exhaustion, storage disabled, etc.) — mintSlot is still called and a slot is still returned (so MarmotClient construction does not throw), but AC-KEY-3's byte-identical-across-launches guarantee cannot hold for that session since nothing durable was written. Is this degradation acceptable (matches every other STORAGE_KEYS entry's existing isStorageAvailable()-gated silent-no-persist behavior, e.g. writeSettings/writeUserProfile), or does the KeyPackage slot's role as a relay-addressable `d` tag (unlike settings/profile, republishing under a NEW slot each launch means the relay does NOT replace the previous kind-30443 event, leaving stale KeyPackages accumulating on relays for a storage-unavailable session) warrant different handling than the existing precedent?"
+    }
+  ]
+}

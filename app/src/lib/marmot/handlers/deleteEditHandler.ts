@@ -27,13 +27,13 @@
  * adding a gate here would silently discard a signal S3 was built to retain.
  *
  * ─── The forwarded pubkey is the INNER rumor pubkey (NOT the kind-445 author) ─
- * ─── but it is group-member-attested, NOT MLS-identity-bound (see below) ──────
+ * ─── and it is now MLS-identity-bound: the authenticated sender (see below) ───
  *
  * This handler forwards the authenticated `sender` (AuthenticatedSender) to
- * `applyDeleteEditSignal`, which authorizes on `sender.pubkey`. Under the S1
- * stub `sender.pubkey` IS the claimed inner application-rumor pubkey (the seam
- * resolver returns `rumor.pubkey`/`'claimed'` until the MLS backbone lands), so
- * the trust level described below is unchanged by the seam refactor. That inner
+ * `applyDeleteEditSignal`, which authorizes on `sender.pubkey`. That
+ * `sender.pubkey` is the MLS-authenticated transport sender: marmot-ts 0.7.0
+ * resolves it from the group's ratchet-tree credential and drops any
+ * claimed-vs-authenticated mismatch before fan-out. That inner
  * pubkey is never the kind-445 wrapper's ephemeral author
  * (learning `kind-445-events-have-ephemeral-authors`).
  * `applicationRumorDispatcher.ts`'s listener calls `deserializeApplicationData`
@@ -42,21 +42,17 @@
  * (with its ephemeral author) is never exposed past that point. `chatHandler.ts`
  * and `reactionHandler.ts` already rely on this identically.
  *
- * IMPORTANT — trust model (verified against ts-mls / marmot-ts 0.5.1 source):
- * this inner `pubkey` is **NOT** cryptographically bound to the MLS sender.
- * ts-mls returns only the decrypted `{message: Uint8Array}` for an application
- * message and DROPS the authenticated sender leaf credential (proposals keep it;
- * `unprotectPrivateMessage` is not exported), so `deserializeApplicationData`
- * validates field *presence* only and never checks `pubkey` against the sending
- * member's identity. MLS still guarantees the sender is a *current group member*
- * (non-members cannot forge), so AC-AUTH-2's group clause here is
- * **best-effort / group-member-attested**: it stops outsiders and honest
- * mismatches, but a malicious current member can forge `pubkey` to impersonate
- * another member — the same residual Few already carries for kind-9/kind-7.
- * The full MLS-identity binding is tracked upstream:
- * see `BACKLOG.json#marmot-ts-0-5-1-drops` and spec AC-AUTH-2 (2026-07-07 amendment).
- * DMs are unaffected (seal-signature bound). Do NOT overstate this as
- * "MLS-authenticated" — it is not.
+ * Trust model (marmot-ts 0.7.0 authenticated-sender forks — see the `ts-mls`
+ * and `@internet-privacy/marmot-ts` git pins in app/package.json): this inner
+ * `pubkey` IS cryptographically bound to the MLS sender. The library resolves
+ * the authenticated sender leaf credential during unprotect and enforces that
+ * the rumor's claimed `pubkey` matches it, dropping any mismatch (and
+ * undeserializable bytes) before the message is delivered. So AC-AUTH-2's
+ * group clause here is genuinely MLS-authenticated: a malicious current member
+ * can no longer forge `pubkey` to impersonate another member — the
+ * sender-leaf-drop gap (formerly `BACKLOG.json#marmot-ts-0-5-1-drops`) is
+ * closed by the marmot-ts-authenticated-sender-migration epic (ADR-012).
+ * DMs remain independently seal-signature bound.
  */
 
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';

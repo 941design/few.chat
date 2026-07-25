@@ -32,14 +32,15 @@ function handleLeaveIntent(rumor: ApplicationRumor, ctx: DispatcherContext, send
   // A leave_intent naming a different member (subject !== sender) is
   // silently dropped here: no enqueueLeave call, no departure side effect.
   //
-  // Readiness-only (AC-MV-1): under the app-layer-only stub `sender.pubkey`
-  // defaults to the claimed `rumor.pubkey` (or, via the dev-only test
-  // override hook, whatever an attacker-controlled test injects) — so an
-  // attacker who controls the rumor also controls `sender.pubkey` and can
-  // still forge a matching pair today. This gate only becomes load-bearing
-  // once the out-of-scope MLS sender-binding backbone (ADR-012) feeds a true
-  // MLS-authenticated sender the attacker cannot set. Until then, forgery
-  // still succeeds end-to-end (see spec.md `## Non-Goals`).
+  // Load-bearing (ADR-012 backbone landed — epic
+  // marmot-ts-authenticated-sender-migration): `sender.pubkey` is now the
+  // MLS-authenticated transport sender that marmot-ts 0.7.0 resolves from the
+  // group's ratchet-tree credential, not the claimed `rumor.pubkey`. The
+  // library drops any message whose claimed pubkey != the authenticated sender
+  // before the dispatcher sees it, so an attacker cannot set `sender.pubkey`
+  // to a member they are not. A leave_intent naming a different member
+  // (subject !== authenticated sender) therefore cannot be forged: it is
+  // dropped here with no departure side effect.
   if (payload.pubkey !== sender.pubkey.toLowerCase()) return;
 
   deps.enqueueLeave(ctx.groupId, payload.pubkey);

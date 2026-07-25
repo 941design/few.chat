@@ -1,0 +1,5 @@
+{
+  "decision": "lighter_path",
+  "architect_skipped": true,
+  "reason": "S1 targets only app/package.json + app/package-lock.json (config, markdown-class); both owned ACs (AC-DEP-2, AC-DEP-3) fully specified; no new file. Lead implements the dep-pin + cold-install verification directly; examiner still runs."
+}

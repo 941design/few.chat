@@ -15,8 +15,7 @@
  * auth-helpers.ts), so a locked/absent signer is simulated via the dev-only
  * `window.__fewTest.forceProfileSignerFailure` override on
  * MarmotContext.tsx's `publishProfileUpdate` (gated NODE_ENV !== 'production',
- * re-read on every call — mirrors the `resolveAuthenticatedSender` override
- * precedent from story S1's authenticatedSenderResolver.ts).
+ * re-read on every call).
  *
  * Absence of the meta-event is verified via the SAME rumor-counter mechanism
  * groups-profile-request.spec.ts already relies on for its own "no rumor was

@@ -1,0 +1,47 @@
+{
+  "story_id": "S4",
+  "status": "done",
+  "final_outcome": "accepted",
+  "completed_at": "2026-07-25T18:40:00Z",
+  "files_created": [
+    "app/tests/unit/marmot/order-sensitive-ingest.property.test.ts",
+    "specs/epic-marmot-ts-authenticated-sender-migration/S4-order-sensitive-ingest-integration-verification/architecture.json",
+    "specs/epic-marmot-ts-authenticated-sender-migration/S4-order-sensitive-ingest-integration-verification/baseline.json",
+    "specs/epic-marmot-ts-authenticated-sender-migration/S4-order-sensitive-ingest-integration-verification/result.json"
+  ],
+  "files_modified": [
+    "specs/epic-marmot-ts-authenticated-sender-migration/S4-order-sensitive-ingest-integration-verification/verification.json",
+    "app/tests/unit/marmot/order-sensitive-ingest.property.test.ts",
+    "specs/epic-marmot-ts-authenticated-sender-migration/S4-order-sensitive-ingest-integration-verification/result.json"
+  ],
+  "tests_added": {
+    "property_permutation": 43,
+    "example_based": 6,
+    "adversarial_regression": 1
+  },
+  "test_counts": {
+    "baseline": 4351,
+    "final": 4400
+  },
+  "mocks": [],
+  "remediation_rounds": 1,
+  "architect_skipped": false,
+  "modules_touched": [
+    "applicationRumorDispatcher",
+    "epochResolver",
+    "welcomeSubscription"
+  ],
+  "escalation_history": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Reconciling two DIFFERENT id spaces that the four AC-ORDER-* wordings conflate at a glance \u2014 applicationRumorDispatcher's dedup keys on the DECRYPTED rumor's inner `.id` field, while welcomeSubscription's dedup keys on the OUTER raw kind-445 NostrEvent id \u2014 required tracing both files' actual code (not just the AC prose) before the test harness design would hold together. AC-ORDER-1's phrase 'a sender-mismatched rumor sharing the same rumor id' only resolves cleanly once you see that a real forger can share the INNER id while necessarily using a DIFFERENT outer raw-event id (they can't reproduce another signer's exact bytes) \u2014 the welcomeSubscription-layer test had to model both ids explicitly (distinct outer ids, shared inner rumor id) to be a faithful, non-trivial proof rather than an accidental tautology. [Round 1] A first mutation attempt for VQ-S4-016 (firing a bogus onApplicationMessage call from the replay loop's 'newState' branch) silently passed all 50 tests for the wrong reason: that branch is dead code in the AC-ORDER-3 test's own outcome scenario (the replayed 'losing' commit's outcome is scripted as skippedPastEpoch, never newState, so ingest() never yields a processed+newState result during replay here). Confirming a mutation's non-detection is a REAL tautology (vs. an unreachable-branch false alarm) required re-deriving which result kinds the test's own fake-group outcome map can actually produce at each ingest() call site before concluding anything about test quality.",
+    "surprised_by": "epochResolver.ts's rollbackAndReplay re-emits an already-delivered application message through ingest() a SECOND time on every rollback (by design \u2014 the message sits in the grace-window replay queue and is replayed alongside the winning commit). This means AC-ORDER-3's dispatcher-delivered call count is NOT '2x the app-message count per cycle' as a naive read of 'replay' might suggest \u2014 the dispatcher's own rumor-id LRU silently collapses the replay's re-emission back down to exactly one handler call per cycle. Worth flagging for S5's behavior-docs pass since it's a real, load-bearing dedup interaction between two files that isn't obviously implied by either file's own comments in isolation. [Round 1] EpochResolver's onApplicationMessage callback has NO dedup of its own (unlike the dispatcher) \u2014 it genuinely fires twice per rollback cycle (once at the message's initial ingest, once during replay), confirmed empirically via a debug probe. The original AC-ORDER-3 assertion (`toHaveBeenCalled()`, no upper bound) did not pin this and would have silently accepted an extra spurious invocation \u2014 a real, mutation-confirmed tautology, closed in this round by asserting the exact `count * 2`.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "summary": "Round 0 wrote app/tests/unit/marmot/order-sensitive-ingest.property.test.ts (48 tests) proving the four architecture.md \u00a76 whole-flow guarantees (AC-ORDER-1..4) against S3's REAL, already-landed applicationRumorDispatcher.createDispatcher(), epochResolver.EpochResolver, and welcomeSubscription.subscribeToGroupMessages \u2014 none mocked (see prior summary for full detail). Round 1 (this update) is a targeted, test-only confidence-raising pass addressing three examiner findings (VQ-S4-013/014/015), with ZERO net production-code change (diff-hash-verified clean after every mutation-and-revert cycle):\n\n(1) VQ-S4-013 \u2014 de-tautologized AC-ORDER-3 and AC-ORDER-4 via hand-mutation, matching ORDER-1/2's round-0 discipline. AC-ORDER-3: mutation M1 (inject an `authenticity` field into the rumor passed to `onApplicationMessage` during replay) broke exactly 3/3 rollback-count cases as expected. A follow-up probe surfaced a genuine tautology: the original `toHaveBeenCalled()` assertion (no upper bound) let a duplicated/spurious `onApplicationMessage` invocation slip through undetected on first attempt (48/48 passed with the mutation live). Root-caused and closed within scope by tightening the assertion to an exact count (`count * 2`, empirically confirmed: one call at initial ingest, one at replay, no dedup of its own on this path) \u2014 re-verified the tightened assertion now fails 3/3 as expected, then cleanly reverted. AC-ORDER-4: mutating welcomeSubscription's `markGroupSeen` call from before to after `await resolver.ingestEvent(...)` (breaking the documented mark-before-first-await race guard) broke exactly the 1 'simultaneous' race test as expected, leaving the other 3 AC-ORDER-4 scenarios green (correctly, since they have an intervening await). Also confirmed the dispatcher's own dedup (`isSeen`) hard-disabled breaks 9 tests including all 3 ORDER-3 cycles (2x calls instead of 1x collapsed). All mutations reverted; diff-hash-confirmed identical to the pre-round-1 checkpoint. (2) VQ-S4-014 \u2014 added 2 new tests: 'same groupId reused after dispose (simulated crash-recovery re-join)' and 'two independent groups... does not suppress'. Both pass against real code (no defect: `seenIdsByGroup`'s per-groupId keying already isolates). Verified non-tautology by mutating `getGroupSeenIds` to return one shared Set across all groups \u2014 broke exactly the cross-group test (1/2), correctly leaving the reuse test green (it doesn't exercise cross-group isolation). Reverted, diff-hash-confirmed clean. (3) VQ-S4-015 \u2014 added a code comment on the AC-ORDER-3 describe block documenting the replayQueue FIFO-by-insertion assumption and the re-permute-if-this-changes contract.\n\nFull unit suite: 224 files, 4400 passed + 1 skipped (was 4398 passed + 1 skipped), 0 failed \u2014 no regressions (+2 net new tests from VQ-S4-014). tsc --noEmit: clean. No ESLint config present (NO_LINT, unchanged baseline). Out of scope per the remediation brief and left untouched: VQ-S4-007 (AC-AR-22/AC-40, tracked separately) and VQ-S4-012 (real marmot-ts ingest() microtask timing \u2014 coverage home is the e2e gate's groups-blackout-guard.spec.ts against the real relay, not a unit-test concern). Five new post-impl verification records (VQ-S4-016..019, plus this note) appended to verification.json documenting the round-1 mutation evidence and two follow-up questions for a future round (whether flushFutureBuffer's unreadable/rejected replay-retry branches and the historical-vs-live entry-point symmetry warrant their own dedicated mutation pass).",
+  "decider_disposition": "ACCEPT (round 1). 4 guarantees met + empirically de-tautologized (real AC-ORDER-3 tautology found+fixed). VQ-S4-016/017/019 persisted as follow-up test-hardening; VQ-S4-018 = intended resubscribe-dedup behavior, no action. E2E gate covers real-library timing."
+}

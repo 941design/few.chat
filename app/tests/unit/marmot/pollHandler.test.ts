@@ -166,12 +166,24 @@ function makeDeps(
   };
 }
 
+// S3 (marmot-ts 0.7.0 authenticated-sender migration): the dispatcher now
+// registers TWO listeners — 'authenticatedApplicationMessage' (message-
+// carrying) and 'unauthenticatedMessage' (diagnostic-only, AC-OBS-1). A
+// single shared `listener` variable would be silently overwritten by the
+// second .on() call; listeners are tracked per event name instead. emit()
+// passes the payload shape the dispatcher now expects
+// ({message, senderPubkey, senderLeafIndex}), with senderPubkey sourced from
+// the currently-configured mockRumor so the dispatcher's sender-vs-rumor
+// choke-point trivially matches (mirroring the old fallback sender).
 function makeFakeGroup() {
-  let listener: ((data: Uint8Array) => void) | null = null;
+  const listeners = new Map<string, (payload: never) => void | Promise<void>>();
   return {
-    on: vi.fn((_event: string, fn: (data: Uint8Array) => void) => { listener = fn; }),
-    off: vi.fn(),
-    async emit() { if (listener) await listener(new Uint8Array()); },
+    on: vi.fn((event: string, fn: (payload: never) => void | Promise<void>) => { listeners.set(event, fn); }),
+    off: vi.fn((event: string, _fn: (payload: never) => void | Promise<void>) => { listeners.delete(event); }),
+    async emit() {
+      const fn = listeners.get('authenticatedApplicationMessage');
+      if (fn) await fn({ message: new Uint8Array(), senderPubkey: mockRumor?.pubkey ?? '', senderLeafIndex: 0 } as never);
+    },
   };
 }
 

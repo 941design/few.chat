@@ -1,0 +1,246 @@
+{
+  "epic_name": "marmot-ts-authenticated-sender-migration",
+  "created_at": "2026-07-25T13:00:00Z",
+  "total_stories": 5,
+  "dependency_notes": "S1 is foundational and load-bearing: nothing in the app compiles or runs against 0.7.0 types until both fork SHAs are installed (spec \u00a72 blackout). S2 and S3 both depend on S1 for that reason. S2 and S3 are otherwise functionally independent (KeyPackage slot lifecycle vs dispatcher/epochResolver wiring) but both touch app/src/context/MarmotContext.tsx at disjoint line ranges (:1219/:1390/:1410 slot sites for S2, :1699/:1824 dispatcher wiring for S3) \u2014 landing S2 before S3 (story_order, not a hard schema dependency) avoids the two stories editing the same file in the same window. S4 is the FR-A7 cross-cutting integration story: architecture.md's own 'Risk concentration' note places all four AC-ORDER-* guarantees on files S3 already owns (applicationRumorDispatcher.ts, epochResolver.ts) plus the unchanged-but-interacting welcomeSubscription.ts, so S4's dependency union reduces to {S3} \u2014 it is still emitted as its own story per FR-A7 because the signal (architecture.md \u00a76 + acceptance-criteria.md's 'Spans modules:' lines) is present, not because the guarantees are architecturally scattered. S5 (behavior docs) depends on S3 because it documents the 'authenticity: mls' behavior S3 lands; it has no dependency on S4 and could be sequenced anywhere after S3, but is placed last for readability.",
+  "mock_resolution_plan": "No temporary mocks are introduced by this epic. All story dependencies are real, sequential landings (S1's fork pin must exist before S2/S3 can compile; S3's dispatcher wiring must exist before S4 can exercise real producers) rather than mocked seams \u2014 consistent with Module Ownership principle 1's exception for a story that is naturally sequenced instead of independently testable in isolation, and with the FR-A7 integration story's Mock Strategy exception (S4 verifies against S3's real, already-implemented producers and must never mock them).",
+  "seams": [],
+  "cross_cutting_acs": [
+    {
+      "ac_id": "AC-ORDER-1",
+      "spanned_by": [
+        "S3"
+      ]
+    },
+    {
+      "ac_id": "AC-ORDER-2",
+      "spanned_by": [
+        "S3"
+      ]
+    },
+    {
+      "ac_id": "AC-ORDER-3",
+      "spanned_by": [
+        "S3"
+      ]
+    },
+    {
+      "ac_id": "AC-ORDER-4",
+      "spanned_by": [
+        "S3"
+      ]
+    }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "name": "pin-marmot-ts-fork-dependencies",
+      "title": "Pin ts-mls and marmot-ts to the authenticated-sender fork SHAs",
+      "description": "Pin app/package.json's ts-mls and @internet-privacy/marmot-ts dependencies to the two load-bearing fork commit SHAs already resolved in spec.md \u00a75 (github:941design/ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13, github:941design/marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2), and prove \u2014 not merely assert \u2014 that a cold `make node_modules` resolves both over HTTPS (never git+ssh) and that exactly one ts-mls copy, the fork's, is what actually installed. This is the foundational story: per spec.md \u00a72, without the fork's senderCredential every group application message is silently dropped (total blackout), invisible to typecheck \u2014 nothing downstream compiles or behaves correctly until this lands. The story pins and proves the two SHAs; it does not decide them (already decided, spec \u00a75).",
+      "acceptance_criteria": [
+        "AC-DEP-2",
+        "AC-DEP-3"
+      ],
+      "scope": {
+        "includes": [
+          "Update app/package.json's ts-mls entry to github:941design/ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13 (AC-DEP-2)",
+          "Update app/package.json's @internet-privacy/marmot-ts entry to github:941design/marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2 (AC-DEP-2)",
+          "Regenerate app/package-lock.json via a cold `make node_modules` run on a host with no SSH key configured for github.com, and confirm the install completes with exit code 0 over HTTPS (AC-DEP-2)",
+          "Run `npm ls ts-mls` from app/ post-install and confirm exactly one resolved entry (AC-DEP-3)",
+          "Grep app/node_modules/ts-mls/dist for a symbol present only in the fork's senderCredential-carrying build and confirm at least one match (AC-DEP-3)"
+        ],
+        "excludes": [
+          "Any application source change (dispatcher, KeyPackage slot, handlers) \u2014 this story is dependency-pin-only",
+          "The behavioral e2e proving a real chat message survives end-to-end on the fork (AC-DEP-1) \u2014 that requires the dispatcher wiring change and is owned by S3, since a green cold-install alone does not prove the message-carrying event still reaches the app"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "done",
+      "owning_module": "package pins",
+      "creates_seam": false,
+      "consumes_seams": [],
+      "lighter_path": true,
+      "is_integration_story": false,
+      "files": [
+        "app/package.json",
+        "app/package-lock.json"
+      ],
+      "notes": "lighter_path=true: both file targets (app/package.json, app/package-lock.json) are .json \u2014 in the markdown_class_extensions set per base:story-planner Mode 2's lighter_path rule, so files_code is empty even though this is the epic's highest-risk story in practice (silent-blackout failure mode). Both owned ACs (AC-DEP-2, AC-DEP-3) are ac_complete (present in acceptance-criteria.md, no <placeholder>, no literal ellipsis, no trailing '?', both use MUST/MUST NOT). Neither AC's scope signals new-file creation \u2014 both files already exist. All three lighter_path predicates hold, so the rule's deterministic output is true: the lead implements directly via Edit and the examiner still runs; the integration-architect is not spawned for this story. Flagged for the lead's attention because the story's *verification* complexity (HTTPS-vs-git+ssh lockfile rewrite quirk, cold-cache no-SSH-key host requirement, dist-symbol grep) is nontrivial despite the config-only file classification \u2014 see this run's RETROSPECTIVE note."
+    },
+    {
+      "id": "S2",
+      "name": "keypackage-hex-slot-migration",
+      "title": "Persist and migrate the KeyPackage hex slot identifier",
+      "description": "Introduce a persisted, once-minted `generateKeyPackageSlot()` hex slot used as MarmotClient's clientId, replacing the free-form 'few' string that 0.6.0's identifier validation (/^[0-9a-f]{64}$/) now throws on. Covers all three resolution call sites in MarmotContext.tsx (:1219 constructor, :1390 rotate, :1410 create) and the fresh-install, legacy-clientId-regeneration, and stable-reuse-across-launches paths, plus the rotate-path gap where a legacy per-package stored identifier of 'few' currently throws inside rotate()->create() and is silently swallowed to console.debug.",
+      "acceptance_criteria": [
+        "AC-KEY-1",
+        "AC-KEY-2",
+        "AC-KEY-3",
+        "AC-KEY-4"
+      ],
+      "scope": {
+        "includes": [
+          "Add a `keyPackageSlot: 'lp_keyPackageSlot_v1'` STORAGE_KEYS entry and a load-or-generate helper in app/src/lib/storage.ts (AC-KEY-1, AC-KEY-2, AC-KEY-3)",
+          "On MarmotContext.tsx:1219 (constructor), read the persisted slot or mint+persist one via generateKeyPackageSlot() before constructing MarmotClient, and use it as clientId (AC-KEY-1)",
+          "On startup, detect a persisted clientId not matching /^[0-9a-f]{64}$/ (including the pre-migration 'few' value) and regenerate+persist a conformant slot, used for that and every subsequent launch (AC-KEY-2)",
+          "Confirm two consecutive app initializations for the same install reuse the byte-identical persisted clientId (AC-KEY-3)",
+          "Resolve the MarmotContext.tsx:1390 rotate-path gap for a locally stored KeyPackage with legacy identifier 'few' so client.keyPackages.rotate() resolves to a conformant hex slot and completes without throwing, and the console.debug rotation-failure swallow branch does not fire for this case (AC-KEY-4)",
+          "Confirm MarmotContext.tsx:1410 (create) resolves its slot from the now-hex clientId post-migration (AC-KEY-1)",
+          "Confirm the possible 4th keyPackages.list() site at MarmotContext.tsx:2496 is not a mutation/slot site (architecture.md \u00a77 open item)"
+        ],
+        "excludes": [
+          "Any change to keyPackages.ts's free-form `client: 'few'` app label \u2014 confirmed unaffected by hex validation (spec \u00a73.2, \u00a78)",
+          "Dispatcher/sender-authenticity wiring (Change 3) \u2014 owned by S3",
+          "Any change to STORAGE_KEYS entries or storage.ts helpers unrelated to the KeyPackage slot"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "done",
+      "owning_module": "STORAGE_KEYS / storage",
+      "creates_seam": false,
+      "consumes_seams": [],
+      "lighter_path": false,
+      "is_integration_story": false,
+      "files": [
+        "app/src/context/MarmotContext.tsx",
+        "app/src/types/index.ts",
+        "app/src/lib/storage.ts"
+      ],
+      "notes": "lighter_path=false: files_code is non-empty (MarmotContext.tsx is .tsx, index.ts and storage.ts are .ts \u2014 none are markdown-class), so the rule's first predicate already fails regardless of AC completeness or new-file status. Primary owning_module is STORAGE_KEYS / storage per architecture.md's Module map Change column ('New keyPackageSlot ... entry + load-or-generate helper'); the story also edits the three MarmotContext.tsx call sites that consume that helper, at line ranges disjoint from S3's dispatcher-wiring edits (:1699/:1824)."
+    },
+    {
+      "id": "S3",
+      "name": "authenticated-sender-dispatcher-wiring",
+      "title": "Wire the library's authenticated MLS sender through the dispatcher seam",
+      "description": "Switch the dispatcher's single inbound-message listener from the raw applicationMessage event to authenticatedApplicationMessage, build sender.authenticity as the literal 'mls' from the library-supplied senderPubkey, widen epochResolver.ts's MlsGroupLike interface to compile against the fork's widened IngestResult union, wire the unauthenticatedMessage diagnostic to a visible console.warn, and verify \u2014 without re-implementing \u2014 that the already-wired app-layer attribution gates (S6 announcement gate, leaveHandler's forced-removal guard) now check against a genuinely authenticated sender. Also delivers the primary \u00a72 blackout guard: the e2e proving a real, second-browser-context peer's chat message survives end-to-end on the fork.",
+      "acceptance_criteria": [
+        "AC-DEP-1",
+        "AC-SEAM-1",
+        "AC-SEAM-2",
+        "AC-SEAM-3",
+        "AC-SEAM-4",
+        "AC-GATE-1",
+        "AC-GATE-2",
+        "AC-OBS-1"
+      ],
+      "scope": {
+        "includes": [
+          "Switch applicationRumorDispatcher.ts's group.on(...) subscription from 'applicationMessage' to 'authenticatedApplicationMessage', and confirm exactly one message-carrying group.on(...) listener is registered per group (AC-SEAM-2)",
+          "Construct sender as { pubkey: senderPubkey, authenticity: 'mls' } directly from the authenticatedApplicationMessage payload before handing the message to handlers (AC-SEAM-1)",
+          "Preserve the choke-point drop (sender.pubkey !== rumor.pubkey) as defense-in-depth, firing before markSeen exactly as today, verbatim AC-XCUT-1 ordering (AC-SEAM-3)",
+          "Widen epochResolver.ts's MlsGroupLike interface to compile against the fork's IngestResult union (processed w/ senderPubkey, rejected:unauthenticated-sender, rejected:undeserializable) with zero attributable tsc errors (AC-SEAM-4)",
+          "Wire the library's unauthenticatedMessage diagnostic event to a console.warn logging all four payload fields (senderPubkey, claimedPubkey, reason, event), visible with no DEBUG env var set (AC-OBS-1)",
+          "Add the e2e proving a second real browser-context peer's group chat message renders in the first peer's view post-migration, published through the app (AC-DEP-1)",
+          "Extend groups-announcement-roster-gate.spec.ts coverage to run against the fork build, confirming the S6 gate still rejects a body/sender-mismatched invited/accepted/admitted actor (AC-GATE-1, verify-only \u2014 no chatHandler.ts code change)",
+          "Confirm leaveHandler.ts:43's forced-removal guard still gates enqueueLeave on sender.pubkey for a body/sender-mismatched leave_intent (AC-GATE-2, verify-only \u2014 no leaveHandler.ts code change)",
+          "Resolve the Seam B (retire vs keep the authenticatedSenderResolver stub / __fewTest override) and Seam C (impersonation e2e layer: library-cited vs app-choke-point) decisions architecture.md \u00a74 leaves open for the integration-architect to record"
+        ],
+        "excludes": [
+          "Re-implementing any app-layer attribution gate \u2014 handlers already authorize on sender.pubkey (architecture.md \u00a72 'No code change \u2014 verify only')",
+          "KeyPackage slot persistence/migration (Change 2) \u2014 owned by S2",
+          "epochResolver.ts's onApplicationMessage callback becoming a live second consumption point \u2014 it must remain a documented no-op in production",
+          "The cross-cutting AC-ORDER-* order-sensitivity property tests spanning welcomeSubscription \u2014 owned by the integration story S4, though this story's files (applicationRumorDispatcher.ts, epochResolver.ts) are where that guarantee's risk concentrates per architecture.md \u00a76"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "done",
+      "owning_module": "applicationRumorDispatcher",
+      "creates_seam": false,
+      "consumes_seams": [],
+      "lighter_path": false,
+      "is_integration_story": false,
+      "files": [
+        "app/src/lib/marmot/applicationRumorDispatcher.ts",
+        "app/src/lib/marmot/epochResolver.ts",
+        "app/src/lib/marmot/authenticatedSenderResolver.ts",
+        "app/src/context/MarmotContext.tsx",
+        "app/src/lib/marmot/handlers/chatHandler.ts",
+        "app/src/lib/marmot/handlers/leaveHandler.ts",
+        "app/tests/e2e/groups-blackout-guard.spec.ts"
+      ],
+      "notes": "lighter_path=false: files_code is non-empty (all .ts/.tsx source and a .spec.ts e2e file), so the integration-architect runs for this story regardless of AC completeness. owning_module is 'applicationRumorDispatcher' (the architecture.md Module-map row for the single-listener seam); this story also implements epochResolver.ts's MlsGroupLike widening and touches authenticatedSenderResolver.ts and MarmotContext.tsx's dispatcher-wiring lines (:1699/:1824) as the same coherent Change-3 unit per architecture.md's own module-ownership guidance ('wiring = dispatcher + epochResolver'). For the cross_cutting_acs mapping (AC-ORDER-1..4), this story is the concrete implementer of both applicationRumorDispatcher.ts and epochResolver.ts, and is the only story that touches (verify-only) welcomeSubscription.ts's interaction surface for those guarantees \u2014 hence AC-ORDER-1..4's spanned_by is [S3] even though 'EpochResolver' and 'welcomeSubscription' are not the literal owning_module string; see this run's RETROSPECTIVE note on the single-owning_module-string vs multi-module-story tension."
+    },
+    {
+      "id": "S4",
+      "name": "order-sensitive-ingest-integration-verification",
+      "title": "Verify order-sensitive ingest-and-authenticate guarantees across dispatcher, epochResolver, and welcomeSubscription",
+      "description": "FR-A7 integration story. Proves, via property/interleaving tests against S3's real, already-landed dispatcher and epochResolver, the four whole-flow guarantees architecture.md \u00a76 names for the inbound-application-rumor-ingest-and-authenticate flow: sender-mismatched rumors never reach markSeen in either dedup layer; a rejected:unauthenticated-sender outcome is never treated as bufferable/retriable; EpochResolver's onApplicationMessage callback stays a no-op through competing-commit rollback/replay; and historical-sync/live-subscription overlap never produces divergent authenticity outcomes for the same rumor id. Runs last relative to its dependency (S3) because it verifies the assembled whole against real producers, not mocks.",
+      "acceptance_criteria": [
+        "AC-ORDER-1",
+        "AC-ORDER-2",
+        "AC-ORDER-3",
+        "AC-ORDER-4"
+      ],
+      "scope": {
+        "includes": [
+          "Property/interleaving test generating orderings of {legitimate rumor, sender-mismatched rumor sharing an id, redelivery of that id} across the dispatcher's per-group LRU and welcomeSubscription's raw-event-id dedup sets, asserting the mismatched rumor is never recorded in either structure and the legitimate rumor is processed exactly once regardless of arrival order (AC-ORDER-1)",
+          "Property test generating ingest() outcome sequences containing at least one rejected:'unauthenticated-sender' at an arbitrary position among unreadable/skipped/processed results, asserting it is never added to EpochResolver's retry buffer and never triggers welcomeSubscription's un-mark-on-buffered logic (AC-ORDER-2)",
+          "Test asserting that for any ordering of competing-commit rollback and replay within the 3s grace window, every re-emitted application message routes authenticity resolution exclusively through authenticatedApplicationMessage, with EpochResolver's onApplicationMessage callback remaining a zero-side-effect no-op in production configuration for every replayed message, independent of replay order/count (AC-ORDER-3)",
+          "Test asserting that for any interleaving where the same rumor id is observed by both welcomeSubscription's historical-sync path and the dispatcher's live subscription, both paths agree on the authenticity outcome (both 'mls' or both the same rejection reason) and deliver to handlers at most once (AC-ORDER-4)"
+        ],
+        "excludes": [
+          "Any new production behavior \u2014 this story verifies guarantees the epic's other stories are expected to already satisfy; a genuine gap found here is a defect against S2/S3, not new scope",
+          "Mocking applicationRumorDispatcher, epochResolver, or welcomeSubscription \u2014 per FR-A7's Mock Strategy exception this story verifies against S3's real, already-implemented producers"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "done",
+      "creates_seam": false,
+      "consumes_seams": [],
+      "lighter_path": false,
+      "is_integration_story": true,
+      "files": [
+        "app/tests/unit/marmot/order-sensitive-ingest.property.test.ts"
+      ],
+      "notes": "is_integration_story=true forces lighter_path=false per the mutual-exclusion invariant, regardless of the file-extension/AC-completeness predicates (this story's own test-only .ts file target would in any case classify as files_code, independently yielding false). owning_module is intentionally omitted per FR-A7 step 5 \u2014 this story spans applicationRumorDispatcher, epochResolver, and welcomeSubscription by design rather than owning exactly one. Dependency: S3 (the union of AC-ORDER-1..4's spanned_by sets in the top-level cross_cutting_acs array, all [S3]), so story_order places S4 after S3."
+    },
+    {
+      "id": "S5",
+      "name": "behavior-docs-mls-authenticity-update",
+      "title": "Document the authenticated-sender behavior and 0.7.0 baseline in docs/behavior/groups.md",
+      "description": "Update docs/behavior/groups.md to state that inbound group application messages carry a library-authenticated sender (authenticity: 'mls') after this migration, describe the drop-not-render behavior for a sender-mismatched message, and record a version note naming both pinned fork SHAs as the app's marmot-ts baseline \u2014 the CLAUDE.md-mandated documentation upkeep for this epic.",
+      "acceptance_criteria": [
+        "AC-DOC-1"
+      ],
+      "scope": {
+        "includes": [
+          "Add new prose (not editing pre-existing text) to docs/behavior/groups.md stating inbound group messages carry authenticity: 'mls' post-migration (AC-DOC-1)",
+          "Describe the drop-not-render behavior for a sender-mismatched message in docs/behavior/groups.md (AC-DOC-1)",
+          "Add a version note in docs/behavior/groups.md naming both pinned fork SHAs (ts-mls#9f0c7bd..., marmot-ts#cb0025c...) as the app's marmot-ts baseline (AC-DOC-1)"
+        ],
+        "excludes": [
+          "docs/design-rationales.md \u2014 no new UI design rule is introduced by this epic (spec \u00a77, \u00a78)",
+          "Any code change \u2014 this story is documentation-only"
+        ]
+      },
+      "complexity": "low",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "done",
+      "owning_module": "behavior docs",
+      "creates_seam": false,
+      "consumes_seams": [],
+      "lighter_path": false,
+      "is_integration_story": false,
+      "files": [
+        "docs/behavior/groups.md"
+      ],
+      "notes": "lighter_path=false despite files_code being empty (docs/behavior/groups.md is .md, markdown-class) and no new file being created: AC-DOC-1's rendered text contains two literal ellipsis characters ('\u2026') truncating the fork SHAs for prose brevity (acceptance-criteria.md:168), which fails the lighter_path rule's ac_complete sub-condition (c) ('no \u2026 literal'). Per the rule's conservative default, ac_complete=false forces lighter_path=false \u2014 the integration-architect runs for this story."
+    }
+  ],
+  "story_order": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5"
+  ]
+}

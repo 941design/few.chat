@@ -1,0 +1,37 @@
+{
+  "epic": "marmot-ts-authenticated-sender-migration",
+  "explored_at": "2026-07-25T10:44:23Z",
+  "summary": "Migrate app from marmot-ts 0.5.1 + registry ts-mls to the 0.7.0 authenticated-sender fork build (both pinned to 941design fork feature-branch SHAs). Three changes: (1) fork dependency pins, (2) persisted KeyPackage hex slot incl. rotate-gap fix, (3) wire the library's authenticated senderPubkey through the dispatcher so sender.pubkey carries authenticity:'mls'. The app-layer attribution gates are ALREADY wired to sender.pubkey — only their trust source changes.",
+  "key_findings": {
+    "sender_flow": "Single group.on('applicationMessage') listener at applicationRumorDispatcher.ts:136. Today resolveSender always returns {pubkey: rumor.pubkey, authenticity:'claimed'} (authenticatedSenderResolver.ts:37); the choke-point drop (sender.pubkey!==rumor.pubkey, :113-122) is dead code under the stub. Every handler already consumes sender.pubkey (chatHandler, leaveHandler:43 forced-removal vector, pollHandler, profileHandler, deleteEditHandler) — NO handler edits needed.",
+    "change3_seam": "SenderResolver signature (rumor)=>AuthenticatedSender has no channel for a library senderPubkey. Recommended: switch listener to group.on('authenticatedApplicationMessage', {message,senderPubkey,senderLeafIndex}), build sender={pubkey:senderPubkey,authenticity:'mls'} directly, keep choke-point as defense-in-depth, retire the inert resolver stub (Seam B1). applicationMessage still fires but only for authenticated msgs — listen to ONE event, not both.",
+    "epochResolver": "epochResolver.ts MlsGroupLike union (:59-69) hand-pins the 0.5.1 IngestResult; must widen for 0.7.0 (rejected now splits admin-policy vs unauthenticated-sender/undeserializable). It is a NO-OP-callback historical-sync helper (welcomeSubscription.ts:1163-1172), not a live dispatch path — widen for compilation; classify rejected:unauthenticated-sender as TERMINAL not bufferable.",
+    "keypackage_slot": "clientId:'few' (MarmotContext.tsx:1219) is a bare literal, not persisted. 0.6.0 hex-validates the slot identifier -> throws. Fix: generateKeyPackageSlot() persisted via a new STORAGE_KEYS entry (lp_keyPackageSlot_v1) read/written by storage.ts readItem/writeItem, load-or-generate before new MarmotClient (:1208). Three slot sites: :1219 ctor, :1390 rotate (no d -> legacy 'few' throws, swallowed at :1394 = silent rotation-failure loop), :1410 create. The client:'few' label at keyPackages.ts:28 is free-form, NOT hex-validated — leave it.",
+    "exact_0_7_0_types": "AuthenticatedApplicationMessage{message:Uint8Array;senderPubkey:string;senderLeafIndex:number}. UnauthenticatedMessageInfo{senderPubkey:string;claimedPubkey?:string;reason:'unauthenticated-sender'|'undeserializable';event:NostrEvent}. IngestResult processed-applicationMessage carries top-level senderPubkey + result.senderLeafIndex. rejected: admin-policy(has result+message) | unauthenticated-sender/undeserializable(has senderPubkey+claimedPubkey?, NO result).",
+    "observability": "console.warn('[dispatcher.unauthenticatedMessage]',{...}) already at applicationRumorDispatcher.ts:112-118 (real warn, not debug-gated) — a checkable Playwright page.on('console') target. The new library unauthenticatedMessage event needs its own equivalent warn/counter to be checkable.",
+    "e2e": "New relay-bucket specs MUST be named groups-*.spec.ts (app/playwright.config.ts:43-44 filename glob is the only bucket signal). Exemplars: groups-dispatch-isolation.spec.ts (two-peer blackout guard, __fewTest.onChatIdbWrite counter), groups-announcement-roster-gate.spec.ts (S6 gate). Publish-through-the-app via browser.newContext peers (helpers/group-setup.ts createGroupAndInvite). TRAP: context.close() destroys MLS KeyPackage secret material — keep migrating peer's context open. Relay wiped only on make test-e2e (down -v). Definitive gate: make test-e2e-all (12 non-relay + 48 relay).",
+    "app_cannot_forge": "buildRumor always stamps the local pubkey (MarmotContext.tsx:127-128; every call site passes own pubkeyHex), so the app cannot produce a divergent-sender message. An app-driven impersonation e2e is infeasible; the library drop is proven by marmot-ts's own tests (out of scope, cite). App e2e proves the blackout guard (legit msg survives) as primary.",
+    "unit_conventions": "vitest only, app/tests/unit/**/*.test.ts, no jsdom. Handlers tested via injected-deps makeSender(pubkey) helper defaulting to {pubkey,authenticity:'claimed'}; existing app/tests/unit/marmot/*.test.ts already have 'mls'-sender forged-actor scenarios (reusable). authenticatedSenderResolver.test.ts is the resolver unit-test template (vi.stubGlobal/stubEnv).",
+    "install_verification": "Cold make node_modules must resolve both forks; npm normalizes lockfile 'resolved' to git+ssh even on HTTPS fetch (not proof). Real proofs: cold install succeeds on no-SSH-key host (GIT_CONFIG_COUNT gh-token rewrite), npm ls ts-mls shows single copy, grep node_modules/{ts-mls,@internet-privacy/marmot-ts}/dist for a 0.7.0-unique symbol."
+  },
+  "adr_012": "Proposed (not Accepted), supersedes ADR-006. Mandates hybrid: (1) MLS sender-binding backbone in the fork [THIS EPIC], (2) enum-meta-event forwarding via envelopeVerifier.ts [OUT OF SCOPE]. Deniability is an explicit non-goal.",
+  "order_sensitive": true,
+  "prior_learnings": [
+    "marmot-ts-0-5-1-drops (the defect this epic fixes; resolve on completion)",
+    "npm-ci-with-git-ssh-deps (GIT_CONFIG_COUNT per-process rewrite for github: forks on no-SSH host)",
+    "verifying-private-npm-git-dependency-sandboxed (lockfile resolved-field is git+ssh even on HTTPS; verify by cold install success + dist grep)",
+    "npm-install-can-silently-skip-re (don't trust green tsc as proof new code is present; grep dist for a version-unique symbol)",
+    "closing-playwright-browsercontext-destroys (context.close destroys MLS KeyPackage secret material; keep peer context open in slot e2e)",
+    "mls-over-relay-playwright-e2e-must (gate on rendered readiness markers, not fixed timeouts)",
+    "e2e-same-file-relay-re-run + e2e_bucket_naming_relay_trap (per-file identity salting; groups-* filename is the only relay-bucket signal)",
+    "marmotcontext-use-clientref-current-not-init (use clientRef.current for MarmotGroupType-typed helpers)"
+  ],
+  "stale_learnings_flagged": [
+    "mls-resubscribe-can-permanently-drop-future — already fixed at welcomeSubscription.ts:1196-1206; supersede, do not treat as current risk",
+    "architecture_marmot_dual_listener (project memory) — already marked RESOLVED; single dispatcher confirmed"
+  ],
+  "open_questions_for_planner": [
+    "Seam B1 (retire resolver stub) vs B2 (keep __fewTest override) — coupled to whether an app-choke-point impersonation e2e is wanted; architecture recommends B1.",
+    "Confirm MarmotContext.tsx:2496 keyPackages.list() is not a slot/mutation site."
+  ]
+}

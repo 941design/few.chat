@@ -347,6 +347,78 @@ describe('EpochResolver — future buffer', () => {
   });
 });
 
+// ----------- Future buffer flush: re-buffer vs drop -----------
+
+describe('EpochResolver — future buffer flush semantics', () => {
+  it('re-buffers a still-unreadable event across a flush, and drops a rejected one', async () => {
+    // On flush (triggered here by a commit), each queued event is re-ingested:
+    // one that is STILL unreadable must stay in the future buffer for a later
+    // retry, while one that comes back 'rejected' (terminal per AC-SEAM-4) must
+    // be dropped, not re-buffered.
+    const group = makeMlsGroup({
+      initialEpoch: 1,
+      ingestPlan: [
+        // Call 1: event A unreadable → buffered
+        [{ kind: 'unreadable', event: makeEvent({ id: 'evt-A', created_at: 100 }), errors: [] }],
+        // Call 2: event B unreadable → buffered
+        [{ kind: 'unreadable', event: makeEvent({ id: 'evt-B', created_at: 101 }), errors: [] }],
+        // Call 3: a commit arrives → handleCommit triggers a flush (call 4)
+        [{ kind: 'processed', result: { kind: 'newState' }, event: makeEvent({ id: 'commit-1', created_at: 102 }) }],
+        // Call 4: flush of [A, B] — A is still unreadable (re-buffer), B is rejected (drop)
+        [
+          { kind: 'unreadable', event: makeEvent({ id: 'evt-A', created_at: 100 }), errors: [] },
+          { kind: 'rejected', event: makeEvent({ id: 'evt-B', created_at: 101 }) },
+        ],
+      ],
+    });
+    const cb = makeCallbacks();
+    const resolver = new EpochResolver(group as never, cb, { graceWindowMs: 30000 });
+
+    await resolver.ingestEvent(makeEvent({ id: 'evt-A', created_at: 100 }));
+    await resolver.ingestEvent(makeEvent({ id: 'evt-B', created_at: 101 }));
+
+    let buffer = (resolver as unknown as { futureBuffer: NostrEvent[] }).futureBuffer;
+    expect(buffer.map((e) => e.id).sort()).toEqual(['evt-A', 'evt-B']);
+
+    // Commit triggers the flush. A survives (still unreadable), B is dropped.
+    await resolver.ingestEvent(makeEvent({ id: 'commit-1', created_at: 102 }));
+
+    buffer = (resolver as unknown as { futureBuffer: NostrEvent[] }).futureBuffer;
+    expect(buffer.map((e) => e.id)).toEqual(['evt-A']);
+
+    resolver.dispose();
+  });
+});
+
+// ----------- Buffer eviction orders by created_at, not insertion -----------
+
+describe('EpochResolver — buffer eviction ordering', () => {
+  it('evicts the oldest by created_at (not the oldest inserted) when capacity is exceeded', async () => {
+    // Events arrive with created_at DECREASING then interleaved, so insertion
+    // order and timestamp order disagree. With maxBufferSize 3 the survivors
+    // must always be the three highest created_at — capBuffer sorts by
+    // created_at before trimming, regardless of arrival order.
+    const arrivals = [
+      { id: 'e-500', created_at: 500 },
+      { id: 'e-100', created_at: 100 },
+      { id: 'e-400', created_at: 400 },
+      { id: 'e-200', created_at: 200 },
+      { id: 'e-300', created_at: 300 },
+    ];
+    const plan = arrivals.map((a) => [{ kind: 'unreadable', event: makeEvent(a), errors: [] }]);
+    const group = makeMlsGroup({ initialEpoch: 1, ingestPlan: plan as never });
+    const cb = makeCallbacks();
+    const resolver = new EpochResolver(group as never, cb, { maxBufferSize: 3 });
+
+    for (const a of arrivals) {
+      await resolver.ingestEvent(makeEvent(a));
+    }
+
+    const buffer = (resolver as unknown as { futureBuffer: NostrEvent[] }).futureBuffer;
+    expect(buffer.map((e) => e.created_at).sort((x, y) => x - y)).toEqual([300, 400, 500]);
+  });
+});
+
 // ----------- Grace window expiry -----------
 
 describe('EpochResolver — grace window', () => {

@@ -1,0 +1,73 @@
+{
+  "epic": "marmot-ts-authenticated-sender-migration",
+  "concepts": [
+    {
+      "id": "invariant-fork-pin-pair",
+      "name": "ts-mls + marmot-ts fork pins are a load-bearing pair",
+      "owning_module": "package pins",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "public-contract-keypackage-create",
+      "name": "KeyPackage publish helper (create({client, relays}))",
+      "owning_module": "keyPackages",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "invariant-marmot-context-wiring",
+      "name": "MarmotContext is the sole composition/wiring layer (slot resolution + dispatcher wiring)",
+      "owning_module": "MarmotContext",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "naming-scheme-lp-storage-keys",
+      "name": "lp_* localStorage key naming scheme (STORAGE_KEYS)",
+      "owning_module": "STORAGE_KEYS / storage",
+      "type": "naming_scheme",
+      "added_by_story": null
+    },
+    {
+      "id": "invariant-single-dispatcher-listener",
+      "name": "Exactly one inbound application-message listener per group + resolve-before-markSeen ordering",
+      "owning_module": "applicationRumorDispatcher",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "public-contract-sender-resolver",
+      "name": "AuthenticatedSender / SenderResolver contract",
+      "owning_module": "authenticatedSenderResolver",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "invariant-epoch-resolver-noop",
+      "name": "epochResolver.onApplicationMessage must remain a no-op in production",
+      "owning_module": "epochResolver",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "validation-rule-handler-sender-attribution",
+      "name": "Handler attribution gates validate against sender.pubkey (chatHandler S6, leaveHandler:43, pollHandler, profileHandler, deleteEditHandler)",
+      "owning_module": "handlers",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "path-convention-behavior-docs-groups",
+      "name": "Group messaging / author-attribution behavior is documented at docs/behavior/groups.md",
+      "owning_module": "behavior docs",
+      "type": "path_convention",
+      "added_by_story": null
+    }
+  ],
+  "stories": [],
+  "reviewer_state": {
+    "last_story_reviewed": null,
+    "model_at": "2026-07-25T13:00:00Z"
+  }
+}

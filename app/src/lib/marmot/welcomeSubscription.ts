@@ -1163,7 +1163,7 @@ export async function subscribeToGroupMessages(
   // EpochResolver wraps mlsGroup.ingest() with fork resolution, rollback,
   // and future-epoch buffering. Application messages are dispatched by the
   // unified dispatcher (applicationRumorDispatcher) via the MarmotGroup
-  // 'applicationMessage' event; the resolver's onApplicationMessage callback
+  // 'authenticatedApplicationMessage' event; the resolver's onApplicationMessage callback
   // is a no-op here — EpochResolver still requires the field to maintain its
   // internal interface contract.
   const resolver = new EpochResolver(

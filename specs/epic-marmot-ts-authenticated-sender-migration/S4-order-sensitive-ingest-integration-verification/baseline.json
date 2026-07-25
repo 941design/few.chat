@@ -1,0 +1,23 @@
+{
+  "story_id": "S4",
+  "captured_at": "2026-07-25T16:00:00Z",
+  "note": "Captured as the state immediately prior to this story's own new test file (S3 already landed and done — see S3/result.json). No production code exists for this story to touch; the baseline anchors the pre-S4 test/typecheck/lint counts this story's Regression Prevention step compares against.",
+  "test": {
+    "runner": "vitest run (cd app)",
+    "status": "PASS",
+    "files": 223,
+    "passed": 4350,
+    "skipped": 1,
+    "failed": 0,
+    "source": "inherited from specs/epic-marmot-ts-authenticated-sender-migration/S3-authenticated-sender-dispatcher-wiring/result.json#verification.unit_suite"
+  },
+  "typecheck": {
+    "command": "cd app && npx tsc --noEmit",
+    "status": "clean",
+    "source": "inherited from S3/result.json#verification.typecheck (pre-existing welcomeSubscription.ts:1170 error was resolved by S3's AC-SEAM-4)"
+  },
+  "lint": {
+    "status": "NO_LINT",
+    "note": "No ESLint config present in app/ (no .eslintrc*, no eslint.config.*) — unchanged since S1/S2/S3."
+  }
+}

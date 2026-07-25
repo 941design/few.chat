@@ -1,0 +1,27 @@
+{
+  "story_id": "S5",
+  "status": "done",
+  "final_outcome": "accepted",
+  "architect_skipped": true,
+  "modules_touched": [
+    "behavior docs"
+  ],
+  "files_modified": [
+    "docs/behavior/groups.md"
+  ],
+  "remediation_rounds": 1,
+  "completed_at": "2026-07-25T17:25:00Z",
+  "implementation_notes": [
+    "AC-DOC-1: added a new section '## 9. Message authenticity: who really sent a message' to docs/behavior/groups.md stating (a) inbound group messages carry a cryptographically authenticated sender ('authenticity' in state-not-UI product voice), (b) a message whose claimed author != authenticated sender is DROPPED (not shown, not stored), (c) the guarantee backs the roster/leave gates (body-carried actor checked against the authenticated sender), (d) honest guarantees only \u2014 not deniability, no broadcast, dropped forgeries observable as a diagnostic, legacy messages still readable/attributed.",
+    "AC-DOC-1 version note: an italic source note names both pinned fork SHAs as the app's marmot-ts baseline (ts-mls 941design/ts-mls 9f0c7bd feat/app-message-sender; @internet-privacy/marmot-ts 941design/marmot-ts cb0025c authenticated-sender).",
+    "Renumbered the trailing sections 9->10 (central trade-off), 10->11 (edge cases), 11->12 (out of scope), and updated the three internal cross-references accordingly (\u00a79->\u00a710 at former lines 297 and 402; \u00a711->\u00a712 at former line 210). Verified headers now run 1..12 with no duplicates.",
+    "Added a Sources bullet referencing docs/adr/ADR-012 and specs/epic-marmot-ts-authenticated-sender-migration/.",
+    "Followed docs/behavior/CLAUDE.md writing rules: product-level, state-not-UI, honest guarantees (explicitly disclaimed deniability + no broadcast), sourced. Deliberately kept implementation detail out (the dedup inner-rumor-id vs outer-event-id id-space distinction and rollback-replay dedup that S4 flagged are implementation-level, not product behaviour, so not documented here).",
+    "Implemented directly by the lead (lighter-path override): the sole reason stories.json marked this full-path was a cosmetic ellipsis in AC-DOC-1's text tripping the ac_complete check; the change is pure prose the lead authored with full migration context.",
+    "Remediation round 1: examiner VQ-S5-004/007 correctly flagged that AC-DOC-1 requires the FULL fork SHAs; expanded both from 7-char to full 40-char form (github: pin shorthand). Re-verified via grep."
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "lighter-path docs edit; no architect retro."
+  }
+}

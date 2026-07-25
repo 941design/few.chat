@@ -49,6 +49,10 @@ export const STORAGE_KEYS = {
   relays: 'lp_relays_v1',
   signerMode: 'lp_signerMode_v1',
   nip46Session: 'lp_nip46Session_v1',
+  // MIP-00 KeyPackage addressable slot (`d` tag) identifier, minted once via
+  // generateKeyPackageSlot() and reused across launches/rotations. See
+  // storage.ts's readOrCreateKeyPackageSlot().
+  keyPackageSlot: 'lp_keyPackageSlot_v1',
 } as const;
 
 // ============================

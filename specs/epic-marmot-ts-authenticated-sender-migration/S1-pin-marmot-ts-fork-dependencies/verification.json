@@ -1,0 +1,57 @@
+{
+  "story_id": "S1",
+  "authored_by": "story-planner",
+  "authored_at": "2026-07-25T14:00:00Z",
+  "questions": [
+    {
+      "question_id": "VQ-S1-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Is every verification check for the fork install a real observable that would differ between the pre-fork state (registry ts-mls) and the post-fork state — not a check on package.json's declared version string alone, and not the package-lock.json `resolved` field (npm normalizes this to git+ssh regardless of transport, so it reads the same under both HTTPS and SSH fetch and cannot discriminate)? Show the exact `npm ls ts-mls` output and the exact matched grep line from `app/node_modules/ts-mls/dist`, and confirm both would produce different output against a plain `npm install ts-mls` (registry) baseline."
+    },
+    {
+      "question_id": "VQ-S1-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does the diff for this story touch only app/package.json and app/package-lock.json (the 'package pins' module), with zero changes to any application source file (dispatcher, KeyPackage slot resolution, handlers) — confirming the scope.excludes boundary ('Any application source change ... this story is dependency-pin-only') was honored?"
+    },
+    {
+      "question_id": "VQ-S1-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could 'package pins' be deleted and rewritten without modifying any file outside its dependencies_allowed list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S1-004",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the pin change resolve architecture.md §5's stated risk ('Fork install is load-bearing and silent-failure-prone... invisible to typecheck') by proving install success via the two non-lockfile-string checks (npm ls + dist grep) rather than relying on a green tsc or unit-test run as a stand-in for install correctness?"
+    },
+    {
+      "question_id": "VQ-S1-005",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "On a cold `make node_modules` run on a host with no SSH key configured for github.com, does the install complete via HTTPS (exit code 0) without silently falling back to a cached node_modules, a local file:// resolution, or an unrelated package satisfying the `ts-mls` name — i.e. is the installed artifact provably the intended fork commit and not a supply-chain substitution?"
+    },
+    {
+      "question_id": "VQ-S1-006",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "Does bumping ts-mls/marmot-ts to the fork SHAs introduce any change to own-send echo suppression or reaction badge propagation (the two known regressions AC-AR-22 / AC-40 — findings own-send-message-echo-no-longer, group-reaction-badge-no-longer-propagates) as an incidental side effect of the dependency bump alone, before any S2/S3 code change lands? Confirm via `git diff --stat` that no dispatcher/handler file is touched by this story."
+    },
+    {
+      "question_id": "VQ-S1-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEP-2",
+      "question": "For AC-DEP-2: does a cold `make node_modules` (no pre-existing app/node_modules, no SSH key for github.com) complete successfully and resolve both `github:941design/ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13` and `github:941design/marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2` over HTTPS? Provide (a) the exact install command and its exit code, (b) evidence beyond the package-lock.json `resolved` field (which npm normalizes to git+ssh regardless of transport) — e.g. a verbose install log showing an https:// fetch — and (c) confirm the check is not merely re-reading package.json's declared spec string."
+    },
+    {
+      "question_id": "VQ-S1-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEP-3",
+      "question": "For AC-DEP-3: does `npm ls ts-mls` run from app/ after the cold install report exactly one resolved ts-mls entry, and does a grep of app/node_modules/ts-mls/dist for a symbol present ONLY in the fork's senderCredential-carrying build find at least one match? Name the exact symbol searched, confirm it is absent from the registry ts-mls package (so the grep is state-discriminating fork vs registry), and show both command outputs verbatim."
+    }
+  ]
+}

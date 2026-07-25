@@ -123,6 +123,58 @@ export function writeUserProfile(profile: UserProfile): void {
 }
 
 // ============================
+// KeyPackage slot (MIP-00 `d` tag identifier)
+// ============================
+
+// MIP-00: the KeyPackage addressable slot identifier must be exactly 64
+// lowercase hex characters. A pre-migration install may have a persisted
+// (or literal, never-persisted) value of 'few', which does not match.
+const KEY_PACKAGE_SLOT_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * Reads the persisted KeyPackage slot identifier, or mints and persists one
+ * via `mintSlot` when absent or non-conformant (covers both a fresh install
+ * with nothing persisted yet, and a pre-migration install whose persisted
+ * value is the legacy free-form `'few'` literal or any other value that does
+ * not match MIP-00's `/^[0-9a-f]{64}$/` shape).
+ *
+ * Precondition: `mintSlot` returns a value conformant to
+ * `/^[0-9a-f]{64}$/` (e.g. marmot-ts's `generateKeyPackageSlot()`). Not
+ * validated here — the caller is trusted to pass a conformant minter.
+ *
+ * Postcondition: the returned value always matches
+ * `/^[0-9a-f]{64}$/`. When a fresh value is minted, it is persisted via
+ * `writeItem` (localStorage, when available) *before* this function
+ * returns, so a caller that immediately constructs a stateful client with
+ * the returned slot as `clientId` is guaranteed the persisted value is
+ * already durable. When storage is unavailable (`isStorageAvailable()` is
+ * false), the mint still happens and is returned, but nothing is persisted
+ * — the next call in the same session will mint again (no crash, no
+ * silent staleness across a single unavailable-storage session).
+ *
+ * `mintSlot` is injected rather than imported statically here so this
+ * module (and everything that transitively imports it) does not pull in
+ * the marmot-ts/ts-mls dependency graph. Callers dynamically import
+ * `generateKeyPackageSlot` from `@internet-privacy/marmot-ts` themselves
+ * (mirroring MarmotContext.tsx's existing browser-gated dynamic import).
+ *
+ * @param mintSlot - Mints a fresh, MIP-00-conformant hex slot. Called at
+ *   most once per invocation of this function.
+ * @returns The persisted (or freshly minted) hex slot, byte-identical
+ *   across calls once a conformant value exists.
+ */
+export function readOrCreateKeyPackageSlot(mintSlot: () => string): string {
+  const stored = readItem<string | null>(STORAGE_KEYS.keyPackageSlot, null);
+  if (typeof stored === 'string' && KEY_PACKAGE_SLOT_PATTERN.test(stored)) {
+    return stored;
+  }
+
+  const minted = mintSlot();
+  writeItem(STORAGE_KEYS.keyPackageSlot, minted);
+  return minted;
+}
+
+// ============================
 // Reset all app data
 // ============================
 //
