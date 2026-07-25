@@ -37,18 +37,18 @@ test.describe('Mobile QR scanner FAB', () => {
     await expect(page.getByTestId('qr-scan-fab')).toBeHidden();
   });
 
-  test('is hidden on an open-chat route the way the bottom tab bar is', async ({ page }) => {
+  test('stays visible on an open-chat route the way the bottom tab bar does', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');
     await expect(page.getByTestId('qr-scan-fab')).toBeVisible();
     await expect(page.getByTestId('mobile-bottom-nav')).toBeVisible();
 
-    // Route-visibility gating is keyed on route + presence of `id`, not on
-    // whether the contact actually resolves — an arbitrary id is enough to
-    // exercise the hidden branch without seeding a real contact.
+    // The bottom tab bar is the primary mobile navigation: it must remain
+    // present and fixed on every route, including an open chat (`?id=`). An
+    // arbitrary id exercises the open-chat branch without seeding a contact.
     await page.goto('/contacts?id=nonexistent-probe');
-    await expect(page.getByTestId('mobile-bottom-nav')).toBeHidden();
-    await expect(page.getByTestId('qr-scan-fab')).toBeHidden();
+    await expect(page.getByTestId('mobile-bottom-nav')).toBeVisible();
+    await expect(page.getByTestId('qr-scan-fab')).toBeVisible();
   });
 
   test('is not a member of the hamburger overlay', async ({ page }) => {

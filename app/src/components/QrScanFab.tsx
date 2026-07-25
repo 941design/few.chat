@@ -23,9 +23,10 @@ import { resolveScanDestination } from '@/src/lib/qr';
  * the bottom tab bar's list (between the two domain tabs) by Layout.tsx —
  * NOT added to `navItems`, because that array drives BOTH the bottom bar
  * AND the hamburger overlay, so joining it would leak the scanner into the
- * hamburger (AC-FAB-3). Placement inside the bar's `!hideBottomNav` /
- * `md:none` container is what gates its visibility (AC-FAB-1/AC-FAB-4) —
- * it no longer carries its own route/breakpoint gate.
+ * hamburger (AC-FAB-3). Placement inside the bar's `md:none` container is
+ * what gates its visibility (AC-FAB-1/AC-FAB-4) — it no longer carries its
+ * own route/breakpoint gate. The bar (and so this tab) is always shown, on
+ * every route including open chats.
  *
  * Presented as a peer of the domain tabs (themed scan icon + label) rather
  * than a floating action button, so it reads as part of the native-feeling
@@ -121,7 +122,7 @@ export default function QrScanFab() {
       {/* Centered tab slot — mirrors the domain-tab markup in Layout.tsx's
           bottom bar (Box as="li" flex="1", column icon + 2xs label) so the
           scanner reads as a peer tab, not a floating overlay. Visibility is
-          owned by the enclosing bar (`!hideBottomNav`, `md:none`). */}
+          owned by the enclosing bar (`md:none`; always shown). */}
       <Box as="li" flex="1">
         <Box
           as="button"

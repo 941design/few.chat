@@ -114,10 +114,10 @@ export default function Layout({ children }: LayoutProps) {
 
   // Hide the imprint footer on the two open-chat pages (see helper above).
   const hideImprintFooter = shouldHideImprintFooter(router.pathname, router.query.id);
-  // The mobile bottom tab bar hides on those same open-chat pages: the message
-  // composer owns the bottom of the viewport there, so a fixed tab bar would
-  // collide with it. Condition is identical to the footer's, reused verbatim.
-  const hideBottomNav = hideImprintFooter;
+  // The mobile bottom tab bar is ALWAYS shown — it is the primary mobile
+  // navigation, so it must never disappear or shift (including on open-chat
+  // pages, and after scanning a contact card or group invite). It is a fixed,
+  // md-only bar; the reserved bottom padding below keeps content clear of it.
 
   const navItems = [
     { label: copy.layout.nav.contacts, href: '/contacts', icon: 'contacts' },
@@ -138,18 +138,15 @@ export default function Layout({ children }: LayoutProps) {
       display="flex"
       flexDirection="column"
       // Clear the fixed mobile bottom bar so the footer / last row of content
-      // is never hidden behind it. Only when the bar is shown, and only on
-      // mobile (the bar is md:none). Includes the iOS safe-area inset the bar
-      // itself also pads by, so the reserved space matches the bar's height.
-      sx={
-        hideBottomNav
-          ? undefined
-          : {
-              '@media (max-width: 47.99em)': {
-                paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))',
-              },
-            }
-      }
+      // is never hidden behind it. Applied on every page (the bar is always
+      // shown) and only on mobile (the bar is md:none). Includes the iOS
+      // safe-area inset the bar itself also pads by, so the reserved space
+      // matches the bar's height.
+      sx={{
+        '@media (max-width: 47.99em)': {
+          paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))',
+        },
+      }}
     >
       <DirectMessageNotificationsWatcher />
       <PendingPairingIntentWatcher />
@@ -612,25 +609,25 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Mobile bottom tab bar — the two primary domains (Contacts, Groups)
           promoted to a native-feeling fixed bar. Mobile only (hidden at md+,
-          where the desktop nav already carries them). Hidden on the open-chat
-          pages so it does not collide with the message composer. The header
+          where the desktop nav already carries them). Always shown and always
+          in the same fixed location — the primary mobile navigation, present on
+          every page including open chats and scan-landing views. The header
           hamburger still lists every destination, these two included. */}
-      {!hideBottomNav && (
-        <Box
-          as="nav"
-          aria-label={copy.layout.mobileMenuLabel}
-          display={{ base: 'flex', md: 'none' }}
-          position="fixed"
-          bottom={0}
-          left={0}
-          right={0}
-          zIndex={10}
-          bg="surfaceBg"
-          borderTopWidth="1px"
-          borderTopColor="borderSubtle"
-          sx={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
-          data-testid="mobile-bottom-nav"
-        >
+      <Box
+        as="nav"
+        aria-label={copy.layout.mobileMenuLabel}
+        display={{ base: 'flex', md: 'none' }}
+        position="fixed"
+        bottom={0}
+        left={0}
+        right={0}
+        zIndex={10}
+        bg="surfaceBg"
+        borderTopWidth="1px"
+        borderTopColor="borderSubtle"
+        sx={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        data-testid="mobile-bottom-nav"
+      >
           <HStack as="ul" listStyleType="none" spacing={0} w="100%">
             {navItems.map((item, index) => {
               const isActive = router.pathname === item.href;
@@ -690,14 +687,13 @@ export default function Layout({ children }: LayoutProps) {
                     (Contacts | Scan | Groups). Rendered here inside the bar's
                     list — NOT via navItems, so it never reaches the hamburger
                     overlay (AC-FAB-3) — and gated by the enclosing bar's
-                    `!hideBottomNav` / `md:none` container (AC-FAB-1/4). */}
+                    `md:none` container (AC-FAB-1/4). */}
                 {index === 0 && <QrScanFab />}
                 </React.Fragment>
               );
             })}
           </HStack>
-        </Box>
-      )}
+      </Box>
 
       {/* Footer — legal links at the very bottom of every page, except the two
           open-chat pages (DM thread, group chat) where the composer owns the

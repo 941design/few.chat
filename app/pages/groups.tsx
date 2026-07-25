@@ -704,8 +704,10 @@ function GroupDetailView({ id }: { id: string }) {
       <Box data-testid="group-detail-page">
         <HStack mb={4} justify="space-between" flexWrap="wrap" gap={3}>
           <Box>
+            {/* Back-link is desktop-only: on mobile the always-present bottom
+                tab bar carries the Groups destination, so this row is redundant. */}
             <NextLink href="/groups" passHref legacyBehavior>
-              <Button as="a" variant="ghost" size="sm" mb={2}>
+              <Button as="a" variant="ghost" size="sm" mb={2} display={{ base: 'none', md: 'inline-flex' }}>
                 ← {copy.groups.navLabel}
               </Button>
             </NextLink>

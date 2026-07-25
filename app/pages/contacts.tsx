@@ -430,8 +430,10 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
         <title>{`${displayName} - ${copy.contacts.pageTitle} - ${copy.appName}`}</title>
       </Head>
       <Box data-testid="contact-detail-page">
+        {/* Back-link is desktop-only: on mobile the always-present bottom tab
+            bar carries the Contacts destination, so this row is redundant. */}
         <NextLink href="/contacts" passHref legacyBehavior>
-          <Button as="a" variant="ghost" size="sm" mb={2}>
+          <Button as="a" variant="ghost" size="sm" mb={2} display={{ base: 'none', md: 'inline-flex' }}>
             ← {copy.contacts.backToContacts}
           </Button>
         </NextLink>
