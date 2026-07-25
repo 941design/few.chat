@@ -6,7 +6,10 @@ in, what moves them between states, the confirmations and invariants that hold, 
 edge cases, and the reasoning behind key decisions. They deliberately avoid
 implementation detail and user-interface presentation.
 
-These documents are created and maintained with the `/behavior-docs` skill.
+These documents are created and maintained with the `/behavior-docs` skill, and must
+be updated in the same run as any feature or bug work that changes user-facing
+behaviour. UI presentation rules live separately in
+[`docs/design-rationales.md`](../design-rationales.md).
 
 ## Topics
 

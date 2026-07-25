@@ -83,6 +83,24 @@ the only gate.
 - `make test-e2e-fast`, `make test-e2e-groups`, `make test-e2e-image-sharing`, and any filtered `node scripts/run-e2e.mjs <pattern>` run a **subset**. They are dev-iteration aids. A green subset is **never** an e2e pass — `test-e2e-fast` prints a partial-run warning when run standalone for this reason.
 - When the `/feature` or `/bug` workflow reaches its e2e step, the pass criterion is the full suite, not the tests that happen to touch the changed files.
 
+## Documentation upkeep (behaviour & design docs)
+
+Two living documents describe the product; both must stay current with the code.
+
+- **`docs/behavior/`** — product-level behaviour specification, one document per
+  topic plus a `README.md` index, maintained via the `/behavior-docs` skill.
+  **Any feature or bug work that changes user-facing behaviour must update the
+  affected topic document(s) in the same run** — either invoke
+  `/behavior-docs <topic>` or edit the document following the skill's writing
+  rules (`.claude/skills/behavior-docs/references/`), and keep the index in
+  sync. If the change touches a topic not yet covered by a document, note that
+  in the run's report/retro instead of authoring a new topic mid-feature.
+- **`docs/design-rationales.md`** — standing UI design rules with their
+  reasoning (no concrete example names, negative actions danger-outline,
+  minimal info text, …). Consult it before UI work. When the user states a new
+  design rule of general scope during development, append it there in the
+  document's Rule/Why/How-to-apply shape.
+
 ## Project state
 Project orientation lives in `BACKLOG.json`. On a fresh session — or when
 resuming work after idle time — run `/base:orient` to get a 3-line
