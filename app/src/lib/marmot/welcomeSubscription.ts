@@ -1142,6 +1142,7 @@ export async function subscribeToGroupMessages(
   ndk: import('@nostr-dev-kit/ndk').default,
   onMembersChanged?: (members: string[]) => void,
   onHistorySynced?: () => void,
+  lifecycle?: { drainApplicationMessages?: () => Promise<void>; signal?: AbortSignal },
 ): Promise<() => void> {
   // marmot-ts tags kind 445 events with #h using the Nostr group ID
   // (MarmotGroupData.nostrGroupId), NOT the MLS group context ID (idStr).
@@ -1171,12 +1172,27 @@ export async function subscribeToGroupMessages(
     { onMembersChanged },
   );
 
+  let disposed = false;
+  let liveSubscription: { stop(): void } | undefined;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    resolver.dispose();
+    liveSubscription?.stop();
+    lifecycle?.signal?.removeEventListener('abort', dispose);
+  };
+  if (lifecycle?.signal?.aborted) {
+    dispose();
+    return dispose;
+  }
+  lifecycle?.signal?.addEventListener('abort', dispose, { once: true });
+
   // Returns true when this call newly ingested the event (i.e. it was not a
   // duplicate). Used by the historical-sync loop to count net-new ingests
   // accurately even though processedIds is now shared across instances.
   async function ingestNdkEvent(ndkEvent: import('@nostr-dev-kit/ndk').NDKEvent): Promise<boolean> {
     const eventId = ndkEvent.id ?? '';
-    if (!eventId || processedIds.has(eventId)) return false;
+    if (disposed || !eventId || processedIds.has(eventId)) return false;
     // Mark seen BEFORE ingest so an overlapping subscription instance does not
     // double-ingest this event while it is in flight. If the resolver reports it
     // was only buffered (future-epoch/unreadable), un-mark it below.
@@ -1212,85 +1228,99 @@ export async function subscribeToGroupMessages(
 
   // Build a relay set scoped to this group's relays so that traffic and
   // group activity are not leaked to the full default relay pool.
-  const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
-  const relaySet = relays.length > 0
-    ? NDKRelaySet.fromRelayUrls(relays, ndk)
-    : undefined;
-
-  // Anchor for the Phase-2 live sub's `since` filter. Captured BEFORE Phase-1
-  // begins so the relay replays any event published between Phase-1 EOSE and
-  // Phase-2 WebSocket REQ registration — without it, events landing in that
-  // gap are silently dropped. `processedIds` dedups the resulting overlap.
-  //
-  // The `CLOCK_SKEW_MARGIN_SEC` backdate exists because relays filter `since`
-  // against the event's signed `created_at`, not the relay's receipt time. 30s
-  // is the chosen window because it covers (a) sub-second JS scheduling jitter
-  // that produced the reported 33–60% flake, (b) modest NTP drift between
-  // publisher and subscriber clocks, and (c) brief mobile sleep/resume or
-  // pre-signed-event lag. `processedIds` absorbs the wider replay window at
-  // zero correctness cost — every duplicate is dropped before dispatch.
-  const CLOCK_SKEW_MARGIN_SEC = 30;
-  const fetchStartedAt = Math.floor(Date.now() / 1000) - CLOCK_SKEW_MARGIN_SEC;
-
-  // Fetch and ingest all existing kind 445 events (historical sync).
-  // This ensures commits published before subscription started are processed.
-  let historicalCount = 0;
-  let historicalIngested = 0;
-  let historySyncComplete = false;
   try {
-    const { fetchEventsWithTimeout } = await import('@/src/lib/ndkClient');
-    const { events: existingEvents, timedOut } = await fetchEventsWithTimeout(ndk, filter, {}, relaySet);
-    if (timedOut) {
-      console.warn(`[welcomeSubscription] Historical fetch timed out for group ${groupId.slice(0, 16)} — skipping onHistorySynced to avoid epoch divergence`);
-    } else {
-      historySyncComplete = true;
-    }
-    // Sort by created_at to process in chronological order
-    const sorted = Array.from(existingEvents).sort(
-      (a, b) => (a.created_at ?? 0) - (b.created_at ?? 0)
-    );
-    historicalCount = sorted.length;
-    for (const ev of sorted) {
-      if (await ingestNdkEvent(ev)) historicalIngested++;
-    }
-  } catch (err) {
-    console.debug('[welcomeSubscription] Historical fetch failed:', err);
-  }
-  console.info(`[welcomeSubscription] Historical sync: ${historicalIngested}/${historicalCount} events ingested for group ${groupId.slice(0, 16)}${historySyncComplete ? '' : ' (incomplete)'}`);
+    const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
+    if (disposed) return dispose;
+    const relaySet = relays.length > 0
+      ? NDKRelaySet.fromRelayUrls(relays, ndk)
+      : undefined;
 
-  // Only fire onHistorySynced when we know ALL historical events were received
-  // (EOSE from relays). On timeout the local epoch may lag behind — publishing
-  // an application rumor now would risk the MLS epoch divergence the surrounding
-  // comment warns about.
-  if (historySyncComplete) {
-    // S6 (AC-DECLINE-12): unconditional on the caller-supplied onHistorySynced
-    // callback below — the decline receive path's deferral gate must resolve
-    // even when this subscribeToGroupMessages call omits that callback.
-    markGroupHistorySynced(groupId);
-  }
-  if (onHistorySynced && historySyncComplete) {
+    // Anchor for the Phase-2 live sub's `since` filter. Captured BEFORE Phase-1
+    // begins so the relay replays any event published between Phase-1 EOSE and
+    // Phase-2 WebSocket REQ registration — without it, events landing in that
+    // gap are silently dropped. `processedIds` dedups the resulting overlap.
+    //
+    // The `CLOCK_SKEW_MARGIN_SEC` backdate exists because relays filter `since`
+    // against the event's signed `created_at`, not the relay's receipt time. 30s
+    // is the chosen window because it covers (a) sub-second JS scheduling jitter
+    // that produced the reported 33–60% flake, (b) modest NTP drift between
+    // publisher and subscriber clocks, and (c) brief mobile sleep/resume or
+    // pre-signed-event lag. `processedIds` absorbs the wider replay window at
+    // zero correctness cost — every duplicate is dropped before dispatch.
+    const CLOCK_SKEW_MARGIN_SEC = 30;
+    const fetchStartedAt = Math.floor(Date.now() / 1000) - CLOCK_SKEW_MARGIN_SEC;
+
+    // Fetch and ingest all existing kind 445 events (historical sync).
+    // This ensures commits published before subscription started are processed.
+    let historicalCount = 0;
+    let historicalIngested = 0;
+    let historySyncComplete = false;
     try {
-      onHistorySynced();
+      const { fetchEventsWithTimeout } = await import('@/src/lib/ndkClient');
+      const { events: existingEvents, timedOut } = await fetchEventsWithTimeout(ndk, filter, {}, relaySet);
+      if (disposed) return dispose;
+      if (timedOut) {
+        console.warn(`[welcomeSubscription] Historical fetch timed out for group ${groupId.slice(0, 16)} — skipping onHistorySynced to avoid epoch divergence`);
+      } else {
+        historySyncComplete = true;
+      }
+      // Sort by created_at to process in chronological order
+      const sorted = Array.from(existingEvents).sort(
+        (a, b) => (a.created_at ?? 0) - (b.created_at ?? 0)
+      );
+      historicalCount = sorted.length;
+      for (const ev of sorted) {
+        if (await ingestNdkEvent(ev)) historicalIngested++;
+      }
     } catch (err) {
-      console.debug('[welcomeSubscription] onHistorySynced callback failed:', err);
+      console.debug('[welcomeSubscription] Historical fetch failed:', err);
     }
+    console.info(`[welcomeSubscription] Historical sync: ${historicalIngested}/${historicalCount} events ingested for group ${groupId.slice(0, 16)}${historySyncComplete ? '' : ' (incomplete)'}`);
+
+    // EventEmitter does not await application listeners. Persist their queued
+    // work before exposing readiness or publishing history-dependent profiles.
+    try {
+      await lifecycle?.drainApplicationMessages?.();
+    } catch (error) {
+      dispose();
+      throw error;
+    }
+    if (disposed) return dispose;
+
+    // Only fire onHistorySynced when we know ALL historical events were received
+    // (EOSE from relays). On timeout the local epoch may lag behind — publishing
+    // an application rumor now would risk the MLS epoch divergence the surrounding
+    // comment warns about.
+    if (historySyncComplete) {
+      // S6 (AC-DECLINE-12): unconditional on the caller-supplied onHistorySynced
+      // callback below — the decline receive path's deferral gate must resolve
+      // even when this subscribeToGroupMessages call omits that callback.
+      markGroupHistorySynced(groupId);
+    }
+    if (onHistorySynced && historySyncComplete) {
+      try {
+        onHistorySynced();
+      } catch (err) {
+        console.debug('[welcomeSubscription] onHistorySynced callback failed:', err);
+      }
+    }
+
+    // NOTE: selfUpdate is intentionally NOT called here — it advances the
+    // local MLS epoch, creating a divergent branch. sendApplicationRumor
+    // (for profile publish) is safe after historical sync because the local
+    // epoch is up-to-date. The onHistorySynced callback handles this.
+
+    // Live subscription for future events, scoped to the group's relays.
+    // `since: fetchStartedAt` closes the EOSE→REQ gap (see fetchStartedAt above).
+    const liveFilter = { ...filter, since: fetchStartedAt };
+    const sub = ndk.subscribe(liveFilter, { closeOnEose: false }, relaySet);
+    liveSubscription = sub;
+    sub.on('event', (ndkEvent) => void ingestNdkEvent(ndkEvent));
+    return dispose;
+  } catch (error) {
+    dispose();
+    throw error;
   }
-
-  // NOTE: selfUpdate is intentionally NOT called here — it advances the
-  // local MLS epoch, creating a divergent branch. sendApplicationRumor
-  // (for profile publish) is safe after historical sync because the local
-  // epoch is up-to-date. The onHistorySynced callback handles this.
-
-  // Live subscription for future events, scoped to the group's relays.
-  // `since: fetchStartedAt` closes the EOSE→REQ gap (see fetchStartedAt above).
-  const liveFilter = { ...filter, since: fetchStartedAt };
-  const sub = ndk.subscribe(liveFilter, { closeOnEose: false }, relaySet);
-  sub.on('event', (ndkEvent) => void ingestNdkEvent(ndkEvent));
-
-  return () => {
-    resolver.dispose();
-    sub.stop();
-  };
 }
 
 /**

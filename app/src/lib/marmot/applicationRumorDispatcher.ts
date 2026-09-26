@@ -45,8 +45,15 @@ export interface RumorHandler<TKind extends number = number> {
   handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender): Promise<void> | void;
 }
 
+export interface DispatcherSubscription {
+  (): void;
+  /** Wait for work accepted before this call. After disposal, queued work is
+   * skipped and the running handler finishes. Await before reassigning storage. */
+  drain(): Promise<void>;
+}
+
 export interface Dispatcher {
-  subscribe(group: MarmotGroupLike, ctx: DispatcherContext): () => void;
+  subscribe(group: MarmotGroupLike, ctx: DispatcherContext): DispatcherSubscription;
 }
 
 import { deserializeApplicationData } from '@internet-privacy/marmot-ts';
@@ -97,18 +104,21 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
   }
 
   return {
-    subscribe(group: MarmotGroupLike, ctx: DispatcherContext): () => void {
-      const listener = async ({ message, senderPubkey }: AuthenticatedApplicationMessage): Promise<void> => {
+    subscribe(group: MarmotGroupLike, ctx: DispatcherContext): DispatcherSubscription {
+      let disposed = false;
+      let tail = Promise.resolve();
+      const listener = ({ message, senderPubkey }: AuthenticatedApplicationMessage): Promise<void> => {
+        if (disposed) return Promise.resolve();
         let rumor: ApplicationRumor;
         try {
           rumor = deserializeApplicationData(message) as ApplicationRumor;
         } catch {
           // Malformed application message — discard silently.
-          return;
+          return Promise.resolve();
         }
 
         if (isSeen(ctx.groupId, rumor.id)) {
-          return;
+          return Promise.resolve();
         }
 
         // Build the authenticated sender DIRECTLY from the library-supplied
@@ -131,19 +141,28 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
             claimedPubkey: rumor.pubkey,
             authenticatedPubkey: sender.pubkey,
           });
-          return;
+          return Promise.resolve();
         }
 
-        markSeen(ctx.groupId, rumor.id);
-
-        const matching = handlers.filter((h) => h.kind === rumor.kind);
-        for (const handler of matching) {
-          try {
-            await handler.handle(rumor, ctx, sender);
-          } catch (err) {
-            console.warn(`[dispatcher.${rumor.kind}]`, err);
+        // EventEmitter ignores returned promises. Own the queue here so an
+        // open/create finishes persisting before its dependent vote/edit runs.
+        // Check dedup again inside the queue for overlapping history/live events.
+        tail = tail.then(async () => {
+          if (disposed || isSeen(ctx.groupId, rumor.id)) return;
+          // At-most-once attempts: do not replay partial side effects when one
+          // handler fails. Failures are isolated; later messages still run.
+          markSeen(ctx.groupId, rumor.id);
+          const matching = handlers.filter((h) => h.kind === rumor.kind);
+          for (const handler of matching) {
+            if (disposed) return;
+            try {
+              await handler.handle(rumor, ctx, sender);
+            } catch (err) {
+              console.warn(`[dispatcher.${rumor.kind}]`, err);
+            }
           }
-        }
+        });
+        return tail;
       };
 
       // AC-OBS-1: diagnostic-only — logs every rumor the library itself
@@ -165,10 +184,13 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
 
       group.on('authenticatedApplicationMessage', listener);
       group.on('unauthenticatedMessage', unauthenticatedListener);
-      return () => {
+      const unsubscribe: DispatcherSubscription = () => {
+        disposed = true;
         group.off('authenticatedApplicationMessage', listener);
         group.off('unauthenticatedMessage', unauthenticatedListener);
       };
+      unsubscribe.drain = () => tail;
+      return unsubscribe;
     },
   };
 }

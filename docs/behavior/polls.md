@@ -17,6 +17,22 @@ any member can vote.
 
 ---
 
+## Delivery ordering and recovery limits
+
+Within a group, received poll messages are processed in arrival order, including
+completion of storage writes. An opening message followed by a vote and a closing
+message therefore records the vote before computing the closing tally. Duplicate
+copies of an attempted message are ignored within the active dispatcher's bounded
+recent-message history. Different groups can process messages independently.
+
+A vote that arrives before its poll exists is ignored; there is no pending-vote
+replay queue. This also applies to a duplicate of that ignored vote delivered
+later while it remains in recent-message history. Handler failures are logged and
+later messages continue, but already attempted messages are not automatically
+retried: repeating partially completed side effects could duplicate notifications
+or other actions. These limits differ from storage writes overtaking each other.
+
+
 ## 2. Creating a poll
 
 Any group member can create a poll by giving it a **question**, an optional description, and

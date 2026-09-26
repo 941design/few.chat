@@ -1,0 +1,756 @@
+cd app && npx vitest run
+
+ RUN  v4.0.18 /Users/mrother/Projects/941design/quizzl/app
+
+ ✓ tests/unit/messageEdits/api.test.ts (115 tests) 118ms
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — Phase-2 live sub carries `since` covering Phase-1 gap > passes a since filter to ndk.subscribe approximating the Phase-1 start timestamp
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-id-1234567
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — Phase-2 live sub carries `since` covering Phase-1 gap > captures an independent `since` anchor on each re-subscribe call
+[welcomeSubscription] Historical sync: 0/0 events ingested for group g1
+
+ ✓ tests/unit/pairing/pairingAck.test.ts (55 tests) 881ms
+ ✓ tests/unit/themes-validation.test.ts (110 tests) 95ms
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — Phase-2 live sub carries `since` covering Phase-1 gap > captures an independent `since` anchor on each re-subscribe call
+[welcomeSubscription] Historical sync: 0/0 events ingested for group g1
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — Phase-2 live sub carries `since` covering Phase-1 gap > backdates the `since` anchor by a clock-skew safety margin
+[welcomeSubscription] Historical sync: 0/0 events ingested for group g-skew
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — receipt-handler integration > valid kind-444 rumor → enqueuePendingInvitation called; joinGroupFromWelcome NOT called
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'Invalid welcome event: missing encoding=base64 tag' }
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — receipt-handler integration > invalid Welcome (decryption failure) → silently dropped; enqueuePendingInvitation NOT called
+[welcomeSubscription] Could not process gift wrap event: Error: Decryption failed — wrong key
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/welcomeSubscription.test.ts:823:44
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — authenticated unwrap dispatch (S3) > AC-AUTH-2/3/SEC-3: a join request with rumor.pubkey forged relative to a validly-signed seal is dropped -- no PendingJoinRequest is ever created
+[welcomeSubscription] Dropping join request: seal authentication failed
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — authenticated unwrap dispatch (S3) > AC-AUTH-3/AC-AUTH-6: a Welcome with rumor.pubkey forged relative to a validly-signed seal is still enqueued (uncorrelated), with inviterPubkeyHex set to the REAL seal signer
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'Invalid welcome event: missing encoding=base64 tag' }
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — authenticated unwrap dispatch (S3) > AC-SEC-4: an unauthenticated Welcome with a forged rumor.id colliding with an already-enqueued legit invitation's id is keyed by its own gift-wrap eventId -- the legit entry is untouched
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'Invalid welcome event: missing encoding=base64 tag' }
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — authenticated unwrap dispatch (S3) > AC-SEC-4: an unauthenticated Welcome with a forged rumor.id colliding with an already-enqueued legit invitation's id is keyed by its own gift-wrap eventId -- the legit entry is untouched
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'Invalid welcome event: missing encoding=base64 tag' }
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — pairing-ack dispatch (S3) > omitting the two new trailing params behaves exactly as before — no pairing-ack dispatch attempted
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'Invalid welcome event: missing encoding=base64 tag' }
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — cross-instance dedup (shared per-group seen ids) > does not ingest the same event twice across overlapping subscription instances
+[welcomeSubscription] Historical sync: 0/0 events ingested for group dedup-group-uniq
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — cross-instance dedup (shared per-group seen ids) > does not ingest the same event twice across overlapping subscription instances
+[welcomeSubscription] Historical sync: 0/0 events ingested for group dedup-group-uniq
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToGroupMessages — cross-instance dedup (shared per-group seen ids) > does not ingest the same event twice across overlapping subscription instances
+[welcomeSubscription] Could not ingest group message: TypeError: Cannot destructure property 'buffered' of '(intermediate value)' as it is undefined.
+    at ingestNdkEvent (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/welcomeSubscription.ts:1212:15)
+
+stderr | tests/unit/marmot/groupMessageEdits.test.ts > createDeleteEditHandler (S5): routes every kind-5 unconditionally, no known-target gate > applyDeleteEditSignal throwing is swallowed (logged), never propagates out of handle()
+[dispatcher.5] applyDeleteEditSignal failed: Error: boom
+    at Object.<anonymous> (/Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/groupMessageEdits.test.ts:225:15)
+    at Object.Mock [as applyDeleteEditSignal] (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at handle (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/handlers/deleteEditHandler.ts:80:29)
+    at Object.handle (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/handlers/deleteEditHandler.ts:102:95)
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/groupMessageEdits.test.ts:232:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > declinePendingInvitation — gift-wrapped decline send (S5) > AC-DECLINE-5(b): authenticated:true, the relay publish rejects -> removePendingInvitation is STILL called and no error propagates out of declinePendingInvitation
+[welcomeSubscription] dm:decline-send-failed { id: 'decline-', reason: 'relay offline' }
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > declinePendingInvitation — gift-wrapped decline send (S5) > AC-DECLINE-5(b): authenticated:true, sealAndWrap itself throws -> removePendingInvitation is STILL called and no error propagates
+[welcomeSubscription] dm:decline-send-failed { id: 'decline-', reason: 'seal failed' }
+
+stderr | tests/unit/marmot/groupMessageEdits.test.ts > group delete/edit send orchestration (S5 gate-remediation, finding 3: calls the REAL exported performGroupDeleteMessage/performGroupEditMessage — no re-derived handler bodies) > edit: a failed companion does NOT roll back the already-successful edit (AC-EDIT-8)
+[chat-store] edit companion publish failed: Error: companion failed
+    at Object.<anonymous> (/Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/groupMessageEdits.test.ts:1024:37)
+    at Object.Mock [as sendApplicationRumor] (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at sendRumorSafe (/Users/mrother/Projects/941design/quizzl/app/src/context/ChatStoreContext.tsx:70:19)
+    at performGroupEditMessage (/Users/mrother/Projects/941design/quizzl/app/src/context/ChatStoreContext.tsx:350:13)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/groupMessageEdits.test.ts:1028:5
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:20
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-7: a decline-kind rumor is routed to the decline branch, never to Welcome or join-request handling
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-routing-1
+
+ ✓ tests/unit/marmot/groupMessageEdits.test.ts (55 tests) 74ms
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-7 (companion): a genuine kind-444 Welcome does NOT fall into the decline branch (declineDeps untouched)
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'Invalid welcome event: missing encoding=base64 tag' }
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-8: a decline whose seal fails authentication produces zero side effects (no Remove, no post, no marker clear)
+[welcomeSubscription] Dropping decline: seal authentication failed
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-9: fires (Remove+post) when the seal author is a genuinely pending member (in-tree, no profile)
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-pending-fi
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-9: no-op when the seal author already joined (has a MemberProfile)
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-already-jo
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-9: no-op when the seal author was never a member of the referenced group
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-never-memb
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-9: the tree-membership comparison is case-insensitive — an UPPERCASE-stored member list still matches the (always-lowercase) authenticated seal pubkey
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-mixed-case
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-10: performs Remove -> post -> marker-clear -> mark-seen, in that exact call order
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-ordering
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-10: mark-seen has NOT happened while the sequence is still in flight (mid-flight snapshot, not merely end-state equality)
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-mid-flight
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-10: an interruption BEFORE Remove completes (commit throws) leaves the gift wrap unmarked so it reprocesses on the next start
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-commit-thr
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-11: the SAME gift-wrap event re-delivered after the pre-existing top-level seen-guard already marked it is a pure no-op (no second Remove/post)
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-replay-sam
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-11: a decline for an invitee already removed by a PRIOR (distinct-id) decline is a clean no-op — corollary of the tree-gate, not a separate dedup mechanism
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-already-re
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > carry-forward (S5 review): TWO GENUINELY DISTINCT decline wraps from B, dispatched CONCURRENTLY, converge to exactly ONE Remove + ONE declined post
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-concurrent
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > carry-forward (S5 review): an empty groupId is a clean no-op — no Remove, no post, no marker clear, no throw
+[welcomeSubscription] Dropping decline: empty/missing groupId
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > FIX A: Remove succeeds but the `declined` post throws — wrap IS marked seen, B IS removed, marker cleared, and it does NOT reprocess on redelivery (best-effort announcement)
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-post-fails
+
+stderr | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > FIX A: Remove succeeds but the `declined` post throws — wrap IS marked seen, B IS removed, marker cleared, and it does NOT reprocess on redelivery (best-effort announcement)
+[welcomeSubscription] dm:decline-announcement-failed { reason: 'relay unreachable' }
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > FIX B: a terminal no-op (B already joined) marks the gift wrap seen — closes the unbounded reprocessing churn
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-terminal-n
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > FIX B: RE-INVITE REACTIVATION — a stale decline (terminal no-op on first arrival, while B was not pending) cannot spuriously Remove B after A later re-invites B to the SAME group
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-reinvite-r
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > subscribeToWelcomes — decline receive (S6) > AC-DECLINE-12: a decline for a not-yet-synced group defers (no Remove/post/mark-seen) until that group historical-syncs, then runs the full DD-7 sequence
+[welcomeSubscription] Historical sync: 0/0 events ingested for group group-deferred-u
+
+stdout | tests/unit/marmot/welcomeSubscription.test.ts > group subscription setup lifetime and application persistence barrier > waits for application persistence before reporting historical readiness
+[welcomeSubscription] Historical sync: 0/0 events ingested for group ebb3e86d-5133-4d
+
+ ✓ tests/unit/marmot/welcomeSubscription.test.ts (66 tests) 1875ms
+     ✓ captures an independent `since` anchor on each re-subscribe call  1102ms
+ ✓ tests/unit/cards/contactCard.test.ts (78 tests) 232ms
+ ✓ tests/unit/reactions/api.test.ts (64 tests) 10ms
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (dispatcher layer): a sender-mismatched rumor never poisons the per-group rumor-id LRU; the legitimate rumor sharing that id is processed exactly once, for every arrival order > ordering #2 ([ 'mismatched', 'legitimate', …(1) ])
+[dispatcher.unauthenticatedMessage] {
+  groupId: 'ORDER-TEST-GROUP',
+  kind: 9,
+  rumorId: 'order1-dispatcher-shared-id',
+  claimedPubkey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  authenticatedPubkey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+}
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (dispatcher layer): a sender-mismatched rumor never poisons the per-group rumor-id LRU; the legitimate rumor sharing that id is processed exactly once, for every arrival order > ordering #3 ([ 'mismatched', 'redelivery', …(1) ])
+[dispatcher.unauthenticatedMessage] {
+  groupId: 'ORDER-TEST-GROUP',
+  kind: 9,
+  rumorId: 'order1-dispatcher-shared-id',
+  claimedPubkey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  authenticatedPubkey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #+0 ([ 'legit', 'mismatch', 'redelivery' ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order1-welcome-7
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #+0 ([ 'legit', 'mismatch', 'redelivery' ])
+[marmot.unauthenticatedMessage] {
+  senderPubkey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  claimedPubkey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  reason: 'unauthenticated-sender',
+  event: {
+    id: 'order1-welcome-7c5dac2b-fe06-4bac-aaee-3341531c2857-mismatch-raw',
+    pubkey: 'raw-pk',
+    created_at: 1000,
+    kind: 445,
+    tags: [],
+    content: '',
+    sig: 'sig'
+  }
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #1 ([ 'legit', 'redelivery', 'mismatch' ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order1-welcome-d
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #1 ([ 'legit', 'redelivery', 'mismatch' ])
+[marmot.unauthenticatedMessage] {
+  senderPubkey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  claimedPubkey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  reason: 'unauthenticated-sender',
+  event: {
+    id: 'order1-welcome-d7b24fdb-0aa4-42cc-b06e-896084b2e14f-mismatch-raw',
+    pubkey: 'raw-pk',
+    created_at: 1000,
+    kind: 445,
+    tags: [],
+    content: '',
+    sig: 'sig'
+  }
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #2 ([ 'mismatch', 'legit', 'redelivery' ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order1-welcome-9
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #2 ([ 'mismatch', 'legit', 'redelivery' ])
+[marmot.unauthenticatedMessage] {
+  senderPubkey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  claimedPubkey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  reason: 'unauthenticated-sender',
+  event: {
+    id: 'order1-welcome-98f8aaf7-f6d5-49db-8e22-d475e08ac26c-mismatch-raw',
+    pubkey: 'raw-pk',
+    created_at: 1000,
+    kind: 445,
+    tags: [],
+    content: '',
+    sig: 'sig'
+  }
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #3 ([ 'mismatch', 'redelivery', 'legit' ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order1-welcome-0
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #3 ([ 'mismatch', 'redelivery', 'legit' ])
+[marmot.unauthenticatedMessage] {
+  senderPubkey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  claimedPubkey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  reason: 'unauthenticated-sender',
+  event: {
+    id: 'order1-welcome-077927b5-ca6a-491c-807b-e3ce5d57f97c-mismatch-raw',
+    pubkey: 'raw-pk',
+    created_at: 1000,
+    kind: 445,
+    tags: [],
+    content: '',
+    sig: 'sig'
+  }
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #4 ([ 'redelivery', 'legit', 'mismatch' ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order1-welcome-9
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #4 ([ 'redelivery', 'legit', 'mismatch' ])
+[marmot.unauthenticatedMessage] {
+  senderPubkey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  claimedPubkey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  reason: 'unauthenticated-sender',
+  event: {
+    id: 'order1-welcome-980dd360-4587-44bd-b4e0-163c732de612-mismatch-raw',
+    pubkey: 'raw-pk',
+    created_at: 1000,
+    kind: 445,
+    tags: [],
+    content: '',
+    sig: 'sig'
+  }
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #5 ([ 'redelivery', 'mismatch', 'legit' ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order1-welcome-6
+
+stderr | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers): a sender-mismatched raw event sharing the legitimate rumor's inner id never poisons either dedup layer, for every arrival order > ordering #5 ([ 'redelivery', 'mismatch', 'legit' ])
+[marmot.unauthenticatedMessage] {
+  senderPubkey: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  claimedPubkey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  reason: 'unauthenticated-sender',
+  event: {
+    id: 'order1-welcome-67074736-04d6-4c10-af42-79919cac2424-mismatch-raw',
+    pubkey: 'raw-pk',
+    created_at: 1000,
+    kind: 445,
+    tags: [],
+    content: '',
+    sig: 'sig'
+  }
+}
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-2 (welcomeSubscription, real subscribeToGroupMessages + real EpochResolver): un-mark-on-buffered logic never fires for a rejected:unauthenticated-sender outcome > interleaving #+0 ([ 'U', 'R', 'U-redeliver', …(1) ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order2-welcome-8
+
+ ✓ tests/unit/unreadStore.test.ts (33 tests) 2625ms
+     ✓ incrementJoinRequest increases counter for a group  1484ms
+     ✓ counts DM messages persisted via chatPersistence#appendMessage, excluding own messages  1126ms
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-2 (welcomeSubscription, real subscribeToGroupMessages + real EpochResolver): un-mark-on-buffered logic never fires for a rejected:unauthenticated-sender outcome > interleaving #1 ([ 'R', 'U', 'R-redeliver', …(1) ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order2-welcome-7
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-2 (welcomeSubscription, real subscribeToGroupMessages + real EpochResolver): un-mark-on-buffered logic never fires for a rejected:unauthenticated-sender outcome > interleaving #2 ([ 'U', 'U-redeliver', 'R', …(1) ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order2-welcome-7
+
+stderr | tests/unit/marmot/profileHandler.test.ts > profileHandler > clearPendingDirectInvite failure is best-effort and does not abort the rest of handle()
+[Marmot] clearPendingDirectInvite failed for group-profile-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: Error: idb quota
+    at Object.<anonymous> (/Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/profileHandler.test.ts:468:15)
+    at Object.Mock [as clearPendingDirectInvite] (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at handle (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/handlers/profileHandler.ts:147:18)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+stderr | tests/unit/marmot/profileHandler.test.ts > accept-producer (AC-PROD-3/4/5, DD-9) > a sendAnnouncement failure is best-effort and does not abort the rest of handle()
+[Marmot] accepted-producer sendAnnouncement failed for group-profile-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: Error: publish failed
+    at Object.<anonymous> (/Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/profileHandler.test.ts:702:13)
+    at Object.Mock [as sendAnnouncement] (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at handle (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/handlers/profileHandler.ts:163:18)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/profileHandler.test.ts:708:5
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:20
+
+stderr | tests/unit/marmot/profileHandler.test.ts > accept-producer (AC-PROD-3/4/5, DD-9) > a consumePendingDirectInviteMarker failure is best-effort, fails closed (no accepted post), and does not abort the rest of handle()
+[Marmot] consumePendingDirectInviteMarker failed for group-profile-test:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc: Error: idb read failed
+    at Object.<anonymous> (/Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/profileHandler.test.ts:717:13)
+    at Object.Mock [as consumePendingDirectInviteMarker] (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at handle (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/handlers/profileHandler.ts:133:42)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+ ✓ tests/unit/marmot/profileHandler.test.ts (31 tests) 20ms
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-2 (welcomeSubscription, real subscribeToGroupMessages + real EpochResolver): un-mark-on-buffered logic never fires for a rejected:unauthenticated-sender outcome > interleaving #3 ([ 'R', 'R-redeliver', 'U', …(1) ])
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order2-welcome-7
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-4: historical-sync and live-subscription overlap for the same rumor id never diverge, and deliver to handlers at most once > historical-then-live: a legitimate rumor observed by both paths is ingested once and dispatched once
+[welcomeSubscription] Historical sync: 1/1 events ingested for group order4-legit-his
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-4: historical-sync and live-subscription overlap for the same rumor id never diverge, and deliver to handlers at most once > live-then-historical: a legitimate rumor observed by a live sub, then by a second overlapping instance's historical fetch, is ingested once and dispatched once
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order4-legit-liv
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-4: historical-sync and live-subscription overlap for the same rumor id never diverge, and deliver to handlers at most once > live-then-historical: a legitimate rumor observed by a live sub, then by a second overlapping instance's historical fetch, is ingested once and dispatched once
+[welcomeSubscription] Historical sync: 0/1 events ingested for group order4-legit-liv
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-4: historical-sync and live-subscription overlap for the same rumor id never diverge, and deliver to handlers at most once > simultaneous: two overlapping live subscriptions observing the same event back-to-back (no await between) still ingest and dispatch exactly once
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order4-legit-sim
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-4: historical-sync and live-subscription overlap for the same rumor id never diverge, and deliver to handlers at most once > simultaneous: two overlapping live subscriptions observing the same event back-to-back (no await between) still ingest and dispatch exactly once
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order4-legit-sim
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > AC-ORDER-4: historical-sync and live-subscription overlap for the same rumor id never diverge, and deliver to handlers at most once > historical-then-live, rejected outcome: both paths agree on the rejection and no handler is ever invoked
+[welcomeSubscription] Historical sync: 1/1 events ingested for group order4-rejected-
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > Adversarial (constructed): crash-recovery split point > a fresh subscribeToGroupMessages instance re-ingests an event that was buffered (unreadable) and never resolved before the prior instance was torn down
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order-adversaria
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > Adversarial (constructed): crash-recovery split point > a fresh subscribeToGroupMessages instance re-ingests an event that was buffered (unreadable) and never resolved before the prior instance was torn down
+[welcomeSubscription] Historical sync: 1/1 events ingested for group order-adversaria
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > Cross-group isolation and groupId-reuse (VQ-S4-014) > same groupId reused after dispose (simulated crash-recovery re-join): a previously-delivered event stays deduped on the rejoin's historical refetch, and a genuinely new event is still ingested and dispatched
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order-crossgroup
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > Cross-group isolation and groupId-reuse (VQ-S4-014) > same groupId reused after dispose (simulated crash-recovery re-join): a previously-delivered event stays deduped on the rejoin's historical refetch, and a genuinely new event is still ingested and dispatched
+[welcomeSubscription] Historical sync: 0/1 events ingested for group order-crossgroup
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > Cross-group isolation and groupId-reuse (VQ-S4-014) > two independent groups: an event id marked seen in one group's dedup set does not suppress the SAME id's legitimate delivery in a different group
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order-crossgroup
+
+stdout | tests/unit/marmot/order-sensitive-ingest.property.test.ts > Cross-group isolation and groupId-reuse (VQ-S4-014) > two independent groups: an event id marked seen in one group's dedup set does not suppress the SAME id's legitimate delivery in a different group
+[welcomeSubscription] Historical sync: 0/0 events ingested for group order-crossgroup
+
+ ✓ tests/unit/marmot/order-sensitive-ingest.property.test.ts (50 tests) 292ms
+ ✓ tests/unit/unreadStore-property.test.ts (69 tests) 10ms
+stderr | tests/unit/marmot/welcomeSubscriptionAutoAccept.test.ts > subscribeToWelcomes — auto-accept correlation (S4) > when correlation matches but the MLS join throws, the record is NOT consumed and the Welcome falls through to the pending path (never silently dropped)
+[welcomeSubscription] dm:auto-accept-join-failed { reason: 'MLS join failed: stale epoch' }
+
+ ✓ tests/unit/calls/callSignaling.test.ts (46 tests) 53ms
+ ✓ tests/unit/marmot/welcomeSubscriptionAutoAccept.test.ts (15 tests) 366ms
+ ✓ tests/unit/marmot/pollHandler.test.ts (29 tests) 12ms
+ ✓ tests/unit/directMessages/dmMessageEdits.test.ts (31 tests) 289ms
+ ✓ tests/unit/reactions/api-property.test.ts (43 tests) 12ms
+stderr | tests/unit/marmot/chatHandler.test.ts > chatHandler > S5: a resolvePendingSignalsForSlot failure is swallowed — setChatVersion still fires
+[dispatcher.9] resolvePendingSignalsForSlot failed: Error: boom
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/chatHandler.test.ts:280:61
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+stderr | tests/unit/marmot/chatHandler.test.ts > chatHandler > S5 gate-remediation (finding 5): applyDeleteEditSignal throwing (null result) still does NOT bump setChatVersion — only a genuinely non-null ChangeResult bumps
+[dispatcher.9] applyDeleteEditSignal (edit-marked replacement) failed: Error: boom
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/chatHandler.test.ts:336:54
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+ ✓ tests/unit/marmot/chatHandler.test.ts (41 tests) 29ms
+ ✓ tests/unit/messageEdits/crossCuttingImmutabilityInvariance.test.ts (33 tests) 15ms
+ ✓ tests/unit/directMessageNotifications-property.test.ts (38 tests) 10ms
+ ✓ tests/unit/dmProfile/receive.test.ts (33 tests) 176ms
+ ✓ tests/unit/chatPersistence-property.test.ts (40 tests) 17ms
+stderr | tests/unit/marmot/invite-link-lifecycle-integration.test.ts > AC-INV-4 — an interruption between "compute expired" and "bump in-memory counter" never yields shown-but-not-stamped > the in-memory bump throwing AFTER a successful persist leaves the link recoverable ("stamped-not-yet-shown"), never "shown-but-not-stamped"
+[inviteExpirySweep] failed to notify link inv4-inv4-g15 Error: simulated crash between the IDB stamp and the in-memory bump
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/invite-link-lifecycle-integration.test.ts:444:13
+    at incrementInviteExpiry (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at runSweep (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/inviteExpirySweep.ts:77:11)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/invite-link-lifecycle-integration.test.ts:448:5
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:20
+
+stderr | tests/unit/marmot/invite-link-lifecycle-integration.test.ts > AC-INV-4 — an interruption between "compute expired" and "bump in-memory counter" never yields shown-but-not-stamped > a multi-link pass: a bump crash on the FIRST link does not abort the SECOND link, and both recover on re-init
+[inviteExpirySweep] failed to notify link inv4-multi-1-inv4-multi-a-g16 Error: simulated crash on the first link only
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/invite-link-lifecycle-integration.test.ts:479:13
+    at incrementInviteExpiry (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at runSweep (/Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/inviteExpirySweep.ts:77:11)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/invite-link-lifecycle-integration.test.ts:482:5
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:20
+
+ ✓ tests/unit/marmot/invite-link-lifecycle-integration.test.ts (28 tests) 273ms
+ ✓ tests/unit/directMessageNotifications.test.ts (23 tests) 10ms
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [baseline] single delivery, already synced, pending -> exactly one Remove, at most one post, marked seen
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-baseline
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [redelivery x no-crash] the SAME eventId redelivered after full completion is a pure no-op — still exactly one Remove total
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-redelivery-cl
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [crash-before-commit x redelivery] commit throws on first attempt (retryable), unmarked, SAME eventId redelivered succeeds -> exactly one successful Remove, at most one post
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-crash-before-
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [crash-after-commit x redelivery] Remove lands, THEN a fresh-eventId redelivery arrives (restart-analog): tree-gate converges to terminal no-op, no second Remove/post
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-crash-after-c
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [concurrent double-click x no-crash] two genuinely distinct wraps dispatched concurrently converge to exactly one Remove + at most one post
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-concurrent-cl
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [concurrent double-click x crash-before-commit] first attempt hits a throwing commit; the serialized second attempt retries and succeeds -> exactly one successful Remove
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-concurrent-cr
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [sync-deferral x redelivery] a decline arrives before the group syncs; a SAME-eventId redelivery arrives WHILE still deferred; sync then completes -> exactly one Remove once resolved
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-defer-then-re
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [empty-groupId x redelivery] a clean no-op regardless of how many times it is redelivered
+[welcomeSubscription] Dropping decline: empty/missing groupId
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [already-joined terminal-noop x re-invite x redelivery] a stale decline is a no-op, marked seen; re-invite makes B pending again; the SAME eventId redelivered must NOT reactivate
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-reinvite-rede
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [documented out-of-scope] a DISTINCT-eventId decline arriving AFTER a re-invite CAN reactivate — acknowledged bound, not a regression to chase here
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-reinvite-dist
+
+stdout | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [Remove-succeeds-post-fails x redelivery] declined post is best-effort: zero posts permitted when it throws, and a later redelivery does not retry the post
+[welcomeSubscription] Historical sync: 0/0 events ingested for group cc-post-fails-re
+
+stderr | tests/unit/marmot/crossCuttingDeclineConvergence.test.ts > AC-CROSS-1 — decline whole-flow convergence across redelivery x crash-timing x sync-timing x group-held combinations > [Remove-succeeds-post-fails x redelivery] declined post is best-effort: zero posts permitted when it throws, and a later redelivery does not retry the post
+[welcomeSubscription] dm:decline-announcement-failed { reason: 'relay unreachable' }
+
+ ✓ tests/unit/marmot/crossCuttingDeclineConvergence.test.ts (12 tests) 232ms
+ ✓ tests/unit/backup/relayBackup.test.ts (47 tests) 17ms
+ ✓ tests/unit/contacts.test.ts (44 tests) 849ms
+     ✓ the full list-confirm work (confirmContact + reconcile) never touches chatPersistence#loadMessages  830ms
+ ✓ tests/unit/hooks/useDynamicBanner.test.ts (35 tests) 57ms
+ ✓ tests/unit/chatPersistence-editDelete.test.ts (43 tests) 8ms
+stderr | tests/unit/calls/callManager.test.ts > CallManager > T16: startCall tears down on publish failure (no leaked media/state) > clears the active call and releases media when wrapAndPublish rejects
+[callManager] startCall: offer publish failed, tearing down Error: relay unavailable
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/calls/callManager.test.ts:625:50
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+stderr | tests/unit/calls/callManager.test.ts > CallManager > T17: Caller-side ring timeout ends an unanswered call > tears down after the ring timeout when no peer connected
+[callManager] caller ring timeout — no answer, ending call 00694537-c296-4ad2-b1b8-04e51aee2bbb
+
+ ✓ tests/unit/calls/callManager.test.ts (21 tests) 32ms
+ ✓ tests/unit/marmot/profileRequestHandler.test.ts (19 tests) 10ms
+ ✓ tests/unit/cards/shareCard.test.ts (27 tests) 113ms
+ ✓ tests/unit/marmot/groupReactions.test.ts (27 tests) 51ms
+ ✓ tests/unit/contactChat.test.ts (14 tests) 8ms
+ ✓ tests/unit/messageEdits/rumor.test.ts (84 tests) 25ms
+ ✓ tests/unit/dmProfile/kinds.test.ts (98 tests) 10ms
+ ✓ tests/unit/dmProfile/scheduler.test.ts (48 tests) 11ms
+ ✓ tests/unit/inviteLinkLifecycle.test.ts (32 tests) 18ms
+ ✓ tests/unit/dmProfile/send.test.ts (24 tests) 253ms
+ ✓ tests/unit/marmot/applicationRumorDispatcher.test.ts (16 tests) 150ms
+ ✓ tests/unit/pairing/pendingIntent.test.ts (21 tests) 221ms
+ ✓ tests/unit/directMessages/selfHeal.test.ts (27 tests) 9ms
+ ✓ tests/unit/marmot/epochResolver.test.ts (17 tests) 9ms
+ ✓ tests/unit/components/ProfileHealWatcher.test.ts (32 tests | 1 skipped) 11ms
+ ✓ tests/unit/cards/addContactCardWiring.test.ts (28 tests) 119ms
+ ✓ tests/unit/media/blossomClient.test.ts (34 tests) 24ms
+ ✓ tests/unit/marmot/joinRequestHandler.test.ts (38 tests) 21ms
+ ✓ tests/unit/contacts-property.test.ts (25 tests) 14ms
+ ✓ tests/unit/calls/peerSession.test.ts (22 tests) 12ms
+ ✓ tests/unit/marmot/outboundJoinRequests.test.ts (25 tests) 38ms
+stderr | tests/unit/inviteRescindInvariants.test.ts > AC-INV-4 — orphan-marker safety (isPending && marker conjunction masks an orphaned marker) > VQ-S12-005 double-failure: runPostRemovalCleanup swallows a throwing clearPendingDirectInvite (best-effort), and the resulting orphaned marker is still masked at the row
+[GroupsPage] post-removal purge/clear failed: Error: IDB unavailable
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/inviteRescindInvariants.test.ts:408:53
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+ ✓ tests/unit/inviteRescindInvariants.test.ts (17 tests) 43ms
+ ✓ tests/unit/directMessages/mutation-gaps.test.ts (26 tests) 70ms
+ ✓ tests/unit/memberListAdminUi.test.ts (44 tests) 7ms
+ ✓ tests/unit/profileRequestRunner.test.ts (25 tests) 18ms
+ ✓ tests/unit/cards/inviteByCard.test.ts (32 tests) 33ms
+ ✓ tests/unit/chat/messageActionUi.test.ts (104 tests) 11ms
+ ✓ tests/unit/chatPersistence-wipe.test.ts (19 tests) 12ms
+ ✓ tests/unit/marmot/leaveGroupImpl.test.ts (20 tests) 44ms
+ ✓ tests/unit/blockedPeers.test.ts (31 tests) 8ms
+ ✓ tests/unit/contacts-mutation-gaps.test.ts (20 tests) 11ms
+ ✓ tests/unit/pendingInvitations.test.ts (28 tests) 55ms
+ ✓ tests/unit/manageInviteLinksModal.redesign.test.ts (33 tests) 31ms
+ ✓ tests/unit/marmot/parseStructured.test.ts (51 tests) 6ms
+ ✓ tests/unit/directMessageNotifications-block-suppression.test.ts (13 tests) 5ms
+ ✓ tests/unit/pairing/nonceStore.integration.test.ts (23 tests) 27ms
+ ✓ tests/unit/qr-scan-destination.test.ts (48 tests) 80ms
+ ✓ tests/unit/marmot/approveJoinRequestImpl.test.ts (13 tests) 10ms
+ ✓ tests/unit/chatPersistence-purge.test.ts (16 tests) 7ms
+ ✓ tests/unit/groups/InviteMemberModal.test.ts (15 tests) 34ms
+ ✓ tests/unit/profileRequestSync.test.ts (49 tests) 12ms
+stderr | tests/unit/marmot/autoCommitLeave.test.ts > fireAutoCommit > commit failure → onCommitted not called; entries preserved for next timer cycle
+[Marmot] fireAutoCommit: commit failed, entries retained for retry: Error: epoch conflict
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/marmot/autoCommitLeave.test.ts:286:48
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+ ✓ tests/unit/marmot/autoCommitLeave.test.ts (6 tests) 7ms
+ ✓ tests/unit/directMessages/sealAndWrap.test.ts (15 tests) 220ms
+ ✓ tests/unit/themes/zodBoundary.test.ts (30 tests) 9ms
+ ✓ tests/unit/contactChat-block-gating.test.ts (20 tests) 8ms
+ ✓ tests/unit/reactions/rumor.test.ts (25 tests) 59ms
+ ✓ tests/unit/marmot/registerHandlers.test.ts (18 tests) 79ms
+ ✓ tests/unit/calls/mediaManager.test.ts (20 tests) 7ms
+ ✓ tests/unit/directMessages/mutation-gaps-2.test.ts (11 tests) 89ms
+ ✓ tests/unit/cards/addDeepLink.test.ts (18 tests) 75ms
+ ✓ tests/unit/cards/contactCardImport.test.ts (11 tests) 145ms
+ ✓ tests/unit/marmot/admissionDigest.test.ts (13 tests) 5ms
+ ✓ tests/unit/marmot/joinRequestSender.test.ts (16 tests) 110ms
+ ✓ tests/unit/directMessages/dmReactions.test.ts (10 tests) 91ms
+ ✓ tests/unit/pages/profile-announce-fanout.test.ts (10 tests) 47ms
+ ✓ tests/unit/marmot/leaveHandler.test.ts (8 tests) 4ms
+ ✓ tests/unit/themes/treatments.test.ts (18 tests) 30ms
+ ✓ tests/unit/contacts-add-by-npub.test.ts (15 tests) 9ms
+stderr | tests/unit/hooks/useImageSend.test.ts > sendImageMessage > treats post-publish setBlob failure as best-effort: resolves successfully and reports sent
+[useImageSend] post-publish persistence failed; image will be re-fetched from Blossom on reload Error: IDB quota exceeded
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/hooks/useImageSend.test.ts:192:42
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+stderr | tests/unit/hooks/useImageSend.test.ts > sendImageMessage > treats post-publish addMessageRef failure as best-effort: resolves successfully and reports sent
+[useImageSend] post-publish persistence failed; image will be re-fetched from Blossom on reload Error: IDB write failed
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/hooks/useImageSend.test.ts:209:48
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:145:11
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:915:26
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1209:10)
+    at file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/vitest/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/runner/dist/index.js:1653:12)
+
+ ✓ tests/unit/hooks/useImageSend.test.ts (12 tests) 56ms
+ ✓ tests/unit/dmProfile/scheduler.integration.test.ts (16 tests) 8ms
+ ✓ tests/unit/marmot/envelopeVerifier.test.ts (17 tests) 104ms
+ ✓ tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts (12 tests) 4ms
+ ✓ tests/unit/storage.test.ts (23 tests) 8ms
+ ✓ tests/unit/hooks/useDecryptedImage.test.ts (13 tests) 10ms
+ ✓ tests/unit/marmot/chatPersistence.test.ts (10 tests) 4ms
+ ✓ tests/unit/marmot/grantAdminImpl.test.ts (13 tests) 5ms
+ ✓ tests/unit/pages/groupsMemberRemoval.test.ts (19 tests) 7ms
+ ✓ tests/unit/chat/inviteLifecycleAnnouncement.test.ts (20 tests) 4ms
+ ✓ tests/unit/inviteExpiries.test.ts (12 tests) 4ms
+ ✓ tests/unit/cards/processContactInput.test.ts (10 tests) 47ms
+ ✓ tests/unit/marmot/pendingDirectInviteStorage.test.ts (19 tests) 15ms
+ ✓ tests/unit/calls/turnConfig.test.ts (14 tests) 5ms
+ ✓ tests/unit/knownPeers.test.ts (29 tests) 5ms
+ ✓ tests/unit/marmot/parseStructured.contract.test.ts (42 tests) 6ms
+ ✓ tests/unit/marmot/reactionHandler.test.ts (8 tests) 20ms
+ ✓ tests/unit/walledGarden.test.ts (30 tests) 4ms
+ ✓ tests/unit/useUpdateChecker.test.ts (15 tests) 20ms
+stderr | tests/unit/inviteExpirySweep.test.ts > inviteExpirySweep — runInviteExpirySweep > a failed persist write never leaves a phantom in-memory bump (stamp-before-increment ordering)
+[inviteExpirySweep] failed to notify link n1 Error: simulated IDB write failure
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/inviteExpirySweep.test.ts:25:13
+    at Mock (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at /Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/inviteLinkStorage.ts:328:11
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+stderr | tests/unit/inviteExpirySweep.test.ts > inviteExpirySweep — runInviteExpirySweep > a persist failure on one link does not abort the rest of the sweep pass
+[inviteExpirySweep] failed to notify link n1 Error: simulated IDB write failure
+    at /Users/mrother/Projects/941design/quizzl/app/tests/unit/inviteExpirySweep.test.ts:25:13
+    at Mock (file:///Users/mrother/Projects/941design/quizzl/app/node_modules/@vitest/spy/dist/index.js:285:34)
+    at /Users/mrother/Projects/941design/quizzl/app/src/lib/marmot/inviteLinkStorage.ts:328:11
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+ ✓ tests/unit/inviteExpirySweep.test.ts (9 tests) 12ms
+ ✓ tests/unit/calls/incomingCallModal.test.ts (11 tests) 7ms
+ ✓ tests/unit/directMessageNotifications-pending-retain.test.ts (5 tests) 8ms
+ ✓ tests/unit/pages/groupsManageLinksDeepLink.test.ts (19 tests) 6ms
+ ✓ tests/unit/sweepCrossCuttingInvariants.test.ts (9 tests) 4ms
+ ✓ tests/unit/components/JoinRequestCard.test.ts (16 tests) 3ms
+ ✓ tests/unit/maintainer.mutation-gaps.test.ts (14 tests) 47ms
+ ✓ tests/unit/marmot/readPreJoinGroupData.realMarmot.test.ts (1 test) 214ms
+stderr | tests/unit/marmot/NdkNetworkAdapter.test.ts > NdkNetworkAdapter — request relay scoping > returns empty array on timeout to avoid partial results
+[NdkNetworkAdapter] request() timed out — returning empty to avoid partial results
+
+ ✓ tests/unit/marmot/NdkNetworkAdapter.test.ts (10 tests) 40ms
+ ✓ tests/unit/processContactInput-blocked.test.ts (5 tests) 57ms
+ ✓ tests/unit/cards/contactCard.mutation-gaps.test.ts (32 tests) 53ms
+ ✓ tests/unit/marmot/groupStorage.test.ts (9 tests) 7ms
+ ✓ tests/unit/components/OutboundJoinRequestCard.test.ts (16 tests) 3ms
+ ✓ tests/unit/contactCache.test.ts (14 tests) 4ms
+ ✓ tests/unit/pendingContactsSlice.test.ts (9 tests) 4ms
+ ✓ tests/unit/marmot/profileSync.test.ts (13 tests) 62ms
+ ✓ tests/unit/blockContactAction.test.ts (8 tests) 5ms
+ ✓ tests/unit/marmot/cancelInvitationImpl.test.ts (9 tests) 6ms
+ ✓ tests/unit/advanced-settings.i18n.test.ts (18 tests) 6ms
+ ✓ tests/unit/media/imageProcessing.test.ts (13 tests) 142ms
+ ✓ tests/unit/calls/startCall.test.ts (19 tests) 4ms
+ ✓ tests/unit/contacts-selectable.test.ts (14 tests) 4ms
+ ✓ tests/unit/components/InvitationCard.test.ts (22 tests) 4ms
+ ✓ tests/unit/chat/reactionUiHelpers.test.ts (20 tests) 9ms
+ ✓ tests/unit/marmot/readPreJoinGroupName.realMarmot.test.ts (1 test) 119ms
+ ✓ tests/unit/cards/addPage.i18n.test.ts (4 tests) 4ms
+ ✓ tests/unit/profileRequestStorage.integration.test.ts (8 tests) 7ms
+ ✓ tests/unit/media/imageMessage.test.ts (20 tests) 4ms
+ ✓ tests/unit/marmot/pollSync.test.ts (22 tests) 4ms
+ ✓ tests/unit/pages/profile-add-to-group-marker.test.ts (5 tests) 4ms
+ ✓ tests/unit/keyPackages.test.ts (15 tests) 5ms
+ ✓ tests/unit/pages/profile-broadcast-marker.test.ts (8 tests) 4ms
+ ✓ tests/unit/marmot/renameGroupImpl.test.ts (11 tests) 5ms
+ ✓ tests/unit/themes/buildChakraTheme.test.ts (13 tests) 13ms
+ ✓ tests/unit/marmot/inviteLinkStorage.test.ts (17 tests) 4ms
+ ✓ tests/unit/settings.themePicker.test.ts (13 tests) 5ms
+ ✓ tests/unit/hooks/useThemeStyles.test.ts (7 tests) 4ms
+ ✓ tests/unit/themes/contrast.hexParsing.test.ts (48 tests) 9ms
+ ✓ tests/unit/lib/inviteBannerState.test.ts (13 tests) 6ms
+ ✓ tests/unit/directMessageNotifications-active-view.test.ts (4 tests) 3ms
+ ✓ tests/unit/relay.test.ts (22 tests) 6ms
+ ✓ tests/unit/calls/callScreen.test.ts (22 tests) 3ms
+ ✓ tests/unit/lib/contactInviteLine.test.ts (15 tests) 86ms
+ ✓ tests/unit/contacts-groups.test.ts (19 tests) 3ms
+ ✓ tests/unit/contacts-ssr-guard.test.ts (6 tests) 2ms
+ ✓ tests/unit/themes/index.test.ts (11 tests) 11ms
+ ✓ tests/unit/directMessages.test.ts (10 tests) 33ms
+ ✓ tests/unit/directMessages/buildChatRumor.test.ts (9 tests) 33ms
+ ✓ tests/unit/cards/pairingUiCopy.i18n.test.ts (6 tests) 3ms
+ ✓ tests/unit/advanced-settings-story03.test.ts (10 tests) 111ms
+ ✓ tests/unit/pendingConfirmation.i18n.test.ts (7 tests) 4ms
+ ✓ tests/unit/advanced-settings-story04.test.ts (9 tests) 66ms
+ ✓ tests/unit/calls/callStore.test.ts (9 tests) 3ms
+ ✓ tests/unit/marmot/joinRequestStorage.test.ts (11 tests) 4ms
+ ✓ tests/unit/marmot/inviteLinkGeneration.test.ts (10 tests) 4ms
+ ✓ tests/unit/marmot/mediaPersistence.test.ts (12 tests) 6ms
+ ✓ tests/unit/bip39.test.ts (17 tests) 17ms
+ ✓ tests/unit/marmot/pollPersistence.test.ts (13 tests) 5ms
+ ✓ tests/unit/inviteExpiryRows.test.ts (10 tests) 3ms
+ ✓ tests/unit/marmot/applicationDispatchPersistence.test.ts (4 tests) 7ms
+ ✓ tests/unit/directMessages/dualListen.test.ts (6 tests) 7ms
+ ✓ tests/unit/components/ThemeIcon.test.ts (50 tests) 5ms
+ ✓ tests/unit/themes/contrast.test.ts (12 tests) 5ms
+ ✓ tests/unit/manageInviteLinksModal.test.ts (10 tests) 13ms
+ ✓ tests/unit/reactions/composeInsert.test.ts (13 tests) 3ms
+ ✓ tests/unit/nostrKeys.test.ts (12 tests) 26ms
+ ✓ tests/unit/themes/fontUnion.test.ts (12 tests) 3ms
+ ✓ tests/unit/blockCopy.i18n.test.ts (6 tests) 4ms
+ ✓ tests/unit/inviteExpiryCycle.test.ts (6 tests) 4ms
+ ✓ tests/unit/advanced-settings-npub.test.ts (6 tests) 79ms
+ ✓ tests/unit/notificationCounts.test.ts (13 tests) 4ms
+ ✓ tests/unit/feedback-block-gating.test.ts (5 tests) 2ms
+ ✓ tests/unit/qr.mutation-gaps.test.ts (20 tests) 3ms
+ ✓ tests/unit/attachmentsFeatureToggle.test.ts (8 tests) 2ms
+ ✓ tests/unit/advanced-settings-story05.test.ts (10 tests) 75ms
+ ✓ tests/unit/messageEdits.i18n.test.ts (3 tests) 5ms
+stderr | tests/unit/marmot/readPreJoinGroupData.nullPath.test.ts > readPreJoinGroupData — no matching local key package (AC-DATA-2 null path) > resolves null when getWelcome itself throws (undecodable Welcome)
+[welcomeSubscription] dm:pre-join-group-data-read-failed { reason: 'malformed welcome' }
+
+ ✓ tests/unit/marmot/readPreJoinGroupData.nullPath.test.ts (4 tests) 4ms
+ ✓ tests/unit/groups/npubQrScannerOnScanOptional.test.ts (2 tests) 2ms
+ ✓ tests/unit/leaveEligibility.test.ts (22 tests) 3ms
+ ✓ tests/unit/maintainer.test.ts (9 tests) 56ms
+ ✓ tests/unit/inviteExpirySweep-active-view.test.ts (3 tests) 2ms
+ ✓ tests/unit/inviteExpirySweepSchedule.test.ts (4 tests) 3ms
+ ✓ tests/unit/marmot/groupStorage.clearAllGroupData.test.ts (1 test) 1ms
+ ✓ tests/unit/activeViewStore.test.ts (5 tests) 2ms
+ ✓ tests/unit/calls/callNotice.test.ts (9 tests) 6ms
+ ✓ tests/unit/pendingRequestsSection.test.ts (7 tests) 1139ms
+     ✓ markJoinRequestsRead is exported from unreadStore  1090ms
+ ✓ tests/unit/calls/callSettings.test.ts (26 tests) 4ms
+ ✓ tests/unit/profileNicknameCap.test.ts (7 tests) 3ms
+ ✓ tests/unit/media/imetaTag.test.ts (8 tests) 4ms
+ ✓ tests/unit/dmProfile/receive-block-contact-regression.test.ts (2 tests) 2ms
+ ✓ tests/unit/marmotAdapter.test.ts (5 tests) 3ms
+ ✓ tests/unit/lib/pubkeyDisplay.test.ts (5 tests) 7ms
+ ✓ tests/unit/qr.test.ts (9 tests) 22ms
+ ✓ tests/unit/marmot/leaveSync.test.ts (13 tests) 3ms
+ ✓ tests/unit/chat/chatBoxPollOpenAttribution.test.ts (4 tests) 2ms
+ ✓ tests/unit/linkify.test.ts (11 tests) 3ms
+ ✓ tests/unit/addContactByNpub.i18n.test.ts (2 tests) 2ms
+ ✓ tests/unit/scannerCopy.i18n.test.ts (3 tests) 2ms
+ ✓ tests/unit/components/noGreyedOutPeople.test.ts (5 tests) 2ms
+ ✓ tests/unit/groups/cameraErrorClassification.test.ts (11 tests) 3ms
+ ✓ tests/unit/lib/freshIdentity.test.ts (4 tests) 1ms
+ ✓ tests/unit/themes/schema.test.ts (9 tests) 8ms
+ ✓ tests/unit/removeMember.i18n.test.ts (3 tests) 2ms
+ ✓ tests/unit/inviteAwaiting.i18n.test.ts (3 tests) 2ms
+ ✓ tests/unit/publicEnv.test.ts (3 tests) 5ms
+ ✓ tests/unit/cancelPendingInvitation.i18n.test.ts (2 tests) 2ms
+ ✓ tests/unit/pages/layoutImprintFooter.test.ts (8 tests) 2ms
+ ✓ tests/unit/languageDetection.test.ts (7 tests) 2ms
+ ✓ tests/unit/makeAdmin.i18n.test.ts (3 tests) 1ms
+ ✓ tests/unit/cards/npubQrModal.test.ts (5 tests) 2ms
+ ✓ tests/unit/badgeAccent.test.ts (4 tests) 2ms
+ ✓ tests/unit/avatar.test.ts (3 tests) 4ms
+ ✓ tests/unit/pendingInvitations.i18n.test.ts (2 tests) 2ms
+ ✓ tests/unit/feedback.i18n.test.ts (3 tests) 2ms
+ ✓ tests/unit/reactions/reactions.i18n.test.ts (2 tests) 3ms
+ ✓ tests/unit/avatarManifest.test.ts (1 test) 8ms
+ ✓ tests/unit/marmot/membersChanged.test.ts (5 tests) 2ms
+ ✓ tests/unit/leaveIntent.i18n.test.ts (2 tests) 1ms
+ ✓ tests/unit/pages/profile-can-add-to-group.test.ts (5 tests) 1ms
+ ✓ tests/unit/theme.test.ts (2 tests) 4ms
+
+ Test Files  225 passed (225)
+      Tests  4411 passed | 1 skipped (4412)
+   Start at  16:57:59
+   Duration  68.38s (transform 4.60s, setup 0ms, import 157.33s, tests 14.57s, environment 15ms)
+

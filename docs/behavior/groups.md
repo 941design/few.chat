@@ -7,6 +7,24 @@ deliberately accepts.*
 
 ---
 
+## Receiving messages after reopening
+
+Application handlers are attached before historical group messages are ingested.
+Historical readiness waits for queued application processing, including storage
+writes, before history-dependent profile publication begins. This covers chat,
+polls, profiles, reactions, and edit/delete messages through the same authenticated
+message channel. Messages are processed in arrival order within each subscription.
+
+Leaving a subscription cancels work that has not started and detaches its
+listeners. A pending historical fetch that completes after cancellation cannot
+start a live subscription. A handler already running must finish before its
+storage can safely be reassigned to another account; full account-transition
+isolation remains under review. Previously consumed messages whose application
+content was never saved are not guaranteed recoverable because MLS state may have
+advanced beyond their encryption epoch. Offline two-peer recovery and rapid
+React lifecycle transitions still require integration verification.
+
+
 ## 1. What a group is
 
 A group is a shared, end-to-end-encrypted conversation whose membership is enforced

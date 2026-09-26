@@ -61,12 +61,12 @@ vi.mock('@nostr-dev-kit/ndk', async (importOriginal) => {
 // EpochResolver is statically imported by welcomeSubscription.ts; mock it so the
 // test doesn't need a real MarmotGroup with event-emitter shape. ingestEvent is a
 // spy so the dedup test can assert how many events actually reached the resolver.
-const { mockIngestEvent } = vi.hoisted(() => ({ mockIngestEvent: vi.fn(async (_event: unknown) => {}) }));
+const { mockIngestEvent, mockDisposeResolver } = vi.hoisted(() => ({ mockIngestEvent: vi.fn(async (_event: unknown) => {}), mockDisposeResolver: vi.fn() }));
 vi.mock('@/src/lib/marmot/epochResolver', () => ({
   EpochResolver: class {
     constructor(_group: unknown, _opts: unknown) {}
     ingestEvent(event: unknown) { return mockIngestEvent(event); }
-    dispose() {}
+    dispose() { mockDisposeResolver(); }
   },
 }));
 
@@ -2875,5 +2875,54 @@ describe('subscribeToWelcomes — decline receive (S6)', () => {
     await cancelPendingInvitationImpl(deps, 'g', invitee, async (content) => { emittedContent = content; });
 
     expect(JSON.parse(emittedContent)).toEqual({ type: 'invite_cancelled', pubkey: invitee, by: self });
+  });
+});
+
+
+describe('group subscription setup lifetime and application persistence barrier', () => {
+  it('waits for application persistence before reporting historical readiness', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(), timedOut: false });
+    const onHistory = vi.fn();
+    const sub = { on: vi.fn(), stop: vi.fn() };
+    const ndk = { subscribe: vi.fn(() => sub) };
+    let release!: () => void;
+    const drain = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const setup = subscribeToGroupMessages(crypto.randomUUID(), [], {} as never, ndk as never,
+      undefined, onHistory, { drainApplicationMessages: drain });
+    try {
+      await vi.waitFor(() => expect(drain).toHaveBeenCalledOnce());
+      expect(onHistory).not.toHaveBeenCalled();
+      expect(ndk.subscribe).not.toHaveBeenCalled();
+    } finally {
+      release?.();
+      (await setup)();
+    }
+    expect(onHistory).toHaveBeenCalledOnce();
+    expect(sub.stop).toHaveBeenCalledOnce();
+  });
+
+  it('disposes pending setup and ignores history arriving after cancellation', async () => {
+    let resolveHistory!: (value: { events: Set<unknown>; timedOut: boolean }) => void;
+    mockFetchEventsWithTimeout.mockImplementation(() => new Promise((resolve) => { resolveHistory = resolve; }));
+    mockIngestEvent.mockClear();
+    mockDisposeResolver.mockClear();
+    const controller = new AbortController();
+    const onHistory = vi.fn();
+    const ndk = { subscribe: vi.fn() };
+    const setup = subscribeToGroupMessages(crypto.randomUUID(), [], {} as never, ndk as never,
+      undefined, onHistory, { signal: controller.signal });
+    try {
+      await vi.waitFor(() => expect(resolveHistory).toBeTypeOf('function'));
+      controller.abort();
+      expect(mockDisposeResolver).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      resolveHistory?.({ events: new Set([{ id: 'late-history', kind: 445 }]), timedOut: false });
+      (await setup)();
+    }
+    expect(mockIngestEvent).not.toHaveBeenCalled();
+    expect(onHistory).not.toHaveBeenCalled();
+    expect(ndk.subscribe).not.toHaveBeenCalled();
+    expect(mockDisposeResolver).toHaveBeenCalledOnce();
   });
 });

@@ -594,3 +594,63 @@ test.describe.serial('Close poll with zero votes', () => {
     await expect(resultsBox.getByText('0 votes')).toBeVisible();
   });
 });
+
+// R01/R05: real MLS history, with the receiving page fully closed while the
+// sender uses app UI. Keep the browser context so its IndexedDB/MLS state survives.
+test('offline receiver reopens to one chat message and the persisted poll lifecycle', async ({ browser }) => {
+  test.setTimeout(240_000);
+  await computeTestKeypairs();
+  const alice = await bootUserWithProfile(browser, USER_A, 'Alice');
+  const bob = await bootUserWithProfile(browser, USER_B, 'Bob');
+  const name = 'Historical application dispatch';
+  try {
+    await createGroupAndOpen(alice.page, name);
+    await inviteAndJoin(alice.page, USER_B.npub, bob.page, name);
+    await openGroupDetail(bob.page, name);
+    const receiverUrl = bob.page.url();
+    await expect(bob.page.getByTestId('chat-input')).toBeVisible();
+    // Establish an actual application round-trip before taking the receiver offline.
+    await bob.page.getByTestId('chat-input').fill('Ready for offline history');
+    await bob.page.getByTestId('chat-input').press('Enter');
+    await expect(alice.page.getByText('Ready for offline history', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await bob.page.close();
+
+    await alice.page.getByTestId('chat-input').fill('Delivered while receiver was offline');
+    await alice.page.getByTestId('chat-input').press('Enter');
+    await expect(alice.page.getByText('Delivered while receiver was offline', { exact: true })).toBeVisible();
+    await alice.page.getByTestId('create-poll-btn').click();
+    await alice.page.getByTestId('poll-title-input').fill('Offline poll');
+    await alice.page.getByTestId('poll-option-input-0').fill('Yes');
+    await alice.page.getByTestId('poll-option-input-1').fill('No');
+    await alice.page.getByTestId('create-poll-submit-btn').click();
+    const card = alice.page.getByTestId('poll-panel').locator('[data-testid^="poll-card-"]', { hasText: 'Offline poll' });
+    await expect(card).toBeVisible();
+    // Nostr revisions have second precision. Distinct seconds make this a test
+    // of ordered historical dispatch, separately from truly reversed arrival.
+    await alice.page.waitForTimeout(1100);
+    await card.getByText('Yes', { exact: true }).click();
+    await card.getByText('Vote', { exact: true }).click();
+    await expect(card.getByText('Voted', { exact: true })).toBeVisible();
+    await alice.page.waitForTimeout(1100);
+    await card.getByText('Close Poll', { exact: true }).click();
+    await card.getByText('Confirm', { exact: true }).click();
+    await expect(alice.page.getByTestId('poll-panel').locator('[data-testid^="poll-results-card-"]', { hasText: 'Offline poll' })).toBeVisible();
+
+    const reopened = await bob.context.newPage();
+    await reopened.goto(receiverUrl);
+    const message = reopened.getByText('Delivered while receiver was offline', { exact: true });
+    await expect(message).toBeVisible({ timeout: 60_000 });
+    await expect(message).toHaveCount(1);
+    const results = reopened.getByTestId('poll-panel').locator('[data-testid^="poll-results-card-"]', { hasText: 'Offline poll' });
+    await expect(results).toBeVisible({ timeout: 30_000 });
+    await expect(results.getByText(/1 voter/)).toBeVisible();
+    // A second reopen proves application persistence rather than transient rendering.
+    await reopened.reload();
+    await expect(message).toBeVisible({ timeout: 60_000 });
+    await expect(message).toHaveCount(1);
+    await expect(results.getByText(/1 voter/)).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await alice.context.close();
+    await bob.context.close();
+  }
+});

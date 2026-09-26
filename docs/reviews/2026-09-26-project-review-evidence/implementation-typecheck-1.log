@@ -1,0 +1,1 @@
+cd app && npx tsc --noEmit --incremental false

@@ -22,21 +22,21 @@ In the ledger's last column, replace `—` with `owner; date; commit/PR or worki
 | ID | Priority | Task | State | Evidence at handover | Owner / sign-off |
 |---|---|---|---|---|---|
 | R00 | — | Preserve review baseline and evidence | done | Review artifacts archived; source unchanged | Codex; 2026-09-26; this handover |
-| R01 | P1 | Attach group handlers before historical ingestion | planned | Production code and installed-library trace | — |
+| R01 | P1 | Attach group handlers before historical ingestion | in_progress | Production code and installed-library trace | Codex; 2026-09-26; working tree; [continuation](#implementation-continuation-1) |
 | R02 | P1 | Make external identity authoritative across activation/reload | planned | Production lifecycle trace | — |
 | R03 | P1 | Isolate private state when changing accounts | planned | Storage/restore/backup trace | — |
 | R04 | P1 | Preserve selected signer and remove local-key bypasses | planned | Rebinding probe plus call-path trace | — |
-| R05 | P2 | Serialize application dispatch across messages | planned | Focused failing reproduction | — |
+| R05 | P2 | Serialize application dispatch across messages | in_progress | Focused failing reproduction | Codex; 2026-09-26; working tree; [continuation](#implementation-continuation-1) |
 | R06 | P2 | Scope poll votes to their group | planned | Focused failing reproduction | — |
 | R07 | P2 | Make vote replacement deterministic by revision | planned | Focused failing reproduction | — |
 | R08 | P2 | Make profile mutations atomic | planned | Focused failing reproduction | — |
 | R09 | P2 | Honor persisted relays when creating NDK | planned | Real-NDK initialization probe | — |
 | R10 | P2 | Fix ambiguous update-banner browser assertion | done | 72/72 non-relay browser cases pass | Codex; 2026-09-26; update-detection.spec.ts; [record](#r10-completion) |
-| R11 | P2 | Unblock and complete the full browser gate | blocked | Host port 3001 occupied during review | — |
-| R12 | P2 | Close integration-test blind spots | planned | Test helpers/mocks inspected | — |
+| R11 | P2 | Unblock and complete the full browser gate | in_progress | Host port 3001 occupied during review | Codex; 2026-09-26; working tree; [continuation](#implementation-continuation-1) |
+| R12 | P2 | Close integration-test blind spots | in_progress | Test helpers/mocks inspected | Codex; 2026-09-26; working tree; [continuation](#implementation-continuation-1) |
 | R13 | P2 | Investigate response-body timeout coverage | needs_investigation | Timeout ends before body consumption | — |
-| R14 | P3 | Prevent install stamps after failed setup | done | Isolated failure/retry tests pass | Codex; 2026-09-26; Makefile + scripts/test-install-stamps.py; [record](#r14-completion) |
-| R15 | P2 | Investigate late subscriptions after effect cleanup | needs_investigation | Async setup lacks cancellation generation | — |
+| R14 | P3 | Prevent install stamps after failed setup | done | Isolated failure/retry tests pass | Codex; 2026-09-26; `7fccaf1`; [record](#r14-completion) |
+| R15 | P2 | Investigate late subscriptions after effect cleanup | in_progress | Async setup lacks cancellation generation | Codex; 2026-09-26; working tree; [continuation](#implementation-continuation-1) |
 | R16 | P2 | Investigate recovery after incomplete historical sync | needs_investigation | Timeout path and sync markers inspected | — |
 | R17 | P2 | Investigate backup failure propagation and retries | needs_investigation | Publish result ignored by scheduler callback | — |
 | R18 | P3 | Correct stale onboarding/test/protocol documentation | planned | README, Makefile, comments inspected | — |
@@ -389,6 +389,60 @@ No production storage or behavior changes. Existing platform detection and insta
 entry points remain intact. Native macOS execution was not available in this Linux ARM environment.
 Sign-off: Codex, 2026-09-26; isolated control-flow checks passed.
 
+<a id="implementation-continuation-1"></a>
+**Implementation continuation 1 — 2026-09-26, Codex**
+
+Branch `master`; starting commit `9eef5689c142e319b513e6a31117e0aed29ee122`;
+R14 committed as `7fccaf1`. Existing user changes listed above remain preserved.
+R10's existing accessible-navigation change is retained, awaiting browser execution.
+R01/R05/R15 share uncommitted changes in `MarmotContext.tsx`,
+`applicationRumorDispatcher.ts`, and `welcomeSubscription.ts`: attach handlers before
+history ingestion, serialize synchronous event delivery, expose a drain barrier,
+cancel pending historical subscription setup, and track the actual initialized client
+for subscription effect replacement. Tests added in
+`applicationDispatchPersistence.test.ts` and `welcomeSubscription.test.ts` cover
+synchronous poll open/vote/close with fake IndexedDB, reversed arrival, dedup/error
+semantics, independent groups, disposal/drain, and delayed historical setup cancellation.
+Groups/polls behavior documentation and its index describe limits.
+
+These tasks are **not signed off**: tests/build and real offline two-peer delivery
+remain required. R03 still needs account ownership and quiescence of already-running
+handlers; R15 still needs React StrictMode/rapid client replacement evidence; R16
+history retry/readiness/dedup failure hypotheses remain open. R12 is partly addressed
+by the new tests; identity/provider and other persistence regressions remain outstanding.
+
+Verification environment is Linux ARM, Node 22.23.3, npm 10.9.9. Port 3001 was free;
+Docker reported no running containers before this run. Initial `make test-e2e-all`
+attempts failed before browser discovery during dependency setup: SSH authentication,
+npm fork peer-resolution crash, cached HTTPS credential mismatch, then pnpm 12's
+fork build policy. GitHub CLI API access confirmed the available token can read
+`rotheric/ink`; command-scoped HTTPS rewriting and `!gh auth git-credential` avoid
+changing global Git config. A temporary pnpm 9.15.9 tool install plus
+`npm_config_legacy_peer_deps=true` is being used to build the unchanged pinned forks.
+No package manifest or lockfile pins were changed. The full gate retry log is currently
+`/tmp/quizzl-review-e2e-pnpm9.log`; archive its terminal output before sign-off.
+Next: poll the running gate, run unit tests after dependencies finish, correct any
+failures, then validate real lifecycle scenarios before committing this work package.
+
+Continuation verification update: dependency installation succeeded with the unchanged
+pins using the command-scoped Git helper, legacy peer resolution, and pnpm 9.15.9.
+`make test-unit` passed **225 files, 4,411 tests, one skipped** (68.38 seconds),
+including the new dispatcher/IDB and historical cancellation/barrier regressions.
+Evidence: [implementation-unit-1.log](2026-09-26-project-review-evidence/implementation-unit-1.log).
+`make --eval='review-typecheck: ensure-deps; cd app && npx tsc --noEmit --incremental false' review-typecheck`
+also passed. Added a real two-peer offline chat/poll recovery case in
+`app/tests/e2e/groups-polls.spec.ts`, awaiting relay execution.
+The full `make test-e2e-all` is **still running**, unified-exec session **63174**,
+log `/tmp/quizzl-review-e2e-pnpm9.log`; the non-relay bucket discovered 71 tests.
+Poll that exact session before starting another browser/dev/build job. Do not
+restart it just because a context/observation ended. No full browser pass is yet
+claimed, and no Docker fixtures had started at the latest observation.
+The update-detection URL assertion now accepts the static export's trailing slash.
+Next action: finish observing the full gate and classify failures; run the final
+production build after the dev server exits; complete lifecycle acceptance evidence
+(including React generation transitions and already-running handler quiescence)
+before closing R01/R05/R15. All R02–R04 and other tasks remain in their ledger states.
+
 <a id="r10-completion"></a>
 **R10 completion — 2026-09-26, Codex**
 
@@ -433,3 +487,16 @@ On resume: inspect current state, finish the lifecycle work package and its rela
 verification, then proceed with the account/signer P1 tasks R02/R03/R04 and the
 rest of the ledger. A production build and final full integration gate remain
 required. No verification process is intentionally left running.
+
+**Lifecycle checkpoint commit — requested after the pause**
+
+The user requested committing the remaining implementation work. The commit
+containing this entry records the R01/R05/R15 lifecycle changes, regression tests,
+behavior documentation, and unit/type-check evidence described above. These task
+states remain `in_progress`: committing the checkpoint does not establish the
+outstanding relay, offline recovery, React lifecycle, or account-isolation gates.
+R10 is already committed as `387c72b`; R14 as `7fccaf1`. The goal remains paused,
+and the earlier journal's running-process and uncommitted-work statements describe
+historical checkpoints, not the current state. No additional implementation or
+verification process was started for this commit request. Unrelated local settings,
+user reports, screenshots, invitation test, and migration request remain unstaged.

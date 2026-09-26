@@ -781,6 +781,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     if (ready) readyGateRef.current?.resolve();
   }, [ready]);
   const clientRef = useRef<MarmotClientType | null>(null);
+  const [subscriptionClient, setSubscriptionClient] = useState<MarmotClientType | null>(null);
   // Track welcome subscription cleanup so it can be stopped on remount/identity change
   const welcomeSubRef = useRef<(() => void) | null>(null);
   // Track group message subscription cleanup functions keyed by groupId
@@ -1165,6 +1166,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === 'undefined') return;
 
     let cancelled = false;
+    setSubscriptionClient(null);
 
     async function init() {
       try {
@@ -1495,6 +1497,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           }
         })();
 
+        if (cancelled) return;
+        setSubscriptionClient(client);
         setReady(true);
       } catch (err) {
         console.error('[Marmot] Initialization failed:', err);
@@ -1533,10 +1537,12 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   // Subscribe to group messages for each group (for incoming application rumors)
   useEffect(() => {
     if (!ready || groups.length === 0) return;
-    const client = clientRef.current;
+    const client = subscriptionClient;
     if (!client || typeof window === 'undefined') return;
 
     const subsMap = groupSubsRef.current;
+    const setupController = new AbortController();
+    const isCurrent = () => !setupController.signal.aborted && clientRef.current === client;
 
     async function subscribeNewGroups() {
       // Initialise unread counts from persisted messages on first run
@@ -1549,12 +1555,15 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       const { subscribeToGroupMessages } = await import('@/src/lib/marmot/welcomeSubscription');
       const { getNdk } = await import('@/src/lib/ndkClient');
       const ndk = getNdk();
-      if (!ndk) return;
+      if (!ndk || !isCurrent()) return;
 
       for (const group of groups) {
+        if (!isCurrent()) return;
         if (subsMap.has(group.id)) continue; // Already subscribed
+        let unsubDispatcher: import('@/src/lib/marmot/applicationRumorDispatcher').DispatcherSubscription | undefined;
         try {
           const mlsGroup = await client!.groups.get(group.id).catch(() => null);
+          if (!isCurrent()) return;
           if (!mlsGroup) continue;
 
           // Immediately sync member list from MLS state (authoritative source).
@@ -1563,6 +1572,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           // is up-to-date without needing to re-ingest historical events (which
           // is impossible after the MLS key schedule advances due to forward secrecy).
           const { getGroupMembers } = await import('@internet-privacy/marmot-ts');
+          if (!isCurrent()) return;
           const mlsMembers = getGroupMembers(mlsGroup.state);
           // groupsRef.current (kept in sync near line 398) rather than the
           // closure `groups`, for consistency with the onMembersChanged callback
@@ -1586,105 +1596,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
-          const unsub = await subscribeToGroupMessages(
-            group.id,
-            group.relays,
-            mlsGroup,
-            ndk,
-            // Refresh memberPubkeys from MLS state after ingesting any event
-            // (commits, proposals, etc. — not just application messages)
-            async (currentMembers) => {
-              // Always bump groupDataVersion so consumers (e.g. isAdmin) re-read
-              // group metadata after any MLS commit, even when member count is unchanged.
-              setGroupDataVersion((v) => v + 1);
-              // Read via groupsRef (always current) rather than the effect's
-              // closure `groups`: this callback outlives its effect run, and the
-              // effect now re-runs only on id-set changes, so the closure would
-              // otherwise go stale across renames/membership updates.
-              const stored = groupsRef.current.find((g) => g.id === group.id);
-              if (stored) {
-                // Resync membership AND the group name from authoritative MLS
-                // metadata after any processed commit. A rename lands here for
-                // remote members: proposeUpdateMetadata({ name }) is silent on the
-                // timeline, so this is the path that makes a rename visible to
-                // everyone (the separate kind-9 notice is display-only).
-                const mlsName = mlsGroup.groupData?.name;
-                const nameChanged =
-                  typeof mlsName === 'string' && mlsName.length > 0 && mlsName !== stored.name;
-                const memberChange = membersChanged(stored.memberPubkeys, currentMembers);
-                if (nameChanged || memberChange) {
-                  await persistGroup({
-                    ...stored,
-                    ...(memberChange ? { memberPubkeys: currentMembers } : {}),
-                    ...(nameChanged ? { name: mlsName } : {}),
-                  });
-                  await reloadGroups();
-                }
-              }
-              // WORKAROUND: auto-commit unapplied proposals (e.g. leave
-              // proposals) so all members can send application messages.
-              // Only works when the local user is admin. Fails silently
-              // if admin promotion was lost — see sendRumorSafe comment.
-              if (Object.keys(mlsGroup.unappliedProposals).length > 0) {
-                void mlsGroup.commit().catch((err: unknown) => {
-                  console.debug('[Marmot] auto-commit unapplied proposals failed:', err);
-                });
-              }
-            },
-            // Publish profile after historical sync completes (epoch is up-to-date).
-            // Uses localProfileRef to avoid stale-closure race.
-            () => {
-              // S8-F1: check the durable published-ref AND the transient
-              // in-flight ref. Either one already covers this group means a
-              // second concurrent (or completed) attempt must be skipped.
-              if (profilePublishedRef.current.has(group.id)) return;
-              if (profilePublishInFlightRef.current.has(group.id)) return;
-              const currentProfile = localProfileRef.current;
-              // May be null (locked/absent signer) — signAndSendProfileBackground
-              // owns the null-signer guard and dev-logs the skip itself (AC-SEND-10 /
-              // Fable-S8-3: don't pre-empt the helper's centralized observability).
-              const signer = signerRef.current;
-              // Marked SYNCHRONOUSLY, before the async sign+send starts, so a
-              // second onHistorySynced firing for the same group (before this
-              // attempt's await resolves) is rejected by the check above
-              // rather than racing into a duplicate sign+publish.
-              profilePublishInFlightRef.current.add(group.id);
-              void (async () => {
-                try {
-                  // AC-SEND-10 (VQ-S8-006): profilePublishedRef is marked ONLY
-                  // after a successful signature+send — never before — so a
-                  // signer failure (locked/absent NIP-07) leaves no residual
-                  // "already published" local state that would suppress a
-                  // legitimate retry once the signer recovers.
-                  const { sent } = await signAndSendProfileBackground({
-                    signer,
-                    profile: currentProfile,
-                    logLabel: `onHistorySynced (group ${group.id})`,
-                    sendRumor: async (payload) => {
-                      console.info(`[Marmot] onHistorySynced: publishing profile for group ${group.id}, nickname="${currentProfile.nickname}"`);
-                      const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
-                      await sendRumorSafe(mlsGroup, rumor as any, { softFail: true });
-                      console.info(`[Marmot] onHistorySynced: profile published successfully for group ${group.id}`);
-                    },
-                  });
-                  if (sent) {
-                    profilePublishedRef.current.add(group.id);
-                  }
-                } catch (err) {
-                  // Defense-in-depth parity with the pre-S8 code: sendRumorSafe
-                  // runs { softFail: true } so it does not throw today, but a
-                  // future config change must dev-log here, not surface as an
-                  // unhandled rejection.
-                  console.warn(`[Marmot] onHistorySynced: profile publish failed for group ${group.id}`, err);
-                } finally {
-                  // Always release the in-flight marker (success or failure)
-                  // so a future onHistorySynced firing (e.g. a legitimate
-                  // retry after a signer failure) is not permanently blocked.
-                  profilePublishInFlightRef.current.delete(group.id);
-                }
-              })();
-            },
-          );
+          if (!isCurrent()) return;
 
           // Wire the unified dispatcher for all application rumor handlers (Stories 02–03).
           const dispatcherCtx = {
@@ -1699,7 +1611,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           // sender.authenticity: 'mls' directly from the library's
           // authenticatedApplicationMessage event — see
           // applicationRumorDispatcher.ts. No app-side resolver is involved.
-          const unsubDispatcher = buildDispatcher({
+          unsubDispatcher = buildDispatcher({
             // Chat
             appendMessage,
             incrementUnread,
@@ -1825,13 +1737,127 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // S4 (AC-QUEUE-4): real enqueueLeave closure — replaces MOCK-S2-001 stub from S2.
             enqueueLeave,
           }).subscribe(mlsGroup, dispatcherCtx);
+          setupController.signal.addEventListener('abort', unsubDispatcher, { once: true });
+
+
+          const unsub = await subscribeToGroupMessages(
+            group.id,
+            group.relays,
+            mlsGroup,
+            ndk,
+            // Refresh memberPubkeys from MLS state after ingesting any event
+            // (commits, proposals, etc. — not just application messages)
+            async (currentMembers) => {
+              if (!isCurrent()) return;
+              // Always bump groupDataVersion so consumers (e.g. isAdmin) re-read
+              // group metadata after any MLS commit, even when member count is unchanged.
+              setGroupDataVersion((v) => v + 1);
+              // Read via groupsRef (always current) rather than the effect's
+              // closure `groups`: this callback outlives its effect run, and the
+              // effect now re-runs only on id-set changes, so the closure would
+              // otherwise go stale across renames/membership updates.
+              const stored = groupsRef.current.find((g) => g.id === group.id);
+              if (stored) {
+                // Resync membership AND the group name from authoritative MLS
+                // metadata after any processed commit. A rename lands here for
+                // remote members: proposeUpdateMetadata({ name }) is silent on the
+                // timeline, so this is the path that makes a rename visible to
+                // everyone (the separate kind-9 notice is display-only).
+                const mlsName = mlsGroup.groupData?.name;
+                const nameChanged =
+                  typeof mlsName === 'string' && mlsName.length > 0 && mlsName !== stored.name;
+                const memberChange = membersChanged(stored.memberPubkeys, currentMembers);
+                if (nameChanged || memberChange) {
+                  await persistGroup({
+                    ...stored,
+                    ...(memberChange ? { memberPubkeys: currentMembers } : {}),
+                    ...(nameChanged ? { name: mlsName } : {}),
+                  });
+                  await reloadGroups();
+                }
+              }
+              // WORKAROUND: auto-commit unapplied proposals (e.g. leave
+              // proposals) so all members can send application messages.
+              // Only works when the local user is admin. Fails silently
+              // if admin promotion was lost — see sendRumorSafe comment.
+              if (Object.keys(mlsGroup.unappliedProposals).length > 0) {
+                void mlsGroup.commit().catch((err: unknown) => {
+                  console.debug('[Marmot] auto-commit unapplied proposals failed:', err);
+                });
+              }
+            },
+            // Publish profile after historical sync completes (epoch is up-to-date).
+            // Uses localProfileRef to avoid stale-closure race.
+            () => {
+              if (!isCurrent()) return;
+              // S8-F1: check the durable published-ref AND the transient
+              // in-flight ref. Either one already covers this group means a
+              // second concurrent (or completed) attempt must be skipped.
+              if (profilePublishedRef.current.has(group.id)) return;
+              if (profilePublishInFlightRef.current.has(group.id)) return;
+              const currentProfile = localProfileRef.current;
+              // May be null (locked/absent signer) — signAndSendProfileBackground
+              // owns the null-signer guard and dev-logs the skip itself (AC-SEND-10 /
+              // Fable-S8-3: don't pre-empt the helper's centralized observability).
+              const signer = signerRef.current;
+              // Marked SYNCHRONOUSLY, before the async sign+send starts, so a
+              // second onHistorySynced firing for the same group (before this
+              // attempt's await resolves) is rejected by the check above
+              // rather than racing into a duplicate sign+publish.
+              profilePublishInFlightRef.current.add(group.id);
+              void (async () => {
+                try {
+                  // AC-SEND-10 (VQ-S8-006): profilePublishedRef is marked ONLY
+                  // after a successful signature+send — never before — so a
+                  // signer failure (locked/absent NIP-07) leaves no residual
+                  // "already published" local state that would suppress a
+                  // legitimate retry once the signer recovers.
+                  const { sent } = await signAndSendProfileBackground({
+                    signer,
+                    profile: currentProfile,
+                    logLabel: `onHistorySynced (group ${group.id})`,
+                    sendRumor: async (payload) => {
+                      if (!isCurrent()) throw new Error('Group subscription replaced');
+                      console.info(`[Marmot] onHistorySynced: publishing profile for group ${group.id}, nickname="${currentProfile.nickname}"`);
+                      const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
+                      await sendRumorSafe(mlsGroup, rumor as any, { softFail: true });
+                      console.info(`[Marmot] onHistorySynced: profile published successfully for group ${group.id}`);
+                    },
+                  });
+                  if (sent && isCurrent()) {
+                    profilePublishedRef.current.add(group.id);
+                  }
+                } catch (err) {
+                  // Defense-in-depth parity with the pre-S8 code: sendRumorSafe
+                  // runs { softFail: true } so it does not throw today, but a
+                  // future config change must dev-log here, not surface as an
+                  // unhandled rejection.
+                  console.warn(`[Marmot] onHistorySynced: profile publish failed for group ${group.id}`, err);
+                } finally {
+                  // Always release the in-flight marker (success or failure)
+                  // so a future onHistorySynced firing (e.g. a legitimate
+                  // retry after a signer failure) is not permanently blocked.
+                  if (isCurrent()) profilePublishInFlightRef.current.delete(group.id);
+                }
+              })();
+            },
+            { drainApplicationMessages: () => unsubDispatcher!.drain(), signal: setupController.signal },
+          );
+
+
+          if (!isCurrent()) {
+            unsub();
+            unsubDispatcher();
+            return;
+          }
 
           // Combine both unsubscribe functions so cleanup tears down both listeners.
           subsMap.set(group.id, () => {
             unsub();
-            unsubDispatcher();
+            unsubDispatcher?.();
           });
         } catch (err) {
+          unsubDispatcher?.();
           console.warn(`[Marmot] subscribeToGroupMessages for ${group.id} failed:`, err);
         }
       }
@@ -1844,6 +1870,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     // Previously only groups that disappeared were cleaned up, leaving
     // duplicate subscriptions alive across re-renders.
     return () => {
+      setupController.abort();
       for (const [groupId, unsub] of Array.from(subsMap.entries())) {
         unsub();
         subsMap.delete(groupId);
@@ -1865,7 +1892,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     // on the id SET (groupSubscriptionKey), not the `groups` array reference; see
     // the comment above groupSubscriptionKey for why re-running on every churn
     // regressed live propagation.
-  }, [ready, groupSubscriptionKey, pubkeyHex]);
+  }, [ready, groupSubscriptionKey, pubkeyHex, subscriptionClient]);
 
   // Profile updates are published automatically via the onHistorySynced callback
   // (once per group, after historical events are ingested and the local epoch is
@@ -2140,6 +2167,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     await clearAllGroupData();
     setGroups([]);
     clientRef.current = null;
+    setSubscriptionClient(null);
     profilePublishedRef.current.clear();
     profilePublishInFlightRef.current.clear();
     appStartSweepRanRef.current = false;
