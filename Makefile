@@ -22,7 +22,7 @@ PLAYWRIGHT_STAMP := $(PLAYWRIGHT_BROWSERS_PATH)/.installed_$(shell uname -s)-$(s
 -include .cloudflare
 export
 
-.PHONY: help test build test-unit test-coverage test-e2e test-e2e-all test-e2e-fast test-e2e-groups e2e-up e2e-down test-e2e-image-sharing playwright run-dev clean install deps deploy deploy-check ensure-deps ensure-playwright screenshots screenshots-serve
+.PHONY: test-install-stamps help test build test-unit test-coverage test-e2e test-e2e-all test-e2e-fast test-e2e-groups e2e-up e2e-down test-e2e-image-sharing playwright run-dev clean install deps deploy deploy-check ensure-deps ensure-playwright screenshots screenshots-serve
 
 # Default target
 .DEFAULT_GOAL := help
@@ -43,12 +43,12 @@ help: ## Show this help message
 
 ## Always-run check: rebuild node_modules if platform stamp is missing or deps changed
 ensure-deps:
-	@if [ ! -f $(PLATFORM_STAMP) ] \
+	@set -e; if [ ! -f $(PLATFORM_STAMP) ] \
 	  || [ $(APP_DIR)/package.json -nt $(PLATFORM_STAMP) ] \
 	  || [ $(APP_DIR)/package-lock.json -nt $(PLATFORM_STAMP) ]; then \
 		echo "[make] Installing deps for $$(uname -s)-$$(uname -m)..."; \
 		rm -rf $(APP_DIR)/node_modules $(APP_DIR)/.next $(APP_DIR)/out; \
-		cd $(APP_DIR) && npm ci; \
+		cd $(APP_DIR) && npm ci && \
 		touch ../$(PLATFORM_STAMP); \
 	fi
 
@@ -56,10 +56,10 @@ node_modules: ensure-deps ## Install deps (auto-reinstalls on platform switch)
 
 ## Always-run check: install Playwright browsers if stamp is missing
 ensure-playwright: ensure-deps
-	@if [ ! -f "$(PLAYWRIGHT_STAMP)" ]; then \
+	@set -e; if [ ! -f "$(PLAYWRIGHT_STAMP)" ]; then \
 		echo "[make] Installing Playwright browsers ($(PLAYWRIGHT_VERSION)) for $$(uname -s)-$$(uname -m) into $(PLAYWRIGHT_BROWSERS_PATH)..."; \
 		mkdir -p "$(PLAYWRIGHT_BROWSERS_PATH)"; \
-		cd $(APP_DIR) && npx playwright install chromium; \
+		cd $(APP_DIR) && npx playwright install chromium && \
 		touch "$(PLAYWRIGHT_STAMP)"; \
 	fi
 
@@ -111,6 +111,9 @@ test: test-unit test-e2e-all ## Run all tests (unit + FULL e2e suite) — the de
 # that runs a subset. A green subset is NOT an e2e pass. See CLAUDE.md "E2E gate".
 ## Run the full e2e suite (both modes) — the definitive e2e gate
 test-e2e-all: test-e2e-fast test-e2e ## Run the FULL e2e suite (60 tests, both modes) — the e2e gate
+
+test-install-stamps: ## Verify setup failure/retry behavior in isolated temporary directories
+	python3 scripts/test-install-stamps.py
 
 ## Run unit tests (Vitest)
 test-unit: ensure-deps ## Run unit tests (Vitest)
