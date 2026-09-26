@@ -1,0 +1,347 @@
+[make] Installing deps for Linux-aarch64...
+npm warn skipping integrity check for git dependency ssh://git@github.com/941design/ts-mls.git
+npm warn skipping integrity check for git dependency ssh://git@github.com/941design/marmot-ts.git
+
+added 615 packages, and audited 616 packages in 43s
+
+197 packages are looking for funding
+  run `npm fund` for details
+
+22 vulnerabilities (1 low, 6 moderate, 13 high, 2 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+[make] Installing Playwright browsers (1.58.2) for Linux-aarch64 into /home/mrother.guest/.cache/playwright-few...
+Downloading Chrome for Testing 145.0.7632.6 (playwright chromium v1208)[2m from https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1208/chromium-linux-arm64.zip[22m
+|                                                                                |   0% of 179.6 MiB
+|■■■■■■■■                                                                        |  10% of 179.6 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 179.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 179.6 MiB
+Chrome for Testing 145.0.7632.6 (playwright chromium v1208) downloaded to /home/mrother.guest/.cache/playwright-few/chromium-1208
+Downloading FFmpeg (playwright ffmpeg v1011)[2m from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-linux-arm64.zip[22m
+|                                                                                |   0% of 1.6 MiB
+|■■■■■■■■                                                                        |  10% of 1.6 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 1.6 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 1.6 MiB
+FFmpeg (playwright ffmpeg v1011) downloaded to /home/mrother.guest/.cache/playwright-few/ffmpeg-1011
+Downloading Chrome Headless Shell 145.0.7632.6 (playwright chromium-headless-shell v1208)[2m from https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1208/chromium-headless-shell-linux-arm64.zip[22m
+|                                                                                |   0% of 106.4 MiB
+|■■■■■■■■                                                                        |  10% of 106.4 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 106.4 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 106.4 MiB
+Chrome Headless Shell 145.0.7632.6 (playwright chromium-headless-shell v1208) downloaded to /home/mrother.guest/.cache/playwright-few/chromium_headless_shell-1208
+cd app && node scripts/run-e2e.mjs
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:35383
+
+ ✓ Starting...
+ ⚠ Disabling SWC Minifer will not be an option in the next major version. Please report any issues you may be experiencing to https://github.com/vercel/next.js/issues
+Attention: Next.js now collects completely anonymous telemetry regarding usage.
+This information is used to shape Next.js' roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://nextjs.org/telemetry
+
+ ✓ Ready in 1167ms
+ ○ Compiling / ...
+ ✓ Compiled / in 3.9s (2418 modules)
+ GET / 200 in 5796ms
+[e2e] Dev server ready on http://127.0.0.1:35383
+
+Running 71 tests using 1 worker
+
+(node:4009) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:4009) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ GET / 200 in 20ms
+ ⚠ Cross origin request detected from 127.0.0.1 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ ○ Compiling /profile ...
+ ✓ Compiled /profile in 679ms (2436 modules)
+ GET /profile/ 200 in 819ms
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ ✓ Compiled /_error in 408ms (2438 modules)
+ ✓ Compiled /add in 209ms (2452 modules)
+ GET /add/ 200 in 305ms
+ GET /version.json?t=1790434693034 404 in 23ms
+ GET /version.json?t=1790434694386 404 in 9ms
+ ○ Compiling /contacts ...
+ ✓ Compiled /contacts in 1490ms (2512 modules)
+  ✓   1 [chromium] › tests/e2e/add-welcome.spec.ts:58:7 › /add first-visit welcome screen — contact-card variant › AC-CONTACT-1/2/4/5, AC-NAME-2, AC-PRIV-1/2: a first-timer sees the inviter name, must enter a name to continue, and completing it saves the name + adds the contact (11.5s)
+ GET /add/ 200 in 86ms
+  ✓   2 [chromium] › tests/e2e/add-welcome.spec.ts:143:7 › /add first-visit welcome screen — contact-card variant › AC-CONTACT-3: a card with no readable name (bare npub) omits the invite line but still renders the pitch, name input, and action (1.6s)
+ GET / 200 in 28ms
+ GET /profile/ 200 in 19ms
+ GET / 200 in 15ms
+ GET /version.json?t=1790434704599 404 in 15ms
+ GET /add/ 200 in 8ms
+  ✓   3 [chromium] › tests/e2e/add-welcome.spec.ts:175:7 › /add first-visit welcome screen — contact-card variant › AC-RETURN-1: a returning user (identity already on disk) opening a contact card link never sees the welcome screen (6.1s)
+ GET / 200 in 12ms
+ ✓ Compiled /settings in 486ms (2532 modules)
+ GET /settings/ 200 in 594ms
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /version.json?t=1790434710451 404 in 37ms
+  ✓   4 [chromium] › tests/e2e/advanced-settings.spec.ts:44:7 › Advanced Settings › 1. AC-GATE-1: Advanced section is collapsed by default (5.3s)
+ GET / 200 in 30ms
+ GET /settings/ 200 in 13ms
+ GET /version.json?t=1790434714898 404 in 6ms
+  ✓   5 [chromium] › tests/e2e/advanced-settings.spec.ts:70:7 › Advanced Settings › 2. AC-RELAY-1: relay list shows DEFAULT_RELAYS after clear state (4.8s)
+ GET / 200 in 11ms
+ GET /settings/ 200 in 13ms
+ GET /version.json?t=1790434720135 404 in 9ms
+  ✓   6 [chromium] › tests/e2e/advanced-settings.spec.ts:87:7 › Advanced Settings › 3. AC-RELAY-3: invalid relay URL is rejected with an error (5.6s)
+ GET / 200 in 7ms
+ GET /settings/ 200 in 16ms
+ GET /version.json?t=1790434725327 404 in 12ms
+  ✓   7 [chromium] › tests/e2e/advanced-settings.spec.ts:108:7 › Advanced Settings › 4. AC-RELAY-4: removing the last relay shows a blocking error (4.8s)
+ GET / 200 in 13ms
+ GET /settings/ 200 in 13ms
+ GET /version.json?t=1790434730656 404 in 31ms
+  ✓   8 [chromium] › tests/e2e/advanced-settings.spec.ts:134:7 › Advanced Settings › 5. AC-RELAY-5: reset button restores DEFAULT_RELAYS and removes custom relay (5.7s)
+ GET / 200 in 8ms
+ GET /settings/ 200 in 17ms
+ GET /version.json?t=1790434736478 404 in 18ms
+  ✓   9 [chromium] › tests/e2e/advanced-settings.spec.ts:163:7 › Advanced Settings › 6. AC-OTHER-1: danger zone wipe confirmation requires typing WIPE (5.4s)
+ GET / 200 in 9ms
+ GET /settings/ 200 in 16ms
+ GET /version.json?t=1790434741434 404 in 20ms
+  ✓  10 [chromium] › tests/e2e/advanced-settings.spec.ts:197:7 › Advanced Settings › 7. AC-NPUB-1: Advanced section does not expose raw hex pubkeys (5.1s)
+ GET / 200 in 13ms
+ GET /settings/ 200 in 22ms
+ GET /version.json?t=1790434746995 404 in 12ms
+  ✓  11 [chromium] › tests/e2e/advanced-settings.spec.ts:216:7 › Advanced Settings › 8. AC-I18N-1: Advanced section heading is visible and not empty (5.1s)
+ GET / 200 in 7ms
+ GET /profile/ 200 in 30ms
+  ✓  12 [chromium] › tests/e2e/avatar-selection.spec.ts:24:7 › Avatar selection › clicking an avatar card selects the avatar (2.8s)
+ GET / 200 in 5ms
+ GET /profile/ 200 in 9ms
+  ✓  13 [chromium] › tests/e2e/avatar-selection.spec.ts:40:7 › Avatar selection › clicking an avatar image selects the avatar (2.7s)
+ GET / 200 in 6ms
+ GET / 200 in 6ms
+  ✓  14 [chromium] › tests/e2e/banner-decor.spec.ts:72:7 › Nav banner decoration › decoration element is present on default theme (2.2s)
+ GET / 200 in 5ms
+ GET / 200 in 10ms
+  ✓  15 [chromium] › tests/e2e/banner-decor.spec.ts:84:7 › Nav banner decoration › decoration is positioned top-left and non-interactive (2.8s)
+ GET / 200 in 6ms
+ GET / 200 in 8ms
+  ✓  16 [chromium] › tests/e2e/banner-decor.spec.ts:103:7 › Nav banner decoration › decoration is a non-interactive background layer that never blocks menu items (2.7s)
+ GET / 200 in 6ms
+ GET / 200 in 8ms
+ GET / 200 in 6ms
+  ✓  17 [chromium] › tests/e2e/banner-decor.spec.ts:127:9 › Nav banner decoration › decoration has SVG background for "spring" theme (2.6s)
+ GET / 200 in 6ms
+ GET / 200 in 6ms
+ GET / 200 in 12ms
+ GET / 200 in 7ms
+  ✓  18 [chromium] › tests/e2e/banner-decor.spec.ts:151:7 › Nav banner decoration › AC-UX-6/MV-1: spring nav banner swaps to a freshly-generated SVG that differs across two separate page loads (5.3s)
+ GET / 200 in 8ms
+ GET / 200 in 9ms
+ GET / 200 in 7ms
+  ✓  19 [chromium] › tests/e2e/banner-decor.spec.ts:185:7 › Nav banner decoration › AC-A11Y-1/AC-UX-6: the nav logo chip is present and legible against the real generated banner (2.5s)
+ GET / 200 in 7ms
+ GET /settings/ 200 in 6ms
+ GET /version.json?t=1790434774676 404 in 11ms
+  ✓  20 [chromium] › tests/e2e/banner-decor.spec.ts:209:7 › Nav banner decoration › MV-2: repeatedly re-selecting the spring theme live never leaves a broken/blank banner or logs an uncaught error (7.5s)
+ GET / 200 in 7ms
+ GET /profile/ 200 in 13ms
+ GET / 200 in 8ms
+ GET /version.json?t=1790434783291 404 in 5ms
+ GET /add/ 200 in 25ms
+  ✓  21 [chromium] › tests/e2e/contact-card-deeplink.spec.ts:82:7 › /add deep link (AC-UX-3 / AC-UX-7) › AC-UX-3: existing identity — direct load of /add#c=<card> parses the hash, completes the one-directional add, and (nameless) redirects to pairing name setup (RD-7) (5.1s)
+ GET / 200 in 5ms
+ GET /profile/ 200 in 16ms
+ GET /add/ 200 in 6ms
+  ✓  22 [chromium] › tests/e2e/contact-card-deeplink.spec.ts:114:7 › /add deep link (AC-UX-3 / AC-UX-7) › AC-UX-7 (superseded by epic: first-visit-invite-welcome, story S3): no local identity — /add#c=<card> shows the first-visit welcome screen and completes the one-directional add once a name is entered (3.9s)
+ GET / 200 in 7ms
+ GET /profile/ 200 in 7ms
+  ✓  23 [chromium] › tests/e2e/contact-card-share.spec.ts:27:7 › Share contact card (AC-UX-4) › Profile page produces a copy-able card link and a scannable QR encoding the full onboarding URL (3.3s)
+ GET / 200 in 6ms
+ GET /profile/ 200 in 7ms
+  ✓  24 [chromium] › tests/e2e/contact-card-share.spec.ts:57:7 › Share contact card (AC-UX-4) › Share is disabled until a name is set — no card can go out as a bare npub (2.5s)
+ GET / 200 in 7ms
+ GET /settings/ 200 in 7ms
+ GET /version.json?t=1790434798153 404 in 7ms
+  ✓  25 [chromium] › tests/e2e/contact-card-share.spec.ts:84:7 › Share contact card (AC-UX-4) › Settings page keeps a plain bare-npub QR (not a card link) (4.6s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 37ms
+  ✓  26 [chromium] › tests/e2e/emoji-composer.spec.ts:72:7 › EmojiComposerPicker › trigger button renders with correct testid and aria-label (1.8s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 8ms
+  ✓  27 [chromium] › tests/e2e/emoji-composer.spec.ts:87:7 › EmojiComposerPicker › clicking trigger opens the picker popover (1.7s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 6ms
+  ✓  28 [chromium] › tests/e2e/emoji-composer.spec.ts:103:7 › EmojiComposerPicker › picker renders exactly 36 glyph buttons in a role=grid container (1.8s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 13ms
+  ✓  29 [chromium] › tests/e2e/emoji-composer.spec.ts:123:7 › EmojiComposerPicker › each glyph button has a non-empty aria-label (AC-63) (2.1s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 12ms
+  ✓  30 [chromium] › tests/e2e/emoji-composer.spec.ts:140:7 › EmojiComposerPicker › pressing Escape closes the picker (AC-27) (2.1s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 8ms
+  ✓  31 [chromium] › tests/e2e/emoji-composer.spec.ts:159:7 › EmojiComposerPicker › clicking outside the picker closes it (AC-27) (2.0s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 6ms
+  ✓  32 [chromium] › tests/e2e/emoji-composer.spec.ts:176:7 › EmojiComposerPicker › Ctrl+Shift+E on textarea opens the picker (AC-28) (2.1s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 8ms
+  ✓  33 [chromium] › tests/e2e/emoji-composer.spec.ts:214:7 › EmojiComposerPicker › clicking a glyph appends to empty textarea (AC-31) (2.1s)
+ GET /contacts/?id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 200 in 7ms
+  ✓  34 [chromium] › tests/e2e/emoji-composer.spec.ts:240:7 › EmojiComposerPicker › clicking a glyph inserts at the current cursor position mid-text (AC-30, AC-33) (1.6s)
+ GET / 200 in 6ms
+ GET /contacts/ 200 in 23ms
+ ○ Compiling /groups ...
+ ✓ Compiled /groups in 1283ms (2584 modules)
+ GET /groups/ 200 in 1393ms
+  ✓  35 [chromium] › tests/e2e/imprint-footer-visibility.spec.ts:16:7 › Imprint footer visibility › shows the footer on non-chat pages (home + both list views) (3.4s)
+ GET /contacts/?id=00000000000000000000000000000000000000000000000000000000deadbeef 200 in 30ms
+  ✓  36 [chromium] › tests/e2e/imprint-footer-visibility.spec.ts:27:7 › Imprint footer visibility › hides the footer on the DM chat page (/contacts?id=…) (853ms)
+ GET /groups/?id=00000000000000000000000000000000000000000000000000000000deadbeef 200 in 6ms
+  ✓  37 [chromium] › tests/e2e/imprint-footer-visibility.spec.ts:34:7 › Imprint footer visibility › hides the footer on the group chat page (/groups?id=…) (795ms)
+ ✓ Compiled /imprint in 371ms (2762 modules)
+ GET /imprint/ 200 in 536ms
+  ✓  38 [chromium] › tests/e2e/imprint.spec.ts:7:7 › Imprint page › renders the injected legal facts (1.4s)
+ GET /imprint/ 200 in 8ms
+  ✓  39 [chromium] › tests/e2e/imprint.spec.ts:25:7 › Imprint page › omits empty optional sections (phone) (814ms)
+ GET / 200 in 23ms
+ ✓ Compiled /info in 219ms (2770 modules)
+  ✓  40 [chromium] › tests/e2e/info-page.spec.ts:4:7 › Info page - How few.chat works › reachable via the header info icon (1.5s)
+ GET / 200 in 80ms
+  ✓  41 [chromium] › tests/e2e/info-page.spec.ts:11:7 › Info page - How few.chat works › reachable via the home page card (2.4s)
+ GET /info/ 200 in 25ms
+  ✓  42 [chromium] › tests/e2e/info-page.spec.ts:18:7 › Info page - How few.chat works › shows the plain-language sections (908ms)
+ GET / 200 in 5ms
+ GET / 200 in 9ms
+  ✓  43 [chromium] › tests/e2e/mobile-qr-scanner-fab.spec.ts:30:7 › Mobile QR scanner FAB › renders at a mobile viewport and is absent at a desktop viewport (1.8s)
+ GET / 200 in 6ms
+ GET /contacts/?id=nonexistent-probe 200 in 43ms
+  ✓  44 [chromium] › tests/e2e/mobile-qr-scanner-fab.spec.ts:40:7 › Mobile QR scanner FAB › stays visible on an open-chat route the way the bottom tab bar does (1.4s)
+ GET / 200 in 6ms
+  ✓  45 [chromium] › tests/e2e/mobile-qr-scanner-fab.spec.ts:54:7 › Mobile QR scanner FAB › is not a member of the hamburger overlay (814ms)
+ GET / 200 in 5ms
+  ✓  46 [chromium] › tests/e2e/mobile-qr-scanner-fab.spec.ts:67:7 › Mobile QR scanner FAB › tapping the FAB opens the scanner and it settles with no broken view (914ms)
+ GET / 200 in 6ms
+ GET / 200 in 19ms
+  ✓  47 [chromium] › tests/e2e/profile-display-name.spec.ts:18:7 › Profile display name — prefer nickname, default "You" placeholder › header shows the "You" placeholder (never the npub) when no nickname is set (2.5s)
+ GET / 200 in 6ms
+ GET / 200 in 7ms
+  ✓  48 [chromium] › tests/e2e/profile-display-name.spec.ts:33:7 › Profile display name — prefer nickname, default "You" placeholder › header shows short nickname when set (2.3s)
+ GET / 200 in 6ms
+ GET /profile/ 200 in 29ms
+  ✓  49 [chromium] › tests/e2e/profile.spec.ts:13:7 › Profile updates › editing nickname and avatar auto-saves and updates the header immediately without reload (4.3s)
+ GET / 200 in 7ms
+ GET /profile/ 200 in 5ms
+  ✓  50 [chromium] › tests/e2e/profile.spec.ts:35:7 › Profile updates › mobile header keeps the profile visible inside the navigation drawer (2.2s)
+ GET / 200 in 5ms
+ GET / 200 in 9ms
+ GET /version.json?t=1790434847806 404 in 23ms
+  ✓  51 [chromium] › tests/e2e/profile.spec.ts:49:7 › Profile updates › settings remain reachable from the header cogwheel (3.7s)
+ GET / 200 in 5ms
+  ✓  52 [chromium] › tests/e2e/story-01-scaffold.spec.ts:4:7 › Story 01 - Project Scaffold and Routing › home page loads with correct title and navigation (1.8s)
+ GET / 200 in 8ms
+  ✓  53 [chromium] › tests/e2e/story-01-scaffold.spec.ts:17:7 › Story 01 - Project Scaffold and Routing › navigation links are present (1.7s)
+ GET / 200 in 6ms
+  ✓  54 [chromium] › tests/e2e/story-01-scaffold.spec.ts:33:7 › Story 01 - Project Scaffold and Routing › contacts page is accessible via navigation (2.1s)
+ GET / 200 in 5ms
+  ✓  55 [chromium] › tests/e2e/story-01-scaffold.spec.ts:40:7 › Story 01 - Project Scaffold and Routing › groups page is accessible via navigation (1.8s)
+ GET /settings/ 200 in 28ms
+ GET /version.json?t=1790434858172 404 in 16ms
+  ✓  56 [chromium] › tests/e2e/story-01-scaffold.spec.ts:47:7 › Story 01 - Project Scaffold and Routing › settings page loads (3.0s)
+ GET / 200 in 6ms
+  ✓  57 [chromium] › tests/e2e/story-01-scaffold.spec.ts:52:7 › Story 01 - Project Scaffold and Routing › imprint footer is pinned to the bottom of the viewport on a short page (1.2s)
+ GET / 200 in 6ms
+ GET /settings/ 200 in 6ms
+ GET /version.json?t=1790434862703 404 in 8ms
+  ✓  58 [chromium] › tests/e2e/story-08-settings-theming.spec.ts:14:7 › Story 08: Theme Settings › 1. Settings page renders the spring theme button (the only shipped theme) (4.2s)
+ GET / 200 in 11ms
+ GET /settings/ 200 in 13ms
+ GET /version.json?t=1790434866945 404 in 8ms
+  ✓  59 [chromium] › tests/e2e/story-08-settings-theming.spec.ts:29:7 › Story 08: Theme Settings › 2. Selecting the spring theme persists in localStorage (5.2s)
+ GET / 200 in 8ms
+ GET /settings/ 200 in 8ms
+ GET /version.json?t=1790434872004 404 in 7ms
+ GET /settings/ 200 in 11ms
+ GET /version.json?t=1790434875691 404 in 14ms
+  ✓  60 [chromium] › tests/e2e/story-08-settings-theming.spec.ts:46:7 › Story 08: Theme Settings › 3. Theme setting persists after page reload (7.5s)
+ GET / 200 in 7ms
+ GET / 200 in 11ms
+ GET /settings/ 200 in 9ms
+ GET /version.json?t=1790434879967 404 in 8ms
+  ✓  61 [chromium] › tests/e2e/story-08-settings-theming.spec.ts:66:7 › Story 08: Theme Settings › 4. a deprecated/unknown stored theme name falls back to spring without error (5.1s)
+ GET / 200 in 8ms
+ GET / 200 in 13ms
+ GET / 200 in 7ms
+  ✓  62 [chromium] › tests/e2e/story-08-settings-theming.spec.ts:86:7 › Story 08: Theme Settings › 5. the light spring theme renders no content panel (3.0s)
+ GET / 200 in 54ms
+ GET /contacts/ 200 in 9ms
+  ✓  63 [chromium] › tests/e2e/unread-badge.spec.ts:61:7 › Contacts list unread badge › shows the unread count on the contact row and hides it at zero (2.9s)
+ GET / 200 in 6ms
+ GET /contacts/ 200 in 11ms
+  ✓  64 [chromium] › tests/e2e/unread-badge.spec.ts:78:7 › Contacts list unread badge › caps the row badge at 99+ for large counts (2.5s)
+ GET / 200 in 6ms
+  ✓  65 [chromium] › tests/e2e/update-detection.spec.ts:14:7 › Update Detection › shows banner when version.json returns a different version (2.8s)
+ GET / 200 in 5ms
+  ✓  66 [chromium] › tests/e2e/update-detection.spec.ts:29:7 › Update Detection › does NOT show banner when version.json returns the same version (3.1s)
+ GET / 200 in 6ms
+  ✓  67 [chromium] › tests/e2e/update-detection.spec.ts:52:7 › Update Detection › does NOT show banner on network error (fail-soft) (3.1s)
+ GET / 200 in 7ms
+  ✓  68 [chromium] › tests/e2e/update-detection.spec.ts:61:7 › Update Detection › does NOT show banner on 404 (fail-soft) (3.1s)
+ GET / 200 in 6ms
+  ✘  69 [chromium] › tests/e2e/update-detection.spec.ts:70:7 › Update Detection › banner is non-blocking — user can still interact with the app (30.1s)
+(node:6933) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:6933) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ GET / 200 in 8ms
+  ✓  70 [chromium] › tests/e2e/update-detection.spec.ts:91:7 › Update Detection › dismiss hides banner for session (3.0s)
+ GET / 200 in 8ms
+  ✓  71 [chromium] › tests/e2e/update-detection.spec.ts:108:7 › Update Detection › visibilitychange to visible triggers immediate check (3.6s)
+
+
+  1) [chromium] › tests/e2e/update-detection.spec.ts:70:7 › Update Detection › banner is non-blocking — user can still interact with the app
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for getByRole('navigation', { name: 'Main navigation', exact: true }).locator('a[href="/settings"]')[22m
+
+
+      84 |     const navigation = page.getByRole('navigation', { name: 'Main navigation', exact: true });
+      85 |     await expect(navigation).toBeVisible();
+    > 86 |     await navigation.locator('a[href="/settings"]').click();
+         |                                                     ^
+      87 |     await expect(page).toHaveURL(/\/settings\/?(?:\?.*)?$/);
+      88 |     await expect(page.getByTestId('update-banner')).toBeVisible();
+      89 |   });
+        at /Users/mrother/Projects/941design/quizzl/app/tests/e2e/update-detection.spec.ts:86:53
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/update-detection-Update-De-cad09-still-interact-with-the-app-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/update-detection-Update-De-cad09-still-interact-with-the-app-chromium/error-context.md
+
+  1 failed
+    [chromium] › tests/e2e/update-detection.spec.ts:70:7 › Update Detection › banner is non-blocking — user can still interact with the app
+  70 passed (4.2m)
+[?25h
+make: *** [Makefile:138: test-e2e-fast] Error 1

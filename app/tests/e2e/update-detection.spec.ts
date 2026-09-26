@@ -81,7 +81,11 @@ test.describe('Update Detection', () => {
     await expect(page.getByTestId('update-banner')).toBeVisible({ timeout: 5000 });
 
     // Banner is visible — navigation should still work.
-    await expect(page.locator('nav')).toBeVisible();
+    const navigation = page.getByRole('navigation', { name: 'Main navigation', exact: true });
+    await expect(navigation).toBeVisible();
+    await navigation.getByRole('link', { name: 'Settings', exact: true }).click();
+    await expect(page).toHaveURL(/\/settings\/?(?:\?.*)?$/);
+    await expect(page.getByTestId('update-banner')).toBeVisible();
   });
 
   test('dismiss hides banner for session', async ({ page }) => {
@@ -99,6 +103,27 @@ test.describe('Update Detection', () => {
 
     await page.getByTestId('update-banner-dismiss').click();
     await expect(page.getByTestId('update-banner')).not.toBeVisible();
+  });
+
+  test('reload action reloads the current page', async ({ page }) => {
+    await page.route('**/version.json**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ version: 'new-version-xyz' }),
+      })
+    );
+    await page.goto('/settings/');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(page.getByTestId('update-banner')).toBeVisible();
+    const documentRequest = page.waitForRequest((request) =>
+      request.isNavigationRequest() && request.frame() === page.mainFrame()
+    );
+    await page.getByTestId('update-banner-reload').click();
+    await documentRequest;
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page).toHaveURL(/\/settings\/?$/);
+    await expect(page.getByRole('navigation', { name: 'Main navigation', exact: true })).toBeVisible();
   });
 
   test('visibilitychange to visible triggers immediate check', async ({ page }) => {

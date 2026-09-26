@@ -31,7 +31,7 @@ In the ledger's last column, replace `—` with `owner; date; commit/PR or worki
 | R07 | P2 | Make vote replacement deterministic by revision | planned | Focused failing reproduction | — |
 | R08 | P2 | Make profile mutations atomic | planned | Focused failing reproduction | — |
 | R09 | P2 | Honor persisted relays when creating NDK | planned | Real-NDK initialization probe | — |
-| R10 | P2 | Fix ambiguous update-banner browser assertion | planned | Existing E2E test failed | — |
+| R10 | P2 | Fix ambiguous update-banner browser assertion | done | 72/72 non-relay browser cases pass | Codex; 2026-09-26; update-detection.spec.ts; [record](#r10-completion) |
 | R11 | P2 | Unblock and complete the full browser gate | blocked | Host port 3001 occupied during review | — |
 | R12 | P2 | Close integration-test blind spots | planned | Test helpers/mocks inspected | — |
 | R13 | P2 | Investigate response-body timeout coverage | needs_investigation | Timeout ends before body consumption | — |
@@ -215,9 +215,9 @@ Source map: `app/tests/e2e/update-detection.spec.ts:84`. Actual failure: `page.l
 
 Implementation: use the intended accessible navigation landmark, and test an actual navigation action while the banner remains present. Do not merely suppress strictness with `.first()` or remove the assertion.
 
-- [ ] Banner-visible navigation test passes on intended viewport(s) and verifies the route changes.
-- [ ] Dismiss/reload behaviors remain covered.
-- [ ] Full non-relay bucket passes; R11 records the complete gate separately.
+- [x] Banner-visible navigation test passes on intended viewport(s) and verifies the route changes.
+- [x] Dismiss/reload behaviors remain covered.
+- [x] Full non-relay bucket passes; R11 records the complete gate separately.
 
 **R11 — restore full E2E execution (P2, environment blocker)**
 
@@ -388,3 +388,48 @@ platform/version stamps; subsequent calls do not reinstall. Evidence:
 No production storage or behavior changes. Existing platform detection and install/build/test
 entry points remain intact. Native macOS execution was not available in this Linux ARM environment.
 Sign-off: Codex, 2026-09-26; isolated control-flow checks passed.
+
+<a id="r10-completion"></a>
+**R10 completion — 2026-09-26, Codex**
+
+State: done. Implementation reference: `app/tests/e2e/update-detection.spec.ts`
+in the commit containing this completion record. The ambiguous `nav` assertion
+now selects the exact accessible Main navigation landmark, follows its Settings
+link, verifies the route change, and confirms the banner remains visible.
+The first implementation attempt used an exact `href` selector that did not match
+the static site's trailing-slash URL; the browser run reproduced this as a test
+locator failure (70 passed, one failed), not a production navigation defect.
+The final test uses the accessible Settings link and accepts the trailing slash.
+Dismissal coverage is retained. Added an actual main-frame document request check
+for the banner's reload action on the settings page.
+
+Acceptance evidence: `make test-e2e-fast` passed **72 of 72 cases**, no failures or
+skips, in 3.6 minutes on the configured Desktop Chrome viewport, Linux ARM.
+[Passing bucket log](2026-09-26-project-review-evidence/r10-nonrelay-pass.log).
+[Failed first attempt and setup diagnostics](2026-09-26-project-review-evidence/implementation-e2e-attempt-1.log).
+All three R10 acceptance items are satisfied. Production behavior was unchanged;
+no product behavior documentation update is needed for this test repair.
+Sign-off: Codex, 2026-09-26, browser evidence above.
+
+**Requested stop after R10 — continuation journal**
+
+The user requested stopping after the next completed task; R10 is that task.
+The prior aggregate browser run (session 63174) terminated with the documented
+non-relay failure before starting relay fixtures. The corrected non-relay run
+(session 84670) exited successfully. Neither run constitutes a full browser-gate
+pass; R11 and R22 remain unfinished. No relay/Blossom containers were started.
+The dev server owned by the test runner has exited.
+
+Branch: `master`, preceding completed-task commit `7fccaf1` (R14).
+R10's test and browser logs are committed with this record. Other working-tree
+changes remain uncommitted and must be preserved: R01/R05/R15 lifecycle changes,
+their dispatcher and historical-subscription tests, offline poll/chat browser test,
+and groups/polls behavior documentation. Their previous unit run passed 225 files,
+4,411 tests with one skipped; type checking passed, but real relay/offline and React
+lifecycle acceptance evidence is still outstanding. Existing unrelated user changes
+remain untouched. Do not infer completion of those tasks from R10's browser pass.
+
+On resume: inspect current state, finish the lifecycle work package and its relay
+verification, then proceed with the account/signer P1 tasks R02/R03/R04 and the
+rest of the ledger. A production build and final full integration gate remain
+required. No verification process is intentionally left running.
