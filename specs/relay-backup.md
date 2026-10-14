@@ -48,7 +48,7 @@ Default to the same relays from the kind 30051 addressable relay list (the `d:ma
 
 ### 9. Restore conflict handling
 
-Restore always overwrites local state completely. If the user has partial local state and restores from backup, the backup wins. This avoids complex merge logic. Users are warned before restore that it replaces all current data.
+Restore is **non-destructive** (supersedes the original clear-and-replace design, which wiped categories the backup does not carry — contacts, DM threads, knownPeers, relays, signerMode — and was fixed as a bug). Restore overwrites only the categories the backup carries (settings, profile, and each backed-up group's metadata, MLS state and member profiles), never deletes groups absent from the backup, and **merges** group chat by message id (local wins on id collision) because the backup truncates chat history. `restoreFromBackup` in `app/src/lib/backup/relayBackup.ts` is authoritative; user-facing behaviour is described in `docs/behavior/backup-and-recovery.md`.
 
 ## What Gets Backed Up
 
@@ -195,15 +195,14 @@ Signed with the user's private key via the existing `signerAdapter.signEvent()`.
 4. Decrypt content via `signer.nip44.decrypt(ownPubkey, event.content)`
 5. `JSON.parse(decrypted)` → validate `version` field
 6. If `version > 1`: reject with "backup from newer nostling version" message
-7. Warn user that restore replaces all current data, get confirmation
-8. Clear existing local state (localStorage keys + IDB stores)
+7. ~~Warn user that restore replaces all current data~~ / ~~8. Clear existing local state~~ — superseded: restore is non-destructive (see Key Decision 9); nothing is cleared.
 9. Rehydrate localStorage: write each non-null field back to its `lp_*` key
 10. Rehydrate IDB:
     a. For each group in `groups[]`: `saveGroup(group)`
     b. For each entry in `groupStates`: base64-decode → `IdbGroupStateBackend.setItem(groupId, state)`
     c. For each entry in `memberScores`: `saveMemberScores(groupId, scores)`
     d. For each entry in `memberProfiles`: `saveMemberProfiles(groupId, profiles)`
-    e. For each entry in `chatMessages`: write messages via idb-keyval `set(storageKey, messages)`
+    e. For each entry in `chatMessages`: merge with the stored messages by id (local wins on collision), sort chronologically, write back via idb-keyval
 11. Set `lp_nostrIdentityBackedUp_v1 = 'true'`
 12. Reload app to reinitialize contexts with restored state
 

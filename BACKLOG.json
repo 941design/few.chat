@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-07-25T15:14:57Z",
+  "updated_at": "2026-10-14T05:44:40Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -561,19 +561,6 @@
       "motivation": "The close message carries an authoritative tally that replaces each member's locally-computed result, so a forged close (author checked only against the self-reported pubkey, per ADR-006) lets any member inject an arbitrary result for everyone — higher impact than a forged vote. Separately, the vote parser never checks a single-choice poll's responses count, so a crafted multi-response vote inflates several options at once. Surfaced while writing docs/behavior/polls.md.",
       "behavior": "Close authorization compares poll.creatorPubkey to the rumor's self-reported pubkey only (no cryptographic sender binding — marmot-ts drops the MLS sender leaf, ADR-006). parsePollVote requires >=1 response but does not enforce single-choice (<=1) against poll type, and tallying counts every response. parsePollOpen checks only >=2 options — no upper bound or length caps on receipt (caps are creation-side only).",
       "approach": "On receipt: reject a close whose tally is recomputed-mismatched or (longer term) bind authorship when marmot-ts exposes the sender leaf; enforce single-choice response-count against poll type before tallying; apply the option-count and length caps on the receive side too. Accept residual member-on-member risk per ADR-006 but remove the amplifiers (tally injection, multi-count).",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "relay-backup-md-section-9-specifies",
-      "scope": "any",
-      "anchor": {
-        "path": "specs/relay-backup.md"
-      },
-      "text": "relay-backup.md Section 9 specifies a destructive clear-and-replace restore, but shipped restore is a non-destructive merge (relayBackup.ts restoreFromBackup documents the earlier blanket-clear as a fixed bug) — the spec is stale",
-      "created_at": "2026-07-19",
-      "motivation": "The spec is a misleading source of truth: it tells a reader/agent that restore wipes and replaces all local state, when the shipped code deliberately preserves everything the backup does not carry (contacts, DMs, knownPeers, relays, signerMode) and merges group chat by message id. Anyone reasoning from the spec would document or reason about data-loss behaviour that no longer exists. Surfaced while writing docs/behavior/backup-and-recovery.md.",
-      "behavior": "relay-backup.md Section 9 says restore 'always overwrites local state completely / clear existing local state'. restoreFromBackup in app/src/lib/backup/relayBackup.ts overwrites only backup-carried categories (settings, profile), adds/updates groups without deleting others, and merges group chat (local wins on id collision), with a header comment noting the earlier clear-everything approach was a bug. The spec is not marked superseded.",
-      "approach": "Update relay-backup.md Section 9 to describe the non-destructive add/update/merge restore, or mark it superseded and point to the implementation as authoritative.",
       "kind": "spec-gap"
     },
     {
