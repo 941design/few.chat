@@ -994,3 +994,266 @@ describe('BackupScheduler', () => {
     scheduler.dispose();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Behaviour contracts surfaced by the 2026-10-14 mutation audit of
+// relayBackup.ts — each block asserts a user-facing guarantee the suite above
+// only touched without pinning down.
+// ---------------------------------------------------------------------------
+
+function backupEvent(payload: Partial<BackupPayload>, createdAt: number | undefined, id: string) {
+  return {
+    content: `encrypted:${JSON.stringify({ ...makeEmptyPayload(), ...payload })}`,
+    created_at: createdAt,
+    id,
+  };
+}
+
+describe('fetchBackup — only the user\'s own, newest backup is restored', () => {
+  it('queries exactly the backup address: kind 30078, own pubkey, d:few', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(), timedOut: false });
+
+    await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never, ['wss://r.example']);
+
+    expect(mockFetchEventsWithTimeout.mock.calls[0][1]).toEqual({
+      kinds: [30078],
+      authors: ['deadbeef'],
+      '#d': ['few'],
+    });
+  });
+
+  it('reads from the given relays, falling back to the effective relays when none are given', async () => {
+    const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(), timedOut: false });
+
+    await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never, ['wss://given.example']);
+    expect(vi.mocked(NDKRelaySet.fromRelayUrls).mock.calls[0][0]).toEqual(['wss://given.example']);
+
+    await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never);
+    expect(vi.mocked(NDKRelaySet.fromRelayUrls).mock.calls[1][0]).toEqual([
+      'wss://relay.damus.io',
+      'wss://nos.lol',
+    ]);
+  });
+
+  it('picks the newest backup regardless of the order relays return events in', async () => {
+    const newest = backupEvent({ settings: { theme: 'spring', language: 'en' } }, 300, 'new');
+    const older = backupEvent({ settings: { theme: 'spring', language: 'de' } }, 200, 'mid');
+    const oldest = backupEvent({ settings: { theme: 'spring', language: 'fr' } }, 100, 'old');
+    const orders = [
+      [newest, older, oldest],
+      [older, newest, oldest],
+      [oldest, older, newest],
+      [older, oldest, newest],
+    ];
+    for (const order of orders) {
+      mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(order), timedOut: false });
+      const result = await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never);
+      expect(result!.settings).toEqual({ theme: 'spring', language: 'en' });
+    }
+  });
+
+  it('keeps the first-seen event on an equal timestamp and prefers a dated event over an undated one', async () => {
+    const first = backupEvent({ settings: { theme: 'spring', language: 'en' } }, 100, 'a');
+    const tie = backupEvent({ settings: { theme: 'spring', language: 'de' } }, 100, 'b');
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set([first, tie]), timedOut: false });
+    expect((await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never))!.settings!.language).toBe('en');
+
+    const dated = backupEvent({ settings: { theme: 'spring', language: 'en' } }, 5, 'dated');
+    const undated = backupEvent({ settings: { theme: 'spring', language: 'de' } }, undefined, 'undated');
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set([dated, undated]), timedOut: false });
+    expect((await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never))!.settings!.language).toBe('en');
+  });
+
+  it('does not attempt decryption when no backup exists', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(), timedOut: false });
+    const signer = makeMockSigner();
+
+    expect(await fetchBackup(signer, 'deadbeef', mockNdk as never)).toBeNull();
+    expect(signer.nip44.decrypt).not.toHaveBeenCalled();
+  });
+});
+
+describe('getBackupRelays — backups go to the user\'s own newest relay list', () => {
+  it('queries kind 30051 relay lists authored by the user', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(), timedOut: false });
+
+    await getBackupRelays(mockNdk as never, 'deadbeef');
+
+    expect(mockFetchEventsWithTimeout.mock.calls[0][1]).toEqual({
+      kinds: [30051],
+      authors: ['deadbeef'],
+    });
+  });
+
+  it('uses the newest relay list regardless of event order', async () => {
+    const newest = { created_at: 300, tags: [['relay', 'wss://newest.example']], id: 'n' };
+    const older = { created_at: 200, tags: [['relay', 'wss://older.example']], id: 'o' };
+    for (const order of [[newest, older], [older, newest]]) {
+      mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(order), timedOut: false });
+      expect(await getBackupRelays(mockNdk as never, 'deadbeef')).toEqual(['wss://newest.example']);
+    }
+  });
+
+  it('keeps the first-seen list on an equal timestamp', async () => {
+    const first = { created_at: 100, tags: [['relay', 'wss://first.example']], id: 'a' };
+    const tie = { created_at: 100, tags: [['relay', 'wss://tie.example']], id: 'b' };
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set([first, tie]), timedOut: false });
+
+    expect(await getBackupRelays(mockNdk as never, 'deadbeef')).toEqual(['wss://first.example']);
+  });
+
+  it('falls back to the effective relays when no list carries a timestamp', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({
+      events: new Set([{ tags: [['relay', 'wss://undated.example']], id: 'u' }]),
+      timedOut: false,
+    });
+
+    expect(await getBackupRelays(mockNdk as never, 'deadbeef')).toEqual([
+      'wss://relay.damus.io',
+      'wss://nos.lol',
+    ]);
+  });
+
+  it('ignores non-relay tags and empty relay values', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({
+      events: new Set([
+        {
+          created_at: 1,
+          tags: [['d', 'marmot'], ['relay', ''], ['r', 'wss://kept.example'], ['p', 'wss://not-a-relay']],
+          id: 'x',
+        },
+      ]),
+      timedOut: false,
+    });
+
+    expect(await getBackupRelays(mockNdk as never, 'deadbeef')).toEqual(['wss://kept.example']);
+  });
+});
+
+describe('createBackupEvent — relay-acceptable timestamp', () => {
+  it('stamps created_at in Unix seconds, not milliseconds', async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const event = await createBackupEvent(makeEmptyPayload(), makeMockSigner(), 'deadbeef');
+    const after = Math.floor(Date.now() / 1000);
+
+    expect(event.created_at).toBeGreaterThanOrEqual(before);
+    expect(event.created_at).toBeLessThanOrEqual(after);
+  });
+});
+
+describe('restoreFromBackup — never clobbers local data the backup lacks', () => {
+  it('leaves local settings and profile untouched when the backup carries none', async () => {
+    localStore[STORAGE_KEYS.settings] = JSON.stringify({ theme: 'local', language: 'de' });
+    localStore[STORAGE_KEYS.userProfile] = JSON.stringify({ nickname: 'Local', avatar: null });
+
+    await restoreFromBackup(makeEmptyPayload({ settings: null, userProfile: null }));
+
+    expect(JSON.parse(localStore[STORAGE_KEYS.settings])).toEqual({ theme: 'local', language: 'de' });
+    expect(JSON.parse(localStore[STORAGE_KEYS.userProfile])).toEqual({ nickname: 'Local', avatar: null });
+  });
+
+  it('keeps the local copy of a message on id collision', async () => {
+    const msg = (content: string) => ({ id: 'm1', content, senderPubkey: 'pk', groupId: 'g1', createdAt: 1 });
+    await set('few:messages:g1', [msg('local (edited)')]);
+
+    await restoreFromBackup(makeEmptyPayload({ chatMessages: { g1: [msg('backup')] } }));
+
+    const stored = (await get('few:messages:g1')) as ChatMessage[];
+    expect(stored).toHaveLength(1);
+    expect(stored[0].content).toBe('local (edited)');
+  });
+
+  it('stores the merged history in chronological order whatever the input order', async () => {
+    const m = (id: string, createdAt: number) => ({ id, content: id, senderPubkey: 'pk', groupId: 'g1', createdAt });
+    await set('few:messages:g1', [m('l5', 5), m('l1', 1), m('l9', 9)]);
+
+    await restoreFromBackup(
+      makeEmptyPayload({ chatMessages: { g1: [m('b7', 7), m('b3', 3), m('b11', 11)] } }),
+    );
+
+    const stored = (await get('few:messages:g1')) as ChatMessage[];
+    expect(stored.map((x) => x.createdAt)).toEqual([1, 3, 5, 7, 9, 11]);
+  });
+});
+
+describe('BackupScheduler — 5-minute debounce contract', () => {
+  const FIVE_MIN = 5 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a deferred markDirty publishes at exactly five minutes, not before', () => {
+    const publishFn = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty();
+    vi.advanceTimersByTime(FIVE_MIN - 1);
+    expect(publishFn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+
+    scheduler.dispose();
+  });
+
+  it('a change inside the window publishes when the window ends, not a full interval later', () => {
+    const publishFn = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2 * 60 * 1000);
+    scheduler.markDirty();
+    vi.advanceTimersByTime(3 * 60 * 1000 - 1);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+
+    scheduler.dispose();
+  });
+
+  it('an immediate request publishes at once when the window has exactly elapsed', () => {
+    const publishFn = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    vi.advanceTimersByTime(FIVE_MIN);
+    scheduler.markDirty(true);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+
+    scheduler.dispose();
+  });
+
+  it('ignores changes after dispose()', () => {
+    const publishFn = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.dispose();
+    scheduler.markDirty(true);
+    scheduler.markDirty();
+    vi.advanceTimersByTime(2 * FIVE_MIN);
+
+    expect(publishFn).not.toHaveBeenCalled();
+  });
+
+  it('survives a rejected publish and keeps scheduling', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const publishFn = vi.fn().mockRejectedValueOnce(new Error('relay down')).mockResolvedValue(undefined);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    scheduler.markDirty();
+    vi.advanceTimersByTime(FIVE_MIN);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+
+    scheduler.dispose();
+    warn.mockRestore();
+  });
+});
