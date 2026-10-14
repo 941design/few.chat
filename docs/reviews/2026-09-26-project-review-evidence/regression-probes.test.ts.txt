@@ -1,0 +1,78 @@
+import { it, expect, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { EventEmitter } from 'node:events';
+import { savePoll, saveVote, loadVotes, getPoll } from '@/src/lib/marmot/pollPersistence';
+import { mergeMemberProfile, loadMemberProfiles } from '@/src/lib/marmot/groupStorage';
+import { createPollOpenHandler, createPollVoteHandler } from '@/src/lib/marmot/handlers/pollHandler';
+import { computeTally } from '@/src/lib/marmot/pollTally';
+import { createDispatcher } from '@/src/lib/marmot/applicationRumorDispatcher';
+import { STORAGE_KEYS } from '@/src/types';
+
+vi.mock('@internet-privacy/marmot-ts', () => ({
+  deserializeApplicationData: (data: Uint8Array) => JSON.parse(new TextDecoder().decode(data)),
+}));
+
+const options = [{ id: 'A', label: 'A' }, { id: 'B', label: 'B' }];
+const deps = { savePoll, saveVote, getPoll, loadVotes, setPollVersion: vi.fn() };
+const ctx = (groupId: string) => ({ groupId, selfPubkeyHex: 'self', getActiveGroupId: () => null });
+const sender = { pubkey: 'alice', authenticity: 'mls' as const };
+const rumor = (kind: number, content: object, created_at = 1) => ({
+  id: crypto.randomUUID(), kind, pubkey: 'alice', content: JSON.stringify(content), created_at, tags: [],
+});
+const poll = (id: string, groupId: string) => ({ id, groupId, title: 'Vote', options,
+  creatorPubkey: 'alice', createdAt: 1, closed: false, pollType: 'singlechoice' as const });
+
+it('review: votes from a same-id poll in another group must be isolated', async () => {
+  await savePoll(poll('collision', 'private-group'));
+  await savePoll(poll('collision', 'other-group'));
+  await createPollVoteHandler(deps).handle(rumor(11, { pollId: 'collision', responses: ['A'] }), ctx('other-group'), sender);
+  const privatePoll = await getPoll('private-group', 'collision');
+  expect(computeTally(privatePoll!.options, await loadVotes(privatePoll!.id)).totalVoters).toBe(0);
+});
+
+it('review: older votes must not replace a newer choice on relay replay', async () => {
+  await savePoll(poll('ordering', 'ordering-group'));
+  const handler = createPollVoteHandler(deps);
+  await handler.handle(rumor(11, { pollId: 'ordering', responses: ['B'] }, 200), ctx('ordering-group'), sender);
+  await handler.handle(rumor(11, { pollId: 'ordering', responses: ['A'] }, 100), ctx('ordering-group'), sender);
+  expect((await loadVotes('ordering'))[0].responses).toEqual(['B']);
+});
+
+it('review: concurrent member profile arrivals must both survive IDB merge', async () => {
+  await Promise.all(['alice', 'bob'].map(pubkeyHex => mergeMemberProfile('profile-race', {
+    pubkeyHex, nickname: pubkeyHex, avatar: null, updatedAt: '2026-09-26T12:00:00.000Z',
+  })));
+  expect((await loadMemberProfiles('profile-race')).map(p => p.pubkeyHex).sort()).toEqual(['alice', 'bob']);
+});
+
+it('review: dispatcher must finish opening a poll before dispatching its vote', async () => {
+  const group = new EventEmitter();
+  const done: Promise<void>[] = [];
+  const wrap = (h: any) => ({ ...h, handle(...args: any[]) { const p = h.handle(...args); done.push(p); return p; } });
+  const unsubscribe = createDispatcher([wrap(createPollOpenHandler(deps)), wrap(createPollVoteHandler(deps))])
+    .subscribe(group as any, ctx('dispatch-group'));
+  const emit = (r: object) => group.emit('authenticatedApplicationMessage', {
+    message: new TextEncoder().encode(JSON.stringify(r)), senderPubkey: 'alice', senderLeafIndex: 0,
+  });
+  emit(rumor(10, { ...poll('dispatch', 'dispatch-group') }));
+  emit(rumor(11, { pollId: 'dispatch', responses: ['A'] }));
+  await Promise.all(done);
+  unsubscribe();
+  expect(await loadVotes('dispatch')).toHaveLength(1);
+});
+
+it('review: a fresh NDK instance must use persisted relay settings', async () => {
+  vi.stubGlobal('window', new EventTarget());
+  vi.stubGlobal('localStorage', { getItem: (key: string) => key === STORAGE_KEYS.relays ? JSON.stringify(['wss://chosen.example']) : null });
+  const { getNdk } = await import('@/src/lib/ndkClient');
+  expect(getNdk()!.explicitRelayUrls).toEqual(['wss://chosen.example']);
+});
+
+it('review: reconnecting the local transport must preserve an active external signer', async () => {
+  const { getNdk, applyNdkSigner } = await import('@/src/lib/ndkClient');
+  const { NDKPrivateKeySigner } = await import('@nostr-dev-kit/ndk');
+  const external = new NDKPrivateKeySigner('02'.repeat(32));
+  applyNdkSigner(external as any);
+  expect(getNdk('01'.repeat(32))!.signer).toBe(external);
+  vi.unstubAllGlobals();
+});

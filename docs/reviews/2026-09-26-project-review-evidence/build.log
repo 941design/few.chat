@@ -1,0 +1,57 @@
+cd app && NEXT_PUBLIC_BUILD_VERSION=9eef568 npm run build
+
+> few-chat@0.1.0 prebuild
+> node scripts/generate-theme-registry.mjs && vitest run tests/unit/themes-validation.test.ts
+
+Wrote /Users/mrother/Projects/941design/quizzl/app/src/themes/registry.generated.ts (7 themes: deep-sea, forest, lagoon, lavender, lime, rose, spring).
+
+ RUN  v4.0.18 /Users/mrother/Projects/941design/quizzl/app
+
+ ✓ tests/unit/themes-validation.test.ts (110 tests) 46ms
+
+ Test Files  1 passed (1)
+      Tests  110 passed (110)
+   Start at  16:18:32
+   Duration  217ms (transform 87ms, setup 0ms, import 120ms, tests 46ms, environment 0ms)
+
+
+> few-chat@0.1.0 build
+> next build
+
+ ⚠ Disabling SWC Minifer will not be an option in the next major version. Please report any issues you may be experiencing to https://github.com/vercel/next.js/issues
+  ▲ Next.js 14.2.35
+
+   Linting and checking validity of types ...
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Collecting page data ...
+   Generating static pages (0/12) ...
+   Generating static pages (3/12) 
+   Generating static pages (6/12) 
+   Generating static pages (9/12) 
+ ✓ Generating static pages (12/12)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (pages)                              Size     First Load JS
+┌ ○ /                                      2.76 kB         615 kB
+├   /_app                                  0 B             613 kB
+├ ○ /404                                   194 B           613 kB
+├ ○ /add                                   5.21 kB         618 kB
+├ ○ /contacts                              3.49 kB         643 kB
+├ ○ /feedback (388 ms)                     1.17 kB         637 kB
+├ ○ /groups (393 ms)                       25 kB           659 kB
+├ ○ /imprint                               3.87 kB         651 kB
+├ ○ /info                                  3.87 kB         651 kB
+├ ○ /profile                               7.87 kB         624 kB
+├ ○ /settings (392 ms)                     12.5 kB         627 kB
+└ ○ /theme-preview                         4.79 kB         620 kB
++ First Load JS shared by all              613 kB
+  ├ chunks/framework-e08ca35bb8c7d6c2.js   45.2 kB
+  ├ chunks/main-d75f6837210b7139.js        34.4 kB
+  ├ chunks/pages/_app-504582f7e598476c.js  530 kB
+  └ other shared chunks (total)            2.51 kB
+
+○  (Static)  prerendered as static content
+
+Static files available in app/out/

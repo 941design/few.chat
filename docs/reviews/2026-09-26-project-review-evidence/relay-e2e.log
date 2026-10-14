@@ -1,0 +1,25 @@
+# Wipe relay state between runs — strfry uses tmpfs but only loses state on
+# container removal, not on `up -d`. Without a clean slate, gift wraps from
+# prior runs accumulate and pollute the Walled Garden v2 pending-invitation
+# queue in tests that drive the invite/accept flow.
+docker compose -f docker-compose.e2e.yml down -v
+ Container quizzl-blossom-mock-1 Stopping 
+ Container quizzl-strfry-1 Stopping 
+ Container quizzl-blossom-mock-1 Stopped 
+ Container quizzl-blossom-mock-1 Removing 
+ Container quizzl-strfry-1 Stopped 
+ Container quizzl-strfry-1 Removing 
+ Container quizzl-strfry-1 Removed 
+ Container quizzl-blossom-mock-1 Removed 
+docker compose -f docker-compose.e2e.yml up -d --wait
+ Network quizzl_default Creating 
+ Network quizzl_default Created 
+ Container quizzl-strfry-1 Creating 
+ Container quizzl-blossom-mock-1 Creating 
+ Container quizzl-strfry-1 Created 
+ Container quizzl-blossom-mock-1 Created 
+ Container quizzl-blossom-mock-1 Starting 
+ Container quizzl-strfry-1 Starting 
+ Container quizzl-strfry-1 Started 
+Error response from daemon: ports are not available: exposing port TCP 0.0.0.0:3001 -> 127.0.0.1:0: listen tcp 0.0.0.0:3001: bind: address already in use
+make: *** [test-e2e] Error 1
