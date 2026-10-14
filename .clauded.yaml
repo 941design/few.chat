@@ -6,10 +6,10 @@ vm:
   memory: 8GiB
   disk: 20GiB
   forward_env:
-  - MINIMAX_API_KEY
   - OLLAMA_REVIEW_MODEL
   - OLLAMA_HOST
   - INK_GITHUB_TOKEN:GITHUB_TOKEN
+  - CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
 mount:
   host: /Users/mrother/Projects/941design/quizzl
   guest: /Users/mrother/Projects/941design/quizzl
@@ -21,6 +21,7 @@ environment:
   rust: null
   go: null
   dart: null
+  swift: null
   c: null
   tools:
   - docker
