@@ -1,0 +1,77 @@
+{
+  "bug_name": "pending-invite-no-live-update",
+  "bug_report_file": "bug-reports/pending-invite-no-live-update-report.md",
+  "created_at": "2026-07-25T07:55:11Z",
+  "updated_at": "2026-07-25T07:55:11Z",
+  "phase": "ESCALATED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "Q1",
+      "category": "TEST",
+      "question": "Does a reproduction test demonstrate the bug in the UNCOVERED scenario — invitee idle and NOT on /groups when the Welcome arrives — and does it FAIL before the fix for the right reason (live pill/card stays stale, not a syntax/setup error)? A test that keeps the invitee on /groups with MarmotContext churning is NOT a valid reproduction (it is masked by incidental re-renders)."
+    },
+    {
+      "id": "Q2",
+      "category": "SPEC",
+      "question": "Is the identified root cause the ACTUAL mechanism (proven by runtime observation), not a guess? Specifically: was it settled which of the candidates holds — module-instance duplication of pendingInvitations, an _emit()-not-reaching-React snapshot/subscribe issue, or a startup-window race — with concrete evidence rather than assumption?"
+    },
+    {
+      "id": "Q3",
+      "category": "SPEC",
+      "question": "After the fix, does the pending-invitation pill (Layout nav badge) AND the /groups invitation card both update LIVE on arrival with no reload and no incidental re-render dependency — verified in an idle context (nothing else re-rendering)?"
+    },
+    {
+      "id": "Q4",
+      "category": "QUALITY",
+      "question": "Is the fix minimal and scoped to the reactivity defect? It must NOT rewrite the store architecture, must NOT broadcast profile metadata, and must NOT introduce a polling/interval workaround masking the real re-render gap."
+    },
+    {
+      "id": "Q5",
+      "category": "ARCHITECTURE",
+      "question": "Does the fix preserve the pendingInvitations.ts design constraints (pure localStorage; no IDB/NDK/React/context imports) and the SEEN_KEY dedup semantics (no re-enqueue on reload, no duplicate invitations)?"
+    },
+    {
+      "id": "Q6",
+      "category": "TEST",
+      "question": "Does the full unit suite pass with no regressions, and does the new reproduction test now PASS after the fix? Are baseline vs final counts recorded?"
+    },
+    {
+      "id": "Q7",
+      "category": "QUALITY",
+      "question": "If the fix touches the store's snapshot/emit or adds a MarmotContext-side live bump, does it avoid the getSnapshot infinite-loop footgun (getSnapshot must return a cached stable reference between writes) and avoid tearing the useSyncExternalStore contract?"
+    },
+    {
+      "id": "Q8",
+      "category": "SPEC",
+      "question": "Is the user-facing behaviour doc updated if this changes documented invitation behaviour (docs/behavior/), per the project's documentation-upkeep rule — or is its non-applicability explicitly justified?"
+    }
+  ],
+  "pre_existing_dirty_files": [".serena/project.yml"],
+  "plugin_sha": "f5e4524c7b9618d99914da272f8e8e9745ed9057",
+  "consumer_sha": "4f0852da74a4238808424b808b418c0ec610f136",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": {"unit_files": 224, "unit_passed": 4345, "unit_skipped": 1, "typecheck": "clean"},
+  "fix": null,
+  "outcome": "not-reproducible-in-source",
+  "escalation_resolution": {
+    "resolved_by": "user",
+    "user_conditions": "foreground-and-visible-the-whole-time; observed on deployed few.chat",
+    "finding": "Faithful idle/off-/groups reproduction PASSES in current source, incl. a production static-export build; all three candidate mechanisms (module duplication, emit-not-reaching-React, startup race) disproven with direct evidence. Defect does not live in current reactivity source. Manifests only in deployed runtime -> likely a stale deployed bundle OR real-relay propagation/connection fragility with no reload-free recovery path (app has zero visibilitychange/online/reconnect handling).",
+    "product_code_changed": false,
+    "regression_test_added": "app/tests/e2e/groups-pending-invite-live-idle.spec.ts",
+    "recommended_next_steps": [
+      "Redeploy few.chat from current HEAD and re-test (rules out stale bundle; cheapest).",
+      "If it recurs on a fresh deploy: add a focus/visibilitychange/online handler that re-subscribes welcomes and refreshes the pending-invitation snapshot (self-healing resilience fix)."
+    ]
+  },
+  "review_rounds": [],
+  "remediation_round": 0,
+  "phase_history": [
+    {"phase": "INITIALIZED", "timestamp": "2026-07-25T07:55:11Z", "trigger": "workflow_start"}
+  ]
+}

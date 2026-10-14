@@ -1,0 +1,72 @@
+{
+  "bug_name": "pending-invite-no-live-update",
+  "status": "NOT_REPRODUCIBLE",
+  "root_cause": "None found. Rigorous, repeated runtime reproduction (idle recipient, off /groups, cold identity, freshly-wiped relay) against BOTH `next dev` and a production `next build` static-export (output: 'export') shows the pending-invitation nav badge and the /groups invitation card both update live, with zero page reloads, exactly matching the EXPECTED behavior the bug report describes as missing. None of the three candidate root causes the lead flagged for empirical distinction actually holds: (1) module-instance duplication of pendingInvitations.ts across the MarmotProvider next/dynamic() chunk boundary — DISPROVEN by inspecting the built .next/static/chunks/*.js: the module's storage-key string literal (and MarmotProvider/welcomeSubscription.ts) appear in exactly one file, pages/_app-<hash>.js — this app's build config (output:'export', no custom splitChunks, providers eagerly mounted in _app.tsx) does not split next/dynamic() imports into an isolated chunk with duplicated shared modules; (2) an _emit()-not-reaching-React useSyncExternalStore snapshot/subscribe defect — DISPROVEN behaviorally: the badge DOM element (which does not exist at all when count is 0) materializes live with the correct incremented count with no navigation, reload, or click in between arrival and assertion, across 5 separate confirmation runs (3 exact-match, 2 with pre-existing relay pollution from my own dev-iteration that still showed correct live multi-invite increments, e.g. 0->3 in one run); (3) a startup-window race — not applicable, since the recipient's subscription is fully warmed (MarmotContext mounts once in _app.tsx, independent of route) well before the invite is sent in every run. No commit in this codebase's history touches pendingInvitations.ts's emit/subscribe mechanism in a way that could explain a recent fix, and Layout.tsx's only recent change (4f0852d, mobile-nav bottom-bar-always-shown) does not touch the pendingInvitationCount computation or its useSyncExternalStore wiring — it only changes when the bottom-bar Box element itself mounts.",
+  "hypothesis_for_unreproducibility": "Most likely explanations, in order of plausibility, for why the user observed the defect on the live few.chat deployment: (a) deploy lag — the Cloudflare Pages deployment (few.chat) may have been running an older build than the current working-tree HEAD (4f0852d) at the time of the report, and some prior, now-superseded change already fixed this; (b) an environment-specific factor not reproducible in Playwright/Chromium — e.g. the recipient's actual browser tab was backgrounded/minimized (not just idle-but-foregrounded, which is what this repro tested) and a mobile OS or browser suspended timers/JS execution in a way that delayed the WebSocket message delivery itself (the lead's 'arrival DOES reach localStorage during the live session' claim was inferred from the SEEN_KEY guard on reload, not confirmed via live DevTools observation at report time, so a delayed-but-eventually-delivered arrival remains possible); (c) report inaccuracy (the user's memory of what they saw may not exactly match what happened, e.g. they may not have waited long enough before reloading). None of these are fixable via a code change without further diagnostic information from the user (device/browser, foreground vs backgrounded tab, elapsed idle time, whether tested against the deployed site or a local build).",
+  "recommendation": "Defer-stamp this finding as `already-resolved` (if promoted to BACKLOG) or ask the user for reproduction specifics (browser/device, tab foreground/background state, and whether they were testing the deployed few.chat site vs. a fresh local build) before any further engineering time is spent. Do not implement a speculative fix against a mechanism proven correct by direct runtime evidence — that would violate the 'minimal, root-cause-focused' mandate and risks masking a real gap elsewhere (e.g. relay delivery under real network conditions) behind an unnecessary code change.",
+  "fix": {
+    "description": "No production code change. Added a new permanent e2e regression spec, app/tests/e2e/groups-pending-invite-live-idle.spec.ts, closing a real, previously-undetected coverage gap: none of the ~19 existing invite/accept specs test the idle+off-/groups scenario (they all keep the invitee on /groups with MarmotContext actively churning, per group-setup.ts's createGroupAndInvite helper, which masks a true reactivity regression via incidental re-renders — this is the exact masking mechanism documented in the bug report and the prior learning boolean-derived-beside-usesyncexternalstore). This spec now guards the specific idle, off-/groups, cold-identity scenario going forward, so a FUTURE regression in this exact reactivity path (e.g. a real module-duplication bug introduced by a later webpack/build-config change) would be caught.",
+    "files_changed": [
+      "app/tests/e2e/groups-pending-invite-live-idle.spec.ts (new file)"
+    ]
+  },
+  "tests_added": {
+    "e2e": [
+      {
+        "file": "app/tests/e2e/groups-pending-invite-live-idle.spec.ts",
+        "test": "Groups nav badge increments live and the invitation card appears without a reload",
+        "scenario": "Bob boots on a cold (never-before-seen, per-spec-file-salted) identity, lands on `/` (home page, the app's actual landing route), and stays fully idle there — no navigation, reload, or interaction. Alice creates a group and invites Bob through the real contact-picker flow (no raw WebSocket). Assertion: bobPage's groups-nav-badge (desktop nav pill) becomes visible and increments live with NEITHER a page.reload() NOR a page.goto() between invite-arrival and assertion — only a client-side nav click (home-groups-btn) is used afterward to confirm the /groups invitation card is also already present.",
+        "result_before_any_change": "PASSED (mechanism already correct; this is a new-coverage regression test, not a red-then-green bugfix test)",
+        "result_after": "PASSED",
+        "verified_against": ["next dev (E2E_GROUPS=1 node scripts/run-e2e.mjs)", "production static export (next build with output:'export', served statically, no SPA fallback rewrite)"]
+      }
+    ]
+  },
+  "baseline_vs_final": {
+    "unit_tests": { "baseline": "224 files / 4345 passed / 1 skipped", "final": "unchanged — no source file was modified" },
+    "lint": "NO_LINT — `next lint` is not configured in this project (prompts an interactive ESLint setup wizard on first run; not previously scaffolded)",
+    "typecheck": { "baseline": "clean (npx tsc --noEmit -p tsconfig.json, exit 0)", "final": "clean (exit 0, including the new spec file)" },
+    "e2e_targeted": "app/tests/e2e/groups-pending-invite-live-idle.spec.ts: 1/1 passed, confirmed on a freshly-wiped relay in both next dev and a production static-export build; also confirmed correct (live increment, not stuck) even when re-run against a relay carrying pollution from prior dev-iteration runs of this same investigation",
+    "e2e_full_gate": "NOT RUN — no product code changed; the full 60-test make test-e2e-all gate is the lead's call for whether a coverage-only addition warrants the full run before closing this bug"
+  },
+  "verification_questions": {
+    "Q1": {
+      "answer": "YES, but with an important nuance: the reproduction was written to the idle+off-/groups spec exactly as required, and it does NOT fail — it PASSES, both before and after nothing changed. This is itself the finding: a rigorous, faithful reproduction of the reported scenario shows correct behavior, not the reported defect. It fails for the 'right reason' is inapplicable here since there is no failure to diagnose; instead the test demonstrates the live-update mechanism working end-to-end (badge materializes from non-existent to visible-with-correct-count with zero navigation events).",
+      "evidence": "app/tests/e2e/groups-pending-invite-live-idle.spec.ts, 5 confirmation runs across next dev and a production static export, cold identity, freshly-wiped relay."
+    },
+    "Q2": {
+      "answer": "YES — settled by runtime observation, not assumption. All three candidates were empirically evaluated: module-duplication was ruled out by inspecting the actual production build's chunk files (single occurrence of the module in pages/_app-<hash>.js); the emit-not-reaching-React hypothesis was ruled out by the badge's live materialization in every clean run; the startup-race hypothesis was ruled out because the subscription is always fully warmed (mounted once in _app.tsx, independent of route) well before any invite in every test run. Conclusion: none of the three candidates is the actual mechanism, because there is no defect to attribute a mechanism to in the current codebase state.",
+      "evidence": "grep of .next/static/chunks/*.js for the pendingInvitations.ts storage-key literal after `next build` with NEXT_PUBLIC_RELAYS/NEXT_PUBLIC_BLOSSOM_BASE_URL pointed at the local test relay; 5 e2e confirmation runs."
+    },
+    "Q3": {
+      "answer": "YES, verified in an idle context with nothing else re-rendering (5-minute update-checker poll interval is far outside the ~5-9s test window; no other setInterval touches Layout's ancestor state within that window). Both the Layout nav badge (live, no navigation) and the /groups card (via client-side nav only, no reload) update correctly.",
+      "evidence": "Same e2e spec; passing runs on both next dev and a production static-export build."
+    },
+    "Q4": {
+      "answer": "N/A — no code fix was made (none was proven necessary). The only change is a new e2e test file, which is not a masking mechanism of any kind (no polling/interval added to product code, no store rewrite, no profile-metadata broadcast)."
+    },
+    "Q5": {
+      "answer": "N/A — pendingInvitations.ts was not modified. Its design constraints (pure localStorage, no IDB/NDK/React/context imports) and SEEN_KEY dedup semantics are untouched, confirmed by `git diff` showing zero changes to that file."
+    },
+    "Q6": {
+      "answer": "YES — full unit suite: 224 files / 4345 passed / 1 skipped, unchanged from baseline (no source file was modified, only a new e2e spec added). The new e2e reproduction passes.",
+      "evidence": "make test-unit output; targeted e2e runs above."
+    },
+    "Q7": {
+      "answer": "N/A — no snapshot/emit or MarmotContext-side change was made. No getSnapshot infinite-loop or tearing risk introduced."
+    },
+    "Q8": {
+      "answer": "Non-applicable, justified: no user-facing behaviour changed (nothing was fixed, because nothing was found broken). Checked docs/behavior/groups.md for any existing claim that would now be contradicted or need updating (e.g. an incorrect 'requires reload' or 'updates live' assertion) — no such claim exists in that document; it describes the accept/decline/cancel lifecycle but does not make a specific claim about live vs. reload-required delivery of the recipient-side badge/card. No documentation change is warranted."
+    }
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "harder_than_needed": "The bug report's 'confirmed' facts (arrival reaches localStorage live; only the UI update is broken) were framed as established by code-reading plus one inference (the SEEN_KEY guard proves the live handler ran), not by an actual runtime reproduction — no one had yet gotten the described defect to occur under controlled conditions before I was asked to fix its root cause. A meaningful fraction of the effort here went into confirming a negative (the mechanism works) rather than fixing anything, including building and serving a production static-export just to rule out the module-duplication hypothesis definitively, since `next dev` and `next build` can behave very differently for chunk-splitting questions and the existing e2e harness (scripts/run-e2e.mjs) only ever runs against `next dev`.",
+    "surprised_by": "The existing e2e harness (make test-e2e-groups / test-e2e-all) never exercises a production build at all — every e2e run in this project's Makefile spins up `next dev`, never `next build` + a static server. For a static-export app whose deploy target IS the production build's output (out/), this is a real blind spot: any defect that only manifests in `next build`'s bundling/minification/chunking (not just this bug's now-disproven module-duplication hypothesis, but any future one) is structurally invisible to the entire e2e suite as currently wired. Worth flagging to the project — no action taken here since it's out of this bug's scope.",
+    "scope": "project_specific"
+  },
+  "learnings_persisted": [
+    "few-chat-static-export-bundles-all"
+  ]
+}

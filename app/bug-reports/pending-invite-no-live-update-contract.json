@@ -1,0 +1,33 @@
+{
+  "bug_name": "pending-invite-no-live-update",
+  "fixer_phase": "IMPLEMENTATION",
+  "scope_of_allowed_changes": {
+    "description": "Investigate and, if a real defect is proven by runtime evidence, apply the minimal fix to pendingInvitations.ts's useSyncExternalStore reactivity (or its consumers/wiring) so the pending-invitation nav pill and /groups card update live, with no reload, for an idle recipient off /groups.",
+    "candidate_files_to_modify_if_a_fix_were_needed": [
+      "app/src/lib/pendingInvitations.ts",
+      "app/src/components/Layout.tsx",
+      "app/pages/groups.tsx",
+      "app/src/context/MarmotContext.tsx",
+      "app/src/lib/marmot/welcomeSubscription.ts"
+    ],
+    "test_files": [
+      "app/tests/e2e/groups-pending-invite-live-idle.spec.ts (new — idle, off-/groups reproduction)"
+    ]
+  },
+  "constraints": [
+    "Do NOT rewrite the pendingInvitations.ts store architecture.",
+    "Do NOT broadcast profile metadata to public relays (hard product invariant, CLAUDE.md).",
+    "Do NOT introduce a polling/interval workaround to mask a reactivity gap.",
+    "Preserve pendingInvitations.ts design constraints: pure localStorage, no IDB/NDK/React/context imports.",
+    "Preserve SEEN_KEY dedup semantics (no re-enqueue on reload, no duplicate invitations).",
+    "A reproduction must be idle AND off /groups — a test that keeps the invitee on /groups with MarmotContext churning is invalid (masked by incidental re-renders per prior finding).",
+    "Do not fix a mechanism without runtime proof it is actually broken — no speculative changes."
+  ],
+  "explicit_non_goals": [
+    "No changes to the invitation accept/decline flow.",
+    "No changes to the SEEN_KEY / dedup mechanism.",
+    "No new polling mechanism for invitation freshness.",
+    "No rewrite of the useSyncExternalStore pattern used across this codebase's other stores (outboundJoinRequests.ts, unreadStore.ts)."
+  ],
+  "outcome": "NO_CODE_CHANGE_REQUIRED — see result.json. Root-cause investigation, via a faithful idle+off-/groups e2e reproduction run against both `next dev` and a production static-export build (output: 'export'), on a cold identity and a freshly-wiped relay, could not reproduce the reported defect: the Groups nav badge and the /groups invitation card both update live, with no reload, exactly as expected. The only change made is a new permanent e2e regression spec that closes a real coverage gap (no existing spec previously exercised the idle+off-/groups scenario)."
+}
