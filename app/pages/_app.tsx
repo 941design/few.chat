@@ -16,6 +16,11 @@ const NostrIdentityProvider = dynamic(
   { ssr: false }
 );
 
+const BackupProvider = dynamic(
+  () => import('@/src/context/BackupContext').then((m) => ({ default: m.BackupProvider })),
+  { ssr: false }
+);
+
 const MarmotProvider = dynamic(
   () => import('@/src/context/MarmotContext').then((m) => ({ default: m.MarmotProvider })),
   { ssr: false }
@@ -44,12 +49,14 @@ function AppShell({ Component, pageProps }: AppProps) {
       <LanguageProvider>
         <ProfileProvider>
           <NostrIdentityProvider>
-            <MarmotProvider>
-              <UpdateBanner updateAvailable={updateAvailable} />
-              <Layout>
-                <Component {...pageProps} />
-              </Layout>
-            </MarmotProvider>
+            <BackupProvider>
+              <MarmotProvider>
+                <UpdateBanner updateAvailable={updateAvailable} />
+                <Layout>
+                  <Component {...pageProps} />
+                </Layout>
+              </MarmotProvider>
+            </BackupProvider>
           </NostrIdentityProvider>
         </ProfileProvider>
       </LanguageProvider>

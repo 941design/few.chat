@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-14T05:44:40Z",
+  "updated_at": "2026-10-14T13:03:02Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -256,6 +256,10 @@
       "path": "specs/epic-marmot-ts-authenticated-sender-migration/",
       "status": "DONE",
       "next_action": "completed 2026-07-25"
+    },
+    {
+      "path": "specs/epic-backup-restore-reliability/",
+      "status": "DONE"
     }
   ],
   "findings": [
@@ -564,19 +568,6 @@
       "kind": "spec-gap"
     },
     {
-      "slug": "state-restore-reports-success-even-when",
-      "scope": "any",
-      "anchor": {
-        "path": "app/pages/settings.tsx"
-      },
-      "text": "State-restore reports success even when nothing was restored: an unreachable relay, a missing backup, and a too-new (rejected) backup are all silently swallowed and the flow completes as identity-only recovery with no error, indistinguishable to the user",
-      "created_at": "2026-07-19",
-      "motivation": "A user who recovers their identity and expects their groups/settings to return cannot tell whether the state-restore actually happened. A relay outage or a version-incompatible backup produces the same silent 'success' as 'no backup existed', so a failed restore looks like a completed one — the user may proceed believing their state will come back when it will not. Surfaced while writing docs/behavior/backup-and-recovery.md.",
-      "behavior": "settings.tsx handleRestore wraps the backup fetch in try/catch; on any failure (relay unreachable, fetch error, or fetchBackup throwing on version !== 1) it console.warns and falls through to setRestoreSuccess(true). Identity restore completes and the user sees a success outcome with no state restored and no distinct error for the three cases.",
-      "approach": "Distinguish and surface the outcomes: 'backup restored', 'no backup found', 'relays unreachable — retry', and 'backup from a newer version — not applied' should be separate user-visible results rather than one silent success.",
-      "kind": "spec-gap"
-    },
-    {
       "slug": "profile-page-add-group-success-confirmation",
       "scope": "any",
       "anchor": {
@@ -669,6 +660,31 @@
       "behavior": "The 'banner is non-blocking' test uses page.locator('nav'), which now resolves to two elements, triggering a Playwright strict-mode violation and failing the test.",
       "approach": "Scope the locator to the header nav (e.g. a data-testid or role+name), not the bare 'nav' tag. One-line test-selector fix.",
       "success_signal": "update-detection.spec.ts passes in the non-relay bucket"
+    },
+    {
+      "slug": "external-signer-users-nip-07-nip",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/BackupContext.tsx"
+      },
+      "text": "External-signer users (NIP-07/NIP-46) get no automatic relay backup: BackupProvider only schedules backups when a local private key exists",
+      "created_at": "2026-10-14",
+      "motivation": "A user signed in through a browser extension or remote signer believes their groups are backed up like everyone else's, but nothing is ever published; losing the device loses all group state. The limit is now documented in docs/behavior/backup-and-recovery.md §3, but not fixed.",
+      "behavior": "BackupProvider's effect returns early when privateKeyHex is null, so no BackupScheduler exists in external-signer mode and markDirty is a no-op; publishBackup/fetchBackup also assume a local-key signer (createPrivateKeySigner).",
+      "approach": "Handle with the signer-authority work (2026-09-26 review task R04): route backup encrypt/sign through the active signer, decide whether background NIP-44 encrypt/sign prompts are acceptable for NIP-46/NIP-07, and gate the restore flow accordingly."
+    },
+    {
+      "slug": "four-invite-flow-e2e-tests-fail",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/groups-rename.spec.ts",
+        "line": 127
+      },
+      "text": "Four invite-flow e2e tests fail deterministically on master (also with a freshly wiped relay, run in isolation): invitation-preview decline, profile-update-propagation multi-group invite, remove-member AC-SCEN-8 re-invite, rename invite-join",
+      "created_at": "2026-10-14",
+      "motivation": "The full e2e gate cannot go green while these fail, so real regressions in the invite/join path are masked by known-red noise. They reproduce identically with the backup-restore-reliability changes stashed (baseline 1450dc7, 2026-10-14), so they are not load-flakes but a shared invite/join regression or a test-contract drift.",
+      "behavior": "groups-invitation-preview.spec.ts:142 (~35s), groups-profile-update-propagation.spec.ts:194 (~1.3m), groups-remove-member.spec.ts:191 (~31s), groups-rename.spec.ts:127 (~41s) time out in both a full make test-e2e run and a targeted 4-spec run after docker compose down -v. Likely related to the marmot-ts 0.7.0 migration (9eef568) / dispatch ordering (07adee0), alongside the known own-send regression in groups-dispatch-isolation.",
+      "approach": "Run /base:bug on one of them (rename invite-join is the simplest), diagnose the shared invite/accept stall, and re-run all four."
     }
   ],
   "archive": [

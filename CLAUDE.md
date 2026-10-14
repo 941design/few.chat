@@ -14,6 +14,9 @@ and "it's just public data anyway" reasoning.
   (encrypted, sent only to group members) and NIP-59 gift-wrapped events (encrypted
   to a specific recipient's pubkey, sender hidden by an ephemeral key). A gift wrap is
   *not* a broadcast — it is an addressed private message that happens to transit a relay.
+  The user's own **relay backup** (kind 30078, NIP-44 encrypted to the user's own key,
+  owner-confirmed 2026-10-14) is likewise allowed: only its existence, size and timing are
+  visible, never its contents.
 - **Reading others' profiles** must likewise not require or induce any public
   broadcast of our own data.
 - Before adding or changing any code that publishes, syncs, or fetches profile data,

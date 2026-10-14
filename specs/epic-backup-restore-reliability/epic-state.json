@@ -1,0 +1,15 @@
+{
+  "epic_name": "backup-restore-reliability",
+  "status": "done",
+  "phase": "COMPLETE",
+  "created_at": "2026-10-14T00:00:00Z",
+  "updated_at": "2026-10-14T00:00:00Z",
+  "pre_existing_dirty_files": ["few.png", "fews.png"],
+  "completed_stories": ["S1-honest-restore-outcomes", "S2-scheduled-backup-retries"],
+  "escalated_stories": [],
+  "phase_history": [
+    {"phase": "SPEC_VALIDATED", "timestamp": "2026-10-14T00:00:00Z", "trigger": "adversarial_review_folded_in"},
+    {"phase": "COMPLETE", "timestamp": "2026-10-14T00:00:00Z", "trigger": "unit_green_relay_e2e_own_specs_green"}
+  ],
+  "notes": "Run by hand (base plugin skills unavailable in session). Full e2e gate red on 4 pre-existing invite-flow failures (reproduced on baseline with changes stashed; finding four-invite-flow-e2e-tests-fail) + known own-send regression."
+}

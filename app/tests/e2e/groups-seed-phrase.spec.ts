@@ -62,15 +62,18 @@ test.describe('Seed Phrase Backup & Restore', () => {
     const newPage = await newContext.newPage();
     await newPage.goto('/settings/');
 
-    // Enter mnemonic to restore
+    // The npub lives under Advanced Settings. Expand it BEFORE restoring: the
+    // original identity has published a relay backup, so the restore opens the
+    // "Restore from backup?" dialog, whose overlay would block the toggle.
     const restoreInput = newPage.getByTestId('restore-phrase-input');
     await expect(restoreInput).toBeVisible({ timeout: 30_000 });
+    await openAdvancedSettings(newPage);
+
+    // Enter mnemonic to restore
     await restoreInput.fill(mnemonic!.trim());
     await newPage.getByTestId('restore-identity-btn').click();
 
     // Verify same npub — wait for the display to update to the restored identity.
-    // The npub lives under Advanced Settings, so expand that region first.
-    await openAdvancedSettings(newPage);
     await expect(newPage.getByTestId('identity-npub-display')).toHaveText(originalNpub!, { timeout: 30_000 });
 
     await newContext.close();

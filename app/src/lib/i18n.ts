@@ -87,6 +87,15 @@ export type Copy = {
     restoreButton: string;
     restoreSuccess: string;
     restoreError: string;
+    backupNotFound: string;
+    backupUnreachable: string;
+    backupCheckAgain: string;
+    backupUnusable: string;
+    backupApplyError: string;
+    backupRestoreTitle: string;
+    backupRestoreBody: string;
+    backupRestoreSkip: string;
+    backupRestoreConfirm: string;
     backupReminderTitle: string;
     backupReminderBody: string;
     backupReminderAction: string;
@@ -771,6 +780,16 @@ const copy: Record<LanguageCode, Copy> = {
       restoreButton: 'Restore Identity',
       restoreSuccess: 'Identity restored successfully.',
       restoreError: 'Invalid recovery phrase. Please check the words and try again.',
+      backupNotFound: 'No backup of your app state was found. Only your identity was restored.',
+      backupUnreachable: "Couldn't reach the relays to check for a backup of your app state.",
+      backupCheckAgain: 'Check again',
+      backupUnusable: "A backup was found, but this version of the app can't use it. Update the app and restore again.",
+      backupApplyError: 'Your identity was restored, but applying the backup failed.',
+      backupRestoreTitle: 'Restore from backup?',
+      backupRestoreBody:
+        'A backup of your groups and settings was found. Restoring adds it to this device; nothing on this device is deleted.',
+      backupRestoreSkip: 'Skip',
+      backupRestoreConfirm: 'Restore',
       backupReminderTitle: 'Back up your identity',
       backupReminderBody:
         "You are in a group but haven't backed up your identity. If you clear browser data, you will lose access.",
@@ -1342,6 +1361,16 @@ const copy: Record<LanguageCode, Copy> = {
       restoreButton: 'Identität wiederherstellen',
       restoreSuccess: 'Identität erfolgreich wiederhergestellt.',
       restoreError: 'Ungültige Phrase. Bitte Wörter prüfen und erneut versuchen.',
+      backupNotFound: 'Es wurde keine Sicherung deiner App-Daten gefunden. Nur deine Identität wurde wiederhergestellt.',
+      backupUnreachable: 'Die Relays waren nicht erreichbar, um nach einer Sicherung deiner App-Daten zu suchen.',
+      backupCheckAgain: 'Erneut prüfen',
+      backupUnusable: 'Eine Sicherung wurde gefunden, aber diese App-Version kann sie nicht verwenden. Aktualisiere die App und stelle erneut wieder her.',
+      backupApplyError: 'Deine Identität wurde wiederhergestellt, aber das Einspielen der Sicherung ist fehlgeschlagen.',
+      backupRestoreTitle: 'Aus Sicherung wiederherstellen?',
+      backupRestoreBody:
+        'Eine Sicherung deiner Gruppen und Einstellungen wurde gefunden. Beim Wiederherstellen wird sie zu diesem Gerät hinzugefügt; auf diesem Gerät wird nichts gelöscht.',
+      backupRestoreSkip: 'Überspringen',
+      backupRestoreConfirm: 'Wiederherstellen',
       backupReminderTitle: 'Identität sichern',
       backupReminderBody:
         'Du bist in einer Gruppe, hast deine Identität aber noch nicht gesichert.',

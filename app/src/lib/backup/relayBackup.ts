@@ -21,7 +21,7 @@ import { loadAllInviteLinks, saveInviteLink } from '@/src/lib/marmot/inviteLinkS
 import type { InviteLink } from '@/src/lib/marmot/inviteLinkStorage';
 import type { EventSigner } from 'applesauce-core';
 import type NDK from '@nostr-dev-kit/ndk';
-import { fetchEventsWithTimeout } from '@/src/lib/ndkClient';
+import { connectNdk, fetchEventsWithTimeout } from '@/src/lib/ndkClient';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -235,28 +235,124 @@ export async function publishBackup(
 }
 
 /**
- * Fetch the latest backup from relays, decrypt it, validate version,
- * and return the BackupPayload or null if none found.
+ * Outcome of looking up the user's backup. `unusable.reason` is diagnostic
+ * only — the UI shows one message for both reasons.
+ */
+export type BackupLookup =
+  | { status: 'found'; payload: BackupPayload }
+  | { status: 'none' }
+  | { status: 'unreachable' }
+  | { status: 'unusable'; reason: 'newer-version' | 'unreadable' };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
+}
+
+function isBase64(v: unknown): boolean {
+  if (typeof v !== 'string') return false;
+  try {
+    atob(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a decrypted v1 payload's full shape before anything is written,
+ * so a malformed backup is refused instead of partially applied. Collections
+ * an older v1 payload may lack are normalised to empty. Returns null when the
+ * payload is not a usable v1 backup.
+ */
+export function parseBackupPayload(raw: unknown): BackupPayload | null {
+  if (!isRecord(raw) || raw.version !== 1 || typeof raw.createdAt !== 'number') return null;
+
+  const { settings, userProfile } = raw;
+  if (settings !== null && settings !== undefined && !isRecord(settings)) return null;
+  if (userProfile !== null && userProfile !== undefined) {
+    if (!isRecord(userProfile) || typeof userProfile.nickname !== 'string') return null;
+  }
+
+  const groups = raw.groups ?? [];
+  if (
+    !Array.isArray(groups) ||
+    !groups.every(
+      (g) =>
+        isRecord(g) &&
+        typeof g.id === 'string' &&
+        typeof g.name === 'string' &&
+        typeof g.createdAt === 'number' &&
+        isStringArray(g.memberPubkeys) &&
+        isStringArray(g.relays),
+    )
+  ) {
+    return null;
+  }
+
+  const groupStates = raw.groupStates ?? {};
+  if (!isRecord(groupStates) || !Object.values(groupStates).every(isBase64)) return null;
+
+  const memberProfiles = raw.memberProfiles ?? {};
+  if (!isRecord(memberProfiles) || !Object.values(memberProfiles).every(Array.isArray)) return null;
+
+  const chatMessages = raw.chatMessages ?? {};
+  if (
+    !isRecord(chatMessages) ||
+    !Object.values(chatMessages).every(
+      (list) =>
+        Array.isArray(list) &&
+        list.every((m) => isRecord(m) && typeof m.id === 'string' && typeof m.createdAt === 'number'),
+    )
+  ) {
+    return null;
+  }
+
+  const inviteLinks = raw.inviteLinks ?? [];
+  if (!Array.isArray(inviteLinks) || !inviteLinks.every(isRecord)) return null;
+
+  return {
+    ...(raw as unknown as BackupPayload),
+    settings: (settings ?? null) as BackupPayload['settings'],
+    userProfile: (userProfile ?? null) as BackupPayload['userProfile'],
+    groups: groups as BackupPayload['groups'],
+    groupStates: groupStates as BackupPayload['groupStates'],
+    memberProfiles: memberProfiles as BackupPayload['memberProfiles'],
+    chatMessages: chatMessages as BackupPayload['chatMessages'],
+    inviteLinks: inviteLinks as unknown as InviteLink[],
+  };
+}
+
+/**
+ * Look up the latest backup on relays, decrypt and validate it. Never throws:
+ * every failure maps to a lookup outcome the restore UI can show.
  */
 export async function fetchBackup(
   signer: EventSigner,
   pubkeyHex: string,
   ndk: NDK,
   relays?: string[],
-): Promise<BackupPayload | null> {
-  const relayUrls = relays ?? getEffectiveRelays();
+): Promise<BackupLookup> {
+  let events: Set<{ content: string; created_at?: number }>;
+  let timedOut: boolean;
+  try {
+    const relayUrls = relays ?? getEffectiveRelays();
+    const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
+    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk);
+    ({ events, timedOut } = await fetchEventsWithTimeout(
+      ndk,
+      { kinds: [BACKUP_EVENT_KIND], authors: [pubkeyHex], '#d': [BACKUP_D_TAG] },
+      undefined,
+      relaySet,
+    ));
+  } catch {
+    return { status: 'unreachable' };
+  }
 
-  const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
-  const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk);
-
-  const { events } = await fetchEventsWithTimeout(
-    ndk,
-    { kinds: [BACKUP_EVENT_KIND], authors: [pubkeyHex], '#d': [BACKUP_D_TAG] },
-    undefined,
-    relaySet,
-  );
-
-  if (events.size === 0) return null;
+  if (events.size === 0) return timedOut ? { status: 'unreachable' } : { status: 'none' };
 
   // Pick the newest event by created_at
   let newest: { content: string; created_at: number } | null = null;
@@ -266,16 +362,20 @@ export async function fetchBackup(
     }
   }
 
-  if (!newest) return null;
+  if (!newest) return { status: 'none' };
 
-  const plaintext = await signer.nip44!.decrypt(pubkeyHex, newest.content);
-  const parsed = JSON.parse(plaintext) as BackupPayload;
-
-  if (parsed.version !== 1) {
-    throw new Error(`Unsupported backup version: ${parsed.version}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await signer.nip44!.decrypt(pubkeyHex, newest.content));
+  } catch {
+    return { status: 'unusable', reason: 'unreadable' };
   }
 
-  return parsed;
+  if (isRecord(raw) && typeof raw.version === 'number' && raw.version > 1) {
+    return { status: 'unusable', reason: 'newer-version' };
+  }
+  const payload = parseBackupPayload(raw);
+  return payload ? { status: 'found', payload } : { status: 'unusable', reason: 'unreadable' };
 }
 
 /**
@@ -314,6 +414,61 @@ export async function getBackupRelays(
   return relayUrls.length > 0 ? relayUrls : getEffectiveRelays();
 }
 
+/**
+ * Look up the relay backup for an identity whose private key the app holds:
+ * connect, read the relay list, fetch, decrypt, and validate. Never throws — a
+ * failure to connect counts as "unreachable".
+ */
+export async function lookupBackup(privateKeyHex: string, pubkeyHex: string): Promise<BackupLookup> {
+  try {
+    const { createPrivateKeySigner } = await import('@/src/lib/marmot/signerAdapter');
+    const ndk = await connectNdk(privateKeyHex);
+    const relays = await getBackupRelays(ndk, pubkeyHex);
+    const lookup = await fetchBackup(createPrivateKeySigner(privateKeyHex), pubkeyHex, ndk, relays);
+    if (lookup.status === 'unusable') console.warn('[Backup] relay backup unusable:', lookup.reason);
+    return lookup;
+  } catch (err) {
+    console.warn('[Backup] relay backup lookup failed:', err);
+    return { status: 'unreachable' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Restore-decision guard
+//
+// From identity recovery until the user restores or skips the backup found on
+// relays, a scheduled backup would replace that (replaceable, kind 30078)
+// backup with the device's near-empty state. The guard is persisted so the
+// pause survives a reload; the Settings page re-offers the decision.
+// ---------------------------------------------------------------------------
+
+export function markRestorePending(pubkeyHex: string): void {
+  localStorage.setItem(STORAGE_KEYS.backupRestorePending, pubkeyHex);
+}
+
+export function clearRestorePending(): void {
+  localStorage.removeItem(STORAGE_KEYS.backupRestorePending);
+}
+
+export function isRestorePending(pubkeyHex: string): boolean {
+  return localStorage.getItem(STORAGE_KEYS.backupRestorePending) === pubkeyHex;
+}
+
+/**
+ * Lift the guard once a lookup shows there is nothing worth protecting: no
+ * backup, or one that cannot be read. A found backup waits for the user's
+ * decision; an unreachable lookup proves nothing; a backup from a newer app
+ * version is kept so an older app never overwrites it.
+ */
+export function settleRestoreGuard(lookup: BackupLookup): void {
+  if (
+    lookup.status === 'none' ||
+    (lookup.status === 'unusable' && lookup.reason === 'unreadable')
+  ) {
+    clearRestorePending();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // S3: Restore state from backup payload
 // ---------------------------------------------------------------------------
@@ -337,34 +492,28 @@ export async function getBackupRelays(
  * does not contain.
  */
 export async function restoreFromBackup(payload: BackupPayload): Promise<void> {
-  // 1. Rehydrate localStorage — overwrite in place; all other keys (contacts,
-  //    knownPeers, relays, signerMode, identity, …) are preserved.
-  if (payload.settings) {
-    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(payload.settings));
-  }
-  if (payload.userProfile) {
-    localStorage.setItem(STORAGE_KEYS.userProfile, JSON.stringify(payload.userProfile));
-  }
+  // IDB writes come first and the localStorage writes last, so an IDB failure
+  // mid-restore leaves settings, profile and the backed-up flag untouched.
 
-  // 2. Rehydrate IDB groups (overwrite per group; groups absent from the backup
+  // 1. Rehydrate IDB groups (overwrite per group; groups absent from the backup
   //    are left in place — restore adds/updates, never deletes).
   for (const group of payload.groups) {
     await saveGroup(group);
   }
 
-  // 3. Rehydrate MLS state (base64-decoded; overwrite per key).
+  // 2. Rehydrate MLS state (base64-decoded; overwrite per key).
   const stateBackend = new IdbGroupStateBackend();
   for (const [key, b64] of Object.entries(payload.groupStates)) {
     const bytes = base64ToUint8Array(b64);
     await stateBackend.setItem(key, bytes as never);
   }
 
-  // 4. Rehydrate member profiles (overwrite per group).
+  // 3. Rehydrate member profiles (overwrite per group).
   for (const [groupId, profiles] of Object.entries(payload.memberProfiles)) {
     await saveMemberProfiles(groupId, profiles as never[]);
   }
 
-  // 5. MERGE group chat messages by id. The backup truncates each group's chat
+  // 4. MERGE group chat messages by id. The backup truncates each group's chat
   //    to the most recent MAX_CHAT_MESSAGES, so overwriting would erase local
   //    history beyond the cap. Union the backup messages with whatever is
   //    already stored (local wins on id collision), sorted chronologically. DM
@@ -382,11 +531,20 @@ export async function restoreFromBackup(payload: BackupPayload): Promise<void> {
     await idbSet(key, merged);
   }
 
-  // 6. Rehydrate invite links (overwrite per link).
+  // 5. Rehydrate invite links (overwrite per link).
   if (payload.inviteLinks) {
     for (const link of payload.inviteLinks) {
       await saveInviteLink(link);
     }
+  }
+
+  // 6. Rehydrate localStorage — overwrite in place; all other keys (contacts,
+  //    knownPeers, relays, signerMode, identity, …) are preserved.
+  if (payload.settings) {
+    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(payload.settings));
+  }
+  if (payload.userProfile) {
+    localStorage.setItem(STORAGE_KEYS.userProfile, JSON.stringify(payload.userProfile));
   }
 
   // 7. Mark identity as backed up.
@@ -397,16 +555,34 @@ export async function restoreFromBackup(payload: BackupPayload): Promise<void> {
 // S4: Backup scheduler with debounce
 // ---------------------------------------------------------------------------
 
-/** Minimum interval between backup publishes (5 minutes). */
+/** Minimum interval between successful backup publishes (5 minutes). */
 const DEBOUNCE_MS = 5 * 60 * 1000;
 
+/** Delays before each retry after a failed publish; the last one repeats. */
+const RETRY_DELAYS_MS = [30 * 1000, 2 * 60 * 1000, 10 * 60 * 1000];
+
+/** Retries after a failure before giving up until the next change. */
+const MAX_RETRIES = 5;
+
+/**
+ * Debounces backup publishes and retries failed ones.
+ *
+ * `publishFn` reports failure by resolving `false` or rejecting; anything else
+ * counts as success. The debounce window runs from the last *successful*
+ * publish; after a failure, retries follow their own backoff and further
+ * changes wait for the pending retry rather than bypassing it.
+ */
 export class BackupScheduler {
-  private publishFn: () => Promise<void>;
+  private publishFn: () => Promise<boolean | void>;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastPublishAt = 0;
   private disposed = false;
+  private inFlight = false;
+  private dirtyDuringFlight = false;
+  private retriesLeft = MAX_RETRIES;
+  private retryPending = false;
 
-  constructor(publishFn: () => Promise<void>) {
+  constructor(publishFn: () => Promise<boolean | void>) {
     this.publishFn = publishFn;
   }
 
@@ -417,8 +593,20 @@ export class BackupScheduler {
    */
   markDirty(immediate?: boolean): void {
     if (this.disposed) return;
+    this.retriesLeft = MAX_RETRIES;
 
-    // Clear any existing scheduled timer
+    if (this.inFlight) {
+      // Publish again once the running attempt settles, so this change is not
+      // lost. (Immediacy is moot: a success always opens the debounce window.)
+      this.dirtyDuringFlight = true;
+      return;
+    }
+
+    // After a failure, changes ride along with the pending retry: backoff is
+    // not bypassed, so a relay outage is not hammered on every trigger.
+    if (this.retryPending) return;
+
+    // Clear any existing scheduled timer (debounce or retry)
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -429,28 +617,56 @@ export class BackupScheduler {
 
     if (immediate && remaining <= 0) {
       // Can publish right now
-      this.doPublish();
+      void this.doPublish();
     } else {
       // Schedule for when the debounce window expires
       const delay = remaining > 0 ? remaining : DEBOUNCE_MS;
-      this.timer = setTimeout(() => this.doPublish(), delay);
+      this.timer = setTimeout(() => void this.doPublish(), delay);
     }
   }
 
   /** Clean up timers. */
   dispose(): void {
     this.disposed = true;
+    this.dirtyDuringFlight = false;
+    this.retryPending = false;
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
   }
 
-  private doPublish(): void {
-    this.lastPublishAt = Date.now();
+  private async doPublish(): Promise<void> {
     this.timer = null;
-    this.publishFn().catch((err) => {
+    this.retryPending = false;
+    this.inFlight = true;
+    let ok: boolean;
+    try {
+      ok = (await this.publishFn()) !== false;
+    } catch (err) {
       console.warn('[BackupScheduler] publish failed:', err);
-    });
+      ok = false;
+    }
+    this.inFlight = false;
+    if (this.disposed) return;
+
+    if (ok) this.lastPublishAt = Date.now();
+
+    const pending = this.dirtyDuringFlight;
+    this.dirtyDuringFlight = false;
+    if (pending && ok) {
+      this.markDirty();
+      return;
+    }
+    // A change made during a failed attempt rides along with the retry (its
+    // budget was already reset by markDirty) rather than bypassing the backoff.
+
+    if (!ok && this.retriesLeft > 0) {
+      const attempt = MAX_RETRIES - this.retriesLeft;
+      this.retriesLeft--;
+      const delay = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+      this.retryPending = true;
+      this.timer = setTimeout(() => void this.doPublish(), delay);
+    }
   }
 }

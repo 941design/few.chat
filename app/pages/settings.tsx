@@ -51,6 +51,7 @@ import { applyRelayChangesToPool, getNdk } from '@/src/lib/ndkClient';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { NDKRelayStatus } from '@nostr-dev-kit/ndk';
 import { resetAllData } from '@/src/lib/storage';
+import type { BackupLookup } from '@/src/lib/backup/relayBackup';
 import {
   getStoredTurnServer,
   setTurnServer,
@@ -127,10 +128,18 @@ function relayStatusLabel(
   return { label: copy.statusDisconnected, colorScheme: 'gray' };
 }
 
+/** Restore-section notice for a backup lookup that found nothing to apply. */
+export type BackupNotice = 'none' | 'unreachable' | 'unusable';
+
+export function backupNoticeFor(lookup: BackupLookup): BackupNotice | null {
+  return lookup.status === 'found' ? null : lookup.status;
+}
+
 export default function SettingsPage() {
   const copy = useCopy();
   const {
     npub,
+    pubkeyHex,
     privateKeyHex,
     seedHex,
     backedUp,
@@ -258,6 +267,11 @@ export default function SettingsPage() {
   // Relay backup restore state
   const [pendingBackupPayload, setPendingBackupPayload] = useState<import('@/src/lib/backup/relayBackup').BackupPayload | null>(null);
   const backupRestoreDisclosure = useDisclosure();
+  const [backupNotice, setBackupNotice] = useState<BackupNotice | null>(null);
+  const [backupChecking, setBackupChecking] = useState(false);
+  // In-memory only: lets "Check again" re-run the backup lookup for the
+  // identity that was just recovered without repeating the recovery.
+  const recoveredKeyRef = useRef<{ privateKeyHex: string; pubkeyHex: string } | null>(null);
 
   // NIP-07 browser extension UI state
   const [nip07Connecting, setNip07Connecting] = useState(false);
@@ -449,9 +463,24 @@ export default function SettingsPage() {
     toast({ title: copy.identity.backupDone, status: 'success', duration: 3000, isClosable: true });
   }, [backupConfirmed, copy.identity.backupDone, toast]);
 
+  /** Look up the recovered identity's backup and show the dialog or outcome notice. */
+  const presentBackupLookup = useCallback(async (keyHex: string, pkHex: string) => {
+    const { lookupBackup, settleRestoreGuard } = await import('@/src/lib/backup/relayBackup');
+    const lookup = await lookupBackup(keyHex, pkHex);
+    settleRestoreGuard(lookup);
+    if (lookup.status === 'found') {
+      setBackupNotice(null);
+      setPendingBackupPayload(lookup.payload);
+      backupRestoreDisclosure.onOpen();
+      return;
+    }
+    setBackupNotice(backupNoticeFor(lookup));
+  }, [backupRestoreDisclosure]);
+
   const handleRestore = useCallback(async () => {
     setRestoreLoading(true);
     setRestoreError(null);
+    setBackupNotice(null);
     try {
       const { identityFromMnemonic, hexFromMnemonic } = await import('@/src/lib/bip39');
       const wordCount = restoreInput.trim().split(/\s+/).length;
@@ -501,6 +530,11 @@ export default function SettingsPage() {
         console.warn('[Settings] Profile recovery from relays failed:', err);
       }
 
+      // Pause scheduled backups for the recovered identity until the user has
+      // decided on the backup that may exist on relays (see markRestorePending).
+      const { markRestorePending } = await import('@/src/lib/backup/relayBackup');
+      markRestorePending(restoredPubkey);
+
       await replaceIdentity({
         privateKeyHex: restoredIdentity.privateKeyHex,
         pubkeyHex: restoredPubkey,
@@ -511,40 +545,59 @@ export default function SettingsPage() {
       }
 
       // Check for relay backup
-      try {
-        const { fetchBackup, getBackupRelays } = await import('@/src/lib/backup/relayBackup');
-        const { createPrivateKeySigner } = await import('@/src/lib/marmot/signerAdapter');
-        const { connectNdk: connectForBackup } = await import('@/src/lib/ndkClient');
-        const backupNdk = await connectForBackup(restoredIdentity.privateKeyHex);
-        const backupSigner = createPrivateKeySigner(restoredIdentity.privateKeyHex);
-        const backupRelays = await getBackupRelays(backupNdk, restoredPubkey);
-        const backup = await fetchBackup(backupSigner, restoredPubkey, backupNdk, backupRelays);
-        if (backup) {
-          setPendingBackupPayload(backup);
-          backupRestoreDisclosure.onOpen();
-          setRestoreInput('');
-          setBackupDone(true);
-          return;
-        }
-      } catch (err) {
-        console.warn('[Settings] Relay backup check failed:', err);
-      }
-
-      setRestoreSuccess(true);
+      recoveredKeyRef.current = { privateKeyHex: restoredIdentity.privateKeyHex, pubkeyHex: restoredPubkey };
       setRestoreInput('');
       setBackupDone(true);
+      setRestoreSuccess(true);
+      try {
+        await presentBackupLookup(restoredIdentity.privateKeyHex, restoredPubkey);
+      } catch (err) {
+        // The identity is already recovered — never report this as an invalid phrase.
+        console.warn('[Settings] Relay backup check failed:', err);
+        setBackupNotice('unreachable');
+      }
     } catch {
       setRestoreError(copy.identity.restoreError);
     } finally {
       setRestoreLoading(false);
     }
-  }, [restoreInput, replaceIdentity, copy.identity.restoreError, savedProfile, saveProfile, backupRestoreDisclosure]);
+  }, [restoreInput, replaceIdentity, copy.identity.restoreError, savedProfile, saveProfile, presentBackupLookup]);
+
+  const handleCheckBackupAgain = useCallback(async () => {
+    const key = recoveredKeyRef.current;
+    if (!key) return;
+    setBackupChecking(true);
+    try {
+      await presentBackupLookup(key.privateKeyHex, key.pubkeyHex);
+    } catch (err) {
+      console.warn('[Settings] Relay backup check failed:', err);
+      setBackupNotice('unreachable');
+    } finally {
+      setBackupChecking(false);
+    }
+  }, [presentBackupLookup]);
+
+  // Re-offer a restore decision left open in an earlier visit (the user left
+  // before restoring or skipping, or relays were unreachable): scheduled
+  // backups stay paused until it is made.
+  const reofferedRef = useRef(false);
+  useEffect(() => {
+    if (reofferedRef.current || !isLocalMode || !privateKeyHex || !pubkeyHex) return;
+    reofferedRef.current = true;
+    void (async () => {
+      const { isRestorePending } = await import('@/src/lib/backup/relayBackup');
+      if (!isRestorePending(pubkeyHex)) return;
+      recoveredKeyRef.current = { privateKeyHex, pubkeyHex };
+      await presentBackupLookup(privateKeyHex, pubkeyHex);
+    })();
+  }, [isLocalMode, privateKeyHex, pubkeyHex, presentBackupLookup]);
 
   const handleConfirmBackupRestore = useCallback(async () => {
     if (!pendingBackupPayload) return;
     try {
-      const { restoreFromBackup } = await import('@/src/lib/backup/relayBackup');
+      const { restoreFromBackup, clearRestorePending } = await import('@/src/lib/backup/relayBackup');
       await restoreFromBackup(pendingBackupPayload);
+      clearRestorePending();
       window.location.reload();
     } catch (err) {
       // Restore FAILED — surface the error, never a false-positive success.
@@ -553,15 +606,22 @@ export default function SettingsPage() {
       console.error('[Settings] Backup restore failed:', err);
       backupRestoreDisclosure.onClose();
       setPendingBackupPayload(null);
-      setRestoreError(copy.identity.restoreError);
+      setRestoreError(copy.identity.backupApplyError);
     }
-  }, [pendingBackupPayload, backupRestoreDisclosure, copy.identity.restoreError]);
+  }, [pendingBackupPayload, backupRestoreDisclosure, copy.identity.backupApplyError]);
 
-  const handleDismissBackupRestore = useCallback(() => {
+  // Closing the dialog (X, Escape, backdrop) is not a decision: the backup stays
+  // protected and is offered again on the next Settings visit.
+  const handleCloseBackupRestore = useCallback(() => {
     backupRestoreDisclosure.onClose();
     setPendingBackupPayload(null);
-    setRestoreSuccess(true);
   }, [backupRestoreDisclosure]);
+
+  // Skipping is a decision: the device's own state may now be backed up.
+  const handleSkipBackupRestore = useCallback(() => {
+    handleCloseBackupRestore();
+    void import('@/src/lib/backup/relayBackup').then((m) => m.clearRestorePending());
+  }, [handleCloseBackupRestore]);
 
   return (
     <>
@@ -799,8 +859,38 @@ export default function SettingsPage() {
                       </Alert>
                     )}
 
+                    {backupNotice && (
+                      <Alert
+                        status={backupNotice === 'none' ? 'info' : 'warning'}
+                        borderRadius="md"
+                        mb={3}
+                        data-testid={`backup-notice-${backupNotice}`}
+                      >
+                        <AlertIcon />
+                        <AlertDescription fontSize="sm" flex="1">
+                          {backupNotice === 'none'
+                            ? copy.identity.backupNotFound
+                            : backupNotice === 'unreachable'
+                              ? copy.identity.backupUnreachable
+                              : copy.identity.backupUnusable}
+                        </AlertDescription>
+                        {backupNotice === 'unreachable' && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            ml={2}
+                            onClick={() => void handleCheckBackupAgain()}
+                            isLoading={backupChecking}
+                            data-testid="backup-check-again-btn"
+                          >
+                            {copy.identity.backupCheckAgain}
+                          </Button>
+                        )}
+                      </Alert>
+                    )}
+
                     {restoreError && (
-                      <Alert status="error" borderRadius="md" mb={3}>
+                      <Alert status="error" borderRadius="md" mb={3} data-testid="restore-error-alert">
                         <AlertIcon />
                         <AlertDescription fontSize="sm">{restoreError}</AlertDescription>
                       </Alert>
@@ -1443,30 +1533,26 @@ export default function SettingsPage() {
       {/* Relay backup restore confirmation dialog */}
       <Modal
         isOpen={backupRestoreDisclosure.isOpen}
-        onClose={handleDismissBackupRestore}
+        onClose={handleCloseBackupRestore}
         isCentered
       >
         <ModalOverlay />
         <ModalContent>
-          <ModalHeader>Restore from backup?</ModalHeader>
+          <ModalHeader>{copy.identity.backupRestoreTitle}</ModalHeader>
           <ModalCloseButton />
           <ModalBody>
-            <Text>
-              A backup was found on the relay network. Restoring will replace all
-              local data (groups and chat messages) with the
-              backed-up version. This cannot be undone.
-            </Text>
+            <Text>{copy.identity.backupRestoreBody}</Text>
           </ModalBody>
           <ModalFooter>
             <Button
               variant="ghost"
               mr={3}
-              onClick={handleDismissBackupRestore}
+              onClick={handleSkipBackupRestore}
             >
-              Skip
+              {copy.identity.backupRestoreSkip}
             </Button>
             <Button colorScheme="brand" onClick={handleConfirmBackupRestore}>
-              Restore
+              {copy.identity.backupRestoreConfirm}
             </Button>
           </ModalFooter>
         </ModalContent>

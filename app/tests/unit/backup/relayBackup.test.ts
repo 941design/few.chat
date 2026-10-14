@@ -25,8 +25,19 @@ vi.mock('@nostr-dev-kit/ndk', () => ({
   },
 }));
 
+const mockConnectNdk = vi.fn();
+
 vi.mock('@/src/lib/ndkClient', () => ({
   fetchEventsWithTimeout: (...args: unknown[]) => mockFetchEventsWithTimeout(...args),
+  connectNdk: (...args: unknown[]) => mockConnectNdk(...args),
+}));
+
+vi.mock('@/src/lib/marmot/signerAdapter', () => ({
+  createPrivateKeySigner: () => ({
+    nip44: {
+      decrypt: async (_pk: string, ciphertext: string) => ciphertext.replace('encrypted:', ''),
+    },
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -111,7 +122,14 @@ import {
   getBackupRelays,
   restoreFromBackup,
   BackupScheduler,
+  parseBackupPayload,
+  markRestorePending,
+  clearRestorePending,
+  isRestorePending,
+  settleRestoreGuard,
+  lookupBackup,
   type BackupPayload,
+  type BackupLookup,
 } from '@/src/lib/backup/relayBackup';
 import {
   saveGroup,
@@ -514,6 +532,11 @@ describe('publishBackup', () => {
   });
 });
 
+function payloadOf(result: BackupLookup): BackupPayload {
+  if (result.status !== 'found') throw new Error(`expected a found backup, got ${result.status}`);
+  return result.payload;
+}
+
 describe('fetchBackup', () => {
   it('returns null when no events found', async () => {
     mockFetchEventsWithTimeout.mockResolvedValueOnce({
@@ -524,7 +547,7 @@ describe('fetchBackup', () => {
     const signer = makeMockSigner();
     const result = await fetchBackup(signer, 'deadbeef', mockNdk as never);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'none' });
   });
 
   it('decrypts and returns the newest backup event', async () => {
@@ -553,9 +576,9 @@ describe('fetchBackup', () => {
       'wss://relay.example.com',
     ]);
 
-    expect(result).not.toBeNull();
-    expect(result!.version).toBe(1);
-    expect(result!.settings).toEqual({ theme: 'spring', language: 'en' });
+    expect(result.status).toBe('found');
+    expect(payloadOf(result).version).toBe(1);
+    expect(payloadOf(result).settings).toEqual({ theme: 'spring', language: 'en' });
     expect(signer.nip44.decrypt).toHaveBeenCalledWith('deadbeef', encryptedContent);
   });
 
@@ -587,10 +610,10 @@ describe('fetchBackup', () => {
     const signer = makeMockSigner();
     const result = await fetchBackup(signer, 'deadbeef', mockNdk as never);
 
-    expect(result!.settings).toEqual({ theme: 'spring', language: 'en' });
+    expect(payloadOf(result).settings).toEqual({ theme: 'spring', language: 'en' });
   });
 
-  it('throws on unsupported backup version', async () => {
+  it('reports a backup from a newer app version as unusable', async () => {
     const badPayload = { version: 99 };
     mockFetchEventsWithTimeout.mockResolvedValueOnce({
       events: new Set([
@@ -600,9 +623,10 @@ describe('fetchBackup', () => {
     });
 
     const signer = makeMockSigner();
-    await expect(fetchBackup(signer, 'deadbeef', mockNdk as never)).rejects.toThrow(
-      'Unsupported backup version: 99',
-    );
+    expect(await fetchBackup(signer, 'deadbeef', mockNdk as never)).toEqual({
+      status: 'unusable',
+      reason: 'newer-version',
+    });
   });
 });
 
@@ -937,12 +961,13 @@ describe('BackupScheduler', () => {
     scheduler.dispose();
   });
 
-  it('publishes after debounce window expires', () => {
+  it('publishes after debounce window expires', async () => {
     const publishFn = vi.fn().mockResolvedValue(undefined);
     const scheduler = new BackupScheduler(publishFn);
 
     scheduler.markDirty(true); // First publish
     expect(publishFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0); // let it settle
 
     scheduler.markDirty(true); // Schedules for later
 
@@ -1049,7 +1074,7 @@ describe('fetchBackup — only the user\'s own, newest backup is restored', () =
     for (const order of orders) {
       mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(order), timedOut: false });
       const result = await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never);
-      expect(result!.settings).toEqual({ theme: 'spring', language: 'en' });
+      expect(payloadOf(result).settings).toEqual({ theme: 'spring', language: 'en' });
     }
   });
 
@@ -1057,19 +1082,19 @@ describe('fetchBackup — only the user\'s own, newest backup is restored', () =
     const first = backupEvent({ settings: { theme: 'spring', language: 'en' } }, 100, 'a');
     const tie = backupEvent({ settings: { theme: 'spring', language: 'de' } }, 100, 'b');
     mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set([first, tie]), timedOut: false });
-    expect((await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never))!.settings!.language).toBe('en');
+    expect(payloadOf(await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).settings!.language).toBe('en');
 
     const dated = backupEvent({ settings: { theme: 'spring', language: 'en' } }, 5, 'dated');
     const undated = backupEvent({ settings: { theme: 'spring', language: 'de' } }, undefined, 'undated');
     mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set([dated, undated]), timedOut: false });
-    expect((await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never))!.settings!.language).toBe('en');
+    expect(payloadOf(await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).settings!.language).toBe('en');
   });
 
   it('does not attempt decryption when no backup exists', async () => {
     mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(), timedOut: false });
     const signer = makeMockSigner();
 
-    expect(await fetchBackup(signer, 'deadbeef', mockNdk as never)).toBeNull();
+    expect(await fetchBackup(signer, 'deadbeef', mockNdk as never)).toEqual({ status: 'none' });
     expect(signer.nip44.decrypt).not.toHaveBeenCalled();
   });
 });
@@ -1201,12 +1226,13 @@ describe('BackupScheduler — 5-minute debounce contract', () => {
     scheduler.dispose();
   });
 
-  it('a change inside the window publishes when the window ends, not a full interval later', () => {
+  it('a change inside the window publishes when the window ends, not a full interval later', async () => {
     const publishFn = vi.fn().mockResolvedValue(undefined);
     const scheduler = new BackupScheduler(publishFn);
 
     scheduler.markDirty(true);
     expect(publishFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0); // let it settle
 
     vi.advanceTimersByTime(2 * 60 * 1000);
     scheduler.markDirty();
@@ -1218,16 +1244,43 @@ describe('BackupScheduler — 5-minute debounce contract', () => {
     scheduler.dispose();
   });
 
-  it('an immediate request publishes at once when the window has exactly elapsed', () => {
+  it('an immediate request publishes at once when the window has exactly elapsed', async () => {
     const publishFn = vi.fn().mockResolvedValue(undefined);
     const scheduler = new BackupScheduler(publishFn);
 
     scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(0); // let it settle
     vi.advanceTimersByTime(FIVE_MIN);
     scheduler.markDirty(true);
     expect(publishFn).toHaveBeenCalledTimes(2);
 
     scheduler.dispose();
+  });
+
+  it('an immediate request inside the window waits for the window to end', async () => {
+    const publishFn = vi.fn().mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    scheduler.markDirty(true);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+
+    scheduler.dispose();
+  });
+
+  it('dispose() cancels an already scheduled publish', async () => {
+    const publishFn = vi.fn().mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty();
+    scheduler.dispose();
+    await vi.advanceTimersByTimeAsync(2 * FIVE_MIN);
+
+    expect(publishFn).not.toHaveBeenCalled();
   });
 
   it('ignores changes after dispose()', () => {
@@ -1256,4 +1309,370 @@ describe('BackupScheduler — 5-minute debounce contract', () => {
     scheduler.dispose();
     warn.mockRestore();
   });
+});
+
+// ---------------------------------------------------------------------------
+// epic-backup-restore-reliability, story 1 — honest lookup outcomes
+// ---------------------------------------------------------------------------
+
+describe('fetchBackup — lookup outcomes (AC-BRR-1)', () => {
+  it('reports relays unreachable when the query times out with nothing', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({ events: new Set(), timedOut: true });
+    expect(await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).toEqual({ status: 'unreachable' });
+  });
+
+  it('reports relays unreachable when the query itself fails', async () => {
+    mockFetchEventsWithTimeout.mockRejectedValueOnce(new Error('socket closed'));
+    expect(await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).toEqual({ status: 'unreachable' });
+  });
+
+  it('uses a backup that arrived even if some relay timed out', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({
+      events: new Set([backupEvent({ settings: { theme: 'spring', language: 'en' } }, 10, 'e')]),
+      timedOut: true,
+    });
+    expect((await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).status).toBe('found');
+  });
+
+  it('reports an undecryptable backup as unusable', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValueOnce({
+      events: new Set([backupEvent({}, 10, 'e')]),
+      timedOut: false,
+    });
+    const signer = makeMockSigner();
+    signer.nip44.decrypt.mockRejectedValueOnce(new Error('bad mac'));
+    expect(await fetchBackup(signer, 'deadbeef', mockNdk as never)).toEqual({
+      status: 'unusable',
+      reason: 'unreadable',
+    });
+  });
+
+  it('reports non-JSON and malformed backups as unusable', async () => {
+    for (const content of ['encrypted:not json', `encrypted:${JSON.stringify({ version: 1, createdAt: 1, groups: 'x' })}`]) {
+      mockFetchEventsWithTimeout.mockResolvedValueOnce({
+        events: new Set([{ content, created_at: 10, id: 'e' }]),
+        timedOut: false,
+      });
+      expect(await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).toEqual({
+        status: 'unusable',
+        reason: 'unreadable',
+      });
+    }
+  });
+});
+
+describe('fetchBackup — never throws on odd decrypted content', () => {
+  it('reports a backup whose plaintext is not an object as unusable', async () => {
+    for (const plaintext of ['null', '42', '"v1"']) {
+      mockFetchEventsWithTimeout.mockResolvedValueOnce({
+        events: new Set([{ content: `encrypted:${plaintext}`, created_at: 10, id: 'e' }]),
+        timedOut: false,
+      });
+      expect(await fetchBackup(makeMockSigner(), 'deadbeef', mockNdk as never)).toEqual({
+        status: 'unusable',
+        reason: 'unreadable',
+      });
+    }
+  });
+});
+
+describe('lookupBackup — relay list + fetch for a local-key identity', () => {
+  it('connects, reads the relay list, and returns the found backup', async () => {
+    mockConnectNdk.mockResolvedValueOnce(mockNdk);
+    mockFetchEventsWithTimeout
+      .mockResolvedValueOnce({ events: new Set([{ created_at: 1, tags: [['relay', 'wss://mine']], id: 'r' }]), timedOut: false })
+      .mockResolvedValueOnce({ events: new Set([backupEvent({ settings: { theme: 'spring', language: 'en' } }, 5, 'b')]), timedOut: false });
+
+    const result = await lookupBackup('11'.repeat(32), 'deadbeef');
+
+    expect(payloadOf(result).settings).toEqual({ theme: 'spring', language: 'en' });
+    const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
+    expect(vi.mocked(NDKRelaySet.fromRelayUrls).mock.calls[0][0]).toEqual(['wss://mine']);
+  });
+
+  it('reports relays unreachable when connecting fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockConnectNdk.mockRejectedValueOnce(new Error('offline'));
+    expect(await lookupBackup('11'.repeat(32), 'deadbeef')).toEqual({ status: 'unreachable' });
+    warn.mockRestore();
+  });
+
+  it('passes an unusable outcome through', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockConnectNdk.mockResolvedValueOnce(mockNdk);
+    mockFetchEventsWithTimeout
+      .mockResolvedValueOnce({ events: new Set(), timedOut: false })
+      .mockResolvedValueOnce({
+        events: new Set([{ content: 'encrypted:{"version":2}', created_at: 1, id: 'b' }]),
+        timedOut: false,
+      });
+    expect(await lookupBackup('11'.repeat(32), 'deadbeef')).toEqual({ status: 'unusable', reason: 'newer-version' });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('parseBackupPayload — full v1 validation before any write (AC-BRR-2)', () => {
+  const group = { id: 'g1', name: 'G', createdAt: 1, memberPubkeys: ['pk'], relays: ['wss://r'] };
+  const valid = () => ({
+    ...makeEmptyPayload(),
+    settings: { theme: 'spring', language: 'en' },
+    userProfile: { nickname: 'N', avatar: null },
+    groups: [group],
+    groupStates: { g1: uint8ArrayToBase64(new Uint8Array([1, 2, 3])) },
+    memberProfiles: { g1: [] },
+    chatMessages: { g1: [{ id: 'm', content: 'c', senderPubkey: 'pk', groupId: 'g1', createdAt: 1 }] },
+  });
+
+  it('accepts a payload produced by collectBackupPayload', async () => {
+    await saveGroup({ ...group, adminPubkeys: [] } as unknown as Group);
+    await new IdbGroupStateBackend().setItem('g1', new Uint8Array([9, 8]) as never);
+    localStore[STORAGE_KEYS.settings] = JSON.stringify({ theme: 'spring', language: 'de' });
+
+    const collected = JSON.parse(JSON.stringify(await collectBackupPayload()));
+    expect(parseBackupPayload(collected)).toEqual(collected);
+  });
+
+  it('treats a v1 payload without invite links as having none', () => {
+    const { inviteLinks: _omit, ...legacy } = valid();
+    expect(parseBackupPayload(legacy)!.inviteLinks).toEqual([]);
+  });
+
+  it('accepts absent settings and profile, normalising them to none', () => {
+    for (const absent of [null, undefined]) {
+      const parsed = parseBackupPayload({ ...valid(), settings: absent, userProfile: absent });
+      expect(parsed).not.toBeNull();
+      expect(parsed!.settings).toBeNull();
+      expect(parsed!.userProfile).toBeNull();
+    }
+  });
+
+  const malformed: Array<[string, (p: Record<string, unknown>) => unknown]> = [
+    ['an array at top level', () => [valid()]],
+    ['settings as an array', (p) => ({ ...p, settings: ['dark'] })],
+    ['profile not an object', (p) => ({ ...p, userProfile: 'N' })],
+    ['group without a name', (p) => ({ ...p, groups: [{ ...group, name: 3 }] })],
+    ['group with a non-numeric createdAt', (p) => ({ ...p, groups: [{ ...group, createdAt: '1' }] })],
+    ['group relays partly non-strings', (p) => ({ ...p, groups: [{ ...group, relays: ['wss://r', 7] }] })],
+    ['group state not a string', (p) => ({ ...p, groupStates: { g1: 12 } })],
+    ['chat message with a non-numeric createdAt', (p) => ({ ...p, chatMessages: { g1: [{ id: 'm', createdAt: '1' }] } })],
+    ['chat message that is not an object', (p) => ({ ...p, chatMessages: { g1: ['m'] } })],
+    ['not an object', () => 'backup'],
+    ['wrong version', (p) => ({ ...p, version: 0 })],
+    ['missing createdAt', (p) => ({ ...p, createdAt: undefined })],
+    ['settings not an object', (p) => ({ ...p, settings: 'dark' })],
+    ['profile without nickname', (p) => ({ ...p, userProfile: { avatar: null } })],
+    ['groups not an array', (p) => ({ ...p, groups: {} })],
+    ['group without id', (p) => ({ ...p, groups: [{ ...group, id: 7 }] })],
+    ['group members not strings', (p) => ({ ...p, groups: [{ ...group, memberPubkeys: [1] }] })],
+    ['group state not base64', (p) => ({ ...p, groupStates: { g1: '%%%' } })],
+    ['member profiles not a list', (p) => ({ ...p, memberProfiles: { g1: {} } })],
+    ['chat not a list', (p) => ({ ...p, chatMessages: { g1: 'x' } })],
+    ['chat message without id', (p) => ({ ...p, chatMessages: { g1: [{ createdAt: 1 }] } })],
+    ['invite links not a list', (p) => ({ ...p, inviteLinks: {} })],
+  ];
+  for (const [label, corrupt] of malformed) {
+    it(`refuses a payload with ${label}`, () => {
+      expect(parseBackupPayload(corrupt(valid() as unknown as Record<string, unknown>))).toBeNull();
+    });
+  }
+});
+
+describe('restoreFromBackup — settings and profile are written last (AC-BRR-3)', () => {
+  it('leaves settings, profile and the backed-up flag unchanged when an IDB write fails', async () => {
+    localStore[STORAGE_KEYS.settings] = JSON.stringify({ theme: 'local', language: 'de' });
+    localStore[STORAGE_KEYS.userProfile] = JSON.stringify({ nickname: 'Local', avatar: null });
+    vi.mocked(set).mockRejectedValueOnce(new Error('QuotaExceededError'));
+
+    await expect(
+      restoreFromBackup(
+        makeEmptyPayload({
+          settings: { theme: 'backup', language: 'en' },
+          userProfile: { nickname: 'Backup', avatar: null },
+          groups: [{ id: 'g1', name: 'G', createdAt: 1, memberPubkeys: [], relays: [] }],
+        }),
+      ),
+    ).rejects.toThrow('QuotaExceededError');
+
+    expect(JSON.parse(localStore[STORAGE_KEYS.settings])).toEqual({ theme: 'local', language: 'de' });
+    expect(JSON.parse(localStore[STORAGE_KEYS.userProfile])).toEqual({ nickname: 'Local', avatar: null });
+    expect(localStore[STORAGE_KEYS.nostrBackedUp]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// epic-backup-restore-reliability, story 2 — scheduled backup retries
+// ---------------------------------------------------------------------------
+
+describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () => {
+  const SEC = 1000;
+  const MIN = 60 * SEC;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a failure does not start the 5-minute window; changes during backoff wait for the retry (AC-BRR-9)', async () => {
+    const publishFn = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(0);
+    scheduler.markDirty(true);
+    scheduler.markDirty();
+    await vi.advanceTimersByTimeAsync(30 * SEC - 1);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+  });
+
+  it('retries after 30 s, 2 min, then every 10 min, five times in total (AC-BRR-10)', async () => {
+    const publishFn = vi.fn().mockResolvedValue(false);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+
+    const expectedDelays = [30 * SEC, 2 * MIN, 10 * MIN, 10 * MIN, 10 * MIN];
+    for (const [i, delay] of expectedDelays.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(publishFn).toHaveBeenCalledTimes(i + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(publishFn).toHaveBeenCalledTimes(i + 2);
+    }
+
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    expect(publishFn).toHaveBeenCalledTimes(6);
+    scheduler.dispose();
+  });
+
+  it('treats a rejected publish as a failure and retries it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const publishFn = vi.fn().mockRejectedValueOnce(new Error('relay down')).mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(30 * SEC);
+
+    expect(publishFn).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+    warn.mockRestore();
+  });
+
+  it('stops retrying once a publish succeeds', async () => {
+    const publishFn = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(30 * SEC);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+  });
+
+  it('a new change after the budget is exhausted publishes and retries again', async () => {
+    const publishFn = vi.fn().mockResolvedValue(false);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+    expect(publishFn).toHaveBeenCalledTimes(6);
+
+    scheduler.markDirty(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(publishFn).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(30 * SEC);
+    expect(publishFn).toHaveBeenCalledTimes(8);
+    scheduler.dispose();
+  });
+
+  it('a change made while a publish is in flight is published afterwards (AC-BRR-11)', async () => {
+    let finish!: (ok: boolean) => void;
+    const publishFn = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<boolean>((r) => (finish = r)))
+      .mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    scheduler.markDirty();
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+
+    finish(true);
+    await vi.advanceTimersByTimeAsync(5 * MIN - 1);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+  });
+
+  it('a change made during a failed publish waits for the retry instead of bypassing backoff', async () => {
+    let finish!: (ok: boolean) => void;
+    const publishFn = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<boolean>((r) => (finish = r)))
+      .mockResolvedValue(true);
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    scheduler.markDirty(true);
+    finish(false);
+    await vi.advanceTimersByTimeAsync(30 * SEC - 1);
+    expect(publishFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(publishFn).toHaveBeenCalledTimes(2);
+    scheduler.dispose();
+  });
+
+  it('schedules nothing once disposed while a publish is in flight', async () => {
+    let finish!: (ok: boolean) => void;
+    const publishFn = vi.fn().mockImplementationOnce(() => new Promise<boolean>((r) => (finish = r)));
+    const scheduler = new BackupScheduler(publishFn);
+
+    scheduler.markDirty(true);
+    scheduler.markDirty(true);
+    scheduler.dispose();
+    finish(false);
+    await vi.advanceTimersByTimeAsync(60 * MIN);
+
+    expect(publishFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('restore-decision guard', () => {
+  it('is scoped to the recovered identity and survives until cleared', () => {
+    markRestorePending('aa');
+    expect(isRestorePending('aa')).toBe(true);
+    expect(isRestorePending('bb')).toBe(false);
+    clearRestorePending();
+    expect(isRestorePending('aa')).toBe(false);
+  });
+
+  const cases: Array<[BackupLookup, boolean]> = [
+    [{ status: 'none' }, false],
+    [{ status: 'unusable', reason: 'unreadable' }, false],
+    [{ status: 'unusable', reason: 'newer-version' }, true],
+    [{ status: 'unreachable' }, true],
+    [{ status: 'found', payload: makeEmptyPayload() }, true],
+  ];
+  for (const [lookup, stillPending] of cases) {
+    const label = lookup.status === 'unusable' ? `unusable/${lookup.reason}` : lookup.status;
+    it(`${stillPending ? 'keeps' : 'lifts'} the pause after a "${label}" lookup`, () => {
+      markRestorePending('aa');
+      settleRestoreGuard(lookup);
+      expect(isRestorePending('aa')).toBe(stillPending);
+    });
+  }
 });

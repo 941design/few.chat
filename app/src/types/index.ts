@@ -53,6 +53,9 @@ export const STORAGE_KEYS = {
   // generateKeyPackageSlot() and reused across launches/rotations. See
   // storage.ts's readOrCreateKeyPackageSlot().
   keyPackageSlot: 'lp_keyPackageSlot_v1',
+  // Pubkey of a recovered identity whose relay backup the user has not yet
+  // restored or skipped; scheduled backups must not overwrite it meanwhile.
+  backupRestorePending: 'lp_backupRestorePending_v1',
 } as const;
 
 // ============================

@@ -68,6 +68,16 @@ honest consequences follow: a change made and then immediately followed by closi
 inside that window, may **not** be captured; and a change to settings alone does not by itself
 trigger a save — it rides along with the next one that does.
 
+**When saving fails:** if no relay accepts the backup (or the app is not yet connected), it is
+retried in the background — after about half a minute, then two minutes, then every ten minutes,
+up to five times; changes made meanwhile are included in the next retry, and a change after the
+last retry starts a fresh round. There is no on-screen backup
+status; a backup that keeps failing is not signalled to you.
+
+**Only with the app's own key:** automatic backups are made only when the app holds your key
+itself. If you sign in with an **external signer** (a browser extension or a remote signer), no
+relay backup is saved.
+
 ---
 
 ## 4. Restoring app state
@@ -83,13 +93,32 @@ with your recovered key and **adds it on top of** the device's current state:
   relay settings — is left untouched. (This matters mainly on a device that already has state; on
   a truly fresh device there is nothing to preserve.)
 - If several backups exist, the **most recent** is used. A backup written by a **newer,
-  incompatible** version of the app is refused rather than applied wrongly.
+  incompatible** version of the app — or one that cannot be read — is refused as a whole before
+  anything is written, rather than applied wrongly or in part.
 
-**One honest rough edge:** if relays are unreachable, or no backup is found, or the only backup
-is too new, the restore step is **silently skipped** and the flow still completes as an
-identity-only recovery — with no error and no state restored. From the user's side these
-outcomes look the same as "there was nothing to restore," so a failed state-restore is not
-clearly signalled.
+**When there is nothing to restore, you are told why.** Alongside the identity-recovered
+confirmation, the app says which of these happened:
+
+- **No backup was found** — only your identity came back.
+- **The relays could not be reached** — the app offers to **check again**, which repeats only the
+  backup lookup (your identity stays recovered).
+- **A backup was found but this app version can't use it** — updating the app and recovering
+  again is the way forward.
+
+If applying a found backup fails partway, you are told that the backup could not be applied;
+your settings and profile are only overwritten once everything else in the backup was written.
+
+**Your old backup is protected until you decide.** From the moment you recover your identity until
+you restore or skip the backup found on relays, the app does not save a new backup over it. If you
+leave before deciding — or the relays could not be reached — the question comes back the next time
+you open Settings, and automatic backups stay paused until then. Closing the dialog without choosing
+counts as leaving, not as skipping. A backup written by a newer app version is never overwritten by
+an older one. **Known limit:** the open question is raised only in Settings — someone who never
+opens Settings again keeps automatic backups paused without being told.
+
+The "relays could not be reached" message is inferred from the relays not answering in time. When
+only some of your relays are down, the app may report that no backup was found even though a relay
+that did not answer holds one.
 
 ---
 
@@ -168,12 +197,15 @@ in place (§4).
 
 **Several backups exist.** The most recent one is used.
 
-**The backup was written by a newer app version.** It is refused rather than applied — but, like
-an unreachable relay or a missing backup, this is not distinctly signalled; the restore simply
-completes as identity-only (§4).
+**The backup was written by a newer app version, or is damaged.** It is refused as a whole and you
+are told the backup can't be used by this app version (§4).
 
-**Relays are unreachable during restore.** The state restore is silently skipped and the flow
-still reports an identity-only recovery; it can be retried later (§4).
+**Relays are unreachable during restore.** Your identity is still recovered; you are told the
+relays could not be reached and can check again (§4).
+
+**Relays are unreachable when a backup is due.** The backup is retried in the background a few
+times; the next change to your groups or profile, or putting the app in the background, tries
+again (§3).
 
 **A new device restores, but relays have aged out old messages.** Group history beyond what the
 restored cryptographic state can decrypt is gone regardless (§5); the inbound half of DM history
@@ -207,9 +239,9 @@ Reconciled across product specifications, acceptance criteria, the shipped imple
 automated test suite:
 
 - `specs/relay-backup.md` and `specs/epic-relay-backup/` — the encrypted relay backup (contents,
-  encrypt-to-self, save triggers). **Note:** the spec's original "restore clears and replaces all
-  local state" was superseded in the shipped code by a **non-destructive merge**; this document
-  follows the shipped behaviour (tracked as a backlog finding).
+  encrypt-to-self, save triggers); its restore section now describes the shipped
+  **non-destructive merge**. `specs/epic-backup-restore-reliability/` — distinct restore outcomes,
+  validate-before-apply, and background retry of failed backups.
 - `specs/dm-message-recovery.md` and `specs/epic-dm-message-recovery/` — recovering the inbound
   half of direct-message history by re-fetching from relays, with lenient parsing and self-heal.
 - `specs/spec.md` / `specs/user-stories.md` — seed-phrase identity recovery.
@@ -219,6 +251,6 @@ automated test suite:
   the documented non-destructive restore/merge), `app/src/lib/nostrKeys.ts` with the seed/mnemonic
   handling (identity recovery), and the direct-message historical re-fetch and self-heal in the
   chat-persistence and DM-subscription code.
-- The `groups-relay-backup`, `groups-seed-phrase`, `groups-seed-recovery`, `dm-historical-recovery`,
-  and `groups-migration-backfill` end-to-end specs, and the unit tests for backup assembly/restore
-  and the seed mnemonic — including the assertion that the profile is never broadcast on restore.
+- The `groups-seed-phrase`, `groups-seed-recovery`, `dm-historical-recovery`, and
+  `groups-migration-backfill` end-to-end specs, and the unit tests for backup assembly, lookup
+  outcomes, validation, restore, scheduling/retry, and the seed mnemonic — including the assertion that the profile is never broadcast on restore.
