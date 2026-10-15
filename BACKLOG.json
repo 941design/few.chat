@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-14T13:03:02Z",
+  "updated_at": "2026-10-15T02:24:25Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -354,9 +354,9 @@
       },
       "text": "Groups e2e suite is flaky under shared-relay/shared-keypair cross-spec contamination",
       "created_at": "2026-07-10",
-      "motivation": "The full e2e gate (make test-e2e-all) is the project's only definitive gate, but ~7 groups tests intermittently fail on cross-user relay-propagation assertions. Observed 2026-07-10: 7 failures in a full run AND 6 failures re-running just 5 of those spec files on a freshly-wiped relay — i.e. reproduces at low load, independent of any single feature change. This makes the gate unreliable and forces ship-over-red judgment calls.",
-      "behavior": "Specs reuse deterministic USER_A/USER_B keypairs against one shared strfry relay for the whole run; gift-wraps/pending-invitations from earlier specs contaminate later specs' queues, so propagation assertions (member profile name, poll announcement, image lightbox, nickname update, feedback reply) time out nondeterministically.",
-      "approach": "Options: per-spec unique ephemeral keypairs; or per-spec-file relay wipe; or baseline-then-delta assertions that tolerate stale queue entries (drain-by-eventId rather than .last()). Pick one and apply suite-wide.",
+      "motivation": "Status 2026-10-15 (bug run groups-e2e-suite-flaky-under-shared, 3 remediation rounds): FIXED root causes — vacuous accept-invitation wait at 34 sites (helper acceptInvitationAndWaitJoined), create-before-ready race (helper createGroup), positional msg-* picks, backup-spec setup race, idb-record helper creating empty idb-keyval DBs, seedContact stale contract, dispatch-isolation unfiltered counter. Full-gate relay failures after the fixes: run3 3, run4 2, run5 1, run6 2 (of ~357), all one-offs except slow member-profile propagation (groups-leave-intent AC-MEMBERS-2 2/4, groups-contacts Bob name 1/4). Success signal (3 consecutive green full runs) NOT yet met.",
+      "behavior": "Residual: member-profile propagation to a peer occasionally exceeds the specs' 30 s budget (Alice still sees no name for Bob); other failures rotate once each (dm-pairing-pending-confirmation:208, dm-pairing-multi-use:60, groups-dm-reactions AC-46 press timeout — now instrumented).",
+      "approach": "Next: diagnose the profile-propagation latency (product perf vs. test budget) with instrumentation; consider warming heavy routes (/settings) in scripts/run-e2e.mjs waitForServer (cold-compile Fast Refresh reload flake seen in isolated runs).",
       "success_signal": "make test-e2e-all is green across 3 consecutive runs with no per-spec quarantine"
     },
     {
@@ -609,32 +609,6 @@
       "success_signal": "A vote cast in group B for a pollId reused from group A does not appear in group A's recomputed tally"
     },
     {
-      "slug": "own-send-message-echo-no-longer",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/chatHandler.ts"
-      },
-      "text": "Own-send message echo no longer suppressed at the dispatcher — appendMessage fires twice (AC-AR-22 regressed by author-auth app-layer epic)",
-      "created_at": "2026-07-24",
-      "motivation": "AC-AR-22 (groups-dispatch-isolation e2e) guards the invariant that a user's own-sent message is written to IDB exactly once: the own-send relay echo must be dropped before the dispatcher calls appendMessage. The dispatcher rework in commits 8c2b2ff/1924c9b broke it. Currently masked at the UI by a second storage-level dedup (one row, one bubble), but it is a lost correctness guarantee and a latent double-processing/perf risk, and the epic's own updated unit tests do not catch it.",
-      "behavior": "After sending a message the onChatIdbWrite counter fires twice (writeCount=2, expected 1). groups-dispatch-isolation.spec.ts:205 fails deterministically — confirmed across the full gate, a 47-test re-run, and in isolation as the very first test on a freshly-wiped relay (so not relay pollution). IDB row count and rendered bubble count both remain 1.",
-      "approach": "Owner decision required: is the own-send echo reaching the dispatcher an unintended regression (restore marmot-ts #sentEventIds / chatHandler own-send suppression) or an intended new dispatcher semantic (then update the AC-AR-22 expectation, as was done for the sibling stale imprint test)? Resolve against the epic's intended dispatcher design before changing code. Start from chatHandler.ts and applicationRumorDispatcher.ts diffs in 8c2b2ff/1924c9b.",
-      "success_signal": "groups-dispatch-isolation.spec.ts:205 passes on a clean relay (writeCount=1)"
-    },
-    {
-      "slug": "group-reaction-badge-no-longer-propagates",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/reactionHandler.ts"
-      },
-      "text": "Group reaction badge no longer propagates — Bob's reaction never renders (AC-40 regressed by author-auth app-layer epic)",
-      "created_at": "2026-07-24",
-      "motivation": "AC-40 (group reactions, story-06) requires a peer's reaction to render as a badge on the reacted message. The reaction receive/apply path was reworked in commits 8c2b2ff/1924c9b (reactionHandler.ts, reactions/api.ts, dispatcher). The e2e regressed while the epic's unit tests pass — the mocked-unit / assembled-system blind spot.",
-      "behavior": "After Bob reacts to Alice's message, the reaction-badge testid never renders. groups-reactions.spec.ts:163 fails in isolation on a freshly-wiped relay while its 6 sibling reaction tests pass (so group setup and other reaction scenarios work), which isolates the break to this cross-peer reaction badge path. Cross-peer reaction timing means the exact break point still warrants owner confirmation.",
-      "approach": "Owner decision required: confirm whether the reaction apply/render is genuinely broken (fix product) or the e2e expectation is stale under new dispatcher semantics (update the test). Start from the reactionHandler.ts and reactions/api.ts diffs in 8c2b2ff/1924c9b.",
-      "success_signal": "groups-reactions.spec.ts:163 passes on a clean relay (badge renders on both peers)"
-    },
-    {
       "slug": "stale-foreign-group-invite-expiry-count",
       "scope": "any",
       "anchor": {
@@ -649,19 +623,6 @@
       "success_signal": "A restored/foreign groupId expiry either self-clears on next sweep or exposes a one-click acknowledge; the Groups nav pill never shows an unclearable expiry."
     },
     {
-      "slug": "update-detection-spec-ts-banner-non",
-      "scope": "app",
-      "anchor": {
-        "path": "app/tests/e2e/update-detection.spec.ts"
-      },
-      "text": "update-detection.spec.ts 'banner is non-blocking' fails Playwright strict-mode: page.locator('nav') matches two <nav> landmarks (header + mobile bottom tab bar)",
-      "created_at": "2026-07-24",
-      "motivation": "Pre-existing e2e failure introduced by the mobile-nav epic (commit 9a77a73) that added a second as='nav' landmark (the bottom tab bar); surfaced while running the non-relay bucket during the mobile-qr-scanner epic. Not caused by the QR scanner (adds no <nav>).",
-      "behavior": "The 'banner is non-blocking' test uses page.locator('nav'), which now resolves to two elements, triggering a Playwright strict-mode violation and failing the test.",
-      "approach": "Scope the locator to the header nav (e.g. a data-testid or role+name), not the bare 'nav' tag. One-line test-selector fix.",
-      "success_signal": "update-detection.spec.ts passes in the non-relay bucket"
-    },
-    {
       "slug": "external-signer-users-nip-07-nip",
       "scope": "any",
       "anchor": {
@@ -674,17 +635,86 @@
       "approach": "Handle with the signer-authority work (2026-09-26 review task R04): route backup encrypt/sign through the active signer, decide whether background NIP-44 encrypt/sign prompts are acceptable for NIP-46/NIP-07, and gate the restore flow accordingly."
     },
     {
-      "slug": "four-invite-flow-e2e-tests-fail",
+      "slug": "invite-accept-not-atomic-across-page-unload",
       "scope": "any",
       "anchor": {
-        "path": "app/tests/e2e/groups-rename.spec.ts",
-        "line": 127
+        "path": "app/src/lib/marmot/welcomeSubscription.ts",
+        "range": [
+          511,
+          532
+        ]
       },
-      "text": "Four invite-flow e2e tests fail deterministically on master (also with a freshly wiped relay, run in isolation): invitation-preview decline, profile-update-propagation multi-group invite, remove-member AC-SCEN-8 re-invite, rename invite-join",
+      "text": "Accepting a group invitation is not atomic across a page unload: navigating away mid-accept can lose the join (MLS-joined but no Group record) or leave a stale invitation next to the joined group",
       "created_at": "2026-10-14",
-      "motivation": "The full e2e gate cannot go green while these fail, so real regressions in the invite/join path are masked by known-red noise. They reproduce identically with the backup-restore-reliability changes stashed (baseline 1450dc7, 2026-10-14), so they are not load-flakes but a shared invite/join regression or a test-contract drift.",
-      "behavior": "groups-invitation-preview.spec.ts:142 (~35s), groups-profile-update-propagation.spec.ts:194 (~1.3m), groups-remove-member.spec.ts:191 (~31s), groups-rename.spec.ts:127 (~41s) time out in both a full make test-e2e run and a targeted 4-spec run after docker compose down -v. Likely related to the marmot-ts 0.7.0 migration (9eef568) / dispatch ordering (07adee0), alongside the known own-send regression in groups-dispatch-isolation.",
-      "approach": "Run /base:bug on one of them (rename invite-join is the simplest), diagnose the shared invite/accept stall, and re-run all four."
+      "motivation": "A user who taps Accept and immediately navigates/reloads can end up MLS-member of a group they never see, with the retry path reporting 'This invitation is no longer valid' — a correctness bug, not cosmetic. Surfaced 2026-10-14 by bug run groups-e2e-suite-flaky-under-shared, where the e2e suite's own navigation aborted joins 1 in 3 times.",
+      "behavior": "joinGroupFromWelcomeCore runs marmotClient.joinGroupFromWelcome (adopts MLS state, consumes key package) → await saveGroup → removePendingInvitation → reloadGroups. Unload between adopt and saveGroup: invitation stays pending, no group card; re-accept likely throws (used key package) and the catch at welcomeSubscription.ts:1363-1370 removes the invitation with an 'invalid' notice. Unload between saveGroup and removePendingInvitation: joined card plus a stale invitation. pendingInvitations.ts never reconciles against joined groups.",
+      "approach": "1) Verify marmot-ts behaviour on re-joining from an already-adopted Welcome. 2) On load, drop pending invitations whose groupId is already a joined group (invitation stores groupId, pendingInvitations.ts:50). 3) For the lost-join window, rebuild the Group record from adopted MLS state on startup (or make the join idempotent). Add an e2e that reloads mid-accept.",
+      "success_signal": "An e2e that reloads the page immediately after clicking Accept ends with exactly one joined group card and no invitation, across 5 runs"
+    },
+    {
+      "slug": "first-relay-backup-fragile-at-cold-start",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/relayBackup.ts",
+        "line": 562
+      },
+      "text": "The first relay backup after load can fail on tight NDK timeouts and then wait 30 s / 2 min to retry, so a fresh session can go minutes without a backup",
+      "created_at": "2026-10-14",
+      "motivation": "Observed 2026-10-15 (instrumented e2e runs): with the relay unreachable at startup, the first attempt takes ~13 s to fail (connect 2.5 s + relay-list fetch 8 s + publish 2.5 s), is logged, and the next try only comes 30 s later (then 2 min). Correction: the flaky e2e that prompted this (groups-backup-restore-outcomes) was a TEST setup race, not this latency — so this is optional hardening of the cold-start window, not a confirmed user-facing failure.",
+      "behavior": "publishScheduledBackup (BackupContext.tsx:52-61): connectNdk ndk.connect(2500), kind-30051 relay-list fetch (8 s), ndkEvent.publish(relaySet) with NDK 3.0.3's default 2.5 s per-relay timeout; a failure is logged and retried after RETRY_DELAYS_MS=[30s,2m,10m]. Attempts do settle (no hang).",
+      "approach": "Optional: shorter first retry (~5 s) for start-up failures and/or a skip of the relay-list fetch when it timed out recently; privacy invariant unchanged.",
+      "success_signal": "With the relay connection deliberately slowed at startup, the first backup lands within 15 s"
+    },
+    {
+      "slug": "create-group-enabled-before-client-ready",
+      "scope": "any",
+      "anchor": {
+        "path": "app/pages/groups.tsx",
+        "range": [
+          1209,
+          1213
+        ]
+      },
+      "text": "The Create Group button is enabled before the MLS client is ready; submitting in that window fails with a generic error instead of waiting or being disabled",
+      "created_at": "2026-10-14",
+      "motivation": "Diagnosed 2026-10-14 as the cause of a flaky e2e (groups-pending-invite-live-idle:110). A user who opens /groups and creates a group right away on a slow load hits the same failure.",
+      "behavior": "create-group-btn renders once the page mounts (gated only by !unsupported) while the list still shows the loading state (!ready); MarmotContext.createGroup returns null when the client is not yet initialised (~MarmotContext.tsx:1903) and CreateGroupModal shows create-group-error; nothing retries.",
+      "approach": "Disable the create button (or the modal submit) until MarmotContext.ready, or have createGroup await client readiness.",
+      "success_signal": "Clicking Create immediately after a cold /groups load either waits or is disabled — never a create-group-error"
+    },
+    {
+      "slug": "backup-dirty-mark-lost-on-early-reload",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/BackupContext.tsx",
+        "range": [
+          67,
+          90
+        ]
+      },
+      "text": "A backup-needed mark raised before the identity has loaded lives only in memory (pendingDirty), so a reload/close in that window loses the change's backup until something else marks dirty",
+      "created_at": "2026-10-15",
+      "motivation": "Found 2026-10-15 while diagnosing a flaky backup e2e: a profile change made in the first ~50 ms of a page load (before the identity loads and the scheduler exists) is never backed up if the page reloads/closes in that window. Narrow, but a silent gap in an integrity feature.",
+      "behavior": "markBackupDirty before the scheduler exists stores the mark in the in-memory pendingDirty and replays it when activateBackupScheduler runs; a reload in between discards it, and the next load sees no change to mark (e.g. the avatar was already backfilled and persisted).",
+      "approach": "Persist the pending dirty flag (e.g. a localStorage boolean) and replay it on scheduler activation; product decision on backup timing — update docs/behavior backup topic accordingly. Privacy invariant unaffected (what/where is published does not change).",
+      "success_signal": "A unit test: mark dirty before identity → simulated reload → scheduler activation publishes"
+    },
+    {
+      "slug": "leave-announcement-blank-name-when-profile-unknown",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/groups-leave-intent.spec.ts",
+        "range": [
+          198,
+          204
+        ]
+      },
+      "text": "The 'left the group' chat announcement renders with a blank name (' left the group') when the leaver's profile has not reached the viewer yet",
+      "created_at": "2026-10-15",
+      "motivation": "Seen 2026-10-15 in 2 of 4 full e2e runs (groups-leave-intent AC-MEMBERS-2): Alice saw ' left the group' because Bob's member profile had not propagated within 30 s. Since 1398e4f the row shows the member's name instead of an npub, but there is no fallback for an unknown name, so the row reads as broken. Product decision: what should the row say when the name is unknown (e.g. 'A member left the group')?",
+      "behavior": "The leave-chat-announcement row interpolates the leaver's display name; when no profile is known the name is empty and no fallback is applied (the npub is deliberately not shown).",
+      "approach": "Owner picks the fallback wording (en+de in i18n.ts); render it when the name is empty; the e2e should then also wait for profile propagation before asserting the name.",
+      "success_signal": "With the leaver's profile absent, the row reads the chosen fallback; groups-leave-intent passes across 3 full runs"
     }
   ],
   "archive": [
