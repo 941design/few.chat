@@ -19,7 +19,8 @@ import { hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
 import { parseStructured } from '@/src/lib/marmot/parseStructured';
 import type { StructuredContent } from '@/src/lib/marmot/parseStructured';
 import { computeTally } from '@/src/lib/marmot/pollTally';
-import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
+import { loadVotesWithPending } from '@/src/lib/marmot/pollReplay';
+import type { Poll, PollVote, PendingPollVote } from '@/src/lib/marmot/pollPersistence';
 
 export interface ChatHandlerDeps {
   appendMessage: (groupId: string, message: ChatMessage) => Promise<void>;
@@ -60,7 +61,13 @@ export interface ChatHandlerDeps {
   isGroupAdmin: (groupId: string, pubkeyHex: string) => Promise<boolean>;
   isGroupMember: (groupId: string, pubkeyHex: string) => Promise<boolean>;
   getPoll: (groupId: string, pollId: string) => Promise<Poll | null>;
-  loadVotes: (pollId: string) => Promise<PollVote[]>;
+  loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
+  // AC-9: the poll_close gate replays stranded early votes before its tally
+  // (same as pollHandler.handleClose) so the announced counts match the
+  // persisted close.
+  saveVote: (vote: PollVote) => Promise<void>;
+  loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
+  removePendingVotes: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
 }
 
 /**
@@ -150,7 +157,7 @@ async function gateAnnouncement(
       // re-ingest, that wrong tally would be permanent for the session.
       let votes: PollVote[];
       try {
-        votes = await deps.loadVotes(structured.pollId);
+        votes = await loadVotesWithPending(poll, deps);
       } catch {
         return null;
       }

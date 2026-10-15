@@ -3,7 +3,8 @@ import type { ChatMessage } from './chatPersistence';
 import type { ReactionThreadKey } from '@/src/lib/reactions/types';
 import type { ApplicationRumor, AuthenticatedSender } from './applicationRumorDispatcher';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
-import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
+import type { Poll, PollVote, PendingPollVote } from '@/src/lib/marmot/pollPersistence';
+import { queuePendingVote, loadPendingVotes, removePendingVotes } from '@/src/lib/marmot/pollPersistence';
 import type { ProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
 import { createChatHandler } from './handlers/chatHandler';
@@ -73,7 +74,12 @@ export interface HandlerDeps {
   savePoll: (poll: Poll) => Promise<void>;
   saveVote: (vote: PollVote) => Promise<void>;
   getPoll: (groupId: string, pollId: string) => Promise<Poll | null>;
-  loadVotes: (pollId: string) => Promise<PollVote[]>;
+  loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
+  // AC-9 early-vote queue. Optional so existing wiring keeps compiling; when
+  // omitted, the IDB-backed pollPersistence implementations are used.
+  queuePendingVote?: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<void>;
+  loadPendingVotes?: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
+  removePendingVotes?: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
   setPollVersion: (updater: (v: number) => number) => void;
   // Leave handler deps
   enqueueLeave: (groupId: string, pubkey: string) => void;
@@ -85,6 +91,9 @@ export function buildDispatcher(deps: HandlerDeps): Dispatcher {
     saveVote: deps.saveVote,
     getPoll: deps.getPoll,
     loadVotes: deps.loadVotes,
+    queuePendingVote: deps.queuePendingVote ?? queuePendingVote,
+    loadPendingVotes: deps.loadPendingVotes ?? loadPendingVotes,
+    removePendingVotes: deps.removePendingVotes ?? removePendingVotes,
     setPollVersion: deps.setPollVersion,
   };
 
@@ -100,6 +109,9 @@ export function buildDispatcher(deps: HandlerDeps): Dispatcher {
       isGroupMember: deps.isGroupMember,
       getPoll: deps.getPoll,
       loadVotes: deps.loadVotes,
+      saveVote: deps.saveVote,
+      loadPendingVotes: pollDeps.loadPendingVotes,
+      removePendingVotes: pollDeps.removePendingVotes,
     }),
     createReactionHandler({
       loadMessages: deps.loadMessages,

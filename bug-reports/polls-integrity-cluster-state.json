@@ -1,0 +1,95 @@
+{
+  "bug_name": "polls-integrity-cluster",
+  "bug_report_file": "bug-reports/polls-integrity-cluster-report.md",
+  "created_at": "2026-10-15T08:18:52Z",
+  "updated_at": "2026-10-15T10:43:39Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "SECURITY",
+      "question": "Is the vote store group-scoped so a vote stored for (groupB, pollId) can never be loaded into (groupA, pollId)s tally — proven by a failing-then-passing unit test of the cross-group injection?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does the migration move legacy few:poll-votes:{pollId} rows to the group-scoped key correctly (groupId recovered from the poll store), idempotently, without losing or duplicating votes, and drop rows whose poll is unknown or ambiguous (tested)?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SPEC",
+      "question": "Are early votes queued per (groupId, pollId), bounded, and applied with the full receive-side validation when the poll-open arrives (AC-9), with queued votes for a closed or never-arriving poll handled deterministically?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "SECURITY",
+      "question": "Does parsePollOpen reject polls exceeding the creation-side option-count and length caps on receipt?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "SPEC",
+      "question": "Is the stale AC-9 close-tally sentence corrected and docs/behavior/polls.md updated for the new behaviour?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on pollHandler/pollPersistence/pollSync shows no real-gap survivors in touched code; polls e2e specs pass on a wiped relay?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "9471e99309f223c52833b5deeaf7f53de6559953",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "REJECTED: A failed migration swallowed before tally read (Codex high); B replay deletes queued votes before saving (Codex high); C unbounded string lengths in queue/caps (Codex medium)",
+      "examiner": "VQ-1,2,4,5 YES; VQ-3 PARTIAL sev5 (size bound); VQ-6 PARTIAL (unverifiable read-only)"
+    },
+    {
+      "round": 1,
+      "reviewer": "REJECTED: Codex HIGH stranded queued votes (replay only once, on first open); minor migration write outside enqueue lock; A, B-ordering, C confirmed",
+      "decider": "RETRY (Fable): re-entrant replay before close tally + on vote, newer-wins, chatHandler gate replay, migration writes via enqueue"
+    },
+    {
+      "round": 2,
+      "reviewer": "REJECTED solely on Codex HIGH (replay vs live ordering), items 1-6 verified",
+      "decider": "ACCEPT (Fable): waived as bounded low-severity; cheap fix would regress multi-device vote changes; follow-up poll-vote-ordering-single-key + comment at pollReplay.ts"
+    }
+  ],
+  "remediation_round": 2,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T08:18:52Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T09:03:24Z",
+      "trigger": "fast_path_first_retry"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T09:33:07Z",
+      "trigger": "decider_retry_round_2"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T10:33:58Z",
+      "trigger": "decider_accept"
+    }
+  ],
+  "e2e_gate": {
+    "run": "full-7 2026-10-15",
+    "result": "non-relay 72/72; relay 336 passed / 4 failed",
+    "attribution": "3 failures (dm-block-contact AC-PRIV, dm-feedback-channel + dm-giftwrap-bell setup) caused by the gate running against a tree being edited (dev-server full reloads on half-edited poll files); frozen HEAD+all-uncommitted copy 10/10 green — bug-reports/gate7-regressions-diagnosis.md. groups-contacts:54 = known product defect mls-message-lost-on-unload-after-ingest"
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": "(1) Votes were stored under few:poll-votes:{pollId}. Poll ids are unique only per group (first-open-wins is per group), so a member sharing groups A and B with a victim could open a poll in B that reuses A's pollId. Votes cast in B then landed in the same row list and were counted in A's recomputed close tally. (2) handleVote returned early when the poll was unknown, so a vote delivered before its poll-open was lost. This contradicts AC-9. (3) parsePollOpen enforced only the minimum of two options. The creation caps (10 options, title 200, description 500, option 100) were enforced only by CreatePollModal's inputs, so oversized polls from other clients were accepted.",
+  "fix": "pollPersistence: PollVote gains groupId and is stored under few:poll-votes:{groupId}:{pollId}. loadVotes(groupId, pollId) also filters rows by their own groupId/pollId. A one-time, memoised, idempotent migration (migrateLegacyVotes, awaited by loadVotes/saveVote/clearPollData, re-armed by clearAllPollData) does the following for rows without a groupId: if the poll store knows the poll in exactly one group, the rows move there and an existing group-scoped row with the same id wins; unknown or multi-group polls are dropped; malformed rows are dropped; targets are written before sources are stripped. A failed migration is logged and retried on the next use. New persisted early-vote queue few:poll-pending-votes:{groupId} (queuePendingVote/takePendingVotes): the latest arrival per (poll, voter) replaces the earlier one; a voter can have at most 10 distinct polls per group (further ones are dropped, never evicting others); a group holds at most 200 entries (the oldest-received is evicted); the TTL is 7 days. clearPollData deletes every vote key of the group plus its queue; clearAllPollData also clears queue keys. pollHandler: an unknown-poll vote is queued with the authenticated sender and raw responses. handleOpen takes the queued votes for (ctx.groupId, pollId) after savePoll and runs them through buildSanitizedVote, the same function the live path now uses. A vote for a closed poll is still dropped. Close reads loadVotes(ctx.groupId, pollId), and so does the chatHandler poll_close gate. pollSync: POLL_LIMITS is shared with CreatePollModal. parsePollOpen enforces max options, title, description (and its type) and option-label caps; parsePollVote rejects more than 10 responses. registerHandlers: the queue deps are optional and default to the persistence implementations, so MarmotContext (owned by the parallel agent) needed no edit.",
+  "files_changed": [
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollSync.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/components/groups/CreatePollModal.tsx",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollPersistence.test.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "app/tests/unit/marmot/applicationDispatchPersistence.test.ts",
+    "specs/epic-group-polls/acceptance-criteria.md",
+    "docs/behavior/polls.md",
+    "app/src/lib/marmot/pollReplay.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollSync.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/components/groups/CreatePollModal.tsx",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollPersistence.test.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "app/tests/unit/marmot/applicationDispatchPersistence.test.ts",
+    "specs/epic-group-polls/acceptance-criteria.md",
+    "docs/behavior/polls.md"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "bug-reports/polls-integrity-cluster-contract.json",
+    "bug-reports/polls-integrity-cluster-result.json",
+    "app/src/lib/marmot/pollReplay.ts"
+  ],
+  "tests_added": [
+    "app/tests/unit/marmot/pollIntegrity.test.ts (85 tests: 34 written before the fix, 29 of them failed pre-fix; mutation-gap closers; 10 added test-first in round 1 and 10 in round 2)",
+    "pollHandler.test.ts: the bug-encoding 'vote for unknown poll: saveVote NOT called' now asserts the vote is queued (group, authenticated sender, raw responses), not stored, with no UI bump; new test: a vote for a closed poll is not queued",
+    "applicationDispatchPersistence.test.ts: the bug-encoding 'does not promise recovery of a vote that arrived before its poll' now asserts recovery through real IndexedDB (vote -> open -> close gives totalVoters 1)",
+    "registerHandlers.test.ts: queue deps default to the persistence implementations and pass through when injected; chatHandler.test.ts: poll_close gate reads loadVotes(groupId, pollId)"
+  ],
+  "baseline": {
+    "unit_files": 232,
+    "unit_passed": 4877,
+    "unit_skipped": 1,
+    "tsc": "clean"
+  },
+  "final": {
+    "unit_files": 238,
+    "unit_passed": 5001,
+    "unit_skipped": 1,
+    "tsc": "clean",
+    "note": "after remediation round 2; the file count includes parallel runs' new test files"
+  },
+  "e2e": {
+    "postfix": "groups-polls (35) + groups-poll-after-leave (7): 42/42 passed on a wiped relay under the shared flock.",
+    "note": "No e2e covers out-of-order delivery (the app cannot be made to reorder MLS delivery). AC-9 replay is covered by unit tests, including a real-IndexedDB dispatcher test.",
+    "round_1": "groups-polls + groups-poll-after-leave 42/42 on a wiped relay",
+    "round_2": "groups-polls + groups-poll-after-leave 42/42 on a wiped relay"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config outside the repo (scratchpad/mut/stryker.polls.mjs, own tempDir), mutate pollHandler.ts + pollPersistence.ts + pollSync.ts",
+    "before": "77.92% (439 killed, 2 timeout, 116 survived, 9 no-coverage), measured on the post-fix code before the gap-closing tests",
+    "after": "92.02% (519 killed, 44 survived, 1 no-coverage); pollHandler 97.4%, pollPersistence 87.9%, pollSync 98.6%",
+    "remaining": "No real gaps remain. Equivalent: `?? []` fallbacks whose replacement content is shape-filtered, typeof/key guards that are redundant with later checks (missing pollId never matches; a NaN receivedAt fails the TTL; a null option throws inside the try), the migration early-exit and the `hasLegacy` short-circuits (rewriting a scoped key is idempotent), length>0 guards before delMany/set, and the single-choice `length > 1` cap (slicing ≤1 is a no-op). Side-effect-only: enqueue's writeQueues map cleanup (pre-existing, memory only) and the migration write-ordering loops (only observable on a mid-run crash).",
+    "recorded": "base:mutation-audits add-audit, slug quizzl, scope module, for all three paths",
+    "after_round_1": "92.17% (553 killed, 46 survived, 1 no-coverage); pollHandler 96.3%, pollPersistence 88.7%, pollSync 97.6%",
+    "after_round_2": "91.53% (573 killed, 52 survived, 1 no-coverage); pollHandler 96.8%, pollPersistence 87.9%, pollReplay 91.9%, pollSync 97.6%"
+  },
+  "design_choices": [
+    "Group-scoped key AND groupId on the row, with loadVotes filtering by both. The key gives O(1) per-(group, poll) reads and lets clearPollData delete by prefix; the row field makes rows self-describing, which is how migration recognises legacy rows by content instead of key shape and stops a crafted pollId containing ':' from colliding with another key's rows.",
+    "Early-vote queue persisted in IDB, not in memory. An MLS application message is decrypted and dispatched once. After a reload it is not re-delivered to the dispatcher (the epoch keys are consumed and the seen set is rebuilt), so a vote held in memory would be lost if the page unloads before its poll-open arrives, and AC-9 would hold only within a session.",
+    "Bounds: per-voter cap of 10 distinct polls per group, with new entries dropped so one member cannot evict others; group cap of 200 with oldest-received evicted; TTL of 7 days from local receipt (rather than the sender's created_at, which the sender controls). Responses are stored raw and sanitised at apply time with the live-vote function. parsePollVote's cap of 10 responses bounds entry size.",
+    "Migration runs lazily (memoised promise awaited by vote reads/writes) inside pollPersistence. This keeps MarmotContext untouched. clearAllPollData re-arms it, so restoring an older backup migrates again.",
+    "The queue deps are optional in HandlerDeps and default to the persistence functions in buildDispatcher. This keeps the MarmotContext call site, owned by the parallel agent, compiling unchanged."
+  ],
+  "verification_answers": {
+    "VQ-1": "Yes. Votes are stored under few:poll-votes:{groupId}:{pollId}, and loadVotes also filters by the row's groupId/pollId. pollIntegrity.test.ts runs the attack through the real handlers and real storage: the attacker re-opens A's pollId in B, two votes are cast in B, and A's close tallies only A's single vote. This test failed before the fix (B's votes were counted). Both directions and clear-on-leave isolation are also tested.",
+    "VQ-2": "Yes. migrateLegacyVotes moves rows of a poll known in exactly one group, with groupId stamped, and removes the legacy key. It drops rows of unknown and multi-group polls, malformed rows, and rows whose pollId disagrees with their key. Tests show: a re-run leaves the store byte-identical, a crash replay neither loses nor duplicates, an existing scoped row wins, it runs automatically before the first read, and a failed run is retried.",
+    "VQ-3": "Yes. A vote for an unknown poll is queued per group with the authenticated sender. On poll-open, only that poll's entries in that group are taken and pass buildSanitizedVote, the same function as the live path (property test over 60 random response lists: queued result == live result). Determinism: latest arrival per voter replaces; per-voter cap 10 (excess dropped); group cap 200 (oldest-received evicted); 7-day TTL; cleared on leave and reset; survives a module reload. A vote for a known closed poll is dropped, never queued. A queued vote whose poll never arrives (or arrives oversized and rejected) expires. A close arriving before its open is still dropped (out of scope, noted). Round 1: replay is read -> save -> remove, so an interruption never loses a queued vote and re-replay is idempotent. The savePoll -> replay window belongs to mls-message-lost-on-unload-after-ingest. Round 2: replay is re-entrant (open, every later vote, and close), so a vote stranded by an interrupted replay is recovered at the next poll message and always before a close tallies (the close fails closed if the replay fails). Newer-wins prevents a stranded older vote from overriding a newer one.",
+    "VQ-4": "Yes. parsePollOpen rejects more than 10 options, a title over 200, a description over 500 or not a string, and an option label over 100. These are the POLL_LIMITS constants shared with CreatePollModal. Boundary table tests cover each cap at and over the limit, and the handler stores nothing for an oversized open. parsePollVote rejects more than 10 responses. Round 1: poll ids (≤64, non-empty) are capped on open/vote/close, and option ids and response ids (≤8, non-empty) are capped too.",
+    "VQ-5": "Yes. In AC-9, the close-tally sentence now says the payload counts are ignored and the tally is recomputed from the stored votes of that poll in that group (AC-POLL-4). Queue bounds/validation and the receive-side caps were added. docs/behavior/polls.md was updated: early votes held then counted (bounds, per-group), polls/votes kept per group, caps enforced on both sides, receive-side vote sanitisation, close recompute and authenticated creator/voter. Stale 'member-attested' / 'dropped' statements were reconciled with the author-auth epic, and edge cases and Sources were updated.",
+    "VQ-6": "Yes. After round 2: unit suite 238 files, 5001 passed, 1 skipped; tsc clean; Stryker 91.53% with only equivalent or side-effect-only survivors; polls e2e 42/42 on a wiped relay."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "Two existing tests encoded the bug, not just the one the brief named: applicationDispatchPersistence.test.ts's 'does not promise recovery of a vote that arrived before its poll' also asserted the drop, and it passed vacuously once the handler needed new deps (the dispatcher swallows handler TypeErrors). Separately, MarmotContext was off-limits, which forced the new handler deps to be optional with persistence defaults instead of being injected like the others.",
+    "surprised_by": "docs/behavior/polls.md was stale beyond this bug. It still described closes as replacing the local tally, single-choice as unenforced and attribution as member-attested, all fixed by the author-auth epic. A first pass of corrupt-queue tests passed for the wrong reason (fixture receivedAt:1 was already expired), which the mutation run exposed.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "follow_ups": [
+    "A poll-close that arrives before its poll-open is still dropped (AC-9 does not require queueing it).",
+    "MarmotContext could inject queuePendingVote/takePendingVotes explicitly for consistency with the other poll deps.",
+    "Window between savePoll and early-vote replay: covered by finding mls-message-lost-on-unload-after-ingest (not fixed here)."
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollSync.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/components/groups/CreatePollModal.tsx",
+    "app/src/lib/marmot/pollReplay.ts"
+  ],
+  "remediation_round_1": {
+    "findings": [
+      "A (high) failed legacy migration was swallowed, so loadVotes could read a missing/half-migrated list and a close persisted an incomplete tally forever",
+      "B (high) early-vote replay removed queued votes before saving them; an unload in between lost them",
+      "C (medium) pollId, option id and response id lengths were uncapped on receipt",
+      "minor: clearAllPollData did not wait for an in-flight migration; polls.md lacked remove-after-apply and the stray-announcement note"
+    ],
+    "code": "A: ensureVotesMigrated now logs and RETHROWS (memo reset for retry). loadVotes therefore rejects, and handleClose and the chatHandler poll_close gate already fail closed on that. saveVote and clearPollData use settleVotesMigration(), which tolerates the failure. B: takePendingVotes was replaced by loadPendingVotes (read-only) + removePendingVotes(groupId, applied), which removes exactly the applied entries matched by poll+voter+receivedAt, so a newer early vote queued meanwhile survives. The new exported replayPendingVotes(poll, deps) does read -> saveVote each -> remove; handleOpen calls it. Re-replay is idempotent because saveVote upserts by `${pollId}:${voter}`. registerHandlers defaults were updated. C: POLL_ID_LIMITS { MAX_POLL_ID_LEN: 64 (createPoll emits a 36-char UUID), MAX_OPTION_ID_LEN: 8 (createPoll emits 'A'..'J') }. Non-empty and capped ids are enforced in parsePollOpen (poll id, option ids), parsePollVote (pollId, each response) and parsePollClose (pollId). Minor: clearAllPollData awaits an in-flight migration before deleting and re-arming. polls.md now says a held vote leaves the holding area only after it is recorded, that a rejected oversized poll's separate announcement row may still appear (cosmetic), and that overlong identifiers are rejected.",
+    "tests_added": "pollIntegrity.test.ts grew from 65 to 75 tests: failed migration makes reads reject and the next use retries; a close during a failed migration persists no tally and a close after the retry persists the full one (old code persisted a partial tally); a failed migration does not block writes; clearAll waits for a migration parked mid-run (verified to fail with the wait removed); save failure during replay leaves the votes queued; a failure between save and remove leaves votes saved and queued, double re-replay gives no double count and the queue is drained; removal spares a newer same-voter entry, a same-voter/same-time entry of another poll, and another voter's same-time entry; id-cap boundary tests at 64/65, 8/9 and empty for open/vote/close, plus the UUID + 'A'..'J' ids createPoll generates. pollHandler.test.ts: a bogus option id was shortened to stay within the new 8-char cap.",
+    "verified": "vitest tests/unit/marmot 55 files green; make test-unit 238 files, 4990 passed, 1 skipped; tsc clean. Stryker at concurrency 1: 92.17% (553 killed, 46 survived, 1 no-coverage; pollHandler 96.3%, pollPersistence 88.7%, pollSync 97.6%). All survivors are equivalent or side-effect-only (new ones: the replay empty-list early return, and the first operand of the id predicates, which is redundant because a non-string has no numeric length), recorded under slug quizzl. Polls e2e (groups-polls + groups-poll-after-leave) 42/42 on a wiped relay under the flock; it ran after the A/B/C code change, and only tests changed afterwards.",
+    "not_fixed": "The window between savePoll and the queue replay (an unload after the poll-open is stored but before queued votes are applied) is the general case of finding mls-message-lost-on-unload-after-ingest: the poll-open is not re-delivered, so leftover queued votes then just expire. It is not specific to polls and was left to that finding."
+  },
+  "remediation_round_2": {
+    "findings": [
+      "Codex HIGH (Decider RETRY): queued votes could be stranded because replay ran only once, at the first poll-open, so a replay interrupted there was never retried"
+    ],
+    "code": "New app/src/lib/marmot/pollReplay.ts holds buildSanitizedVote, replayPendingVotes and loadVotesWithPending (replay then load). It was moved out of pollHandler so chatHandler can share it without importing a handler. Replay is re-entrant: handleOpen runs it after savePoll and, on a duplicate open of an existing OPEN poll, best-effort; handleVote runs it best-effort (warn, entries stay queued) before saving the live vote, so a replay failure never costs the live vote; handleClose calls loadVotesWithPending before computeTally and rethrows, so the close is not persisted. The chatHandler poll_close gate uses the same loadVotesWithPending, and its existing try/catch keeps it fail-closed. Its deps gain saveVote/loadPendingVotes/removePendingVotes, wired in registerHandlers from the poll deps. Newer-wins: replay skips a queued vote when the stored vote for `${pollId}:${voter}` has votedAt >= the queued votedAt; skipped entries are still removed. Migration: legacy additions are collected per key, and every write goes through enqueue(key) and re-reads the key inside the queue (existing scoped rows win by id). A concurrent saveVote is therefore merged, never clobbered. polls.md documents the recovery guarantee: retried at every later vote and close, counted at the latest at close, a failed replay at close leaves the poll open on that device, and a held vote never overrides a newer one.",
+    "tests_added": "pollIntegrity.test.ts grew from 75 to 85, all through createPoll{Open,Vote,Close}Handler / createChatHandler: (i) replay throws at open, later close tallies the queued vote; (ii) open-replay save fails, the next live vote recovers it; (iii) an older stranded vote never overrides the newer live vote (and is still removed); (iii-b) a newer queued vote replaces an older stored one; (iv) replay throws in close, savePoll not called and the poll stays open, a later close succeeds; (v) the chat poll_close announcement includes the recovered vote and matches the persisted close; (vi) a migration target write serialises with a concurrent saveVote (verified to fail against the round-1 migration). Gap closers: duplicate open of an open poll recovers and of a closed poll applies nothing; an equal-votedAt tie keeps the stored vote; legacy rows merge into a target that already holds other voters' rows; duplicate legacy ids migrate once. registerHandlers/chatHandler test deps updated.",
+    "verified": "tests/unit/marmot green; make test-unit 238 files, 5001 passed, 1 skipped; tsc clean. Stryker at concurrency 1 (pollHandler, pollPersistence, pollSync, plus the new pollReplay): 91.53% (573 killed, 52 survived, 1 no-coverage); pollHandler 96.8%, pollPersistence 87.9%, pollReplay 91.9%, pollSync 97.6%. Remaining survivors are equivalent or side-effect-only (replay-failure warn log, write ordering only observable on a crash, `?? []`, the empty-queue early return, the single-choice cap). Recorded under slug quizzl. chatHandler.ts was not in the mutate set (one-line change, covered by test v). Polls e2e (groups-polls + groups-poll-after-leave) 42/42 on a wiped relay under the shared flock, after the round-2 code change."
+  }
+}

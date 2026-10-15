@@ -79,6 +79,7 @@ const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } =
 );
 const { createLeaveIntentHandler } = await import('@/src/lib/marmot/handlers/leaveHandler');
 const { createDeleteEditHandler } = await import('@/src/lib/marmot/handlers/deleteEditHandler');
+const { queuePendingVote: realQueuePendingVote, loadPendingVotes: realLoadPendingVotes, removePendingVotes: realRemovePendingVotes } = await import('@/src/lib/marmot/pollPersistence');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function makeDeps(overrides: Record<string, unknown> = {}) {
@@ -191,6 +192,9 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       isGroupMember: deps.isGroupMember,
       getPoll: deps.getPoll,
       loadVotes: deps.loadVotes,
+      saveVote: deps.saveVote,
+      loadPendingVotes: realLoadPendingVotes,
+      removePendingVotes: realRemovePendingVotes,
     });
   });
 
@@ -244,11 +248,27 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       saveVote: deps.saveVote,
       getPoll: deps.getPoll,
       loadVotes: deps.loadVotes,
+      // AC-9 early-vote queue: defaults to the IDB-backed persistence
+      // implementations when the caller does not inject them.
+      queuePendingVote: realQueuePendingVote,
+      loadPendingVotes: realLoadPendingVotes,
+      removePendingVotes: realRemovePendingVotes,
       setPollVersion: deps.setPollVersion,
     };
     expect(createPollOpenHandler).toHaveBeenCalledWith(pollBag);
     expect(createPollVoteHandler).toHaveBeenCalledWith(pollBag);
     expect(createPollCloseHandler).toHaveBeenCalledWith(pollBag);
+  });
+
+  it('passes injected early-vote queue deps through instead of the persistence defaults', () => {
+    const queuePendingVote = vi.fn(async () => {});
+    const loadPendingVotes = vi.fn(async () => []);
+    const removePendingVotes = vi.fn(async () => {});
+    buildDispatcher({ ...makeDeps(), queuePendingVote, loadPendingVotes, removePendingVotes });
+    const arg = (createPollVoteHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.queuePendingVote).toBe(queuePendingVote);
+    expect(arg.loadPendingVotes).toBe(loadPendingVotes);
+    expect(arg.removePendingVotes).toBe(removePendingVotes);
   });
 
   it('passes the real enqueueLeave to createLeaveIntentHandler when provided', () => {

@@ -14,9 +14,12 @@
  */
 
 import { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, parsePollOpen, parsePollVote, parsePollClose } from '@/src/lib/marmot/pollSync';
-import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
+import type { Poll, PollVote, PendingPollVote } from '@/src/lib/marmot/pollPersistence';
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 import { computeTally } from '../pollTally';
+import { buildSanitizedVote, replayPendingVotes, loadVotesWithPending } from '../pollReplay';
+
+export { replayPendingVotes } from '../pollReplay';
 
 export interface PollHandlerDeps {
   savePoll: (poll: Poll) => Promise<void>;
@@ -26,8 +29,27 @@ export interface PollHandlerDeps {
   // savePoll/saveVote/getPoll for consistency — there is no principled
   // difference between getPoll and loadVotes as poll-store reads, so both
   // go through the deps bag rather than one being a direct import.
-  loadVotes: (pollId: string) => Promise<PollVote[]>;
+  // Group-scoped (bug: polls-integrity-cluster): poll ids are only unique
+  // per group, so votes are always read for (groupId, pollId).
+  loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
+  // AC-9: votes for a poll not yet known in the group are queued and
+  // applied when its poll-open arrives.
+  queuePendingVote: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<void>;
+  loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
+  removePendingVotes: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
   setPollVersion: (updater: (v: number) => number) => void;
+}
+
+// Vote sanitisation and the early-vote replay live in ../pollReplay so the
+// chatHandler poll_close gate can share them without importing a handler.
+
+/** Best-effort replay for paths that must not fail on it (see callers). */
+async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<void> {
+  try {
+    await replayPendingVotes(poll, deps);
+  } catch (err) {
+    console.warn('[pollHandler] early-vote replay failed; entries stay queued:', err);
+  }
 }
 
 // ---- POLL_OPEN handler -------------------------------------------------------
@@ -45,7 +67,14 @@ async function handleOpen(rumor: ApplicationRumor, ctx: DispatcherContext, sende
   // dedups identical redelivery by rumor.id; only a malicious/distinct
   // re-open with a reused pollId reaches this guard, and it is dropped.
   const existing = await deps.getPoll(ctx.groupId, payload.id);
-  if (existing) return;
+  if (existing) {
+    // Guard semantics unchanged (nothing about the stored poll changes), but
+    // an open poll is a chance to recover early votes stranded by an
+    // interrupted earlier replay (AC-9). Best-effort: nothing is persisted
+    // from this message either way.
+    if (!existing.closed) await recoverPendingVotes(existing, deps);
+    return;
+  }
 
   const poll: Poll = {
     id: payload.id,
@@ -64,6 +93,9 @@ async function handleOpen(rumor: ApplicationRumor, ctx: DispatcherContext, sende
   };
 
   await deps.savePoll(poll);
+
+  await replayPendingVotes(poll, deps);
+
   deps.setPollVersion((v) => v + 1);
 }
 
@@ -81,35 +113,32 @@ async function handleVote(rumor: ApplicationRumor, ctx: DispatcherContext, sende
   if (!payload) return;
 
   const existingPoll = await deps.getPoll(ctx.groupId, payload.pollId);
-  // Ignore votes for closed polls.
-  if (existingPoll?.closed) return;
 
-  if (!existingPoll) return;
-
-  // F4 (Fable Stage-2 review, epic: group-message-author-auth-app-layer S5):
-  // sanitize responses against the poll's actual options before storing —
-  // otherwise a crafted vote can contribute to option ids that don't exist
-  // (bogus ids counted by computeTally, since it matches on option.id
-  // membership) or, for a singlechoice poll, contribute to multiple options
-  // at once. Filter to valid option ids first, then cap to one response for
-  // singlechoice polls.
-  const validOptionIds = new Set(existingPoll.options.map((option) => option.id));
-  let sanitizedResponses = payload.responses.filter((response) => validOptionIds.has(response));
-  if (existingPoll.pollType === 'singlechoice' && sanitizedResponses.length > 1) {
-    sanitizedResponses = sanitizedResponses.slice(0, 1);
+  if (!existingPoll) {
+    // AC-9: out-of-order MLS delivery — the poll-open has not arrived (yet).
+    // Queue the vote, bound to the authenticated sender, for replay when it
+    // does. Bounded and expiring (pollPersistence); not shown until applied.
+    await deps.queuePendingVote({
+      groupId: ctx.groupId,
+      pollId: payload.pollId,
+      voterPubkey: sender.pubkey,
+      responses: payload.responses,
+      votedAt: rumor.created_at * 1000,
+    });
+    return;
   }
-  // No valid responses survive sanitization (e.g. all-bogus option ids) —
-  // drop the vote entirely. Saving it with an empty responses array would
-  // still count as a voter row and inflate totalVoters in computeTally.
-  if (sanitizedResponses.length === 0) return;
 
-  const vote: PollVote = {
-    id: `${payload.pollId}:${sender.pubkey}`,
-    pollId: payload.pollId,
-    voterPubkey: sender.pubkey,
-    responses: sanitizedResponses,
-    votedAt: rumor.created_at * 1000,
-  };
+  // Ignore votes for closed polls.
+  if (existingPoll.closed) return;
+
+  // Recover early votes stranded by an interrupted replay BEFORE storing this
+  // live vote, so a stranded vote of the same voter cannot land after it.
+  // Best-effort: a replay failure must not cost the live vote (the entries
+  // stay queued and the close replays again, fail-closed).
+  await recoverPendingVotes(existingPoll, deps);
+
+  const vote = buildSanitizedVote(existingPoll, sender.pubkey, payload.responses, rumor.created_at * 1000);
+  if (!vote) return;
 
   await deps.saveVote(vote);
   deps.setPollVersion((v) => v + 1);
@@ -144,7 +173,9 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
   // payload's results/totalVoters are parsed (pollSync.ts validates the
   // wire shape) but deliberately never read below — a poll creator could
   // otherwise forge the final counts.
-  const votes = await deps.loadVotes(payload.pollId);
+  // Replay stranded early votes first (AC-9). A failure throws, so the close
+  // is NOT persisted with a tally that is missing them (fail closed).
+  const votes = await loadVotesWithPending(existingPoll, deps);
   const { results, totalVoters } = computeTally(existingPoll.options, votes);
 
   const updated: Poll = {

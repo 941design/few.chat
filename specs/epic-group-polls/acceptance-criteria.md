@@ -68,6 +68,9 @@
 ## AC-9: Edge Cases
 - Vote arriving after poll close is silently dropped
 - Vote referencing unknown poll ID is queued and applied when poll-open arrives
-- Close payload's `results` and `totalVoters` replace any local tally
+  - The queue is per group (a vote is only ever applied to the poll with that ID in the group it was received in), persisted across reloads, and bounded: at most 10 distinct queued polls per voter per group (further ones dropped), at most 200 entries per group (oldest evicted), entries expire 7 days after receipt
+  - A queued vote passes the same validation as a live vote when applied (authenticated sender as voter, unknown option IDs dropped, single-choice capped to one, a vote with no valid option discarded)
+- Close payload's `results` and `totalVoters` are ignored; each client recomputes the final tally from the votes it has stored for that poll in that group (AC-POLL-4, epic group-message-author-auth-app-layer)
+- A received poll-open exceeding the creation limits (more than 10 options, title over 200, description over 500, option label over 100 characters) is rejected
 - Option text truncated at 100 chars in PollCard; full text accessible
 - leaveGroup clears poll data for that group (clearPollData called)

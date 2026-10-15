@@ -98,6 +98,9 @@ function makeDeps() {
     isGroupMember: vi.fn(async () => false),
     getPoll: vi.fn(async () => null as import('@/src/lib/marmot/pollPersistence').Poll | null),
     loadVotes: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PollVote[]),
+    saveVote: vi.fn(async () => {}),
+    loadPendingVotes: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PendingPollVote[]),
+    removePendingVotes: vi.fn(async () => {}),
   };
 }
 
@@ -653,6 +656,9 @@ describe('chatHandler', () => {
 
       await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
 
+      // Votes are read group-scoped (bug: polls-integrity-cluster) — a same-id
+      // poll's votes from another group can never feed this tally.
+      expect(deps.loadVotes).toHaveBeenCalledWith(GROUP_ID, 'poll-1');
       expect(deps.appendMessage).toHaveBeenCalledOnce();
       const [, msg] = deps.appendMessage.mock.calls[0];
       const persisted = JSON.parse(msg.content);

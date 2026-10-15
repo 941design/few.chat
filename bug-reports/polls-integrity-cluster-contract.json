@@ -1,0 +1,41 @@
+{
+  "bug_name": "polls-integrity-cluster",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/pollPersistence.ts",
+      "app/src/lib/marmot/handlers/pollHandler.ts",
+      "app/src/lib/marmot/pollSync.ts",
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/lib/marmot/handlers/chatHandler.ts",
+      "app/src/context/PollStoreContext.tsx",
+      "app/src/components/groups/CreatePollModal.tsx",
+      "app/tests/unit/marmot/poll*.test.ts",
+      "app/tests/unit/marmot/chatHandler.test.ts",
+      "app/tests/unit/marmot/registerHandlers.test.ts",
+      "specs/epic-group-polls/acceptance-criteria.md",
+      "docs/behavior/polls.md"
+    ],
+    "must_not_edit": [
+      "app/src/lib/marmot/welcomeSubscription.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/marmot/inviteAccept*",
+      "BACKLOG.json"
+    ]
+  },
+  "behaviour": [
+    "C1: votes are stored under the group-scoped key few:poll-votes:{groupId}:{pollId}; every PollVote row carries groupId; loadVotes(groupId, pollId) returns only rows whose groupId and pollId both match. The close tally (pollHandler.handleClose and the chatHandler poll_close gate) reads loadVotes(ctx.groupId, pollId).",
+    "C2: legacy few:poll-votes:{pollId} rows (entries without groupId) are migrated once per page session, before the first vote read/write: groupId is recovered from the poll store; a poll present in exactly one group -> rows moved with groupId stamped (an existing group-scoped row with the same id wins); unknown or multi-group poll -> rows dropped; the legacy key is removed. Re-running is a no-op; a crash-replay neither loses nor duplicates rows.",
+    "C3: a vote for a poll unknown in this group is queued (IDB key few:poll-pending-votes:{groupId}) with the authenticated sender as voter and the raw responses; latest arrival per (pollId, voter) replaces; at most MAX_PENDING_VOTES_PER_VOTER distinct polls per voter per group (further new ones dropped); at most MAX_PENDING_VOTES_PER_GROUP entries per group (oldest-received evicted); entries older than PENDING_VOTE_TTL_MS are discarded.",
+    "C4: on an accepted poll-open, queued votes for (groupId, pollId) are taken (removed) and run through the exact live-vote sanitisation (valid option ids only, single-choice cap to one, all-invalid dropped) before being stored. A vote for a known closed poll is dropped, never queued.",
+    "C5: clearPollData(groupId) removes that group's polls, every group-scoped vote key of that group and its pending queue; clearAllPollData removes all poll, vote and pending keys and re-arms the migration.",
+    "C6: parsePollOpen rejects options > 10, title > 200, description > 500 or non-string, any option label > 100 (POLL_LIMITS shared with CreatePollModal); parsePollVote rejects more than 10 responses.",
+    "C7: AC-9 close-tally sentence corrected to the shipped recompute; docs/behavior/polls.md describes the queue, its bounds, group scoping and receive-side caps.",
+    "C8: privacy invariant untouched: no new network publishes; all new state is local IDB."
+  ],
+  "non_goals": [
+    "Queueing a poll-close that arrives before its poll-open.",
+    "Timestamp arbitration between a voter's votes (arrival order stays).",
+    "Gating the poll_open chat announcement on the poll-open caps."
+  ]
+}

@@ -24,17 +24,15 @@ import {
 } from '@chakra-ui/react';
 import { usePollStore } from '@/src/context/PollStoreContext';
 import { useCopy } from '@/src/context/LanguageContext';
+import { POLL_LIMITS } from '@/src/lib/marmot/pollSync';
 
 type CreatePollModalProps = {
   isOpen: boolean;
   onClose: () => void;
 };
 
-const MIN_OPTIONS = 2;
-const MAX_OPTIONS = 10;
-const MAX_TITLE_LEN = 200;
-const MAX_DESC_LEN = 500;
-const MAX_OPTION_LEN = 100;
+// Shared with the receive side (parsePollOpen) so both enforce identical caps.
+const { MIN_OPTIONS, MAX_OPTIONS, MAX_TITLE_LEN, MAX_DESC_LEN, MAX_OPTION_LEN } = POLL_LIMITS;
 
 export default function CreatePollModal({ isOpen, onClose }: CreatePollModalProps) {
   const { createPoll } = usePollStore();

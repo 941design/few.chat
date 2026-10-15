@@ -141,7 +141,7 @@ export function PollStoreProvider({
         // Load votes for all polls
         const voteMap: Record<string, PollVote[]> = {};
         for (const poll of storedPolls) {
-          voteMap[poll.id] = await loadVotes(poll.id);
+          voteMap[poll.id] = await loadVotes(groupId, poll.id);
         }
         if (active) setVotes(voteMap);
       })
@@ -165,7 +165,7 @@ export function PollStoreProvider({
       setPolls(storedPolls);
       const voteMap: Record<string, PollVote[]> = {};
       for (const poll of storedPolls) {
-        voteMap[poll.id] = await loadVotes(poll.id);
+        voteMap[poll.id] = await loadVotes(groupId, poll.id);
       }
       setVotes(voteMap);
     }).catch(() => {});
@@ -243,6 +243,7 @@ export function PollStoreProvider({
       // Persist locally
       const vote: PollVote = {
         id: `${pollId}:${pubkey}`,
+        groupId,
         pollId,
         voterPubkey: pubkey,
         responses,

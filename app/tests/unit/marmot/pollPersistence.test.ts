@@ -7,6 +7,8 @@ vi.mock('idb-keyval', () => ({
   get: vi.fn(async (key: string) => store.get(key) ?? undefined),
   set: vi.fn(async (key: string, value: unknown) => { store.set(key, value); }),
   del: vi.fn(async (key: string) => { store.delete(key); }),
+  keys: vi.fn(async () => [...store.keys()]),
+  delMany: vi.fn(async (ks: string[]) => { ks.forEach((k) => store.delete(k)); }),
 }));
 
 // Import after mock is set up
@@ -39,6 +41,7 @@ function makePoll(overrides: Partial<Poll> = {}): Poll {
 function makeVote(overrides: Partial<PollVote> = {}): PollVote {
   return {
     id: 'poll-1:pk-voter',
+    groupId: 'group-1',
     pollId: 'poll-1',
     voterPubkey: 'pk-voter',
     responses: ['A'],
@@ -107,13 +110,13 @@ describe('pollPersistence', () => {
 
   describe('loadVotes / saveVote', () => {
     it('returns empty array when no votes exist', async () => {
-      const votes = await loadVotes('poll-1');
+      const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toEqual([]);
     });
 
     it('persists a vote', async () => {
       await saveVote(makeVote());
-      const votes = await loadVotes('poll-1');
+      const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toHaveLength(1);
       expect(votes[0].responses).toEqual(['A']);
     });
@@ -121,7 +124,7 @@ describe('pollPersistence', () => {
     it('replaces existing vote by compound key', async () => {
       await saveVote(makeVote({ responses: ['A'] }));
       await saveVote(makeVote({ responses: ['B'], votedAt: 3000 }));
-      const votes = await loadVotes('poll-1');
+      const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toHaveLength(1);
       expect(votes[0].responses).toEqual(['B']);
     });
@@ -129,7 +132,7 @@ describe('pollPersistence', () => {
     it('stores votes from different voters', async () => {
       await saveVote(makeVote({ id: 'poll-1:voter1', voterPubkey: 'voter1' }));
       await saveVote(makeVote({ id: 'poll-1:voter2', voterPubkey: 'voter2' }));
-      const votes = await loadVotes('poll-1');
+      const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toHaveLength(2);
     });
   });
@@ -144,8 +147,8 @@ describe('pollPersistence', () => {
       await clearPollData('group-1');
 
       expect(await loadPolls('group-1')).toEqual([]);
-      expect(await loadVotes('p1')).toEqual([]);
-      expect(await loadVotes('p2')).toEqual([]);
+      expect(await loadVotes('group-1', 'p1')).toEqual([]);
+      expect(await loadVotes('group-1', 'p2')).toEqual([]);
     });
 
     it('is a no-op for non-existent group', async () => {

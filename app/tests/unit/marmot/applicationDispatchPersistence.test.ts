@@ -4,7 +4,7 @@ import { clear } from 'idb-keyval';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createDispatcher, type DispatcherSubscription } from '@/src/lib/marmot/applicationRumorDispatcher';
 import { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } from '@/src/lib/marmot/handlers/pollHandler';
-import { getPoll, loadVotes, savePoll, saveVote } from '@/src/lib/marmot/pollPersistence';
+import { getPoll, loadVotes, savePoll, saveVote, queuePendingVote, loadPendingVotes, removePendingVotes } from '@/src/lib/marmot/pollPersistence';
 
 vi.mock('@internet-privacy/marmot-ts', () => ({
   deserializeApplicationData: (bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(bytes)),
@@ -29,7 +29,7 @@ function emit(group: EventEmitter, kind: number, id: string, content: unknown = 
   });
 }
 function pollFixture() {
-  const deps = { getPoll, loadVotes, savePoll, saveVote, setPollVersion: vi.fn() };
+  const deps = { getPoll, loadVotes, savePoll, saveVote, queuePendingVote, loadPendingVotes, removePendingVotes, setPollVersion: vi.fn() };
   const group = new EventEmitter();
   const subscription = createDispatcher([
     createPollOpenHandler(deps), createPollVoteHandler(deps), createPollCloseHandler(deps),
@@ -47,17 +47,18 @@ it('persists synchronous open → vote → close emissions in order, including d
   emit(group, 11, 'vote', vote);
   emit(group, 12, 'close', { pollId: 'poll', results: [], totalVoters: 0 });
   await subscription.drain();
-  expect(await loadVotes('poll')).toHaveLength(1);
+  expect(await loadVotes('group', 'poll')).toHaveLength(1);
   expect(await getPoll('group', 'poll')).toMatchObject({ closed: true, totalVoters: 1, results: [{ optionId: 'A', count: 1 }, { optionId: 'B', count: 0 }] });
 });
 
-it('does not promise recovery of a vote that actually arrived before its poll', async () => {
+it('recovers a vote that arrived before its poll (AC-9 early-vote queue, real IndexedDB)', async () => {
   const { group, subscription } = pollFixture();
   emit(group, 11, 'vote', vote);
   emit(group, 10, 'open', open);
+  emit(group, 12, 'close', { pollId: 'poll', results: [], totalVoters: 0 });
   await subscription.drain();
-  expect(await getPoll('group', 'poll')).not.toBeNull();
-  expect(await loadVotes('poll')).toEqual([]);
+  expect(await loadVotes('group', 'poll')).toHaveLength(1);
+  expect(await getPoll('group', 'poll')).toMatchObject({ closed: true, totalVoters: 1 });
 });
 
 it('isolates handler failure without retrying already attempted side effects or poisoning later messages', async () => {
