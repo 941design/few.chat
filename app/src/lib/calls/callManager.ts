@@ -81,6 +81,14 @@ export interface CallManagerDeps {
    * is best-effort and must never abort the call flow.
    */
   publishGroupNotice?: (groupId: string, content: string) => Promise<void>;
+  /**
+   * Optional block deny-list check (BACKLOG gate-incoming-calls-with-block-deny).
+   * A DIRECT 1:1 offer (caller shares none of the user's groups, spec §5.3) from
+   * a caller for whom this returns true is silently dropped — no ring, no
+   * busy/reject reply. Group calls are deliberately not gated here (owner
+   * product question Q8).
+   */
+  isBlockedCaller?: (pubkeyHex: string) => boolean;
 }
 
 // ── Internal state shapes ─────────────────────────────────────────────────────
@@ -642,6 +650,15 @@ export class CallManager {
         stash.set(evt.senderPubkey, evt.sdp);
       }
       return;
+    }
+
+    // Block deny for direct 1:1 calls — checked BEFORE the busy auto-reject so a
+    // blocked caller never gets a reply that reveals presence. A call binds to a
+    // group whenever the caller is in one of ours (_resolveGroupAndRoster); only
+    // the groupless (direct) case is denied.
+    if (this.deps.isBlockedCaller?.(evt.senderPubkey)) {
+      const { groupId: boundGroupId } = await this._resolveGroupAndRoster(evt);
+      if (boundGroupId === null) return;
     }
 
     // Busy auto-reject: already in a different active call

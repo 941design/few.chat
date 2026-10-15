@@ -1,0 +1,133 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": {
+    "1_profile_add_group_confirmation": "Success/error Alerts lived inside the addableGroups.length>0 gate; inviteByNpub awaits reloadGroups, so the invitee becomes a pending member and the whole block unmounts in the same render that sets success.",
+    "2_create_group_before_ready": "create-group-btn was gated only on !unsupported; MarmotContext.createGroup returns null while clientRef is unset (before ready), surfacing a generic create-group-error.",
+    "3_blocked_unread": "initDirectMessageCounts filtered pending contacts only; archived (blocked, legacy-hidden with kept history) peers were scanned and counted, and their chat cannot be opened to mark read.",
+    "4_foreign_invite_expiry": "inviteExpiries was derived from every stored link's groupId and re-derived every 60s by the sweep; a groupId absent from the groups list (backup-restore residue) fed groupsDomainTotal with no card to clear it.",
+    "5_decodecard_name_len_0": "decodeCard checked only nameLen > 32; a validly self-signed name_len=0 card (never emitted by either encoder) decoded to nickname '' (LWW clobber path).",
+    "6_call_block_gate": "Incoming-call authorization used bare isAllowedDmSender; block keeps the peer in knownPeers, so a blocked peer could ring a direct 1:1 call."
+  },
+  "fix": {
+    "1": "Exported pure addToGroupView(); confirmation Alerts render outside the picker gate (showStatus), picker keeps its own gate (showPicker).",
+    "2": "create-group-btn isDisabled={!ready}; CreateGroupModal submit disabled and handleSubmit no-ops while !ready.",
+    "3": "initDirectMessageCounts skips archived contacts and drops their in-memory counters after the scan (dropDirectMessageCounters); history and last-read timestamps untouched; idempotent.",
+    "4": "unreadStore.scopeInviteExpiriesToGroups(ids) (called in MarmotContext.reloadGroups after loadAllGroups resolves) prunes absent-group counters; initInviteExpiries/incrementInviteExpiry honour the scope; scope is null (no pruning) until the first loaded list; link records never touched.",
+    "5": "decodeCard rejects signed v1/v2 cards with name_len=0 ('contactCard: signed card must carry a non-empty name').",
+    "6": "CallManager.isBlockedCaller dep: an offer from a blocked caller that binds to no group (direct 1:1) is dropped silently before the busy auto-reject; IncomingCallWatcher wires it to isBlockedPeer over a live loadBlockedPeers ref (refreshed on blockedPeersRevision). Group calls untouched (Q8)."
+  },
+  "files_modified": [
+    "app/pages/profile.tsx",
+    "app/pages/groups.tsx",
+    "app/src/components/groups/CreateGroupModal.tsx",
+    "app/src/lib/unreadStore.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/contactCard.ts",
+    "app/src/lib/calls/callManager.ts",
+    "app/src/components/calls/IncomingCallWatcher.tsx",
+    "app/tests/unit/unreadStore.test.ts",
+    "app/tests/unit/cards/contactCard.test.ts",
+    "app/tests/unit/cards/contactCard.mutation-gaps.test.ts",
+    "app/tests/unit/calls/callManager.test.ts",
+    "app/tests/e2e/groups-direct-invite-lifecycle.spec.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/notifications-and-unread.md",
+    "docs/behavior/contacts-and-direct-messages.md"
+  ],
+  "files_created": [
+    "app/tests/unit/pages/profile-add-to-group-view.test.ts",
+    "app/tests/unit/pages/groups-create-before-ready.test.ts",
+    "app/tests/unit/inviteExpiries-groupScope.test.ts",
+    "app/tests/unit/cards/contactCard.signedEmptyName.test.ts",
+    "app/tests/unit/calls/incomingCallWatcherBlockGate.test.ts",
+    "bug-reports/small-ui-count-bugs-contract.json",
+    "bug-reports/small-ui-count-bugs-result.json"
+  ],
+  "files_changed": [
+    "app/pages/profile.tsx",
+    "app/pages/groups.tsx",
+    "app/src/components/groups/CreateGroupModal.tsx",
+    "app/src/lib/unreadStore.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/contactCard.ts",
+    "app/src/lib/calls/callManager.ts",
+    "app/src/components/calls/IncomingCallWatcher.tsx",
+    "app/tests/unit/unreadStore.test.ts",
+    "app/tests/unit/cards/contactCard.test.ts",
+    "app/tests/unit/cards/contactCard.mutation-gaps.test.ts",
+    "app/tests/unit/calls/callManager.test.ts",
+    "app/tests/e2e/groups-direct-invite-lifecycle.spec.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/notifications-and-unread.md",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "app/tests/unit/pages/profile-add-to-group-view.test.ts",
+    "app/tests/unit/pages/groups-create-before-ready.test.ts",
+    "app/tests/unit/inviteExpiries-groupScope.test.ts",
+    "app/tests/unit/cards/contactCard.signedEmptyName.test.ts",
+    "app/tests/unit/calls/incomingCallWatcherBlockGate.test.ts",
+    "bug-reports/small-ui-count-bugs-contract.json",
+    "bug-reports/small-ui-count-bugs-result.json"
+  ],
+  "modules_touched": [
+    "app/pages/profile.tsx",
+    "app/pages/groups.tsx",
+    "app/src/components/groups/CreateGroupModal.tsx",
+    "app/src/lib/unreadStore.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/contactCard.ts",
+    "app/src/lib/calls/callManager.ts",
+    "app/src/components/calls/IncomingCallWatcher.tsx"
+  ],
+  "tests_added": [
+    "tests/unit/pages/profile-add-to-group-view.test.ts (6)",
+    "tests/unit/pages/groups-create-before-ready.test.ts (2, source assertions)",
+    "tests/unit/unreadStore.test.ts: blocked contacts never count (2)",
+    "tests/unit/inviteExpiries-groupScope.test.ts (7)",
+    "tests/unit/cards/contactCard.signedEmptyName.test.ts (2 rejection + 2 seeded encode/decode symmetry sweeps)",
+    "tests/unit/cards/contactCard.mutation-gaps.test.ts: validly-signed over-cap and invalid-UTF-8 cards (2)",
+    "tests/unit/calls/callManager.test.ts T13-block (4)",
+    "tests/unit/calls/incomingCallWatcherBlockGate.test.ts (2)",
+    "tests/e2e/groups-direct-invite-lifecycle.spec.ts: now asserts profile-add-to-group-success visible (was gating on unmount around the bug)",
+    "tests/unit/pages/profile-add-to-group-view.test.ts: statusForViewedContact (remediation 1, +3)"
+  ],
+  "counts": {
+    "unit_baseline": "233 files / 4916 passed / 1 skipped",
+    "unit_after": "238 files; 4958 passed / 1 skipped; 26 failing all in tests/unit/marmot/pollIntegrity.test.ts (parallel polls fixer's in-progress file, untracked, not mine); all non-poll files green",
+    "tsc": "clean before and after",
+    "e2e_nonrelay": "10/10 (unread-badge, contact-card-share, contact-card-deeplink, profile)",
+    "e2e_relay_wiped": "33/33 (groups-direct-invite-lifecycle, groups-lifecycle, groups-pending-invite-live-idle, groups-notification-domain-invariants, dm-block-contact, groups-invite-link)",
+    "e2e_full_gate": "not run (60-test full suite left to the lead)"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config /tmp/claude-501/mutation/small-bugs/",
+    "contactCard.ts decodeCard (529-646)": "before 112 killed/20 survived/15 no-cov (76.2%) -> after 120/17/10 (81.6%)",
+    "unreadStore.ts counter code (490-547, 675-727)": "before 77/7/1 (90.6%) -> after 78/6/1 (91.8%)",
+    "real_gaps_closed": [
+      "decodeCard name cap (nameLen>32) survived — no validly-signed over-cap card was tested",
+      "decodeCard strict UTF-8 ({fatal:true}) survived — no validly-signed invalid-UTF-8 card was tested",
+      "dropDirectMessageCounters spread->{} would wipe sibling DM counters"
+    ],
+    "remaining": "all equivalent (guards subsumed by later length/catch paths, early-return-on-empty no-op emits, pre-existing messages&&length>0) or side-effect-only (diagnostic error-message strings); recorded via mutation-audits add-audit (slug quizzl)"
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. Each item has a test that failed before the fix: #1 profile-add-to-group-view (export absent) + e2e success assertion; #2 groups-create-before-ready; #3 unreadStore blocked tests (failed 1!=0, true!=false); #4 inviteExpiries-groupScope (6 failed); #5 signedEmptyName (2 failed); #6 callManager T13-block (2 failed).",
+    "VQ-2": "Yes. addToGroupView unit-tests the single-group case (addableCount 0 + success -> showStatus) and groups-direct-invite-lifecycle e2e now asserts profile-add-to-group-success visible after adding the only addable group (passed on wiped relay). Create button and modal submit are disabled while !ready (source assertions; groups-pending-invite-live-idle/groups-lifecycle pass).",
+    "VQ-3": "Yes. #3 only deletes in-memory directMessages entries (test asserts IDB history length and last-read timestamp unchanged, sibling counter kept). #4 only filters/deletes inviteExpiries entries (test asserts the stored link record is unchanged); scope is null until reloadGroups has a loaded list, tested ('never prunes before a groups list has loaded') plus a source assertion that the call follows loadAllGroups.",
+    "VQ-4": "Yes. decodeCard rejects signed v1 (with a genuinely verifying signature) and v2 name_len=0 cards; seeded sweeps (60 v1 / ~50 v2 random nicknames incl. lone surrogates, astral, >32-byte) confirm every encoder output still decodes with the expected name (repo has no fast-check, so a seeded mulberry32 sweep is used). Call gate: blocked direct caller dropped (no ring, no busy reply); non-blocked direct caller rings; blocked caller bound to a group still rings (group calls out of scope).",
+    "VQ-5": "No new UI strings (existing i18n keys reused, en+de untouched); design rules respected (no info text added; disabled control instead of explanatory copy). Behaviour docs updated: groups.md (§2 create availability, §4.1 profile-invite confirmation), notifications-and-unread.md (§5 blocked never counts, §6 replaced stale 'unknown group' expiry edge case), contacts-and-direct-messages.md (calls note). #5 has no user-visible change, no doc edit. Changes minimal per item.",
+    "VQ-6": "tsc clean; unit suite green except the parallel polls fixer's pollIntegrity.test.ts; Stryker concurrency 1 on decodeCard + counter code: 3 real gaps closed, remaining survivors equivalent/side-effect-only; relevant e2e 10/10 non-relay and 33/33 relay on a wiped relay. Full 60-test gate not run by me."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "meta",
+    "harder_than_needed": "The brief's non-relay e2e command omits the flock, but every run-e2e invocation starts `next dev` against the shared app/.next; my first non-relay run collided with the parallel diagnosis agent's locked relay run and 10/10 failed with dev-server 404s/JSON errors (and may have perturbed that agent's run). Re-running under the same flock gave 10/10. Also the brief asked for a property test but the repo has no fast-check (hand-rolled seeded sweep used).",
+    "surprised_by": "inviteExpiries is re-derived every 60s from persisted links, so an in-memory prune 'on groups-list load' alone would be undone by the next sweep; the fix needed a persistent group scope honoured by the derive and the live bump.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": "Moved initInviteExpiries JSDoc back above its own symbol (unreadStore.ts); contactCard.ts layout comments now say signed name_len is 1-32; profile.tsx keys the add-to-group attempt by contact pubkey via exported statusForViewedContact so a stale success/error never shows on another contact (incl. an invite resolving after navigation), +3 unit tests in profile-add-to-group-view.test.ts. Targeted vitest 30 files/432 green, tsc clean, groups-direct-invite-lifecycle 7/7 on a wiped relay under the e2e lock."
+}

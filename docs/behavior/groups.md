@@ -46,7 +46,9 @@ control over the group is held by a few.**
 
 Anyone can create a group by giving it a name. The creator becomes its **sole member
 and sole admin**; the group starts with exactly one person and exactly one admin, and
-can never begin with zero admins. From that point, growing the group is an admin
+can never begin with zero admins. Creating becomes available once the app has finished
+starting up its group machinery; until then the create action is disabled rather than
+offered and then failing. From that point, growing the group is an admin
 action (§4), and the roles behave as in §3.
 
 ---
@@ -151,7 +153,9 @@ hasn't set up their identity yet. Other failures — the invitee being unreachab
 the lookup timing out — surface as distinct errors; the invite is not silently lost.
 
 A successful invitation adds the person to the group and delivers them a Welcome; it
-does **not** make them an admin (§3.1).
+does **not** make them an admin (§3.1). Inviting from the contact's own profile
+confirms success there even when that was the last group they could be invited to —
+the confirmation does not disappear just because no group is left to offer.
 
 ### 4.2 Invite links
 

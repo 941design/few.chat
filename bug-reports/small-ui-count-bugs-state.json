@@ -1,0 +1,76 @@
+{
+  "bug_name": "small-ui-count-bugs",
+  "bug_report_file": "bug-reports/small-ui-count-bugs-report.md",
+  "created_at": "2026-10-15T08:29:01Z",
+  "updated_at": "2026-10-15T10:43:39Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "For each of the six findings, is there a test (unit or e2e) that fails before and passes after the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "SPEC",
+      "question": "Is the profile-page success confirmation reachable in the single-addable-group case (e2e or a component-level test through exported logic), and the create button disabled until ready?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Do the counter changes (#3, #4) only touch counters, never message history or invite links, and never prune while groups are still loading (tested)?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "SECURITY",
+      "question": "Does decodeCard reject signed name_len=0 cards while every card encodeCard produces still round-trips (property test), and does the call gate reject blocked peers for 1:1 calls only?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "QUALITY",
+      "question": "i18n respected, design rules respected, behaviour docs updated for user-visible changes, change minimal per item?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on contactCard decode + the counter pruning code shows no real-gap survivors; relevant e2e specs pass on a wiped relay?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "a4d936a4ced3c85a4889d45c2c28cf6f5b9671d9",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED (Codex high was in the parallel polls run, not this one)",
+      "examiner": "VQ-3,4 YES; VQ-1,2,5,6 PARTIAL (self-reported e2e/Stryker; full gate pending; source-text-only test for create button; misplaced JSDoc; stale addToGroupStatus)",
+      "lead": "polish round: JSDoc placement, contactCard comments, reset addToGroupStatus on contact change"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T08:29:01Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T09:08:56Z",
+      "trigger": "lead_polish_round"
+    }
+  ],
+  "e2e_gate": {
+    "run": "full-7 2026-10-15",
+    "result": "non-relay 72/72; relay 336 passed / 4 failed",
+    "attribution": "3 failures (dm-block-contact AC-PRIV, dm-feedback-channel + dm-giftwrap-bell setup) caused by the gate running against a tree being edited (dev-server full reloads on half-edited poll files); frozen HEAD+all-uncommitted copy 10/10 green — bug-reports/gate7-regressions-diagnosis.md. groups-contacts:54 = known product defect mls-message-lost-on-unload-after-ingest"
+  }
+}

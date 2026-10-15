@@ -15,7 +15,8 @@
  *   pubkey (32 bytes)    raw x-only secp256k1 public key.
  *   -- present iff SIGNED --
  *   created_at (4 bytes) uint32 big-endian, Unix seconds.
- *   name_len (1 byte)    UTF-8 byte length of name (0–32).
+ *   name_len (1 byte)    UTF-8 byte length of name (1–32; a signed card with
+ *                        name_len 0 is rejected as malformed).
  *   name (name_len bytes) UTF-8 display name.
  *   sig (64 bytes)       NIP-01 kind-0 event signature over
  *                        { pubkey, created_at, kind:0, tags:[], content: CARD_CONTENT(name) }.
@@ -34,7 +35,7 @@
  *   created_at (4 bytes)  uint32 BE, Unix seconds (anchors the signature, as v1).
  *   expires_at (4 bytes)  uint32 BE, Unix seconds — hard pairing validity edge.
  *   nonce (16 bytes)      random pairing nonce (RD-2).
- *   name_len (1 byte)     UTF-8 byte length of name (0–32).
+ *   name_len (1 byte)     UTF-8 byte length of name (1–32; 0 is rejected).
  *   name (name_len bytes) UTF-8 display name.
  *   sig (64 bytes)        signature over a SYNTHETIC, non-zero-kind event
  *                         (kind = CARD_SIG_KIND_V2, content =
@@ -593,6 +594,11 @@ export function decodeCard(b64url: string): DecodeCardResult {
     offset += NAME_LEN_LEN;
 
     if (nameLen > MAX_NAME_BYTES) return { error: 'contactCard: name_len exceeds the 32-byte cap' };
+    // Neither encoder emits a signed empty-name card (encodeCard takes the
+    // unsigned path for an empty nickname; encodeCardV2 throws on one). Accepting
+    // it would let a self-signed, newer-created_at card blank a cached nickname
+    // via LWW — reject it as malformed to keep encoder and decoder symmetric.
+    if (nameLen === 0) return { error: 'contactCard: signed card must carry a non-empty name' };
 
     const expectedLen = HEADER_LEN + PUBKEY_LEN + CREATED_AT_LEN + v2ExtraLen + NAME_LEN_LEN + nameLen + SIG_LEN;
     if (bytes.length !== expectedLen) {

@@ -36,7 +36,7 @@ import { LEAVE_INTENT_KIND, serialiseLeaveIntent } from '@/src/lib/marmot/leaveS
 import { PROFILE_REQUEST_KIND } from '@/src/lib/marmot/profileRequestSync';
 import { recordRequestEmitted, recordRequestAnswered, loadProfileRequestMemo, clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage';
 import { handleIncomingProfileRequest, notifyProfileObserved, sweepStaleProfiles } from '@/src/lib/marmot/profileRequestRunner';
-import { incrementUnread, markAsRead, initUnreadCounts, initJoinRequestCounts, clearUnreadGroup, incrementJoinRequest, decrementJoinRequest, purgeStrangerDmCounters, clearInviteExpiries } from '@/src/lib/unreadStore';
+import { incrementUnread, markAsRead, initUnreadCounts, initJoinRequestCounts, clearUnreadGroup, incrementJoinRequest, decrementJoinRequest, purgeStrangerDmCounters, clearInviteExpiries, scopeInviteExpiriesToGroups } from '@/src/lib/unreadStore';
 import { isActiveView, getActiveGroupId } from '@/src/lib/activeViewStore';
 import { appendMessage, loadMessages, purgeStrangerDmThreads, CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import { purgeStrangerContacts } from '@/src/lib/contacts';
@@ -1141,6 +1141,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   const reloadGroups = useCallback(async () => {
     const loaded = await loadAllGroups();
     setGroups(loaded);
+    // Only a loaded list scopes invite-expiry counters (never a loading state):
+    // drops counts for groups not in it, e.g. restored links of a non-member
+    // group (BACKLOG stale-foreign-group-invite-expiry-count).
+    scopeInviteExpiriesToGroups(loaded.map((g) => g.id));
   }, []);
 
   // Check and update discoverability status based on available key packages

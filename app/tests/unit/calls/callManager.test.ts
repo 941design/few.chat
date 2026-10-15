@@ -508,6 +508,68 @@ describe('CallManager', () => {
     });
   });
 
+  // ── T13-block ─────────────────────────────────────────────────────────────
+
+  describe('T13-block: a blocked caller cannot ring a direct 1:1 call (BACKLOG gate-incoming-calls-with-block-deny)', () => {
+    it('drops a direct (no shared group) offer from a blocked caller — no ring, no busy/reject reply', async () => {
+      const isBlockedCaller = vi.fn((pk: string) => pk === PEER_A);
+      const manager = new CallManager({
+        ...makeDeps(),
+        getGroupRoster: vi.fn().mockResolvedValue([OWN_PUBKEY, PEER_B]), // PEER_A shares no group
+        isBlockedCaller,
+      });
+      await manager.handleEvent(makeOfferEvent({ senderPubkey: PEER_A, recipientPubkeys: [OWN_PUBKEY] }));
+
+      expect(isBlockedCaller).toHaveBeenCalledWith(PEER_A);
+      expect(callStore.getSnapshot().incoming).toBeNull();
+      expect(wrapAndPublish).not.toHaveBeenCalled();
+      manager.destroy();
+    });
+
+    it('drops a blocked direct caller even while busy (no busy reply that would reveal presence)', async () => {
+      const manager = new CallManager({
+        ...makeDeps(),
+        getGroupRoster: vi.fn().mockResolvedValue([OWN_PUBKEY, PEER_B]),
+        isBlockedCaller: (pk: string) => pk === PEER_A,
+      });
+      callStore.setActive({
+        callId: 'other-call',
+        participants: [],
+        localStream: null,
+        callType: 'voice',
+      });
+      await manager.handleEvent(
+        makeOfferEvent({ callId: 'new-call-id', senderPubkey: PEER_A, recipientPubkeys: [OWN_PUBKEY] }),
+      );
+      expect(encodeReject).not.toHaveBeenCalled();
+      expect(wrapAndPublish).not.toHaveBeenCalled();
+      manager.destroy();
+    });
+
+    it('still rings a direct call from a caller that is NOT blocked', async () => {
+      const manager = new CallManager({
+        ...makeDeps(),
+        getGroupRoster: vi.fn().mockResolvedValue([OWN_PUBKEY, PEER_B]),
+        isBlockedCaller: (pk: string) => pk === PEER_C,
+      });
+      await manager.handleEvent(makeOfferEvent({ senderPubkey: PEER_A, recipientPubkeys: [OWN_PUBKEY] }));
+      expect(callStore.getSnapshot().incoming?.callerPubkey).toBe(PEER_A);
+      manager.destroy();
+    });
+
+    it('does NOT apply the block deny to a group call (group calls are out of scope, owner question Q8)', async () => {
+      const manager = new CallManager({
+        ...makeDeps(), // default roster contains PEER_A → binds to test-group
+        isBlockedCaller: (pk: string) => pk === PEER_A,
+      });
+      await manager.handleEvent(makeOfferEvent({ senderPubkey: PEER_A }));
+      const incoming = callStore.getSnapshot().incoming;
+      expect(incoming?.callerPubkey).toBe(PEER_A);
+      expect(incoming?.groupId).toBe('test-group');
+      manager.destroy();
+    });
+  });
+
   // ── T13b ──────────────────────────────────────────────────────────────────
 
   describe('T13b: answerer applies the remote offer BEFORE adding local media', () => {

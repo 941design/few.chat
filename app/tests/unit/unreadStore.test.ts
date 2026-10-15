@@ -649,6 +649,78 @@ describe('initDirectMessageCounts — pending contacts never light the bell (AC-
   });
 });
 
+describe('initDirectMessageCounts — blocked (archived) contacts never count (BACKLOG one-time-migration-clear-stale-unread)', () => {
+  // Contacts hidden before the block-contact epic became "blocked" with their
+  // history kept (product decision 2026-07-14). Their chat cannot be opened to
+  // mark read, so the startup scan must not count them — and must clear any
+  // counter they already hold. Counters only: history and last-read
+  // timestamps are left untouched (an unblock restores the real unread state).
+
+  const OWN = '58'.repeat(32);
+  const BLOCKED_PEER = '68'.repeat(32);
+  const NORMAL_PEER = '78'.repeat(32);
+
+  async function seedUnreadHistory(peer: string) {
+    const idb = await import('idb-keyval');
+    await idb.set(`few:messages:dm:${peer}`, [
+      { id: 'b'.repeat(64), content: 'old', senderPubkey: peer, createdAt: 9_999_999_999 },
+    ]);
+  }
+
+  beforeEach(() => {
+    localStorageMock.clear();
+    idbStore.clear();
+  });
+
+  it('does not count a blocked contact with unread history, but still counts a normal one', async () => {
+    const { rememberContact, archiveContact } = await import('@/src/lib/contacts');
+    const { initDirectMessageCounts, useUnreadCounts, clearDirectMessageContact } = await import('@/src/lib/unreadStore');
+    clearDirectMessageContact(BLOCKED_PEER);
+    clearDirectMessageContact(NORMAL_PEER);
+    rememberContact(BLOCKED_PEER, '2026-06-01T00:00:00.000Z');
+    rememberContact(NORMAL_PEER, '2026-06-01T00:00:00.000Z');
+    archiveContact(BLOCKED_PEER);
+    await seedUnreadHistory(BLOCKED_PEER);
+    await seedUnreadHistory(NORMAL_PEER);
+
+    await initDirectMessageCounts([BLOCKED_PEER, NORMAL_PEER], OWN);
+
+    expect(useUnreadCounts().directMessages[BLOCKED_PEER] ?? 0).toBe(0);
+    expect(useUnreadCounts().directMessages[NORMAL_PEER]).toBe(1);
+  });
+
+  it('clears a counter a blocked contact already holds, touching neither history nor last-read, idempotently', async () => {
+    const { rememberContact, archiveContact } = await import('@/src/lib/contacts');
+    const {
+      initDirectMessageCounts, useUnreadCounts, clearDirectMessageContact, incrementDirectMessage,
+      markDirectMessagesRead, getDirectMessageLastReadAt,
+    } = await import('@/src/lib/unreadStore');
+    clearDirectMessageContact(BLOCKED_PEER);
+    rememberContact(BLOCKED_PEER, '2026-06-01T00:00:00.000Z');
+    markDirectMessagesRead(BLOCKED_PEER);
+    const lastRead = getDirectMessageLastReadAt(BLOCKED_PEER);
+    incrementDirectMessage(BLOCKED_PEER);
+    incrementDirectMessage(BLOCKED_PEER);
+    expect(useUnreadCounts().directMessages[BLOCKED_PEER]).toBe(2);
+    archiveContact(BLOCKED_PEER);
+    await seedUnreadHistory(BLOCKED_PEER);
+
+    clearDirectMessageContact(NORMAL_PEER);
+    incrementDirectMessage(NORMAL_PEER); // a sibling counter the drop must not touch
+
+    // Not even passed in by the caller: the prune covers every archived contact.
+    await initDirectMessageCounts([], OWN);
+    expect(BLOCKED_PEER in useUnreadCounts().directMessages).toBe(false);
+    expect(useUnreadCounts().directMessages[NORMAL_PEER]).toBe(1);
+    await initDirectMessageCounts([BLOCKED_PEER], OWN);
+    expect(BLOCKED_PEER in useUnreadCounts().directMessages).toBe(false);
+
+    const idb = await import('idb-keyval');
+    expect(await idb.get(`few:messages:dm:${BLOCKED_PEER}`)).toHaveLength(1);
+    expect(getDirectMessageLastReadAt(BLOCKED_PEER)).toBe(lastRead);
+  });
+});
+
 describe('unreadStore mutation-gate: single-key mutations must not leak into sibling keys', () => {
   // Mutation-gate finding (Stryker id 70, line 189): `const next = { ...state.counts }`
   // is required — replacing it with `{}` produces a store where marking one

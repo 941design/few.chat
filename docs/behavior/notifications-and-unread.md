@@ -103,6 +103,9 @@ Unread counts are designed so they neither miss activity nor invent it:
 - **Some counts are cleared entirely** (rather than marked read) when the underlying
   relationship ends: blocking a contact removes their unread count along with the wiped
   conversation, and a departed stranger being cleaned up removes theirs.
+- **A blocked contact never counts.** The startup reconstruction skips blocked contacts and
+  drops any count one still holds — this covers contacts that were hidden before blocking
+  existed and kept their history. Only the count goes; their stored conversation is untouched.
 
 The net effect: the indicator reflects genuinely-unseen activity, and stays stable across
 closing and reopening the app.
@@ -136,9 +139,11 @@ derived from stored state.
 and because each link is only ever counted once, it will not resurface as a notification
 later either.
 
-**An expiry counted for a group you have since left.** It still contributes to the indicator,
-but it remains clearable (shown as an unknown group) and clears on interaction — every counted
-expiry stays dismissible.
+**An expiry for a group not in your groups list.** Leaving a group clears its expiry count.
+Expired links of a group you are not in — for example restored from a backup — do not count:
+once your groups list has loaded, expiry counts are kept only for groups in it, so the
+indicator never shows an expiry with no group to clear it from. Nothing is pruned while the
+list is still loading, and the links themselves are left as stored.
 
 **A reload while counts are being rebuilt.** The rebuild re-reads to catch any message that
 arrived mid-rebuild, and never lowers a count below what is actually unread.

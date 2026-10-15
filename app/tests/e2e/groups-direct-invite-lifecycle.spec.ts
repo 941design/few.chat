@@ -192,18 +192,13 @@ test.describe.serial('Direct invite lifecycle — modal path, reload persistence
     await expect(pageA.getByTestId('profile-add-to-group')).toBeVisible({ timeout: 30_000 });
     // Only one addable group exists (created above), so the select defaults to it.
     await pageA.getByTestId('profile-add-to-group-btn').click();
-    // NOTE: we intentionally do NOT gate on `profile-add-to-group-success` here.
-    // There is a pre-existing product bug (surfaced by this epic's e2e, filed in
-    // BACKLOG: "profile-page Add-to-Group success confirmation is unreachable"):
-    // handleAddToGroup → inviteByNpub awaits reloadGroups() before resolving, so
-    // the just-added contact becomes a member and `addableGroups` empties, which
-    // unmounts the entire Add-to-Group widget (gated on addableGroups.length > 0)
-    // — success Alert included — in the same render. So the widget UNMOUNTING is
-    // the deterministic signal that the invite committed; we gate on that (it
-    // also awaits the in-flight invite before we navigate away). This gate is
-    // coupled to the bug's current behavior; if the success confirmation is ever
-    // fixed to render outside the addableGroups gate, revisit this line.
-    await expect(pageA.getByTestId('profile-add-to-group')).not.toBeVisible({ timeout: 60_000 });
+    // The success confirmation must be reachable in this single-addable-group
+    // case (BACKLOG profile-page-add-group-success-confirmation): the invite
+    // makes C a pending member, so the picker unmounts in the same render that
+    // sets success — the confirmation renders outside the picker gate. Waiting
+    // on it also awaits the in-flight invite before we navigate away.
+    await expect(pageA.getByTestId('profile-add-to-group-success')).toBeVisible({ timeout: 60_000 });
+    await expect(pageA.getByTestId('profile-add-to-group')).not.toBeVisible();
 
     await pageA.goto(groupDetailUrl);
     await expect(pageA.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });

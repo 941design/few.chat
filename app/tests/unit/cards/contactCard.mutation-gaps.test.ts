@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { bytesToHex } from 'nostr-tools/utils';
+import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
+import { bytesToHex, hexToBytes } from 'nostr-tools/utils';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import {
+  CARD_CONTENT,
   encodeCard,
   encodeCardV2,
   decodeCard,
@@ -181,5 +182,43 @@ describe('encodeCardV2 — input validators + signer-identity guard (mutation ga
     await expect(
       encodeCardV2(a.pubkeyHex, { nickname: 'Alice', createdAt: 1000 }, validNonce, 2000, b.signer.signEvent),
     ).rejects.toThrow(/pubkey/);
+  });
+});
+
+// ── decodeCard structural gates hit by a VALIDLY-signed card (mutation gate,
+// small-ui-count-bugs run). Earlier rejection tests only used cards whose
+// signature failed anyway, so removing the name-cap check or the strict UTF-8
+// decode survived: the signature check rejected them for an unrelated reason.
+// These cards carry a genuine signature over exactly what the decoder would
+// reconstruct, so only the structural gate under test can reject them.
+
+describe('decodeCard — structural gates on validly-signed cards (mutation gate)', () => {
+  function signedV1Card(nameBytes: Uint8Array, signedName: string): string {
+    const sk = generateSecretKey();
+    const pubkeyHex = getPublicKey(sk);
+    const createdAt = 1735689600;
+    const ev = finalizeEvent({ kind: 0, created_at: createdAt, tags: [], content: CARD_CONTENT(signedName) }, sk);
+    const buf = new Uint8Array(1 + 32 + 4 + 1 + nameBytes.length + 64);
+    buf[0] = 0x20;
+    buf.set(hexToBytes(pubkeyHex), 1);
+    buf.set([(createdAt >>> 24) & 0xff, (createdAt >>> 16) & 0xff, (createdAt >>> 8) & 0xff, createdAt & 0xff], 33);
+    buf[37] = nameBytes.length;
+    buf.set(nameBytes, 38);
+    buf.set(hexToBytes(ev.sig), 38 + nameBytes.length);
+    return bytesToBase64Url(buf);
+  }
+
+  it('rejects a signed 33-byte name (over the 32-byte cap) even though its signature verifies', () => {
+    const name = 'n'.repeat(33);
+    expect(decodeCard(signedV1Card(new TextEncoder().encode(name), name))).toEqual({
+      error: 'contactCard: name_len exceeds the 32-byte cap',
+    });
+  });
+
+  it('rejects invalid UTF-8 name bytes even when the signature covers their lossy decoding', () => {
+    // 0xff is never valid UTF-8; a lossy decoder would read it as U+FFFD.
+    expect(decodeCard(signedV1Card(Uint8Array.of(0xff), '�'))).toEqual({
+      error: 'contactCard: name is not valid UTF-8',
+    });
   });
 });

@@ -169,9 +169,10 @@ describe('AC-CARD-2: byte layout', () => {
   it('generalizes the length check across small (0) and large (30) name_len values, off by more than one byte', async () => {
     const { pubkeyHex, signer } = makeIdentity();
 
-    // A signed card with name_len=0 is a legal v1 layout (0-32 bytes allowed) but never
-    // produced by encodeCard (an empty nickname takes the unsigned path, AC-CARD-6) -- build
-    // it by hand to exercise decodeCard's length check at this boundary directly.
+    // A signed card with name_len=0 is never produced by encodeCard (an empty nickname takes
+    // the unsigned path, AC-CARD-6) and decodeCard rejects it as malformed anyway (see
+    // contactCard.signedEmptyName.test.ts) -- build it by hand so a truncated one is still
+    // rejected at this boundary.
     const pubkeyBytes = Uint8Array.from(pubkeyHex.match(/../g)!.map((byte) => parseInt(byte, 16)));
     const nameLenZeroBuf = new Uint8Array(1 + 32 + 4 + 1 + 64); // header + pubkey + created_at + name_len(0) + sig
     nameLenZeroBuf[0] = 0x20;

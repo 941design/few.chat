@@ -26,13 +26,15 @@ type CreateGroupModalProps = {
 
 export default function CreateGroupModal({ isOpen, onClose }: CreateGroupModalProps) {
   const copy = useCopy();
-  const { createGroup } = useMarmot();
+  const { createGroup, ready } = useMarmot();
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
-    if (!name.trim()) return;
+    // Not before the MLS client is ready: createGroup would return null and
+    // surface a generic error (BACKLOG create-group-enabled-before-client-ready).
+    if (!name.trim() || !ready) return;
     setIsLoading(true);
     setError(null);
 
@@ -99,7 +101,7 @@ export default function CreateGroupModal({ isOpen, onClose }: CreateGroupModalPr
           <Button
             onClick={() => void handleSubmit()}
             isLoading={isLoading}
-            isDisabled={!name.trim()}
+            isDisabled={!name.trim() || !ready}
             data-testid="create-group-submit-btn"
           >
             {copy.groups.createGroupSubmit}

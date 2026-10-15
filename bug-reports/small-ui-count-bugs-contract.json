@@ -1,0 +1,48 @@
+{
+  "bug_name": "small-ui-count-bugs",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/pages/profile.tsx",
+      "app/pages/groups.tsx",
+      "app/src/components/groups/CreateGroupModal.tsx",
+      "app/src/lib/unreadStore.ts",
+      "app/src/context/MarmotContext.tsx (reloadGroups only)",
+      "app/src/lib/contactCard.ts",
+      "app/src/lib/calls/callManager.ts",
+      "app/src/components/calls/IncomingCallWatcher.tsx",
+      "app/tests/unit/pages/*",
+      "app/tests/unit/cards/contactCard*.test.ts",
+      "app/tests/unit/calls/*",
+      "app/tests/unit/unreadStore.test.ts",
+      "app/tests/unit/inviteExpiries-groupScope.test.ts",
+      "app/tests/e2e/groups-direct-invite-lifecycle.spec.ts",
+      "docs/behavior/groups.md",
+      "docs/behavior/notifications-and-unread.md",
+      "docs/behavior/contacts-and-direct-messages.md"
+    ],
+    "must_not_edit": [
+      "app/src/lib/marmot/poll*",
+      "app/src/lib/marmot/handlers/*",
+      "app/src/context/PollStoreContext.tsx",
+      "app/tests/e2e/groups-leave-intent.spec.ts",
+      "app/tests/e2e/groups-contacts.spec.ts",
+      "app/src/lib/marmot/profileSync*",
+      "BACKLOG.json"
+    ]
+  },
+  "behaviour": [
+    "B1: on the contact profile page the add-to-group success/error confirmation renders outside the addable-groups gate (addToGroupView: showStatus = not blocked && contact && status in {success,error}; showPicker = not blocked && contact && addable>0); in the single-addable-group case the success Alert is visible after the invite.",
+    "B2: create-group-btn and create-group-submit-btn are disabled while MarmotContext.ready is false; handleSubmit no-ops when not ready.",
+    "B3: initDirectMessageCounts skips archived (blocked) contacts and drops any in-memory directMessages counter they hold; message history and last-read timestamps are never modified; idempotent.",
+    "B4: scopeInviteExpiriesToGroups(ids), called by MarmotContext.reloadGroups after loadAllGroups resolves, drops inviteExpiries counters for absent groups and keeps initInviteExpiries/incrementInviteExpiry from re-adding them; before the first call (scope null) nothing is pruned; invite-link records are never modified.",
+    "B5: decodeCard rejects a signed (v1 or v2) card with name_len=0 with error 'contactCard: signed card must carry a non-empty name'; every card encodeCard/encodeCardV2 produce still decodes.",
+    "B6: CallManager drops (silently, before the busy auto-reject) an offer whose caller isBlockedCaller and binds to no group (direct 1:1); IncomingCallWatcher wires isBlockedCaller to isBlockedPeer over a live loadBlockedPeers ref refreshed on blockedPeersRevision. Group calls are not gated."
+  ],
+  "non_goals": [
+    "Block-gating group calls from a blocked member (owner question Q8).",
+    "Clearing last-read timestamps or history of blocked contacts.",
+    "Acknowledging/deleting invite-link records of absent groups.",
+    "Making createGroup await client readiness instead of disabling the control."
+  ]
+}

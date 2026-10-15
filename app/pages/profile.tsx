@@ -614,6 +614,43 @@ export function canAddContactToGroup(
   return true;
 }
 
+export type AddToGroupStatus = 'idle' | 'loading' | 'success' | 'error';
+
+/**
+ * What the profile page's Add-to-group area renders (BACKLOG
+ * profile-page-add-group-success-confirmation). The picker needs an addable
+ * group; the success/error confirmation does NOT — a successful invite turns
+ * the contact into a pending member, which empties the addable list in the
+ * same render that sets `success`, so gating the confirmation on the picker
+ * made it unreachable in the common single-group case. Pure for unit testing
+ * (repo convention: no jsdom).
+ */
+export function addToGroupView(params: {
+  isBlocked: boolean;
+  hasContact: boolean;
+  addableCount: number;
+  status: AddToGroupStatus;
+}): { showPicker: boolean; showStatus: boolean } {
+  const eligible = !params.isBlocked && params.hasContact;
+  return {
+    showPicker: eligible && params.addableCount > 0,
+    showStatus: eligible && (params.status === 'success' || params.status === 'error'),
+  };
+}
+
+/**
+ * The add-to-group status shown for the contact currently being viewed. The
+ * attempt is keyed by the contact it was made for, so navigating to another
+ * contact's profile (same page instance, new `?pubkey=`) — or an invite that
+ * resolves after navigating away — never shows a stale success/error there.
+ */
+export function statusForViewedContact(
+  attempt: { pubkey: string | null; status: AddToGroupStatus },
+  viewedPubkey: string | null,
+): AddToGroupStatus {
+  return attempt.pubkey !== null && attempt.pubkey === viewedPubkey ? attempt.status : 'idle';
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const copy = useCopy();
@@ -622,11 +659,15 @@ export default function ProfilePage() {
   const [version, setVersion] = useState(0);
   // const [npubCopied, setNpubCopied] = useState(false); // npub display hidden — see handleCopyNpub/JSX below
   const [selectedGroupId, setSelectedGroupId] = useState('');
-  const [addToGroupStatus, setAddToGroupStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [addToGroupAttempt, setAddToGroupAttempt] = useState<{ pubkey: string | null; status: AddToGroupStatus }>({
+    pubkey: null,
+    status: 'idle',
+  });
   const [adminGroupIds, setAdminGroupIds] = useState<Set<string>>(new Set());
 
   const pubkeyHex = typeof router.query.pubkey === 'string' ? router.query.pubkey : null;
   const isOwnProfile = !pubkeyHex || pubkeyHex === ownPubkeyHex;
+  const addToGroupStatus = statusForViewedContact(addToGroupAttempt, pubkeyHex);
 
   // Resolve admin groups only when viewing another user's profile
   useEffect(() => {
@@ -694,6 +735,12 @@ export default function ProfilePage() {
 
   const addableGroups = addableGroupsForContact(groups, pubkeyHex!, adminGroupIds);
   const effectiveGroupId = selectedGroupId || addableGroups[0]?.id || '';
+  const addToGroup = addToGroupView({
+    isBlocked,
+    hasContact: !!contact,
+    addableCount: addableGroups.length,
+    status: addToGroupStatus,
+  });
 
   // function handleCopyNpub() {
   //   navigator.clipboard.writeText(npub).catch(() => {});
@@ -708,20 +755,21 @@ export default function ProfilePage() {
     // bypassed. The UI already disables the control while pending; this is the
     // guarantee behind it.
     if (!canAddContactToGroup(contact)) return;
-    setAddToGroupStatus('loading');
+    const target = pubkeyHex;
+    setAddToGroupAttempt({ pubkey: target, status: 'loading' });
     try {
       const result = await addToGroupWithMarker(pubkeyHex, effectiveGroupId, inviteByNpub, {
         markPendingDirectInvite,
         clearPendingDirectInvite,
       });
       if (result.ok) {
-        setAddToGroupStatus('success');
+        setAddToGroupAttempt({ pubkey: target, status: 'success' });
         setSelectedGroupId('');
       } else {
-        setAddToGroupStatus('error');
+        setAddToGroupAttempt({ pubkey: target, status: 'error' });
       }
     } catch {
-      setAddToGroupStatus('error');
+      setAddToGroupAttempt({ pubkey: target, status: 'error' });
     }
   }
 
@@ -814,29 +862,32 @@ export default function ProfilePage() {
             </Button>
           )}
 
-          {!isBlocked && contact && addableGroups.length > 0 && (
+          {/* The confirmation lives OUTSIDE the picker gate: a successful invite
+              empties addableGroups in the same render (see addToGroupView). */}
+          {addToGroup.showStatus && addToGroupStatus === 'success' && (
+            <Alert status="success" borderRadius="md" w="100%" maxW="sm" data-testid="profile-add-to-group-success">
+              <AlertIcon />
+              <AlertDescription>{copy.profile.addToGroupSuccess}</AlertDescription>
+            </Alert>
+          )}
+          {addToGroup.showStatus && addToGroupStatus === 'error' && (
+            <Alert status="error" borderRadius="md" w="100%" maxW="sm" data-testid="profile-add-to-group-error">
+              <AlertIcon />
+              <AlertDescription>{copy.profile.addToGroupError}</AlertDescription>
+            </Alert>
+          )}
+
+          {addToGroup.showPicker && (
             <Box w="100%" maxW="sm" data-testid="profile-add-to-group">
               <Text fontWeight="medium" mb={2}>
                 {copy.profile.addToGroupLabel}
               </Text>
-              {addToGroupStatus === 'success' && (
-                <Alert status="success" borderRadius="md" mb={3} data-testid="profile-add-to-group-success">
-                  <AlertIcon />
-                  <AlertDescription>{copy.profile.addToGroupSuccess}</AlertDescription>
-                </Alert>
-              )}
-              {addToGroupStatus === 'error' && (
-                <Alert status="error" borderRadius="md" mb={3} data-testid="profile-add-to-group-error">
-                  <AlertIcon />
-                  <AlertDescription>{copy.profile.addToGroupError}</AlertDescription>
-                </Alert>
-              )}
               <HStack spacing={3} align="stretch">
                 <Select
                   value={effectiveGroupId}
                   onChange={(e) => {
                     setSelectedGroupId(e.target.value);
-                    setAddToGroupStatus('idle');
+                    setAddToGroupAttempt({ pubkey: pubkeyHex, status: 'idle' });
                   }}
                   aria-label={copy.profile.addToGroupSelect}
                   data-testid="profile-add-to-group-select"

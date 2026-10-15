@@ -20,6 +20,7 @@ import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { isAllowedDmSender } from '@/src/lib/walledGarden';
 import { loadKnownPeers } from '@/src/lib/knownPeers';
+import { isBlockedPeer, loadBlockedPeers } from '@/src/lib/blockedPeers';
 import type { Group } from '@/src/types';
 import type { CallManager } from '@/src/lib/calls/callManager';
 
@@ -45,7 +46,7 @@ export function getCallManager(): CallManager | null {
 
 export function IncomingCallWatcher() {
   const { hydrated, pubkeyHex, privateKeyHex } = useNostrIdentity();
-  const { groups, getClient, knownPeersRevision } = useMarmot();
+  const { groups, getClient, knownPeersRevision, blockedPeersRevision } = useMarmot();
 
   // Live ref keeps the group roster current without tearing down the subscription
   // on every membership change. Mirrors the pattern in ContactChat.tsx / DMNotificationsWatcher.
@@ -61,6 +62,15 @@ export function IncomingCallWatcher() {
   // group) reachable.
   const knownPeersRef = useRef(loadKnownPeers());
   useEffect(() => { knownPeersRef.current = loadKnownPeers(); }, [groups, knownPeersRevision]);
+
+  // Block-set ref (mirrors DirectMessageNotificationsWatcher): refreshed on the
+  // same triggers plus blockedPeersRevision, so a block made while mounted takes
+  // effect on the next offer without a subscription rebuild. Feeds CallManager's
+  // isBlockedCaller, which denies DIRECT 1:1 calls only (group calls: owner Q8).
+  const blockedPeersRef = useRef(loadBlockedPeers());
+  useEffect(() => {
+    blockedPeersRef.current = loadBlockedPeers();
+  }, [groups, knownPeersRevision, blockedPeersRevision]);
 
   // getClient is stable (useCallback) — safe to read directly in the effect.
   const getClientRef = useRef(getClient);
@@ -114,6 +124,7 @@ export function IncomingCallWatcher() {
           // Live list of the user's group ids so CallManager can bind an incoming
           // call to the actual MLS group it belongs to (strict roster authorization).
           getGroupIds: () => groupsRef.current.map((g) => g.id),
+          isBlockedCaller: (pk: string) => isBlockedPeer(pk, blockedPeersRef.current),
           publishGroupNotice: async (groupId: string, content: string) => {
             try {
               const client = getClientRef.current();
@@ -146,12 +157,11 @@ export function IncomingCallWatcher() {
             // per-call roster binding still happens inside CallManager.handleEvent
             // (group calls bind to the live MLS roster; direct calls authorize on
             // the caller pubkey alone).
-            // NOTE (block-contact epic, 2026-07-14): this call gate is intentionally
-            // NOT composed with the block deny-list (isBlockedPeer). Because a block
-            // deliberately keeps the peer in knownPeers (spec §9 / ADR-005), a blocked
-            // contact who is still an allowed sender can currently ring the user. This
-            // is out of scope for the DM-only block epic and latent while calls are
-            // disabled. Follow-up tracked in BACKLOG (gate-incoming-calls-with-block).
+            // The block deny-list is NOT composed here: a block keeps the peer in
+            // knownPeers (spec §9 / ADR-005), and whether a call is direct or group
+            // is only known once CallManager binds it to a roster. CallManager's
+            // isBlockedCaller (wired above) denies blocked callers on DIRECT 1:1
+            // calls; group calls from a blocked member are out of scope (owner Q8).
             return isAllowedDmSender(
               senderPubkey,
               groupsRef.current,

@@ -472,6 +472,38 @@ export function clearPendingContact(peerPubkeyHex: string) {
 // from an externally-supplied group-id list.
 
 /**
+ * The ids of the user's loaded groups list, or `null` until a list has loaded
+ * (BACKLOG stale-foreign-group-invite-expiry-count). While non-null, invite-
+ * expiry counters are kept only for these groups: a groupId with stored expired
+ * links but no group (backup-restore residue of a group the user is not in)
+ * has no card to clear it from, so it must not feed the Groups nav total.
+ * Counters only — the invite-link records are never touched.
+ */
+let inviteExpiryGroupScope: ReadonlySet<string> | null = null;
+
+function inInviteExpiryScope(groupId: string): boolean {
+  return inviteExpiryGroupScope === null || inviteExpiryGroupScope.has(groupId);
+}
+
+/**
+ * Scopes the `inviteExpiries` slice to the given (freshly loaded) groups list:
+ * drops counters for absent groups now, and keeps the periodic re-derive
+ * (`initInviteExpiries`) and live bump (`incrementInviteExpiry`) from re-adding
+ * them. Call ONLY with a list that has actually loaded (MarmotContext's
+ * `reloadGroups`) — before the first call nothing is pruned, so a transient
+ * not-yet-loaded state can never clear a real group's count. Idempotent.
+ */
+export function scopeInviteExpiriesToGroups(groupIds: readonly string[]): void {
+  inviteExpiryGroupScope = new Set(groupIds);
+  const absent = Object.keys(state.inviteExpiries).filter((id) => !inInviteExpiryScope(id));
+  if (absent.length === 0) return;
+  const next = { ...state.inviteExpiries };
+  for (const id of absent) delete next[id];
+  state = { ...state, inviteExpiries: next };
+  emit();
+}
+
+/**
  * Derives, per groupId, the count of that group's stored invite links
  * satisfying `isExpired(link, now) && link.expiryNotified && !link.expiryAcknowledged`
  * (AC-NOTIFY-1). Fully recomputed from persisted flags on every call — never
@@ -490,7 +522,7 @@ export async function initInviteExpiries(now: number = Date.now()): Promise<void
   }
   const next: Record<string, number> = {};
   for (const link of links) {
-    if (link.expiryNotified && !link.expiryAcknowledged && isExpired(link, now)) {
+    if (link.expiryNotified && !link.expiryAcknowledged && isExpired(link, now) && inInviteExpiryScope(link.groupId)) {
       next[link.groupId] = (next[link.groupId] ?? 0) + 1;
     }
   }
@@ -507,6 +539,7 @@ export async function initInviteExpiries(now: number = Date.now()): Promise<void
  * performs, not a replacement for it.
  */
 export function incrementInviteExpiry(groupId: string) {
+  if (!inInviteExpiryScope(groupId)) return;
   const next = { ...state.inviteExpiries };
   next[groupId] = (next[groupId] ?? 0) + 1;
   state = { ...state, inviteExpiries: next };
@@ -640,9 +673,7 @@ export function clearDirectMessageContact(peerPubkeyHex: string) {
  * (see that function's doc comment) before both converged on the raw read.
  */
 export async function initDirectMessageCounts(peerPubkeysHex: string[], ownPubkeyHex: string) {
-  const own = ownPubkeyHex.toLowerCase();
   const timestamps = loadDirectMessageLastRead();
-  const { get } = await import('idb-keyval');
   // Key the slice by dmKey (lowercased peer) — matches incrementDirectMessage and
   // state.directMessages. reconcileInit re-reads any peer touched by a live DM
   // during the scan, so a stale computed value can no longer overwrite a newer
@@ -654,7 +685,20 @@ export async function initDirectMessageCounts(peerPubkeysHex: string[], ownPubke
   // that pair, and it is the reason a leaked contact card cannot light the bell
   // before its pairing has been confirmed. See spec AC-OBS-1 / Design Decision 9.
   const storedList = Object.values(readStoredContacts());
-  const keys = peerPubkeysHex.map(dmKey).filter((key) => !isPendingConfirmation(key, storedList));
+  // Blocked (archived) contacts never count either (BACKLOG
+  // one-time-migration-clear-stale-unread): legacy-hidden contacts kept their
+  // history when they became "blocked", and a blocked chat cannot be opened to
+  // mark it read, so a counter for them could never clear. They are skipped by
+  // the scan and any counter they already hold is dropped below — counters
+  // only; history and last-read timestamps are untouched. Idempotent.
+  const archivedKeys = new Set(
+    storedList.filter((c) => c.archivedAt != null).map((c) => dmKey(c.pubkeyHex)),
+  );
+  const keys = peerPubkeysHex
+    .map(dmKey)
+    .filter((key) => !isPendingConfirmation(key, storedList) && !archivedKeys.has(key));
+  const own = ownPubkeyHex.toLowerCase();
+  const { get } = await import('idb-keyval');
   await reconcileInit('directMessages', keys, async (key) => {
     const lastRead = timestamps[key] ?? 0;
     try {
@@ -669,6 +713,17 @@ export async function initDirectMessageCounts(peerPubkeysHex: string[], ownPubke
     }
     return 0;
   });
+  dropDirectMessageCounters(archivedKeys);
+}
+
+/** Removes in-memory DM counters for `keys` (never touches last-read timestamps). */
+function dropDirectMessageCounters(keys: ReadonlySet<string>): void {
+  const present = Object.keys(state.directMessages).filter((key) => keys.has(key));
+  if (present.length === 0) return;
+  const next = { ...state.directMessages };
+  for (const key of present) delete next[key];
+  state = { ...state, directMessages: next };
+  emit();
 }
 
 /**

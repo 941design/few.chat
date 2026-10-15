@@ -1207,7 +1207,7 @@ export default function GroupsPage() {
           </Heading>
 
           {!unsupported && (
-            <Button onClick={createDisclosure.onOpen} data-testid="create-group-btn">
+            <Button onClick={createDisclosure.onOpen} isDisabled={!ready} data-testid="create-group-btn">
               {copy.groups.createGroup}
             </Button>
           )}

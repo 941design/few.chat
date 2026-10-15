@@ -327,6 +327,7 @@ shipped implementation, and the automated test suite:
 - The `dm-*` and contact/walled-garden end-to-end specs and the unit tests for the pure
   predicates (reachability, blocking, pending confirmation).
 
-**Note on `knownPeers` un-gated channels:** incoming calls are not yet block-gated (tracked
-as a known, currently-latent gap while calls are disabled) — see ADR-008. Calls are out of
-scope for this document.
+**Note on calls:** a blocked contact cannot ring you with a direct (one-to-one) call — the
+call is dropped silently, with no busy or decline reply. A call from a blocked person who
+shares a group with you is not yet block-gated (an open product question; latent while calls
+are disabled) — see ADR-008. Calls are otherwise out of scope for this document.
