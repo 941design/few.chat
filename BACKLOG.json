@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T12:45:44Z",
+  "updated_at": "2026-10-15T14:05:01Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -462,23 +462,6 @@
       "success_signal": "With the leaver's profile absent, the row reads the chosen fallback; groups-leave-intent passes across 3 full runs"
     },
     {
-      "slug": "left-groups-keep-mls-state-forever",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/leaveGroupImpl.ts",
-        "range": [
-          148,
-          165
-        ]
-      },
-      "text": "Leaving or abandoning a group deletes only the app's overlay record; the MLS group state (secrets, history) stays in IDB forever and is included in every relay backup",
-      "created_at": "2026-10-15",
-      "motivation": "Found 2026-10-15 (Fable design consult for invite-accept-not-atomic): every group ever left is an MLS-only orphan in few-groups-state. Its key material outlives membership on the device and is re-exported by relayBackup.ts:121-126, restored on every device, and caused re-invite-after-leave to fail (fixed separately at accept time).",
-      "behavior": "leaveGroupImpl → removeGroupFromStorage = groupStorage.deleteGroup (overlay only); only clearAllGroupData touches few-groups-state. Startup groups.loadAll() loads the orphans into marmot's cache; nothing purges them.",
-      "approach": "After the leave's fire-and-forget kind-9 send has been handed off (don't race it), call marmotClient.groups.destroy(id) (local-only). Optionally a one-time startup purge of MLS-only groups that have no overlay record and no pending invitation (accepting that a solo group whose creation was interrupted before its overlay write is dropped — it was never shown).",
-      "success_signal": "After leaving, few-groups-state has no entry for the group and the next backup contains none"
-    },
-    {
       "slug": "reinvite-after-eviction-fails-already-exists",
       "scope": "any",
       "anchor": {
@@ -517,7 +500,7 @@
       "text": "Multi-tab MLS group cache coherence: each tab caches its own group instances, and a write in one tab leaves another tab at a stale epoch (single active client or cross-tab invalidation needed)",
       "created_at": "2026-10-15",
       "motivation": "Each tab builds its own MarmotClient and caches group instances from groups.loadAll(); no BroadcastChannel/leader election exists (only navigator.locks in welcomeSubscription.ts join lock). A write in tab B (commit, leave, or the destroy→re-join in joinIdempotent) leaves tab A's instance stale; A can pass groups.has + loadGroup checks using B's overlay while sending/subscribing with stale state and re-persisting it over B's. Surfaced by a Codex HIGH on bug invite-accept-not-atomic-across-page-unload round 1; waived there by the Decider (pre-existing class, epic-sized).",
-      "behavior": "Two tabs on the same identity; accept (or any epoch-advancing action) in one, then act in the other → the second tab sends undecryptable messages / overwrites fresher MLS state; today's outcome is silent divergence.",
+      "behavior": "Two tabs on the same identity; accept (or any epoch-advancing action) in one, then act in the other → the second tab sends undecryptable messages / overwrites fresher MLS state; today's outcome is silent divergence. Related write-back gap (leave purge, 2026-10-15): after a leave's groups.destroy, a still-cached instance (another tab, an in-flight handler, or a departure send that outlived the 5 s timeout) can save the MLS state again, leaving an orphan without tombstone — excluded from backups and purged on re-accept, but not swept.",
       "approach": "Choose (a) one active client per origin via navigator.locks leader election, passive tabs render from IDB and forward actions, or (b) BroadcastChannel mls-state-changed {groupId} after every group.save/destroy with receivers evicting and reloading; (a) is simpler to reason about. Add a two-context e2e that advances the epoch in tab 1 and sends from tab 2.",
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
     },
