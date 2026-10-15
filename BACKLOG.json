@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T02:24:25Z",
+  "updated_at": "2026-10-15T06:48:42Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -264,13 +264,6 @@
   ],
   "findings": [
     {
-      "slug": "base-plugin-e2e-testing-skill-swallows-results",
-      "scope": "base-plugin",
-      "anchor": null,
-      "text": "base:e2e-testing skill runs in a forked context but returns only 'Skill execution completed' to the parent — no pass/fail counts, no failure messages. Caller has to re-run the runner directly to learn whether tests passed.",
-      "created_at": "2026-05-18"
-    },
-    {
       "slug": "dm-e2e-publish-via-app-refactor",
       "scope": "any",
       "anchor": {
@@ -330,20 +323,6 @@
       "behavior": "decodeCard treats a signed, correctly-verifying, empty-name (name_len=0) card as a fully valid v1 signed card and returns profile: { nickname: '', updatedAt }. Nothing in the encode/decode/parse/cache pipeline currently distinguishes 'signed empty name, meant to clear the cached name' from 'signed empty name, an encoder/decoder-disagreement edge case nobody meant to produce'.",
       "approach": "Pick one of two explicit resolutions: (1) decodeCard rejects name_len=0 on a signed card as malformed, restoring encoder/decoder symmetry; or (2) keep it valid but document it as an intentional 'clear my cached name' affordance and add an AC + test asserting the LWW-clobber-to-empty behavior is desired, not accidental.",
       "success_signal": "encodeCard and decodeCard agree on whether a signed empty-name card is valid, backed by a test for the chosen behavior.",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "ac-intl-1-i18n-parity-contact",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/unit/cards/addPage.i18n.test.ts"
-      },
-      "text": "AC-INTL-1 i18n parity for contact-card-exchange relies on a hand-maintained key list that won't catch future en-only additions",
-      "created_at": "2026-07-09",
-      "motivation": "addPage.i18n.test.ts satisfies AC-INTL-1 for this epic (S3-S7) via a REQUIRED_KEYS array reconciled by hand against 'git diff HEAD -- app/src/lib/i18n.ts' for this epic's working tree -- the same REQUIRED_KEYS discipline other *.i18n.test.ts suites use. A repo-wide programmatic parity walk was deliberately rejected during S7 (opus-reviewer + verification-examiner) because it would fail on pre-existing, out-of-epic en/de divergence elsewhere in i18n.ts. The tradeoff was accepted for this epic but the durability gap is real: a future epic that adds an en-only key and forgets to extend some REQUIRED_KEYS list gets no automated signal.",
-      "behavior": "i18n parity across the whole app is enforced only by however many per-epic *.i18n.test.ts suites happen to exist, each with its own manually maintained REQUIRED_KEYS array; there is no single mechanism that would catch a newly-added en-only string key anywhere in app/src/lib/i18n.ts.",
-      "approach": "Design a repo-wide i18n parity test that asserts en/de key-set equality for app/src/lib/i18n.ts's Copy type as a whole, while allowlisting (or fixing) the pre-existing divergence that currently blocks that approach, so future epics get automatic coverage instead of needing their own hand-maintained REQUIRED_KEYS list.",
-      "success_signal": "A single i18n parity test covers the whole Copy type (or an explicit allowlist of pre-existing gaps), and a new en-only key fails it automatically.",
       "kind": "spec-gap"
     },
     {
@@ -411,19 +390,6 @@
       "approach": "Add a one-time startup migration that clears unread counters (NOT history) for all currently-archived contacts, mirroring purgeStrangerDmCounters but keyed on archivedAt. Idempotent."
     },
     {
-      "slug": "purgestrangercontacts-s-deleted-number-return",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/contacts.ts",
-        "line": 435
-      },
-      "text": "purgeStrangerContacts's { deleted: number } return-value contract is unspecced on the SSR/storage-unavailable early-return path",
-      "created_at": "2026-07-14",
-      "motivation": "The function's doc comment promises @returns { deleted: number } always, and a caller could reasonably display this count in UI, but no AC in epic-dm-walled-garden (AC-PURGE-5, which specs the sweep's deletion behavior) or elsewhere pins the exact shape of the early-return value when storage is unavailable. A mutation-testing gate (2026-07-14, invite-group-member-from-contacts pre-ship audit) found the { deleted: 0 } object literal could be mutated to {} with zero test failures until a new assertion was added ad hoc. A human should decide whether to formalize this contract in an AC (e.g. add to epic-dm-walled-garden's Retroactive Purge section) or leave it as implementation-only.",
-      "behavior": "purgeStrangerContacts(getWhitelist) returns exactly { deleted: 0 } (not undefined-deleted or {}) when isStorageAvailable() is false. A closing test now asserts this in app/tests/unit/contacts-ssr-guard.test.ts.",
-      "kind": "spec-gap"
-    },
-    {
       "slug": "invite-modal-picker-cannot-re-invite",
       "scope": "any",
       "anchor": {
@@ -435,19 +401,6 @@
       "behavior": "Today: after A invites B, B's picker option becomes disabled ('already in group') and stays that way until B accepts or the invite is otherwise resolved (e.g. cancelled). There is no way to resend via the picker while pending.",
       "approach": "The app already computes the right signal for this — groups.tsx's local confirmedPubkeys (a per-member 'has this person sent a profile message in this group yet' Set, currently only used to drive the member-list's Pending badge). Thread that signal (or an equivalent) through to a shared, contacts.ts-reachable form so the invite-picker predicate can distinguish 'pending invite' from 'confirmed member' and re-enable a distinct pending state per the original DD-4 intent.",
       "success_signal": "Re-opening the invite picker for a group where a contact was invited but hasn't accepted shows that contact as selectable (not disabled), and resubmitting the invite succeeds."
-    },
-    {
-      "slug": "dm-self-heal-spec-ts-ac",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/e2e/dm-self-heal.spec.ts",
-        "line": 181
-      },
-      "text": "dm-self-heal.spec.ts AC-29: malformed JSON-envelope content row not self-healed to decoded text",
-      "created_at": "2026-07-14",
-      "motivation": "Full e2e gate (make test-e2e-all) failed on this AC during an unrelated epic's pre-ship gate — first time this specific AC-29 failure has been observed, so it needs triage rather than being assumed to be the known chronic shared-relay flake.",
-      "behavior": "AC-29 expects a malformed JSON-envelope message row to self-heal to decoded text ('hello from envelope') and survive reload with the IDB row rewritten in place. Instead the raw JSON envelope string renders in the bubble and the assertion times out after 30s.",
-      "success_signal": "dm-self-heal.spec.ts AC-29 passes in an isolated run (not just within the full sequential gate, to rule out cross-test relay/keypair contamination)."
     },
     {
       "slug": "initjoinrequestcounts-startup-scan-reconciliation",
@@ -500,19 +453,6 @@
       "motivation": "This is a silent, unrecoverable divergence between a member's real state (gone) and every remaining member's roster (present, indistinguishable from an active member). Unlike the normal ghost window it never resolves and shows no pending indicator, so remaining members are misled indefinitely. Surfaced while writing docs/behavior/group-administration.md.",
       "behavior": "leaveGroupImpl catches a failed kind-13 send and proceeds with the local purge (soft-leave). When the send fails (e.g. the leaver is offline), no departure signal ever reaches the group: no admin can finalise the removal and no leave-pending/removal-pending state is shown. The out-of-band-leave spec covers the ghost window assuming the signal was sent, but not the send-failed case.",
       "approach": "Record the behaviour and decide whether to mitigate (retry/queue the kind-13 until sent, or surface a local indicator) or accept it as a documented risk in the out-of-band-leave spec.",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "cancelpendinginvitation-can-evict-just-joined",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/cancelInvitationImpl.ts"
-      },
-      "text": "cancelPendingInvitation can evict a just-joined member: 'pending' is derived (in MLS tree + no profile) and cannot tell a not-yet-accepted direct invite from an approved join-requester whose profile has not yet propagated",
-      "created_at": "2026-07-19",
-      "motivation": "Admin-facing footgun that removes a real, consenting member. isPendingMemberImpl treats anyone in the MLS tree without a received profile as pending, and the cancel action is offered for all of them. A join-requester who supplied no name has no provisional profile, so during the window between joining and their profile arriving they look cancellable and cancelling evicts them. The scope-withdraw-invite pre-spec was written to fix exactly this but is unshipped. Surfaced while writing docs/behavior/groups.md.",
-      "behavior": "cancelPendingInvitationImpl commits a real MLS Remove for any pubkey that isPendingMemberImpl reports as pending (in tree, no non-provisional profile). No marker or origin field distinguishes a direct-invite join from an approved-join-request join, so the derived-pending state conflates them. Named approved requesters get a provisional profile (so they read as confirmed and are safe); nameless ones do not, and are removable during the profile-lag window.",
-      "approach": "Implement the scope-withdraw-invite pre-spec (a positive direct-invite marker so cancel is offered only for unaccepted direct invites), or otherwise record join-origin; alternatively seed a provisional profile for nameless approved requesters so they read as confirmed immediately.",
       "kind": "spec-gap"
     },
     {
@@ -741,6 +681,18 @@
       "text": "ContactChat.tsx uses the same fetch-then-live-sub anti-pattern fixed in welcomeSubscription.ts: Phase-1 runs three parallel fetchEventsWithTimeout calls for DM history then Phase-2 opens three live ndk.subscribe calls, leaving a gap where events are silently lost.",
       "reason": "The welcomeSubscription since-anchor fix does NOT transfer: ContactChat's primary DM path is kind-1059 gift-wraps whose outer created_at is randomized/backdated up to 2 days (NIP-59 privacy), so a since:fetchStartedAt filter on the gift-wrap live sub would DROP incoming DMs — a regression. since is only safe on the legacy kind-4 subs (real timestamps), whose inbound-only gap is negligible. Existing per-id dedup (ingestEvent/knownMessageIds + shouldIngestRumor) already absorbs the small overlap. Closing the gap properly would need a relay-replay mechanism that doesn't key on the spoofed gift-wrap timestamp — out of scope for a smell-driven refactor.",
       "source_slug": "contactchat-tsx-uses-same-fetch-then"
+    },
+    {
+      "date": "2026-10-15",
+      "text": "AC-INTL-1 i18n parity for contact-card-exchange relies on a hand-maintained key list that won't catch future en-only additions",
+      "reason": "Stale (verified 2026-10-15): i18n.ts:634 declares the copy table as Record<LanguageCode, Copy> and Copy has no optional keys, so an en-only key already fails type-checking (tsc runs in next build); the hand-maintained key list adds nothing.",
+      "source_slug": "ac-intl-1-i18n-parity-contact"
+    },
+    {
+      "date": "2026-10-15",
+      "text": "base:e2e-testing skill runs in a forked context but returns only 'Skill execution completed' to the parent — no pass/fail counts, no failure messages. Caller has to re-run the runner directly to learn whether tests passed.",
+      "reason": "Out of repo: concerns the base plugin's e2e-testing skill, not quizzl; moved to the base meta-retro tree (2026-10-15).",
+      "source_slug": "base-plugin-e2e-testing-skill-swallows-results"
     }
   ]
 }
