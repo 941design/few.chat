@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T10:45:14Z",
+  "updated_at": "2026-10-15T12:45:44Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -522,19 +522,6 @@
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
     },
     {
-      "slug": "mls-message-lost-on-unload-after-ingest",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/applicationRumorDispatcher.ts"
-      },
-      "text": "An MLS application message can be lost for good if the page unloads after marmot-ts persists the advanced group state but before the app's async handler has processed the decrypted rumor",
-      "created_at": "2026-10-15",
-      "motivation": "Diagnosed 2026-10-15 with in-page instrumentation (bug-reports/profile-propagation-flake-diagnosis.md): groups-contacts failed 4/7 runs because Bob's profile rumor arrived ~160 ms before a navigation; Alice's MLS state advanced past it, so after reload it cannot be decrypted again and the profile never arrives (Bob sends once per session; Alice's earlier profile request suppresses retries for 1 h). Applies to every rumor kind (chat, reactions, polls, edits, profiles), not just profiles.",
-      "behavior": "marmot-ts ingest() decrypts, saves the advanced group state, emits authenticatedApplicationMessage; the dispatcher queues the rumor and handlers persist asynchronously. An unload in between drops the decrypted rumor; the MLS ratchet has moved on, so relay redelivery cannot be decrypted.",
-      "approach": "(a) Durable inbox: persist decrypted rumors (keyed by rumor id, per group) before/atomically with the MLS state save, replay unprocessed ones idempotently on subscribe; (b) narrower profile-only mitigation: re-request a member's profile when the last request predates their join. Prefer (a); verify marmot-ts ordering (save vs emit) first.",
-      "success_signal": "An e2e that reloads right after a peer sends (profile + chat) never loses the rumor across 10 runs; groups-contacts passes 10/10"
-    },
-    {
       "slug": "poll-close-before-open-dropped",
       "scope": "any",
       "anchor": {
@@ -562,17 +549,44 @@
       "success_signal": "Unit: two devices with skewed clocks changing a vote converge on the latest change on every peer, with and without an interrupted replay"
     },
     {
-      "slug": "e2e-runner-flag-dev-server-reloads",
+      "slug": "rumor-journal-cap-evicts-unapplied",
       "scope": "any",
       "anchor": {
-        "path": "app/scripts/run-e2e.mjs"
+        "path": "app/src/lib/marmot/rumorJournal.ts"
       },
-      "text": "The e2e runner does not notice when next dev hot-reloads mid-run, so a gate run against a tree being edited produces failures that look like regressions",
+      "text": "The rumor journal's per-group cap (1000) can evict never-applied entries after an interrupted catch-up of more than 1000 rumors",
       "created_at": "2026-10-15",
-      "motivation": "Gate 7 (2026-10-15) showed 3 'new' failures that were really Fast Refresh full reloads / HTTP 500s from a fixer editing poll files during the run (bug-reports/gate7-regressions-diagnosis.md); attributing them cost a full worktree bisect.",
-      "behavior": "run-e2e.mjs starts next dev with file watching on the live tree and ignores 'Fast Refresh had to perform a full reload' and 5xx lines in the server output.",
-      "approach": "Watch the dev-server output; on 'Fast Refresh had to perform a full reload' or an HTTP 5xx, mark the run invalid and exit non-zero with a clear message (optionally disable watching for e2e). Process: never start a gate while an agent edits app/.",
-      "success_signal": "Touching a source file mid-run makes the runner exit with an 'invalid run: dev server reloaded' message"
+      "motivation": "Decider-waived Codex HIGH (low) on bug mls-message-lost-on-unload-after-ingest, 2026-10-15: strictly better than before the fix (all were lost), but a large interrupted history catch-up still loses the overflow.",
+      "behavior": "partition()/sweep keep the newest 1000 entries per group and drop the rest regardless of whether they were applied.",
+      "approach": "Cap by age only, or raise the cap / evict only entries older than N days; replay in chunks.",
+      "success_signal": "Unit: 1500 pending entries survive a sweep and all replay"
+    },
+    {
+      "slug": "poll-vote-handler-ignore-older-vote",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/handlers/pollHandler.ts"
+      },
+      "text": "Journal replay can reorder a member's vote pair if acking the older one fails while the newer one's ack succeeds; the live vote handler saves whatever arrives last",
+      "created_at": "2026-10-15",
+      "motivation": "Decider-waived Codex HIGH (low) on bug mls-message-lost-on-unload-after-ingest: requires a partial IndexedDB failure (acks are sequential), not reachable by unload alone. Overlaps poll-vote-ordering-single-key.",
+      "behavior": "handleVote persists by arrival; replayed journal entries arrive in receivedAt order, so a failed ack can leave an older vote to be replayed after a newer one.",
+      "approach": "Resolve together with poll-vote-ordering-single-key: one wire-level ordering key makes vote handling order-insensitive.",
+      "success_signal": "Unit: replaying an older vote after a newer one from the same voter leaves the newer one stored"
+    },
+    {
+      "slug": "pending-member-removals-not-persisted",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx",
+        "line": 791
+      },
+      "text": "The 5 s debounced pending-removal queue for leave intents (pendingRemovalsRef) is in memory only; an unload inside the debounce drops the member removal",
+      "created_at": "2026-10-15",
+      "motivation": "Decider-waived Codex HIGH (medium, pre-existing) on bug mls-message-lost-on-unload-after-ingest: the leave-intent rumor is now journaled and acked when handled, but the removal it schedules is not durable, so a reload within 5 s leaves a departed member on the roster.",
+      "behavior": "leave_intent handler → enqueueLeave → in-memory pendingRemovalsRef, flushed after a 5 s debounce; nothing persists or flushes it on pagehide.",
+      "approach": "Persist the pending-removal set (IDB) and resume it at startup, or flush on pagehide; keep idempotency.",
+      "success_signal": "e2e/unit: a reload within the debounce still removes the departed member"
     }
   ],
   "archive": [
