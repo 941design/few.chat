@@ -1,0 +1,39 @@
+{
+  "bug_name": "cross-tab-change-notifications",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/crossTab.ts (new)",
+      "app/src/lib/crossTabReceiver.ts (new)",
+      "app/src/lib/contacts.ts (post after successful writes)",
+      "app/src/lib/contactCache.ts (post after successful writes)",
+      "app/src/lib/knownPeers.ts (post after successful writes)",
+      "app/src/lib/marmot/groupStorage.ts (saveGroup/deleteGroup/clearAllGroupMeta)",
+      "app/src/lib/marmot/chatPersistence.ts (append/update/tombstone/remove/clear)",
+      "app/src/lib/marmot/pollPersistence.ts (savePoll/saveVoteIfNewer)",
+      "app/src/context/MarmotContext.tsx (one receiver effect only)",
+      "app/tests/unit/crossTab.test.ts (new)",
+      "app/tests/unit/crossTab-writers.test.ts (new)",
+      "app/tests/e2e/dm-block-cross-tab.spec.ts (new)",
+      "docs/behavior/contacts-and-direct-messages.md",
+      "docs/behavior/groups.md"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "any MLS client / group-state backend code (S1 single active client is out of scope)",
+      "app/src/lib/i18n.ts (no new UI)"
+    ]
+  },
+  "behaviour": [
+    "B1: crossTab.ts owns the only BroadcastChannel('few-tabs'); messages are {type:'store-changed', store, id?} with store in blocked|known|contacts|groups|chat|polls; malformed messages are dropped on receipt.",
+    "B2: posting and listening share one channel object, so a tab never receives its own posts; without window or BroadcastChannel every call is a silent no-op; postStoreChanged never throws.",
+    "B3: writers post only after their storage write succeeded: archive/unarchiveContact -> contacts + blocked; any contacts/contactCache write -> contacts; knownPeers write -> known; saveGroup/deleteGroup/clearAllGroupMeta -> groups(id); chat append/update/tombstone/remove/clear -> chat(groupId), only when a row changed; savePoll / saveVoteIfNewer (when it wrote) -> polls(groupId). A thrown/rejected write posts nothing; a throwing post never fails the write.",
+    "B4: MarmotContext subscribes once and maps: blocked->blockedPeersRevision, known->knownPeersRevision, contacts->contactsRevision, groups->reloadGroups()+groupDataVersion, chat->chatVersion, polls->pollVersion; actions never write; subscription released on unmount and the channel closed with the last listener.",
+    "B5: e2e — two pages of one browser context: blocking in page 1 closes page 2's open thread with that contact and hides the contact there, without a reload; unblocking brings it back."
+  ],
+  "non_goals": [
+    "Cross-tab MLS coordination / single active client (design S1, blocked on owner decisions).",
+    "Reactions: the reactions store serves reads from an in-memory cache, so a cross-tab bump alone would not refresh it; not wired in S0.",
+    "Rumor journal, pending poll queues, member profiles, account-wide clears of messages/polls: no displayed reload hook."
+  ]
+}

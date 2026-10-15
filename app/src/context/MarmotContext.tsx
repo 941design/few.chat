@@ -30,6 +30,8 @@ import {
   IdbKeyPackageBackend,
   clearAllGroupData,
 } from '@/src/lib/marmot/groupStorage';
+import { subscribeStoreChanged } from '@/src/lib/crossTab';
+import { applyStoreChanged, isLatestReload } from '@/src/lib/crossTabReceiver';
 import type { WelcomeReceivedCallback, UnwrappedRumor } from '@/src/lib/marmot/welcomeSubscription';
 import { serialiseProfileUpdate, PROFILE_RUMOR_KIND } from '@/src/lib/marmot/profileSync';
 import { LEAVE_INTENT_KIND, serialiseLeaveIntent } from '@/src/lib/marmot/leaveSync';
@@ -1143,8 +1145,14 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   }, [ready, groups.length, pubkeyHex]);
 
   // Load groups from storage on mount
+  // Sequence guard: reloads overlap (cross-tab notifications, MLS callbacks,
+  // user actions); only the most recently STARTED reload may apply its list,
+  // so a slower older read can never overwrite a newer one.
+  const reloadGroupsSeqRef = useRef(0);
   const reloadGroups = useCallback(async () => {
+    const seq = ++reloadGroupsSeqRef.current;
     const loaded = await loadAllGroups();
+    if (!isLatestReload(seq, reloadGroupsSeqRef.current)) return;
     setGroups(loaded);
     // Only a loaded list scopes invite-expiry counters (never a loading state):
     // drops counts for groups not in it, e.g. restored links of a non-member
@@ -2574,6 +2582,30 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   const notifyContactsChanged = useCallback((): void => {
     setContactsRevision((n) => n + 1);
   }, []);
+
+  // Cross-tab change notifications (multi-tab design S0): another open tab of
+  // this origin wrote to shared storage (a block, a new group, a chat
+  // message, …). Re-read through the same revision counters / reload this
+  // tab's own writes use; the actions never write, so nothing bounces back.
+  // The subscription (and, with the last listener, the channel) is released
+  // on unmount.
+  useEffect(
+    () =>
+      subscribeStoreChanged((message) =>
+        applyStoreChanged(message, {
+          bumpBlockedPeers: () => setBlockedPeersRevision((n) => n + 1),
+          bumpKnownPeers: () => setKnownPeersRevision((n) => n + 1),
+          bumpContacts: () => setContactsRevision((n) => n + 1),
+          reloadGroups: () => {
+            reloadGroups().catch((err) => console.warn('[Marmot] cross-tab group reload failed:', err));
+          },
+          bumpGroupData: () => setGroupDataVersion((v) => v + 1),
+          bumpChat: () => setChatVersion((v) => v + 1),
+          bumpPolls: () => setPollVersion((v) => v + 1),
+        }),
+      ),
+    [reloadGroups],
+  );
 
   /**
    * Re-publish key-package discoverability and kind 30051 relay list to the given

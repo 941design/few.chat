@@ -14,6 +14,7 @@ import { clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage
 import { clearAllPendingDirectInvites } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { clearAllRumorJournal } from '@/src/lib/marmot/rumorJournal';
 import { clearAllLeftGroupTombstones } from '@/src/lib/marmot/leftGroupTombstones';
+import { postStoreChanged } from '@/src/lib/crossTab';
 // KeyValueStoreBackend is an internal utility type — import directly from subpath
 type KeyValueStoreBackend<T> = {
   getItem(key: string): Promise<T | null>;
@@ -38,6 +39,7 @@ const memberProfileStore = createStore('few-member-profiles', 'profiles');
 
 export async function saveGroup(group: Group): Promise<void> {
   await set(group.id, group, groupMetaStore);
+  postStoreChanged('groups', group.id);
 }
 
 export async function loadGroup(id: string): Promise<Group | undefined> {
@@ -54,10 +56,12 @@ export async function loadAllGroups(): Promise<Group[]> {
 
 export async function deleteGroup(id: string): Promise<void> {
   await del(id, groupMetaStore);
+  postStoreChanged('groups', id);
 }
 
 export async function clearAllGroupMeta(): Promise<void> {
   await clear(groupMetaStore);
+  postStoreChanged('groups');
 }
 
 // ---------------------------------------------------------------------------

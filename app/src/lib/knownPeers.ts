@@ -16,6 +16,8 @@
  *   lp_knownPeersMigrated_v2     — presence flag: migration S3 has run
  */
 
+import { postStoreChanged } from '@/src/lib/crossTab';
+
 const KNOWN_PEERS_KEY = 'lp_knownPeers_v1';
 const KNOWN_PEERS_MIGRATED_KEY = 'lp_knownPeersMigrated_v2';
 
@@ -48,7 +50,10 @@ function writeRaw(peers: string[]): void {
     localStorage.setItem(KNOWN_PEERS_KEY, JSON.stringify(peers));
   } catch {
     // Non-fatal — storage may be full or unavailable
+    return;
   }
+  // Other open tabs re-read the set (cross-tab change notifications).
+  postStoreChanged('known');
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

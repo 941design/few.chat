@@ -143,7 +143,9 @@ describe('MarmotContext wiring (source assertion — no jsdom in this repo)', ()
 
   it('reloadGroups scopes invite-expiry counters only after the groups list has loaded', () => {
     expect(SOURCE).toMatch(
-      /const reloadGroups = useCallback\(async \(\) => \{\s*const loaded = await loadAllGroups\(\);\s*setGroups\(loaded\);[\s\S]*?scopeInviteExpiriesToGroups\(loaded\.map\(\(g\) => g\.id\)\);/,
+      // (a sequence guard may sit between the load and setGroups — a superseded
+      // reload returns before either applies)
+      /const reloadGroups = useCallback\(async \(\) => \{[^}]*?const loaded = await loadAllGroups\(\);\s*(?:if \(![^\n]*\) return;\s*)?setGroups\(loaded\);[\s\S]*?scopeInviteExpiriesToGroups\(loaded\.map\(\(g\) => g\.id\)\);/,
     );
   });
 });

@@ -282,6 +282,16 @@ never creates a duplicate or a second relationship.
 **A message arrives during the moment of blocking.** The person is denied at every channel
 before the history erase runs, so a racing message cannot revive the wiped thread.
 
+**Blocking or unblocking while the app is open in other tabs.** The change reaches every
+other open tab of the same browser at once, without a reload: an open conversation with the
+newly blocked person closes there too, and the contact list, notifications and calls in
+those tabs apply the block (or its removal) immediately. Tabs exchange only a local "this
+changed" signal on the device; nothing is published.
+
+**A conversation open in several tabs.** A message sent, received, edited or deleted in one
+tab appears in the same conversation open in another tab of the same browser without a
+reload; a message still being sent in that other tab is kept.
+
 **Re-joining a group with someone you left before.** Their DM history is already there (never
 purged), so the conversation simply continues.
 

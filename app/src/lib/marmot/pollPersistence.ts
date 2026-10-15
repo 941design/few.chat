@@ -10,6 +10,7 @@
  */
 
 import { get, set, del, keys, delMany } from 'idb-keyval';
+import { postStoreChanged } from '@/src/lib/crossTab';
 
 // ---- Types ----
 
@@ -204,6 +205,7 @@ export function savePoll(poll: Poll): Promise<void> {
       existing.push(poll);
     }
     await set(key, existing);
+    postStoreChanged('polls', poll.groupId);
   });
 }
 
@@ -365,6 +367,7 @@ export async function saveVoteIfNewer(vote: PollVote): Promise<boolean> {
     }
     await set(key, existing);
     wrote = true;
+    postStoreChanged('polls', vote.groupId);
   });
   return wrote;
 }

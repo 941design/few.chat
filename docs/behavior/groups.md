@@ -492,6 +492,11 @@ leftover invitation for a group they are already in is cleared as the app starts
 group and invitation can show together only briefly. Accepting such an invitation
 just clears it. Accepting the same invitation in two tabs at once joins only once.
 
+**The app open in several tabs.** What one tab stores — a group joined, renamed or left, a
+message received or edited, a poll or vote — shows up in the other open tabs of the same
+browser without a reload. This keeps what each tab *shows* current; it does not coordinate
+the tabs' own group processing — each tab still receives and sends as its own client.
+
 **The link's admin leaves or is unreachable.** Requests made against that link go
 unanswered — no other admin receives them. This is the single-admin-per-link limitation.
 

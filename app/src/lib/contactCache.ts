@@ -10,6 +10,7 @@ import type { ProfileAvatar } from '@/src/types';
 import { STORAGE_KEYS } from '@/src/types';
 import { isStorageAvailable } from '@/src/lib/storage';
 import { rememberContact } from '@/src/lib/contacts';
+import { postStoreChanged } from '@/src/lib/crossTab';
 
 export type CachedContact = {
   nickname: string;
@@ -38,6 +39,7 @@ export function writeContactEntry(pubkeyHex: string, contact: CachedContact): vo
     if (existing && existing.updatedAt >= contact.updatedAt) return;
     cache[pubkeyHex] = contact;
     localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify(cache));
+    postStoreChanged('contacts');
     rememberContact(pubkeyHex, contact.updatedAt);
   } catch {
     // silent — storage may be full
@@ -135,6 +137,7 @@ export function writeContactEntryNeutralized(pubkeyHex: string, contact: CachedC
     if (lwwWon) {
       cache[key] = contact;
       localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify(cache));
+      postStoreChanged('contacts');
       // Deliberately NO rememberContact call here — the neutralized primitive.
     }
     const finalEntry = lwwWon ? contact : existing;

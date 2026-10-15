@@ -11,6 +11,7 @@ import type { RoledAttachments } from '@/src/lib/media/imageMessage';
 import * as walledGarden from '@/src/lib/walledGarden';
 import { clearDirectMessageContact } from '@/src/lib/unreadStore';
 import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
+import { postStoreChanged } from '@/src/lib/crossTab';
 
 /** MLS application-message kind discriminator for chat messages. */
 export const CHAT_MESSAGE_KIND = 9;
@@ -405,12 +406,14 @@ export function appendMessage(groupId: string, message: ChatMessage): Promise<bo
       const replaced = existing.slice();
       replaced[existingIndex] = message;
       await set(key, replaced);
+      postStoreChanged('chat', groupId);
       if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
         (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
       }
       return true;
     }
     await set(key, [...existing, message]);
+    postStoreChanged('chat', groupId);
     // Dev-only hook: notify E2E tests when a message is written to IDB.
     if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
       (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
@@ -575,6 +578,7 @@ export function updateMessageInPlace(
     const updatedRows = mergePatchCore(existing, id, patch);
     if (updatedRows === null) return;
     await set(key, updatedRows);
+    postStoreChanged('chat', groupId);
   });
   const settled = next.catch(() => {});
   appendQueues.set(key, settled);
@@ -678,6 +682,7 @@ export function tombstoneMessage(
     const updatedRows = mergePatchCore(existing, id, { tombstoned: true, rev });
     if (updatedRows === null) return false;
     await set(key, updatedRows);
+    postStoreChanged('chat', groupId);
     return true;
   });
   const settled = next.then(
@@ -723,6 +728,7 @@ export function removeMessages(groupId: string, ids: readonly string[]): Promise
     const filtered = existing.filter((m) => !dropSet.has(m.id));
     if (filtered.length === existing.length) return;
     await set(key, filtered);
+    postStoreChanged('chat', groupId);
   });
   const settled = next.catch(() => {});
   appendQueues.set(key, settled);
@@ -736,7 +742,11 @@ export function removeMessages(groupId: string, ids: readonly string[]): Promise
 export function clearMessages(groupId: string): Promise<void> {
   const key = storageKey(groupId);
   const prev = appendQueues.get(key) ?? Promise.resolve();
-  const next = prev.then(() => del(key));
+  const next = prev.then(async () => {
+    const existed = (await get(key)) !== undefined;
+    await del(key);
+    if (existed) postStoreChanged('chat', groupId);
+  });
   const settled = next.then(
     () => {},
     () => {},

@@ -1,0 +1,77 @@
+{
+  "bug_name": "cross-tab-change-notifications",
+  "bug_report_file": "bug-reports/cross-tab-change-notifications-report.md",
+  "created_at": "2026-10-15T17:57:16Z",
+  "updated_at": "2026-10-15T20:13:05Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does a two-page e2e (same browser context) show that blocking a contact in tab 1 makes tab 2 stop showing/admitting that contact without a reload — failing before the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "ARCHITECTURE",
+      "question": "Is there exactly one cross-tab channel module (crossTab.ts) with typed messages, an SSR-safe no-op shim, and no echo handling needed at the sender; are all writers listed in the report wired, posting only after a successful write?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Do unit tests with an injected fake BroadcastChannel cover each writer posting the right store event and each receiver bumping the right revision / calling the right reload?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "QUALITY",
+      "question": "Is the change notification-only (no MLS coordination, no new UI or stores), minimal, and free of listener leaks (channels closed on unmount)?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on crossTab.ts and the receiver wiring shows no real-gap survivors; full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "1006d817bc75a6d6b1e44429e33d874e1cce588d",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED (Codex one medium: open DM thread ignores chatVersion)",
+      "examiner": "VQ-2,3,4 YES; VQ-1,5 PARTIAL (self-reported); clearMessages posts without a row; channel opened by posts"
+    },
+    {
+      "round": 1,
+      "result": "polish applied: DM thread refresh, clearMessages post only on existing row, rememberContact no-op skip, reloadGroups sequence guard"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T17:57:16Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T19:12:23Z",
+      "trigger": "lead_polish_round"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T20:13:05Z",
+      "trigger": "polish_verified_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "full": "non-relay 72 + relay 349 passed / 0 failed / 19 skipped, no INVALID"
+  }
+}

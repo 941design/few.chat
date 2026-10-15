@@ -5,6 +5,7 @@ import { isAllowedDmSender } from '@/src/lib/walledGarden';
 import type { WhitelistArgs } from '@/src/lib/walledGarden';
 import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
 import { rememberKnownPeers } from '@/src/lib/knownPeers';
+import { postStoreChanged } from '@/src/lib/crossTab';
 
 export type StoredContact = {
   pubkeyHex: string;
@@ -73,13 +74,20 @@ export function readStoredContacts(): StoredContactMap {
   }
 }
 
-function writeStoredContacts(next: StoredContactMap): void {
-  if (!isStorageAvailable()) return;
+/**
+ * Persists the contacts map; true iff it landed. Other open tabs are told
+ * only after a successful write (cross-tab change notifications).
+ */
+function writeStoredContacts(next: StoredContactMap): boolean {
+  if (!isStorageAvailable()) return false;
   try {
     localStorage.setItem(STORAGE_KEYS.contacts, JSON.stringify(next));
   } catch {
     // silent — storage may be full
+    return false;
   }
+  postStoreChanged('contacts');
+  return true;
 }
 
 /**
@@ -103,19 +111,23 @@ export function rememberContact(
   // AC-STRUCT-2: silently no-op when the whitelist accessor rejects this peer.
   if (isAllowed !== undefined && !isAllowed(pubkeyHex)) return;
   const contacts = readStoredContacts();
-  const existing = contacts[pubkeyHex];
-  contacts[pubkeyHex] = existing
-    ? {
-        ...existing,
-        lastSeenAt: existing.lastSeenAt >= seenAt ? existing.lastSeenAt : seenAt,
-      }
-    : {
-        pubkeyHex,
-        firstSeenAt: seenAt,
-        lastSeenAt: seenAt,
-        archivedAt: null,
-      };
+  const next = seenContact(contacts[pubkeyHex], pubkeyHex, seenAt);
+  if (!next) return;
+  contacts[pubkeyHex] = next;
   writeStoredContacts(contacts);
+}
+
+/**
+ * The stored contact after a sighting at `seenAt`, or null when the sighting
+ * changes nothing (an existing contact already seen at or after `seenAt`) —
+ * callers skip the write, so other tabs are not told about a non-change.
+ */
+function seenContact(existing: StoredContact | undefined, pubkeyHex: string, seenAt: string): StoredContact | null {
+  if (!existing) {
+    return { pubkeyHex, firstSeenAt: seenAt, lastSeenAt: seenAt, archivedAt: null };
+  }
+  if (existing.lastSeenAt >= seenAt) return null;
+  return { ...existing, lastSeenAt: seenAt };
 }
 
 /**
@@ -268,14 +280,26 @@ export function isPendingConfirmation(pubkeyHex: string, contacts?: StoredContac
   );
 }
 
+/**
+ * Remembers every other member of `groups` in ONE write (one cross-tab
+ * notification per call rather than one per member); no write at all when no
+ * member's record changes.
+ */
 export function rememberContactsFromGroups(groups: Group[], ownPubkeyHex: string | null | undefined): void {
   const seenAt = new Date().toISOString();
+  const contacts = readStoredContacts();
+  let changed = false;
   for (const group of groups) {
     for (const memberPubkey of group.memberPubkeys) {
+      if (!memberPubkey) continue;
       if (ownPubkeyHex && memberPubkey.toLowerCase() === ownPubkeyHex.toLowerCase()) continue;
-      rememberContact(memberPubkey, seenAt);
+      const next = seenContact(contacts[memberPubkey], memberPubkey, seenAt);
+      if (!next) continue;
+      contacts[memberPubkey] = next;
+      changed = true;
     }
   }
+  if (changed) writeStoredContacts(contacts);
 }
 
 export function archiveContact(pubkeyHex: string, archivedAt: string = new Date().toISOString()): void {
@@ -287,7 +311,7 @@ export function archiveContact(pubkeyHex: string, archivedAt: string = new Date(
     ...existing,
     archivedAt,
   };
-  writeStoredContacts(contacts);
+  if (writeStoredContacts(contacts)) postStoreChanged('blocked');
 }
 
 export function unarchiveContact(pubkeyHex: string): void {
@@ -299,7 +323,7 @@ export function unarchiveContact(pubkeyHex: string): void {
     ...existing,
     archivedAt: null,
   };
-  writeStoredContacts(contacts);
+  if (writeStoredContacts(contacts)) postStoreChanged('blocked');
 }
 
 export function listContacts(
@@ -632,6 +656,7 @@ export function purgeStrangerContacts(
       }
       if (changed) {
         localStorage.setItem(STORAGE_KEYS.contacts, JSON.stringify(parsed));
+        postStoreChanged('contacts');
       }
     }
   } catch {
@@ -653,6 +678,7 @@ export function purgeStrangerContacts(
       }
       if (changed) {
         localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify(parsed));
+        postStoreChanged('contacts');
       }
     }
   } catch {

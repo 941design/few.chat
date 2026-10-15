@@ -4,6 +4,8 @@ import type { EventSigner } from 'applesauce-core';
 import type { MemberProfile } from '@/src/types';
 import ChatBox from '@/src/components/chat/ChatBox';
 import { useMarmot } from '@/src/context/MarmotContext';
+import { reconcileMessagesWithStorage } from '@/src/context/ChatStoreContext';
+import { subscribeStoreChangedFor } from '@/src/lib/crossTab';
 import { isAllowedDmSenderComposite, isBlockedPeer, loadBlockedPeers } from '@/src/lib/blockedPeers';
 import { loadKnownPeers } from '@/src/lib/knownPeers';
 import { createLogger } from '@/src/lib/logger';
@@ -364,6 +366,31 @@ export default function ContactChat({
     knownMessageIdsRef.current.add(msg.id);
     return resolveFreshOriginal(msg);
   }, [peerPubkeyHex, privateKeyHex, pubkeyHex, threadId, resolveFreshOriginal]);
+
+  // Cross-tab change notifications (multi-tab design S0): another open tab
+  // wrote to THIS thread (a message sent or received there, an edit, a
+  // delete). Re-read storage and reconcile through the same merge the group
+  // chat uses — storage truth replaces rendered rows, new rows are added,
+  // tombstoned rows drop out, and a pending optimistic send (not yet in
+  // storage) survives.
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = subscribeStoreChangedFor('chat', threadId, () => {
+      loadMessages(threadId)
+        .then(({ messages: stored }) => {
+          if (cancelled) return;
+          for (const msg of stored) knownMessageIdsRef.current.add(msg.id);
+          setMessages((prev) => reconcileMessagesWithStorage(prev, stored));
+        })
+        .catch(() => {
+          // Best-effort refresh — a read failure leaves the view as it is.
+        });
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [threadId]);
 
   useEffect(() => {
     let cancelled = false;

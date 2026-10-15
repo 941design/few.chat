@@ -1,0 +1,121 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "Revision counters / group list / chat & poll versions are per-tab React state over shared origin storage; no cross-tab signal existed, so a write in tab A (e.g. archiveContact) was invisible to tab B until reload.",
+  "fix": "S0: app/src/lib/crossTab.ts — single BroadcastChannel('few-tabs'), typed {type:'store-changed',store,id?} (stores blocked|known|contacts|groups|chat|polls), parse/validate on receipt, post+listen on one channel object (no echo), SSR/Node no-op shim, postStoreChanged never throws, channel closed with the last listener, factory test seam. Writers post only after a successful write: contacts.ts (writeStoredContacts->contacts; archive/unarchive->blocked; purge->contacts), contactCache.ts->contacts, knownPeers.ts writeRaw->known, groupStorage saveGroup/deleteGroup/clearAllGroupMeta->groups(id), chatPersistence append/update/tombstone/remove/clear->chat(groupId) only when a row changed, pollPersistence savePoll/saveVoteIfNewer(wrote)->polls(groupId). Receiver: crossTabReceiver.applyStoreChanged (pure) wired by one MarmotContext effect to setBlockedPeersRevision/setKnownPeersRevision/setContactsRevision/reloadGroups()+setGroupDataVersion/setChatVersion/setPollVersion; actions never write.",
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/contactCache.ts",
+    "app/src/lib/contacts.ts",
+    "app/src/lib/knownPeers.ts",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/groups.md",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/tests/unit/inviteExpiries-groupScope.test.ts"
+  ],
+  "files_created": [
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/tests/e2e/dm-block-cross-tab.spec.ts",
+    "app/tests/unit/crossTab-writers.test.ts",
+    "app/tests/unit/crossTab.test.ts",
+    "bug-reports/cross-tab-change-notifications-contract.json",
+    "bug-reports/cross-tab-change-notifications-result.json"
+  ],
+  "files_changed": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/contactCache.ts",
+    "app/src/lib/contacts.ts",
+    "app/src/lib/knownPeers.ts",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/groups.md",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/tests/e2e/dm-block-cross-tab.spec.ts",
+    "app/tests/unit/crossTab-writers.test.ts",
+    "app/tests/unit/crossTab.test.ts",
+    "bug-reports/cross-tab-change-notifications-contract.json",
+    "bug-reports/cross-tab-change-notifications-result.json",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/tests/unit/inviteExpiries-groupScope.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/contactCache.ts",
+    "app/src/lib/contacts.ts",
+    "app/src/lib/knownPeers.ts",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/components/contacts/ContactChat.tsx"
+  ],
+  "tests_added": [
+    "tests/unit/crossTab.test.ts (40: parse, post, default factory browser/SSR, subscribe/unsubscribe/close, receiver mapping table, MarmotContext wiring source scan)",
+    "tests/unit/crossTab-writers.test.ts (42: every writer posts the right store after success; injected setItem throw / IDB set-del-clear rejection posts nothing; throwing post never fails the write; no-op writes post nothing)",
+    "tests/e2e/dm-block-cross-tab.spec.ts (3: same-context two pages; block in tab 1 closes tab 2's open thread + hides contact without reload; unblock restores) — failed before the fix at the chat-input assertion"
+  ],
+  "test_counts": {
+    "unit_before": 5261,
+    "unit_after": 5352,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch /tmp/claude-501/mutation/crosstab/",
+    "crossTab.ts": "before 56 killed/15 survived/3 no-cov (75.7%) -> after 68/6/0 (91.9%)",
+    "crossTabReceiver.ts": "13/0/0 (100%) both runs",
+    "real_gaps_closed": [
+      "default factory (browser path, window-absent with BroadcastChannel present) untested",
+      "'message' event type not asserted by the fake",
+      "no-channel post logged a spurious warning unasserted"
+    ],
+    "remaining": "6 equivalent/side-effect-only (log strings, guards subsumed by catch/later checks); recorded via mutation-audits add-audit (slug quizzl)"
+  },
+  "e2e": {
+    "targeted": "dm-block-cross-tab + dm-block-contact + groups-polls + groups-lifecycle + groups-message-edit-delete: 54 passed, 2 skipped (wiped relay, under lock)",
+    "full_gate": "make test-e2e-all on wiped relay under lock: non-relay 72 passed; relay 348 passed, 19 skipped; exit 0",
+    "remediation_1": "wiped relay, under lock: dm-block-cross-tab, dm-block-contact, dm-message-edit-delete, groups-direct-chat-no-duplicates, groups-lifecycle, groups-contacts — 25 passed, 0 failed. Full gate not re-run this round (last full gate before round 1: 72 + 348 passed)."
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. dm-block-cross-tab.spec.ts opens two pages in Alice's one context; blocking in page 1 makes page 2 leave Bob's open thread (composer gone, redirected to list, Bob hidden) with zero page loads; unblock restores Bob. Failed before the fix (chat-input still 1 after 15s), passes after.",
+    "VQ-2": "Yes. Exactly one channel module (crossTab.ts), typed StoreChangedMessage, SSR/Node no-op shim, no echo handling needed (post and listen share one BroadcastChannel). All report-listed writers wired, posting only after a successful write. Note: blockedPeers.ts and blockContactAction.ts perform no storage write themselves — the block write is contacts.ts archive/unarchiveContact, which posts 'blocked'. Reactions not wired: its store reads from an in-memory cache, so a bump alone would not refresh another tab (no working reload hook) — left as a non-goal.",
+    "VQ-3": "Yes. Fake injected channel; crossTab-writers.test.ts covers each writer's store/id and failure injection at every touched storage step; crossTab.test.ts covers applyStoreChanged per store (exact action set) and a source scan pins MarmotContext's action->setter wiring.",
+    "VQ-4": "Yes. Notification-only, no MLS coordination, no new UI/strings/stores. One MarmotContext effect returns the unsubscribe; channel closed when last listener leaves (tested).",
+    "VQ-5": "Unit 5343 passed + tsc clean; Stryker concurrency 1: crossTab.ts 91.9%, receiver 100%, 3 real gaps closed, remaining equivalent/side-effect-only; full e2e gate green (72 + 348 passed, 0 failed). Round 1: unit 5352, tsc clean, targeted e2e 25/25; full gate not re-run after round 1."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The report names blockedPeers.ts / blockContactAction.ts as writers, but neither writes storage (the block lives in contacts.ts archivedAt); and 'reaction stores' looked wireable but the reactions module serves reads from an authoritative in-memory cache, so cross-tab support needs cache invalidation, not a counter bump.",
+    "surprised_by": "Reactions cache makes a cross-tab bump a no-op; left unwired rather than invalidating a cache whose authority guards a known badge-revival race.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "items": {
+      "1_dm_thread_cross_tab": "crossTab.subscribeStoreChangedFor(store,id,cb); ContactChat subscribes for ('chat', threadId) and re-reads storage through ChatStoreContext.reconcileMessagesWithStorage (storage row wins, new rows added, tombstones filtered, pending optimistic sends kept). Unsubscribes + cancels on unmount/thread change.",
+      "2_clearMessages": "posts chat only when the thread key existed before the delete.",
+      "3_rememberContact": "skips write+post when a sighting changes nothing (seenContact helper); rememberContactsFromGroups now does one batched write (one post per call, none when unchanged) instead of one write per member.",
+      "4_reloadGroups": "sequence guard (reloadGroupsSeqRef + isLatestReload): a superseded reload returns before setGroups/scopeInviteExpiriesToGroups."
+    },
+    "tests": [
+      "e2e dm-block-cross-tab: new test — tab 3 with its relay WebSocket replaced by a silent mock (routeWebSocket) shows a DM sent in tab 1 without reload; failed before the fix, passes after",
+      "unit: subscribeStoreChangedFor filter, isLatestReload table, reloadGroups guard source-scan, rememberContact no-change/no-post, rememberContactsFromGroups single post + field preservation, clearMessages empty-thread no-post",
+      "inviteExpiries-groupScope.test.ts source regex relaxed to allow the guard line between load and setGroups"
+    ],
+    "mutation": "crossTab.ts 77 killed/6 survived (92.8%; one new real gap in subscribeStoreChangedFor closed), crossTabReceiver.ts 17/0 (100%); audits re-recorded",
+    "e2e": "wiped relay, under lock: dm-block-cross-tab, dm-block-contact, dm-message-edit-delete, groups-direct-chat-no-duplicates, groups-lifecycle, groups-contacts — 25 passed, 0 failed. Full gate not re-run this round (last full gate before round 1: 72 + 348 passed).",
+    "unit": "5352 passed, 1 skipped; tsc clean",
+    "docs": "contacts-and-direct-messages.md: edge case for a conversation open in several tabs"
+  }
+}
