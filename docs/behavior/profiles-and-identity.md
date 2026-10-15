@@ -168,9 +168,14 @@ despite their permanence in the ever-known set (§5.2).
 until you have a name to share. (Inside a group it still publishes whatever profile you
 currently have.)
 
-**A malformed or unsafe avatar reference on the 1:1 channel.** Rejected rather than stored.
-Profiles received *inside a group* are not screened this way — an unsafe avatar reference in
-a group profile is accepted as-is (a known gap, see Sources).
+**A malformed or unsafe avatar reference.** Both channels apply the same rule: an avatar
+reference is accepted only if it is a secure (`https://`) or scheme-relative (`//`) web
+address of bounded length with no whitespace; anything else — an insecure address, an
+embedded or script reference, an oversized value — is rejected on receipt. (An avatar
+reference stored before this check existed stays until that member sends a newer profile.)
+On the 1:1 channel the whole profile message
+carrying it is rejected; *inside a group* only the avatar is dropped and the rest of the
+profile (the name) is still accepted, so the member shows by name without a picture.
 
 **Someone you share several groups with edits their profile.** The update lands in **every**
 group you share with them, not just one.

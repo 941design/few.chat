@@ -30,6 +30,23 @@ export type StructuredContent =
   | { type: 'invite_lifecycle'; event: 'invited' | 'accepted' | 'declined'; pubkey: string }
   | null;
 
+/**
+ * Canonical subject-pubkey guard for every announcement whose payload names a
+ * subject member that the renderer resolves via pubkeyToNpub →
+ * nip19.npubEncode. That encoder THROWS on malformed hex, so a crafted group
+ * message like {"type":"leave_intent","pubkey":"x"} would otherwise break the
+ * chat timeline for every receiver. Rejecting non-canonical pubkeys here makes
+ * such content fall through to harmless plain-text rendering. Every producer
+ * emits a canonical 64-char lowercase-hex pubkey (leaveGroupImpl's
+ * selfPubkeyHex, cancelInvitationImpl's roster pubkey, the admission paths'
+ * request.pubkeyHex), so this never rejects a legitimate announcement.
+ * The `typeof` check matters: RegExp#test coerces its argument, so a
+ * one-element array `["<64 hex>"]` would otherwise pass.
+ */
+function isCanonicalPubkey(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
 export function parseStructured(content: string): StructuredContent {
   try {
     const parsed = JSON.parse(content);
@@ -38,10 +55,10 @@ export function parseStructured(content: string): StructuredContent {
     if (parsed?.type === 'image' && parsed.version !== undefined) {
       return { type: 'image', version: 1, caption: typeof parsed.caption === 'string' ? parsed.caption : '' };
     }
-    if (parsed?.type === 'invite_cancelled' && typeof parsed.pubkey === 'string' && typeof parsed.by === 'string') {
+    if (parsed?.type === 'invite_cancelled' && isCanonicalPubkey(parsed.pubkey) && typeof parsed.by === 'string') {
       return { type: 'invite_cancelled', pubkey: parsed.pubkey, by: parsed.by };
     }
-    if (parsed?.type === 'leave_intent' && typeof parsed.pubkey === 'string') {
+    if (parsed?.type === 'leave_intent' && isCanonicalPubkey(parsed.pubkey)) {
       // The leaver embeds their own display name so the announcement shows a
       // name (not an npub) even when the viewer never received the leaver's
       // MemberProfile. Self-reported, but it is the sender's OWN name over the
@@ -63,24 +80,13 @@ export function parseStructured(content: string): StructuredContent {
     ) {
       return { type: 'call_notice', event: parsed.event, callId: parsed.callId, initiator: parsed.initiator };
     }
-    // Require a canonical 64-char lowercase-hex pubkey, not merely a string.
-    // The render branch feeds `pubkey` to pubkeyToNpub → nip19.npubEncode,
-    // which THROWS on malformed hex — so a crafted group message like
-    // {"type":"member_admitted","pubkey":"x"} would otherwise break the chat
-    // timeline for every receiver. Rejecting non-canonical pubkeys here makes
-    // such content fall through to harmless plain-text rendering. The app only
-    // ever emits `request.pubkeyHex` (always canonical), so this never rejects
-    // a legitimate announcement. NOTE: the leave_intent / invite_cancelled
-    // siblings share the looser `typeof === 'string'` guard and the same
-    // latent throw — a pre-existing gap left untouched here to keep this epic
-    // scoped; hardening them uniformly is a separate follow-up.
-    if (parsed?.type === 'member_admitted' && /^[0-9a-f]{64}$/.test(parsed.pubkey)) {
+    if (parsed?.type === 'member_admitted' && isCanonicalPubkey(parsed.pubkey)) {
       return { type: 'member_admitted', pubkey: parsed.pubkey };
     }
     if (
       parsed?.type === 'invite_lifecycle' &&
       (parsed.event === 'invited' || parsed.event === 'accepted' || parsed.event === 'declined') &&
-      /^[0-9a-f]{64}$/.test(parsed.pubkey)
+      isCanonicalPubkey(parsed.pubkey)
     ) {
       return { type: 'invite_lifecycle', event: parsed.event, pubkey: parsed.pubkey };
     }

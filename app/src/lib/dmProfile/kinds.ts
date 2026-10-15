@@ -190,16 +190,17 @@ const NICKNAME_MAX_BYTES = 32;
  * string a gate-passing peer could otherwise get persisted into
  * `contactCache.ts`.
  */
-const AVATAR_IMAGE_URL_MAX_LENGTH = 512;
+export const AVATAR_IMAGE_URL_MAX_LENGTH = 512;
 
 /**
  * `avatar.imageUrl` scheme allow-list (gate-remediation, sev 3).
  *
  * Decision: ADD a scheme guard here, rather than delegating to the render
- * path. Checked the existing untrusted-wire precedent first — the MLS group
- * profile-sync mechanism (`marmot/profileSync.ts#payloadToMemberProfile`)
- * accepts `payload.avatar.imageUrl` from the wire with NO scheme validation
- * at all, and the render path (`ProfileSummary.tsx`: `<img
+ * path. At the time, the MLS group profile-sync mechanism
+ * (`marmot/profileSync.ts#payloadToMemberProfile`) accepted
+ * `payload.avatar.imageUrl` from the wire with NO scheme validation; it now
+ * shares this module's `avatarImageUrlProblem` predicate (bug
+ * untrusted-group-input-hardening). The render path (`ProfileSummary.tsx`: `<img
  * src={profile.avatar.imageUrl}>`, `AvatarBrowserModal.tsx`) does no
  * sanitization either — there is no existing sanitizing chokepoint to
  * delegate to. Rather than repeat that gap in a brand-new codec module,
@@ -211,6 +212,28 @@ const AVATAR_IMAGE_URL_MAX_LENGTH = 512;
  * `contactCache.ts` or an `<img src>`.
  */
 const AVATAR_IMAGE_URL_SCHEME_RE = /^(?:https:\/\/|\/\/)\S+$/;
+
+/** Why an untrusted `avatar.imageUrl` value is rejected, or `null` if allowed. */
+export type AvatarImageUrlProblem = 'invalid' | 'too-long' | 'invalid-scheme';
+
+/**
+ * The single avatar-URL rule set for every untrusted profile path — the 1:1
+ * profile-announce codec below AND the MLS group profile sync
+ * (`marmot/profileSync.ts#payloadToMemberProfile`). Checks, in order: a
+ * non-empty string, at most `AVATAR_IMAGE_URL_MAX_LENGTH` characters, and the
+ * `https://` / `//` scheme allow-list with no whitespace.
+ */
+export function avatarImageUrlProblem(value: unknown): AvatarImageUrlProblem | null {
+  if (typeof value !== 'string' || value.length === 0) return 'invalid';
+  if (value.length > AVATAR_IMAGE_URL_MAX_LENGTH) return 'too-long';
+  if (!AVATAR_IMAGE_URL_SCHEME_RE.test(value)) return 'invalid-scheme';
+  return null;
+}
+
+/** Boolean form of `avatarImageUrlProblem`. */
+export function isAllowedAvatarImageUrl(value: unknown): value is string {
+  return avatarImageUrlProblem(value) === null;
+}
 
 // ── profile-request wire shape (AC-STRUCT-1 seam contract) ─────────────────
 
@@ -325,19 +348,21 @@ export function encodeProfileAnnounce(input: {
     throw new Error('dmProfile/kinds: encodeProfileAnnounce refuses to serialize a null/absent avatar');
   }
   const imageUrl = (input.avatar as { imageUrl?: unknown }).imageUrl;
-  if (typeof imageUrl !== 'string' || imageUrl.length === 0) {
+  const problem = avatarImageUrlProblem(imageUrl);
+  if (problem === 'invalid') {
     throw new Error('dmProfile/kinds: encodeProfileAnnounce refuses to serialize an avatar with a missing imageUrl');
   }
-  if (imageUrl.length > AVATAR_IMAGE_URL_MAX_LENGTH) {
+  if (problem === 'too-long') {
     throw new Error(`dmProfile/kinds: encodeProfileAnnounce avatar.imageUrl exceeds ${AVATAR_IMAGE_URL_MAX_LENGTH} characters`);
   }
-  if (!AVATAR_IMAGE_URL_SCHEME_RE.test(imageUrl)) {
+  if (problem === 'invalid-scheme') {
     throw new Error('dmProfile/kinds: encodeProfileAnnounce refuses an avatar.imageUrl outside the https:// / // scheme allow-list');
   }
   const payload: ProfileAnnouncePayload = {
     type: 'profile-announce',
     nickname: input.nickname,
-    avatar: { imageUrl },
+    // avatarImageUrlProblem returned null, so imageUrl is a non-empty string.
+    avatar: { imageUrl: imageUrl as string },
     updatedAt: new Date().toISOString(),
   };
   return JSON.stringify(payload);
@@ -399,19 +424,15 @@ export function parseProfileAnnounce(content: string): ParseResult<ProfileAnnoun
     return { ok: false, reason: 'avatar-missing' };
   }
   const imageUrl = (obj.avatar as Record<string, unknown>).imageUrl;
-  if (typeof imageUrl !== 'string' || imageUrl.length === 0) {
-    return { ok: false, reason: 'avatar-imageUrl-invalid' };
-  }
-  if (imageUrl.length > AVATAR_IMAGE_URL_MAX_LENGTH) {
-    return { ok: false, reason: 'avatar-imageUrl-too-long' };
-  }
-  if (!AVATAR_IMAGE_URL_SCHEME_RE.test(imageUrl)) {
-    return { ok: false, reason: 'avatar-imageUrl-invalid-scheme' };
+  const problem = avatarImageUrlProblem(imageUrl);
+  if (problem !== null) {
+    return { ok: false, reason: `avatar-imageUrl-${problem}` };
   }
   const value: ProfileAnnouncePayload = {
     type: 'profile-announce',
     nickname: obj.nickname,
-    avatar: { imageUrl },
+    // avatarImageUrlProblem returned null, so imageUrl is a non-empty string.
+    avatar: { imageUrl: imageUrl as string },
     updatedAt: obj.updatedAt,
   };
   return { ok: true, value };

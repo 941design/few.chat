@@ -487,6 +487,11 @@ reappears to the admin.
 **Identity comparisons** throughout (who is an admin, who may be cancelled, who is
 blocked from leaving) are case-insensitive, so letter-casing never changes the outcome.
 
+**A system announcement naming a member by a malformed identity.** A "left", "invitation
+cancelled", "invited/joined/declined" or "admitted" notice whose named member is not a
+well-formed identity is not treated as an announcement at all — it shows as an ordinary
+text message, and the conversation keeps rendering for everyone.
+
 ---
 
 ## 12. Deliberately out of scope

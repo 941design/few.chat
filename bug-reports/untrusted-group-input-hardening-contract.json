@@ -1,0 +1,30 @@
+{
+  "bug_name": "untrusted-group-input-hardening",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/parseStructured.ts",
+      "app/src/lib/marmot/profileSync.ts",
+      "app/src/lib/dmProfile/kinds.ts",
+      "app/tests/unit/**"
+    ],
+    "must_not_edit": [
+      "app/src/lib/marmot/welcomeSubscription.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/src/lib/marmot/groupStorage.ts",
+      "app/src/lib/marmot/pendingInvitations.ts",
+      "BACKLOG.json"
+    ]
+  },
+  "behaviour": [
+    "C1: parseStructured returns null for invite_cancelled / leave_intent whose subject `pubkey` is not canonical 64-char lowercase hex (same guard as member_admitted / invite_lifecycle); such content falls through to plain-text rendering and never reaches pubkeyToNpub.",
+    "C2: well-formed announcements (canonical subject pubkey) parse exactly as before.",
+    "C3: the avatar imageUrl rules (non-empty string, <= 512 chars, scheme allow-list https:// or //, no whitespace) are a single exported predicate in dmProfile/kinds.ts used by BOTH the 1:1 codec (encode + parse, behaviour unchanged) and marmot/profileSync.ts#payloadToMemberProfile.",
+    "C4: payloadToMemberProfile drops (avatar: null) an avatar whose imageUrl -- direct or reconstructed from a legacy id -- fails the predicate, while keeping nickname/updatedAt/signedEvent/pubkey unchanged.",
+    "C5: no new authentication scheme, no change to anything published; leave_intent subject==sender binding only if every producer announces its own leave."
+  ],
+  "non_goals": [
+    "Actor fields that are never rendered (invite_cancelled.by, poll_open.creatorPubkey, call_notice.initiator) -- renderers attribute from the protocol-authenticated sender.",
+    "Announcement spoofability beyond the leave_intent binding (accepted by owner 2026-07-19)."
+  ]
+}

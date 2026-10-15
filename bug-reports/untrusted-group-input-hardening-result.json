@@ -1,0 +1,93 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": "(1) parseStructured accepted any string as the subject pubkey of leave_intent / invite_cancelled (typeof === 'string'); ChatBox feeds the subject to pubkeyToNpub -> nip19.npubEncode, which throws on non-hex, so one crafted member message broke the timeline render for every receiver. The existing member_admitted / invite_lifecycle regex guard also had a latent hole: RegExp#test coerces its argument, so a one-element array [\"<64 hex>\"] passed. (2) profileSync.payloadToMemberProfile stored any avatar.imageUrl (javascript:, data:, http: trackers, unbounded length) while the 1:1 dmProfile codec enforced https:// or // and a 512-char cap.",
+  "fix": "parseStructured.ts: one isCanonicalPubkey guard (typeof string AND /^[0-9a-f]{64}$/) applied to every subject-carrying announcement (leave_intent, invite_cancelled, member_admitted, invite_lifecycle). dmProfile/kinds.ts: extracted the avatar URL rules into exported avatarImageUrlProblem()/isAllowedAvatarImageUrl() + exported AVATAR_IMAGE_URL_MAX_LENGTH; the 1:1 encoder and parser now use it with identical reasons/throw messages (1:1 behaviour unchanged). profileSync.ts: payloadToMemberProfile keeps the avatar only if the (direct or legacy-id-reconstructed) imageUrl passes isAllowedAvatarImageUrl; otherwise avatar=null and nickname/updatedAt/signedEvent/pubkey are kept. Actor-only fields that are never rendered (invite_cancelled.by, poll_open.creatorPubkey, call_notice.initiator) deliberately left as-is: renderers attribute from the protocol-authenticated sender.",
+  "files_modified": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/src/lib/dmProfile/kinds.ts",
+    "app/src/lib/marmot/profileSync.ts",
+    "app/tests/unit/marmot/parseStructured.test.ts",
+    "app/tests/unit/marmot/parseStructured.contract.test.ts",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/groups.md"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/untrustedGroupInput.test.ts",
+    "bug-reports/untrusted-group-input-hardening-contract.json",
+    "bug-reports/untrusted-group-input-hardening-result.json"
+  ],
+  "files_changed": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/src/lib/dmProfile/kinds.ts",
+    "app/src/lib/marmot/profileSync.ts",
+    "app/tests/unit/marmot/parseStructured.test.ts",
+    "app/tests/unit/marmot/parseStructured.contract.test.ts",
+    "app/tests/unit/marmot/untrustedGroupInput.test.ts",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/groups.md"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/src/lib/dmProfile/kinds.ts",
+    "app/src/lib/marmot/profileSync.ts"
+  ],
+  "tests_added": {
+    "file": "app/tests/unit/marmot/untrustedGroupInput.test.ts",
+    "count": 123,
+    "kinds": "parameterized malformed-subject rejection for all 6 subject-carrying announcement shapes; seeded-PRNG property tests (no fast-check in repo): 'parses iff subject matches /^[0-9a-f]{64}$/ and a parsed subject always npub-encodes', 'group sync keeps the avatar iff the shared 1:1 predicate accepts the URL (nickname always kept)'; avatar drop cases (javascript:, data:, http:, ftp:, relative, whitespace, oversize, non-string, invalid legacy id); predicate boundary at 512.",
+    "pre_fix_failures": 41,
+    "existing_fixtures_updated": "parseStructured(.contract).test.ts used non-canonical fixture pubkeys ('aabb', 'abcd1234') for invite_cancelled/leave_intent happy paths; switched to canonical 64-hex (the contract test's drop-one-field cases were otherwise vacuously null)."
+  },
+  "baseline": {
+    "test_files": 230,
+    "passed": 4725,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "final": {
+    "test_files": 232,
+    "passed": 4865,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean",
+    "note": "includes 1 file / ~17 tests from the parallel invite-accept bug run (inviteAcceptIdempotentJoin.test.ts)"
+  },
+  "mutation": {
+    "tool": "stryker (concurrency 1, scratch config /tmp/claude-501/mutation/stryker.untrusted.mjs, reports in /tmp/claude-501/mutation/reports)",
+    "scope": "parseStructured.ts (module), kinds.ts:193-236 (avatar predicate), profileSync.ts:183-207 (payloadToMemberProfile)",
+    "before": "93.84% (198 killed / 13 survived of 211) with pre-existing tests only",
+    "after": "95.73% (202 killed / 9 survived of 211)",
+    "real_gaps_closed": 4,
+    "real_gaps_detail": "kinds length boundary (> vs >=), isAllowedAvatarImageUrl -> true, isCanonicalPubkey typeof guard (array coercion), profileSync if(true) avatar keep",
+    "remaining_survivors": "9 x OptionalChaining parsed?.type -> parsed.type in parseStructured: equivalent (JSON 'null' makes parsed.type throw, swallowed by the same catch -> null).",
+    "recorded": "base mutation-audits (consumer quizzl): parseStructured.ts module 0.95; kinds.ts changed_lines 193-236 1.00; profileSync.ts changed_lines 183-207 1.00",
+    "new_product_bugs_from_survivors": "none beyond the array-coercion hole, fixed in scope via the shared guard"
+  },
+  "leave_binding_decision": "No change needed. Single producer of leave_intent: leaveGroupImpl.ts:139-140 emits {type:'leave_intent', pubkey: selfPubkeyHex} (always own leave). The subject === authenticated-sender binding ALREADY exists at chatHandler.ts gateAnnouncement case 'leave_intent' (S3 Fable Stage-2 fold-in) with tests at chatHandler.test.ts:593/606 (accept same / reject forged). The parse-level canonical guard now runs before it.",
+  "e2e": {
+    "command": "flock /tmp/claude-501/e2e.lock ... down -v && up -d --wait && run-e2e.mjs groups-leave-intent groups-cancel-pending groups-invite-lifecycle-announcements groups-member-admitted-announcement groups-announcement-roster-gate groups-rename groups-member-profiles groups-profile-update-propagation groups-profile-forwarded-attribution groups-profile-reactive dm-profile-push-triggers dm-profile-self-heal",
+    "result": "exit 1. Run log became unreadable (host EIO on /tmp/claude-501 and /bin/sh after the run) so per-spec counts could not be extracted. app/test-results holds exactly one failure: groups-leave-intent 'Leave-chat announcement names the departed member in USER_A chat (AC-MEMBERS-2)'. The page snapshot shows the leave announcement DID parse and render as a structured row ('left the group') - i.e. not a parseStructured rejection - but without Bob's name, while Alice's own name rendered. That matches the known bootUser seed race (memory e2e_profile_seed_clearstate_race: if(!...)-guarded profile initScript + clearAppState+reload persists a blank nickname ~1/3), which this spec's bootUser uses verbatim, so the leaver sent no name. Assessed as pre-existing flake, not caused by this change; NOT re-run (no shell available).",
+    "status": "unverified - rerun required"
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. untrustedGroupInput.test.ts: 41 tests failed pre-fix (malformed subjects for leave_intent/invite_cancelled; array-subject for member_admitted/invite_lifecycle; avatar cases), all pass post-fix. Property test asserts parse iff canonical and that every parsed subject npub-encodes without throwing, for all 6 subject-carrying shapes.",
+    "VQ-2": "Yes for the rules: one shared predicate (avatarImageUrlProblem/isAllowedAvatarImageUrl in dmProfile/kinds.ts) used by 1:1 encode, 1:1 parse and group payloadToMemberProfile. Rejected group avatar -> avatar null, nickname kept (tests + property). NB: the 1:1 codec rejects the WHOLE announce on a bad avatar; the group path drops only the avatar, as the lead specified. Behaviour docs state both.",
+    "VQ-3": "Yes. Producers enumerated (only leaveGroupImpl, own pubkey); binding already present and tested in chatHandler gateAnnouncement; no new code, documented above.",
+    "VQ-4": "Yes. No auth scheme added, no publish-side change, validator extracted not duplicated (kinds.ts encode/parse now call it), 3 small source edits.",
+    "VQ-5": "Unit 232 files / 4865 passed / 1 skipped, tsc clean. Mutation 93.84% -> 95.73%; only equivalent survivors remain.",
+    "VQ-6": "NOT confirmed. Run exited 1 with one failure (groups-leave-intent AC-MEMBERS-2 leaver-name) attributed to the known profile-seed race; log unreadable due to host I/O fault. Needs a re-run of the listed specs on a wiped relay."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "meta",
+    "harder_than_needed": "Mid-run the host started returning EIO for /tmp/claude-501 (task output, e2e log) and even /bin/sh, killing Bash and serena shell, so the e2e log could not be read, VQ-6 not re-run, validate-result.sh not executed and the meta-retro append script not callable. Separately, Stryker's initial dry run failed on the parallel bug run's intentionally-red repro test (sandbox copies the whole working tree), requiring an ignorePatterns workaround.",
+    "surprised_by": "The leave_intent sender binding the brief asked to evaluate already existed. The existing member_admitted canonical guard was bypassable with a one-element array due to RegExp#test coercion.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  }
+}

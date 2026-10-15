@@ -1,0 +1,78 @@
+{
+  "bug_name": "untrusted-group-input-hardening",
+  "bug_report_file": "bug-reports/untrusted-group-input-hardening-report.md",
+  "created_at": "2026-10-15T06:49:23Z",
+  "updated_at": "2026-10-15T08:18:23Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Do unit tests show that a leave_intent/invite_cancelled (and every other subject-carrying announcement) with a non-64-hex pubkey is rejected at parse time and can no longer reach a render path that throws — failing before the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "SECURITY",
+      "question": "Does group profile sync now apply exactly the 1:1 avatar rules (shared validator: scheme allow-list, length cap), with a rejected avatar dropped but the rest of the profile (name) still accepted, mirroring the 1:1 behaviour?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SPEC",
+      "question": "Was the leave_intent sender-binding decision made on evidence (all producers enumerated), and is the decision documented (implemented with tests, or explicitly left with reason)?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "QUALITY",
+      "question": "No new authentication scheme, no change to what is published, validator shared not duplicated, change minimal?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Full unit suite + tsc green; mutation audit of parseStructured.ts and the profileSync avatar path shows no real-gap survivors in the touched code?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Relevant e2e specs (announcements, leave, profile sync) pass on a wiped relay?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "0797fd3bf14c9f74a190f83ae0bf8ec9f7df31f2",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED",
+      "codex_adversarial": "approve",
+      "examiner": "VQ-1..4 YES; VQ-5 PARTIAL (mutation reports lost in /tmp on VM restart; equivalence of 9 survivors verified); doc wording corrected by lead"
+    }
+  ],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T06:49:23Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T08:18:23Z",
+      "trigger": "fast_path_pass"
+    }
+  ],
+  "e2e_gate": {
+    "run": "verify-1 2026-10-15",
+    "result": "72 passed / 1 failed",
+    "failed": [
+      "groups-leave-intent:198 AC-MEMBERS-2 blank name — pre-existing profile-propagation flake (failed before this change in full runs 3 and 6), tracked in BACKLOG"
+    ]
+  }
+}

@@ -25,6 +25,7 @@ import type { EventSigner } from 'applesauce-core';
 import type { UserProfile, ProfileAvatar, MemberProfile, SignedProfileEvent } from '@/src/types';
 import { AVATAR_BROWSER_CONFIG } from '@/src/config/profile';
 import { verifyForwardedEnvelope, type ForwardedKindSpec } from '@/src/lib/marmot/envelopeVerifier';
+import { isAllowedAvatarImageUrl } from '@/src/lib/dmProfile/kinds';
 
 /** MLS application-message rumor kind for profile updates (kind 0 = metadata). */
 export const PROFILE_RUMOR_KIND = 0;
@@ -189,7 +190,10 @@ export function payloadToMemberProfile(fallbackPubkeyHex: string, payload: Profi
       ?? (payload.avatar.id
         ? `${AVATAR_BROWSER_CONFIG.endpointBaseUrl}/${payload.avatar.id}.png`
         : undefined);
-    if (imageUrl) {
+    // Untrusted wire value: apply the same URL rules as the 1:1 profile
+    // codec (https:// or // only, <= 512 chars). A rejected avatar is dropped
+    // — the rest of the profile (nickname, updatedAt, signedEvent) is kept.
+    if (isAllowedAvatarImageUrl(imageUrl)) {
       avatar = { imageUrl };
     }
   }

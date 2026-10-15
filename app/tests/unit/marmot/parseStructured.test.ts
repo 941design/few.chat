@@ -3,8 +3,8 @@ import { parseStructured, resolveCancellerDisplay } from '@/src/lib/marmot/parse
 
 describe('parseStructured', () => {
   it('returns invite_cancelled variant for valid input', () => {
-    const result = parseStructured('{"type":"invite_cancelled","pubkey":"aabb","by":"ccdd"}');
-    expect(result).toEqual({ type: 'invite_cancelled', pubkey: 'aabb', by: 'ccdd' });
+    const result = parseStructured('{"type":"invite_cancelled","pubkey":"abababababababababababababababababababababababababababababababab","by":"ccdd"}');
+    expect(result).toEqual({ type: 'invite_cancelled', pubkey: 'abababababababababababababababababababababababababababababababab', by: 'ccdd' });
   });
 
   it('returns null for invite_cancelled missing pubkey', () => {
@@ -13,7 +13,7 @@ describe('parseStructured', () => {
   });
 
   it('returns null for invite_cancelled missing by', () => {
-    const result = parseStructured('{"type":"invite_cancelled","pubkey":"aabb"}');
+    const result = parseStructured('{"type":"invite_cancelled","pubkey":"abababababababababababababababababababababababababababababababab"}');
     expect(result).toBeNull();
   });
 
@@ -33,20 +33,20 @@ describe('parseStructured', () => {
   });
 
   it('returns leave_intent variant for valid input', () => {
-    const result = parseStructured('{"type":"leave_intent","pubkey":"abcd1234"}');
-    expect(result).toEqual({ type: 'leave_intent', pubkey: 'abcd1234' });
+    const result = parseStructured('{"type":"leave_intent","pubkey":"abababababababababababababababababababababababababababababababab"}');
+    expect(result).toEqual({ type: 'leave_intent', pubkey: 'abababababababababababababababababababababababababababababababab' });
   });
 
   it('carries the leaver display name when present', () => {
-    const result = parseStructured('{"type":"leave_intent","pubkey":"abcd1234","name":"Alice"}');
-    expect(result).toEqual({ type: 'leave_intent', pubkey: 'abcd1234', name: 'Alice' });
+    const result = parseStructured('{"type":"leave_intent","pubkey":"abababababababababababababababababababababababababababababababab","name":"Alice"}');
+    expect(result).toEqual({ type: 'leave_intent', pubkey: 'abababababababababababababababababababababababababababababababab', name: 'Alice' });
   });
 
   it('trims the leaver display name and drops blank/whitespace names', () => {
-    expect(parseStructured('{"type":"leave_intent","pubkey":"abcd1234","name":"  Alice  "}'))
-      .toEqual({ type: 'leave_intent', pubkey: 'abcd1234', name: 'Alice' });
-    expect(parseStructured('{"type":"leave_intent","pubkey":"abcd1234","name":"   "}'))
-      .toEqual({ type: 'leave_intent', pubkey: 'abcd1234' });
+    expect(parseStructured('{"type":"leave_intent","pubkey":"abababababababababababababababababababababababababababababababab","name":"  Alice  "}'))
+      .toEqual({ type: 'leave_intent', pubkey: 'abababababababababababababababababababababababababababababababab', name: 'Alice' });
+    expect(parseStructured('{"type":"leave_intent","pubkey":"abababababababababababababababababababababababababababababababab","name":"   "}'))
+      .toEqual({ type: 'leave_intent', pubkey: 'abababababababababababababababababababababababababababababababab' });
   });
 
   it('returns null for leave_intent missing pubkey', () => {
