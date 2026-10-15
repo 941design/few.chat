@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T17:57:00Z",
+  "updated_at": "2026-10-15T20:13:06Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -325,18 +325,6 @@
       "kind": "spec-gap"
     },
     {
-      "slug": "block-revision-sibling-revision-counters-have",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/MarmotContext.tsx"
-      },
-      "text": "Block-revision (and sibling revision counters) have no cross-tab sync",
-      "created_at": "2026-07-14",
-      "motivation": "If a user blocks a peer in one tab while another tab has that peer's ContactChat mounted, the second tab's blockedPeersRef never refreshes and keeps persisting the blocked peer's messages — a privacy gap. Pre-existing app-wide characteristic (knownPeersRevision, groupDataVersion share it); surfaced by the block-contact epic review (2026-07-14).",
-      "behavior": "blockedPeersRevision is an in-memory useState counter with no storage-event / BroadcastChannel cross-tab propagation; a block in another tab is not observed until reload.",
-      "approach": "Add a BroadcastChannel or window 'storage' event sync for the revision counters so block/unblock (and known-peer changes) propagate across tabs. Project-wide hardening, not block-specific."
-    },
-    {
       "slug": "invite-modal-picker-cannot-re-invite",
       "scope": "any",
       "anchor": {
@@ -547,6 +535,19 @@
       "behavior": "gateAnnouncement throws on read failure; the dispatcher catches per handler and the journal acks after handlers, so the announcement is not retried. Replay-internal saveVoteIfNewer / removePendingVotes failures are not separately injected in tests.",
       "approach": "On a gate read failure (and a failed enqueue), enqueue the announcement to the held close-announcement queue so the next poll message retries it; add fault injection for replay-internal writes/removals.",
       "success_signal": "Unit: a live poll_close with a failing first getPoll is shown with the correct tally after the next poll message"
+    },
+    {
+      "slug": "cross-tab-reactions-refresh",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/reactions/api.ts"
+      },
+      "text": "Reactions added in one tab do not appear in another open tab until reload: the reaction store answers reads from an in-memory cache that cross-tab notifications do not invalidate",
+      "created_at": "2026-10-15",
+      "motivation": "Left out of the cross-tab S0 change (2026-10-15): bumping a version would not refresh the other tab because reads are served from an in-memory cache, and clearing that cache touches a known badge-revival race.",
+      "behavior": "crossTab store-changed messages cover contacts/blocked/known/groups/chat/polls; reactions are not posted or received.",
+      "approach": "Post a 'reactions' store-changed event after reaction writes and, on receipt, invalidate the affected thread's cache entry in a way that respects the badge-revival guard; add a two-page unit/e2e check.",
+      "success_signal": "A reaction added in tab 1 shows in tab 2 without reload; the badge-revival regression tests still pass"
     }
   ],
   "archive": [
