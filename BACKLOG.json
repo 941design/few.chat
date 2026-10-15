@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T08:28:36Z",
+  "updated_at": "2026-10-15T10:44:03Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -311,21 +311,6 @@
       "kind": "spec-gap"
     },
     {
-      "slug": "decodecard-accepts-signed-name-len-0",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/contactCard.ts",
-        "line": 343
-      },
-      "text": "decodeCard accepts a signed name_len=0 card that encodeCard never emits, opening an LWW empty-name clobber path",
-      "created_at": "2026-07-09",
-      "motivation": "encodeCard only sets the SIGNED flag (and only emits created_at/name_len/sig) when the user has a nickname (DD 10: 'No nickname -> share an unsigned card'), so the encoder path never itself produces a signed card with name_len=0. But decodeCard's structural check at line 343 only rejects nameLen > MAX_NAME_BYTES -- it accepts nameLen === 0 on a signed card as long as the signature verifies. A hand-crafted (or future non-Few client's) self-signed empty-name card with a newer created_at than an existing cache entry would pass verification and, per AC-CACHE-2's LWW rule, overwrite an existing cached nickname with the empty string via importCard -- a legitimately-signed card silently blanking a name the recipient had already cached from a richer source (e.g. MLS profile sync).",
-      "behavior": "decodeCard treats a signed, correctly-verifying, empty-name (name_len=0) card as a fully valid v1 signed card and returns profile: { nickname: '', updatedAt }. Nothing in the encode/decode/parse/cache pipeline currently distinguishes 'signed empty name, meant to clear the cached name' from 'signed empty name, an encoder/decoder-disagreement edge case nobody meant to produce'.",
-      "approach": "Pick one of two explicit resolutions: (1) decodeCard rejects name_len=0 on a signed card as malformed, restoring encoder/decoder symmetry; or (2) keep it valid but document it as an intentional 'clear my cached name' affordance and add an AC + test asserting the LWW-clobber-to-empty behavior is desired, not accidental.",
-      "success_signal": "encodeCard and decodeCard agree on whether a signed empty-name card is valid, backed by a test for the chosen behavior.",
-      "kind": "spec-gap"
-    },
-    {
       "slug": "groups-e2e-suite-flaky-under-shared",
       "scope": "any",
       "anchor": {
@@ -353,19 +338,6 @@
       "kind": "spec-gap"
     },
     {
-      "slug": "gate-incoming-calls-with-block-deny",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/components/calls/IncomingCallWatcher.tsx",
-        "line": 149
-      },
-      "text": "Gate incoming calls with the block deny-list (a blocked contact can still ring)",
-      "created_at": "2026-07-14",
-      "motivation": "A blocked contact can still ring the user via an incoming call: the call gate uses the bare isAllowedDmSender and block deliberately keeps the peer in knownPeers (spec §9 / ADR-005). 'I blocked them but they can still call me' is a user-facing surprise. Surfaced by the block-contact epic review (2026-07-14); user chose to track as a follow-up. Latent while calls are disabled.",
-      "behavior": "IncomingCallWatcher.tsx:149 gates on isAllowedDmSender only; a blocked-but-known peer passes and can ring.",
-      "approach": "Compose isBlockedPeer into the call gate (mirror the DM isAllowedDmSenderComposite), with call-specific ACs + e2e in a dedicated story. Re-enable-calls dependent."
-    },
-    {
       "slug": "block-revision-sibling-revision-counters-have",
       "scope": "any",
       "anchor": {
@@ -376,18 +348,6 @@
       "motivation": "If a user blocks a peer in one tab while another tab has that peer's ContactChat mounted, the second tab's blockedPeersRef never refreshes and keeps persisting the blocked peer's messages — a privacy gap. Pre-existing app-wide characteristic (knownPeersRevision, groupDataVersion share it); surfaced by the block-contact epic review (2026-07-14).",
       "behavior": "blockedPeersRevision is an in-memory useState counter with no storage-event / BroadcastChannel cross-tab propagation; a block in another tab is not observed until reload.",
       "approach": "Add a BroadcastChannel or window 'storage' event sync for the revision counters so block/unblock (and known-peer changes) propagate across tabs. Project-wide hardening, not block-specific."
-    },
-    {
-      "slug": "one-time-migration-clear-stale-unread",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/unreadStore.ts"
-      },
-      "text": "One-time migration: clear stale unread badges for legacy-hidden (now blocked) contacts",
-      "created_at": "2026-07-14",
-      "motivation": "Contacts hidden before the block-contact epic become 'blocked' but their pre-existing unread counts linger on the bell with no way to clear them (their chat is not openable to mark read). Product decision (2026-07-14) was to KEEP their DM history (no retroactive wipe), but the stale unread badge should still be cleared. Minor cosmetic wart affecting only the legacy-hidden-with-unreads cohort.",
-      "behavior": "initDirectMessageCounts prunes with raw isAllowedDmSender, which blocked-but-known peers pass, so a legacy-hidden contact's unread count survives indefinitely.",
-      "approach": "Add a one-time startup migration that clears unread counters (NOT history) for all currently-archived contacts, mirroring purgeStrangerDmCounters but keyed on archivedAt. Idempotent."
     },
     {
       "slug": "invite-modal-picker-cannot-re-invite",
@@ -469,74 +429,6 @@
       "kind": "spec-gap"
     },
     {
-      "slug": "poll-vote-not-yet-received-poll",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/pollHandler.ts"
-      },
-      "text": "Poll vote for a not-yet-received poll is silently dropped, contradicting group-polls AC-9 which specified queueing early votes until the poll-open arrives",
-      "created_at": "2026-07-19",
-      "motivation": "Under out-of-order MLS delivery a member's vote can arrive before the poll-open they were reacting to; the spec (group-polls.md edge cases / AC-9) requires such votes to be queued and applied when the poll arrives, so no vote is lost to arrival order. The shipped handler drops them, so a legitimately-cast vote can silently fail to count. Surfaced while writing docs/behavior/polls.md.",
-      "behavior": "pollHandler drops a vote whose poll is unknown (if (!existingPoll) return), with no queue anywhere; the unit test pollHandler.test.ts asserts saveVote is NOT called for an unknown poll. The close handler similarly drops a close for an unknown poll. AC-9 / group-polls.md specify queue-then-apply.",
-      "approach": "Implement the specified pending-vote queue keyed by pollId (bounded), applied when the matching poll-open arrives; or amend the spec/AC to accept drop-on-unknown-poll as the intended behaviour.",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "poll-receive-side-handlers-not-validate",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/pollHandler.ts"
-      },
-      "text": "Poll receive-side handlers do not validate under the member-attested trust model: a member can forge a close as the creator (replacing everyone's authoritative tally) or cast a single-choice vote listing multiple options (counted multiple times); the parser imposes no option-count/length caps",
-      "created_at": "2026-07-19",
-      "motivation": "The close message carries an authoritative tally that replaces each member's locally-computed result, so a forged close (author checked only against the self-reported pubkey, per ADR-006) lets any member inject an arbitrary result for everyone — higher impact than a forged vote. Separately, the vote parser never checks a single-choice poll's responses count, so a crafted multi-response vote inflates several options at once. Surfaced while writing docs/behavior/polls.md.",
-      "behavior": "Close authorization compares poll.creatorPubkey to the rumor's self-reported pubkey only (no cryptographic sender binding — marmot-ts drops the MLS sender leaf, ADR-006). parsePollVote requires >=1 response but does not enforce single-choice (<=1) against poll type, and tallying counts every response. parsePollOpen checks only >=2 options — no upper bound or length caps on receipt (caps are creation-side only).",
-      "approach": "On receipt: reject a close whose tally is recomputed-mismatched or (longer term) bind authorship when marmot-ts exposes the sender leaf; enforce single-choice response-count against poll type before tallying; apply the option-count and length caps on the receive side too. Accept residual member-on-member risk per ADR-006 but remove the amplifiers (tally injection, multi-count).",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "profile-page-add-group-success-confirmation",
-      "scope": "any",
-      "anchor": {
-        "path": "app/pages/profile.tsx",
-        "line": 673
-      },
-      "text": "Profile-page 'Add to Group' success confirmation is structurally unreachable in the common single-addable-group case",
-      "created_at": "2026-07-19",
-      "motivation": "A user who adds a contact to a group from the contact's profile page gets no success feedback — the confirmation Alert flashes and vanishes, so the click appears to do nothing even though the invite succeeded. Surfaced by the invite-rescind-and-member-removal epic's SCEN-3 e2e (the profile-page direct-invite entry point).",
-      "behavior": "handleAddToGroup awaits inviteByNpub, which internally awaits reloadGroups() before resolving. The added contact thus becomes a (pending) member and addableGroupsForContact returns empty BEFORE inviteByNpub resolves. The entire Add-to-Group widget — select, button, AND the success/error Alerts — is gated on addableGroups.length > 0 (profile.tsx:673), so the whole block (success Alert included) unmounts in the same render pass that would have shown the success state. When the contact has exactly one addable group (the common/tested case), the success confirmation is structurally unreachable through the real UI.",
-      "approach": "Render the success/error confirmation OUTSIDE the addableGroups.length > 0 gate, or defer/decouple the membership refresh from the confirmation render so the Alert can show before addableGroups empties. Pre-existing (the widget gating predates the epic); the invite + marker-write themselves work correctly.",
-      "success_signal": "Adding a contact to a group from their profile page shows a visible success confirmation even when it was their only addable group"
-    },
-    {
-      "slug": "poll-vote-store-key-not-group",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollPersistence.ts",
-        "line": 54
-      },
-      "text": "Poll vote store key is not group-scoped (few:poll-votes:{pollId}); a member sharing two groups with a victim can inject non-member votes into a poll's recomputed tally by reusing a pollId across groups",
-      "created_at": "2026-07-23",
-      "motivation": "S5's tally-recompute makes the local vote store the authoritative source for a closed poll's displayed counts. Because votes are keyed by pollId alone (not groupId), and pollId is attacker-visible and attacker-choosable at poll_open, an attacker who shares group A and B with a victim can open a poll in B reusing A's pollId; sock-puppet votes cast in B land under the shared key on the victim's client and are counted into A's tally at close. Previously latent (close trusted payload counts); S5 elevated it to a real integrity hole.",
-      "behavior": "loadVotes(pollId) returns all locally-stored votes under that pollId regardless of group; computeTally counts them all. Legit pollIds are random UUIDs so accidental collision is nil, but a crafted poll_open can set any pollId.",
-      "approach": "Group-scope the vote store key (few:poll-votes:{groupId}:{pollId}) or persist groupId on PollVote and filter in loadVotes; migrate existing rows. Beyond the app-layer-auth epic's poll-story scope.",
-      "success_signal": "A vote cast in group B for a pollId reused from group A does not appear in group A's recomputed tally"
-    },
-    {
-      "slug": "stale-foreign-group-invite-expiry-count",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/notificationCounts.ts",
-        "line": 87
-      },
-      "text": "Stale/foreign-group invite-expiry count has no reachable clear affordance after bell removal",
-      "created_at": "2026-07-24",
-      "motivation": "The notification bell's expiry rows used to render an 'unknown group' clearable deep-link for a groupId present in the inviteExpiries slice but absent from the current groups list. That row was deleted with the bell (epic obsolete-notification-bell). The Groups nav pill still sums ALL inviteExpiries keys, so such a stale/foreign entry inflates the pill with no UI path to clear it. Codex review Finding 1 (P2).",
-      "behavior": "A groupId in inviteExpiries but not in the current groups list (e.g. backup-restore of a non-member group's on-disk expired links) contributes to groupsDomainTotal but has no card and no bell row; markInviteExpiriesRead is only reachable via the ?id=X&manageLinks=1 redirect branch (groups.tsx:1108), which nothing links to anymore. Leaving a group already clears via leaveGroupImpl, so this is a narrow restore-only residual.",
-      "approach": "Options: (a) prune inviteExpiries keys for groups absent from the current list during the sweep derive step or on groups-list load (guard transient not-ready states); (b) a small stale-expiry acknowledge affordance on the groups list; (c) WONTFIX given rarity. Prefer (a) with a readiness guard.",
-      "success_signal": "A restored/foreign groupId expiry either self-clears on next sweep or exposes a one-click acknowledge; the Groups nav pill never shows an unclearable expiry."
-    },
-    {
       "slug": "external-signer-users-nip-07-nip",
       "scope": "any",
       "anchor": {
@@ -561,23 +453,6 @@
       "behavior": "publishScheduledBackup (BackupContext.tsx:52-61): connectNdk ndk.connect(2500), kind-30051 relay-list fetch (8 s), ndkEvent.publish(relaySet) with NDK 3.0.3's default 2.5 s per-relay timeout; a failure is logged and retried after RETRY_DELAYS_MS=[30s,2m,10m]. Attempts do settle (no hang).",
       "approach": "Optional: shorter first retry (~5 s) for start-up failures and/or a skip of the relay-list fetch when it timed out recently; privacy invariant unchanged.",
       "success_signal": "With the relay connection deliberately slowed at startup, the first backup lands within 15 s"
-    },
-    {
-      "slug": "create-group-enabled-before-client-ready",
-      "scope": "any",
-      "anchor": {
-        "path": "app/pages/groups.tsx",
-        "range": [
-          1209,
-          1213
-        ]
-      },
-      "text": "The Create Group button is enabled before the MLS client is ready; submitting in that window fails with a generic error instead of waiting or being disabled",
-      "created_at": "2026-10-14",
-      "motivation": "Diagnosed 2026-10-14 as the cause of a flaky e2e (groups-pending-invite-live-idle:110). A user who opens /groups and creates a group right away on a slow load hits the same failure.",
-      "behavior": "create-group-btn renders once the page mounts (gated only by !unsupported) while the list still shows the loading state (!ready); MarmotContext.createGroup returns null when the client is not yet initialised (~MarmotContext.tsx:1903) and CreateGroupModal shows create-group-error; nothing retries.",
-      "approach": "Disable the create button (or the modal submit) until MarmotContext.ready, or have createGroup await client readiness.",
-      "success_signal": "Clicking Create immediately after a cold /groups load either waits or is disabled — never a create-group-error"
     },
     {
       "slug": "backup-dirty-mark-lost-on-early-reload",
@@ -672,6 +547,59 @@
       "behavior": "Two tabs on the same identity; accept (or any epoch-advancing action) in one, then act in the other → the second tab sends undecryptable messages / overwrites fresher MLS state; today's outcome is silent divergence.",
       "approach": "Choose (a) one active client per origin via navigator.locks leader election, passive tabs render from IDB and forward actions, or (b) BroadcastChannel mls-state-changed {groupId} after every group.save/destroy with receivers evicting and reloading; (a) is simpler to reason about. Add a two-context e2e that advances the epoch in tab 1 and sends from tab 2.",
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
+    },
+    {
+      "slug": "mls-message-lost-on-unload-after-ingest",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/applicationRumorDispatcher.ts"
+      },
+      "text": "An MLS application message can be lost for good if the page unloads after marmot-ts persists the advanced group state but before the app's async handler has processed the decrypted rumor",
+      "created_at": "2026-10-15",
+      "motivation": "Diagnosed 2026-10-15 with in-page instrumentation (bug-reports/profile-propagation-flake-diagnosis.md): groups-contacts failed 4/7 runs because Bob's profile rumor arrived ~160 ms before a navigation; Alice's MLS state advanced past it, so after reload it cannot be decrypted again and the profile never arrives (Bob sends once per session; Alice's earlier profile request suppresses retries for 1 h). Applies to every rumor kind (chat, reactions, polls, edits, profiles), not just profiles.",
+      "behavior": "marmot-ts ingest() decrypts, saves the advanced group state, emits authenticatedApplicationMessage; the dispatcher queues the rumor and handlers persist asynchronously. An unload in between drops the decrypted rumor; the MLS ratchet has moved on, so relay redelivery cannot be decrypted.",
+      "approach": "(a) Durable inbox: persist decrypted rumors (keyed by rumor id, per group) before/atomically with the MLS state save, replay unprocessed ones idempotently on subscribe; (b) narrower profile-only mitigation: re-request a member's profile when the last request predates their join. Prefer (a); verify marmot-ts ordering (save vs emit) first.",
+      "success_signal": "An e2e that reloads right after a peer sends (profile + chat) never loses the rumor across 10 runs; groups-contacts passes 10/10"
+    },
+    {
+      "slug": "poll-close-before-open-dropped",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/handlers/pollHandler.ts"
+      },
+      "text": "A poll close that arrives before its poll-open (out-of-order MLS delivery) is dropped, so that poll stays open forever on the receiving device",
+      "created_at": "2026-10-15",
+      "motivation": "Follow-up from the polls-integrity-cluster bug run (2026-10-15): AC-9 now queues early votes, but closes for an unknown poll are still discarded; under reordering a member can see a poll that everyone else sees closed.",
+      "behavior": "handleClose returns when getPoll(groupId, pollId) is null; no queue for closes.",
+      "approach": "Queue a pending close per (groupId, pollId) (creator-bound: apply only if the later poll-open's authenticated creator equals the close's sender), applied after open + queued votes; same bounds/expiry as the vote queue. AC-9 currently specifies queueing only for votes — amend it.",
+      "success_signal": "Unit: close-then-open ends with the poll closed with the recomputed tally; a close from a non-creator is discarded"
+    },
+    {
+      "slug": "poll-vote-ordering-single-key",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollReplay.ts",
+        "line": 64
+      },
+      "text": "Poll votes have no single ordering key: replay orders by sender created_at, the live path by arrival, and castVote's local save bypasses the dispatcher queue",
+      "created_at": "2026-10-15",
+      "motivation": "Decider-waived Codex HIGH from bug run polls-integrity-cluster (2026-10-15): a queued early vote can override the same voter's later live vote when replay failed at open and at that later vote and the voter's created_at ran backwards; and a concurrent replay on a stale snapshot can overwrite the user's own newer vote saved via PollStoreContext.castVote (needs an own early vote from another device queued at that instant). Bounded to the voter's own choice; a re-vote repairs it.",
+      "behavior": "replayPendingVotes skips a queued vote when the stored votedAt >= queued votedAt; handleVote saves by arrival; castVote (PollStoreContext ~:252) saves outside the per-group dispatcher queue.",
+      "approach": "Choose one ordering key carried on the wire (per-voter sequence number, or rumor id as tiebreak) and apply it in handleVote, replayPendingVotes and castVote; route castVote through the same serialisation. A naive created_at newer-wins on the live path is wrong (drops vote changes from a second device with a lagging clock). Add a two-device clock-skew unit test.",
+      "success_signal": "Unit: two devices with skewed clocks changing a vote converge on the latest change on every peer, with and without an interrupted replay"
+    },
+    {
+      "slug": "e2e-runner-flag-dev-server-reloads",
+      "scope": "any",
+      "anchor": {
+        "path": "app/scripts/run-e2e.mjs"
+      },
+      "text": "The e2e runner does not notice when next dev hot-reloads mid-run, so a gate run against a tree being edited produces failures that look like regressions",
+      "created_at": "2026-10-15",
+      "motivation": "Gate 7 (2026-10-15) showed 3 'new' failures that were really Fast Refresh full reloads / HTTP 500s from a fixer editing poll files during the run (bug-reports/gate7-regressions-diagnosis.md); attributing them cost a full worktree bisect.",
+      "behavior": "run-e2e.mjs starts next dev with file watching on the live tree and ignores 'Fast Refresh had to perform a full reload' and 5xx lines in the server output.",
+      "approach": "Watch the dev-server output; on 'Fast Refresh had to perform a full reload' or an HTTP 5xx, mark the run invalid and exit non-zero with a clear message (optionally disable watching for e2e). Process: never start a gate while an agent edits app/.",
+      "success_signal": "Touching a source file mid-run makes the runner exit with an 'invalid run: dev server reloaded' message"
     }
   ],
   "archive": [
