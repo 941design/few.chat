@@ -108,9 +108,29 @@ async function waitForServer(timeoutMs = 120_000) {
   throw new Error(`Timed out waiting for ${baseUrl}`);
 }
 
+// Compile every page once before Playwright starts. `next dev` compiles a route
+// on its first request, and a first compile while a browser page is open can
+// trigger a "Fast Refresh had to perform a full reload" that aborts the test
+// in flight (seen on /settings and /groups) and trips the INVALID-run detector.
+const WARM_ROUTES = [
+  "/add/", "/contacts/", "/feedback/", "/groups/", "/imprint/",
+  "/info/", "/profile/", "/settings/", "/theme-preview/",
+];
+
+async function warmRoutes() {
+  for (const route of WARM_ROUTES) {
+    try {
+      await fetch(new URL(route, baseUrl));
+    } catch {
+      // Best effort: a route that fails here still compiles on first use.
+    }
+  }
+}
+
 try {
   await waitForServer();
-  console.log(`[e2e] Dev server ready on ${baseUrl}`);
+  await warmRoutes();
+  console.log(`[e2e] Dev server ready on ${baseUrl} (routes warmed)`);
 
   const runner = spawn(npxCommand, ["playwright", "test", ...process.argv.slice(2)], {
     stdio: "inherit",
