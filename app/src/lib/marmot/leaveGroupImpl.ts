@@ -57,6 +57,12 @@ type Deps = {
    * the admin no longer belongs to.
    */
   clearInviteExpiries: (groupId: string) => void;
+  /**
+   * Drops the group's pending write-ahead rumor-journal entries
+   * (rumorJournal.ts, bug: mls-message-lost-on-unload-after-ingest) so
+   * decrypted plaintext of a left group is not kept — or replayed — locally.
+   */
+  clearRumorJournalForGroup: (groupId: string) => Promise<void>;
   reloadGroups: () => Promise<void>;
   markBackupDirty: (dirty: boolean) => void;
 };
@@ -162,6 +168,7 @@ export async function leaveGroupImpl(
   // AC-DEEPLINK-4: same unconditional purge call, not a separate step —
   // see the Deps field doc comment above.
   deps.clearInviteExpiries(groupId);
+  await deps.clearRumorJournalForGroup(groupId);
   await deps.reloadGroups();
   deps.markBackupDirty(true);
   return true;

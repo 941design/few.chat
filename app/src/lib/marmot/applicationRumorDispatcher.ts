@@ -50,6 +50,25 @@ export interface DispatcherSubscription {
   /** Wait for work accepted before this call. After disposal, queued work is
    * skipped and the running handler finishes. Await before reassigning storage. */
   drain(): Promise<void>;
+  /**
+   * Feed write-ahead-journaled rumors (rumorJournal.ts) through the SAME
+   * listener live deliveries use — sender choke point, LRU dedup, handlers,
+   * ack. Entries are enqueued synchronously, so calling this before live
+   * ingestion starts puts them ahead of every live/history rumor on the FIFO
+   * queue; their ids then suppress the live duplicates. Resolves when the
+   * replayed work (and anything queued before it) has run. No-op after disposal.
+   */
+  replay(entries: ReadonlyArray<{ data: Uint8Array; senderPubkey: string }>): Promise<void>;
+}
+
+/** Write-ahead journal hook (rumorJournal.ts). */
+export interface DispatcherJournal {
+  /** Delete the journal entry once its handlers ran. Failures are warned, never thrown. */
+  ack(groupId: string, rumorId: string): Promise<void>;
+}
+
+export interface DispatcherOptions {
+  journal?: DispatcherJournal;
 }
 
 export interface Dispatcher {
@@ -74,7 +93,8 @@ interface MarmotGroupLike {
 /** Maximum number of seen IDs stored per group. */
 const LRU_CAP = 1000;
 
-export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
+export function createDispatcher(handlers: RumorHandler[], options: DispatcherOptions = {}): Dispatcher {
+  const journal = options.journal;
   // Per-group LRU: Map<groupId, Set<rumorId>>
   // Set preserves insertion order; we evict from the front when size > LRU_CAP.
   const seenByGroup = new Map<string, Set<string>>();
@@ -107,6 +127,15 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
     subscribe(group: MarmotGroupLike, ctx: DispatcherContext): DispatcherSubscription {
       let disposed = false;
       let tail = Promise.resolve();
+      // Never throws, never rejects: an ack failure must not break the queue.
+      const ack = async (rumorId: string): Promise<void> => {
+        if (!journal) return;
+        try {
+          await journal.ack(ctx.groupId, rumorId);
+        } catch (err) {
+          console.warn('[dispatcher.journalAck]', err);
+        }
+      };
       const listener = ({ message, senderPubkey }: AuthenticatedApplicationMessage): Promise<void> => {
         if (disposed) return Promise.resolve();
         let rumor: ApplicationRumor;
@@ -118,7 +147,13 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
         }
 
         if (isSeen(ctx.groupId, rumor.id)) {
-          return Promise.resolve();
+          // Duplicate of a rumor already accepted (e.g. a live redelivery of a
+          // replayed journal entry, which re-journals it). Ack on the queue —
+          // never before the original's handlers finished, since both share
+          // the same journal key.
+          const id = rumor.id;
+          tail = tail.then(() => ack(id));
+          return tail;
         }
 
         // Build the authenticated sender DIRECTLY from the library-supplied
@@ -148,18 +183,32 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
         // open/create finishes persisting before its dependent vote/edit runs.
         // Check dedup again inside the queue for overlapping history/live events.
         tail = tail.then(async () => {
-          if (disposed || isSeen(ctx.groupId, rumor.id)) return;
+          // Not yet started when disposed: NOT acked — replays next session.
+          // Once fan-out has started it is acked in `finally` (at-most-once)
+          // even if disposal cuts it short.
+          if (disposed) return;
+          if (isSeen(ctx.groupId, rumor.id)) {
+            await ack(rumor.id);
+            return;
+          }
           // At-most-once attempts: do not replay partial side effects when one
           // handler fails. Failures are isolated; later messages still run.
           markSeen(ctx.groupId, rumor.id);
-          const matching = handlers.filter((h) => h.kind === rumor.kind);
-          for (const handler of matching) {
-            if (disposed) return;
-            try {
-              await handler.handle(rumor, ctx, sender);
-            } catch (err) {
-              console.warn(`[dispatcher.${rumor.kind}]`, err);
+          try {
+            const matching = handlers.filter((h) => h.kind === rumor.kind);
+            for (const handler of matching) {
+              if (disposed) return;
+              try {
+                await handler.handle(rumor, ctx, sender);
+              } catch (err) {
+                console.warn(`[dispatcher.${rumor.kind}]`, err);
+              }
             }
+          } finally {
+            // Write-ahead journal: the rumor has been handed to its handlers
+            // (at-most-once, even if one threw or disposal cut the fan-out
+            // short) — drop the entry so it is not replayed.
+            await ack(rumor.id);
           }
         });
         return tail;
@@ -190,6 +239,13 @@ export function createDispatcher(handlers: RumorHandler[]): Dispatcher {
         group.off('unauthenticatedMessage', unauthenticatedListener);
       };
       unsubscribe.drain = () => tail;
+      unsubscribe.replay = (entries) => {
+        // listener() itself is a no-op once disposed.
+        for (const entry of entries) {
+          void listener({ message: entry.data, senderPubkey: entry.senderPubkey } as AuthenticatedApplicationMessage);
+        }
+        return tail;
+      };
       return unsubscribe;
     },
   };

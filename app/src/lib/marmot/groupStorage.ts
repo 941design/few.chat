@@ -12,6 +12,7 @@ import type { Group, MemberProfile } from '@/src/types';
 import type { StoredKeyPackage, SerializedClientState } from '@internet-privacy/marmot-ts';
 import { clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage';
 import { clearAllPendingDirectInvites } from '@/src/lib/marmot/pendingDirectInviteStorage';
+import { clearAllRumorJournal } from '@/src/lib/marmot/rumorJournal';
 // KeyValueStoreBackend is an internal utility type — import directly from subpath
 type KeyValueStoreBackend<T> = {
   getItem(key: string): Promise<T | null>;
@@ -133,6 +134,9 @@ export async function clearAllGroupData(): Promise<void> {
   await clear(memberProfileStore);
   await clearProfileRequestMemos('*'); // clear all — groupId filter handled internally
   await clearAllPendingDirectInvites();
+  // Write-ahead rumor journal (rumorJournal.ts): decrypted plaintext of the
+  // previous identity's groups must not survive an account clear.
+  await clearAllRumorJournal();
 }
 
 // ---------------------------------------------------------------------------

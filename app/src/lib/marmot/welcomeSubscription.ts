@@ -26,6 +26,7 @@ import { bytesToHex, hexToBytes } from '@/src/lib/nostrKeys';
 import { createRumor } from 'nostr-tools/nip59';
 import { sealAndWrap } from '@/src/lib/directMessages';
 import { EpochResolver } from './epochResolver';
+import { createApplicationMessageJournaler } from './rumorJournal';
 import { handleJoinRequest, JOIN_REQUEST_KIND } from './joinRequestHandler';
 import type { JoinRequestReceivedCallback } from './joinRequestHandler';
 import {
@@ -1237,12 +1238,16 @@ export async function subscribeToGroupMessages(
   // EpochResolver wraps mlsGroup.ingest() with fork resolution, rollback,
   // and future-epoch buffering. Application messages are dispatched by the
   // unified dispatcher (applicationRumorDispatcher) via the MarmotGroup
-  // 'authenticatedApplicationMessage' event; the resolver's onApplicationMessage callback
-  // is a no-op here — EpochResolver still requires the field to maintain its
-  // internal interface contract.
+  // 'authenticatedApplicationMessage' event. The resolver's (awaited)
+  // onApplicationMessage callback is the write-ahead rumor journal
+  // (rumorJournal.ts): each decrypted rumor is persisted BEFORE marmot-ts
+  // emits it and saves the advanced MLS state, so a page unload before the
+  // dispatcher's handlers ran no longer loses it — MarmotContext replays
+  // pending entries on the next subscribe (bug:
+  // mls-message-lost-on-unload-after-ingest).
   const resolver = new EpochResolver(
     mlsGroup,
-    { onMembersChanged },
+    { onMembersChanged, onApplicationMessage: createApplicationMessageJournaler(groupId) },
   );
 
   let disposed = false;

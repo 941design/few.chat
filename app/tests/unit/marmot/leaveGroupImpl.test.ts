@@ -58,6 +58,7 @@ function makeDeps(
     clearInviteLinksForGroup: vi.fn().mockResolvedValue(undefined),
     clearInviteExpiries: vi.fn(),
     clearPendingDirectInvitesForGroup: vi.fn().mockResolvedValue(undefined),
+    clearRumorJournalForGroup: vi.fn().mockResolvedValue(undefined),
     reloadGroups: vi.fn().mockResolvedValue(undefined),
     markBackupDirty: vi.fn(),
     // Exposed for assertions against the mock passed to getGroup.
@@ -377,5 +378,22 @@ describe('leaveGroupImpl — AC-MARKER-9 real-storage scoping (VQ-S3-007)', () =
     expect(await loadPendingDirectInviteMarkers(OTHER_GROUP)).toEqual(new Set([OTHER]));
 
     await clearAllPendingDirectInvites();
+  });
+
+  // bug: mls-message-lost-on-unload-after-ingest — the write-ahead rumor
+  // journal holds decrypted plaintext; leaving must drop the group's entries
+  // on every path, before the groups reload.
+  it.each([
+    ['solo/abandon', { members: [SELF] }],
+    ['multi-member', { members: [SELF, OTHER] }],
+    ['no mlsGroup', { mlsGroup: null }],
+  ] as const)('%s path clears the group\'s rumor journal before reloading groups', async (_l, opts) => {
+    const deps = makeDeps(opts as never);
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+    expect(deps.clearRumorJournalForGroup).toHaveBeenCalledTimes(1);
+    expect(deps.clearRumorJournalForGroup).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.clearRumorJournalForGroup.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.reloadGroups.mock.invocationCallOrder[0],
+    );
   });
 });

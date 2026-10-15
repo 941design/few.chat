@@ -1,4 +1,4 @@
-import { createDispatcher, type Dispatcher, type RumorHandler } from './applicationRumorDispatcher';
+import { createDispatcher, type Dispatcher, type DispatcherOptions, type RumorHandler } from './applicationRumorDispatcher';
 import type { ChatMessage } from './chatPersistence';
 import type { ReactionThreadKey } from '@/src/lib/reactions/types';
 import type { ApplicationRumor, AuthenticatedSender } from './applicationRumorDispatcher';
@@ -85,7 +85,7 @@ export interface HandlerDeps {
   enqueueLeave: (groupId: string, pubkey: string) => void;
 }
 
-export function buildDispatcher(deps: HandlerDeps): Dispatcher {
+export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = {}): Dispatcher {
   const pollDeps = {
     savePoll: deps.savePoll,
     saveVote: deps.saveVote,
@@ -146,5 +146,5 @@ export function buildDispatcher(deps: HandlerDeps): Dispatcher {
       enqueueLeave: deps.enqueueLeave ?? (() => {}),
     }),
   ];
-  return createDispatcher(handlers);
+  return createDispatcher(handlers, options);
 }

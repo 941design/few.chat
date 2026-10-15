@@ -786,6 +786,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   const welcomeSubRef = useRef<(() => void) | null>(null);
   // Track group message subscription cleanup functions keyed by groupId
   const groupSubsRef = useRef<Map<string, () => void>>(new Map());
+  // Latest dispatcher subscription's drain() per group. A re-subscribe awaits
+  // the previous one before reading the rumor journal, so a handler still
+  // running in the torn-down subscription acks its entry first and is not
+  // replayed a second time (at-most-once across re-subscribes).
+  const dispatcherDrainsRef = useRef<Map<string, () => Promise<void>>>(new Map());
   // S4: Pending out-of-band leave entries queued for debounced auto-commit (AC-QUEUE-1).
   // MUST be useRef — mutations must not trigger re-renders.
   const pendingRemovalsRef = useRef<Map<string, PendingRemoval[]>>(new Map());
@@ -1561,9 +1566,16 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       void initJoinRequestCounts(gids);
 
       const { subscribeToGroupMessages } = await import('@/src/lib/marmot/welcomeSubscription');
+      const rumorJournal = await import('@/src/lib/marmot/rumorJournal');
       const { getNdk } = await import('@/src/lib/ndkClient');
       const ndk = getNdk();
       if (!ndk || !isCurrent()) return;
+      // Bound the write-ahead rumor journal (age / per-group cap) once per run,
+      // incl. entries of groups this device no longer subscribes to.
+      await rumorJournal.sweepRumorJournal().catch((err: unknown) => {
+        console.warn('[Marmot] rumor journal sweep failed:', err);
+      });
+      if (!isCurrent()) return;
 
       for (const group of groups) {
         if (!isCurrent()) return;
@@ -1744,8 +1756,37 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             setPollVersion,
             // S4 (AC-QUEUE-4): real enqueueLeave closure — replaces MOCK-S2-001 stub from S2.
             enqueueLeave,
-          }).subscribe(mlsGroup, dispatcherCtx);
+          }, { journal: { ack: rumorJournal.ackRumor } }).subscribe(mlsGroup, dispatcherCtx);
           setupController.signal.addEventListener('abort', unsubDispatcher, { once: true });
+          // Captured before this subscription replaces it (see dispatcherDrainsRef).
+          const previousDrain = dispatcherDrainsRef.current.get(group.id);
+          dispatcherDrainsRef.current.set(group.id, unsubDispatcher.drain);
+
+          // Write-ahead rumor journal (bug: mls-message-lost-on-unload-after-ingest):
+          // rumors decrypted in an earlier session whose handlers never ran
+          // (page unloaded after the MLS state save) are replayed through the
+          // same dispatcher listener. Must happen AFTER subscribe and BEFORE
+          // subscribeToGroupMessages: replay() enqueues synchronously, so the
+          // replayed rumors run ahead of every live/history rumor on the FIFO
+          // queue, drain() covers them, and their ids suppress live duplicates.
+          try {
+            if (previousDrain) {
+              // Bounded: a wedged handler must not block this group's subscription.
+              await Promise.race([
+                previousDrain().catch(() => undefined),
+                new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+              ]);
+              if (!isCurrent()) return;
+            }
+            const pending = await rumorJournal.listPendingRumors(group.id);
+            if (!isCurrent()) return;
+            if (pending.length > 0) {
+              console.info(`[Marmot] replaying ${pending.length} journaled rumor(s) for group ${group.id}`);
+              void unsubDispatcher.replay(pending);
+            }
+          } catch (err) {
+            console.warn(`[Marmot] rumor journal replay for ${group.id} failed:`, err);
+          }
 
 
           const unsub = await subscribeToGroupMessages(
@@ -2073,6 +2114,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     const { clearPendingJoinRequestsForGroup } = await import('@/src/lib/marmot/joinRequestStorage');
     const { clearInviteLinksForGroup } = await import('@/src/lib/marmot/inviteLinkStorage');
     const { clearPendingDirectInvitesForGroup } = await import('@/src/lib/marmot/pendingDirectInviteStorage');
+    const { clearRumorJournalForGroup } = await import('@/src/lib/marmot/rumorJournal');
 
     return leaveGroupImpl(
       {
@@ -2094,6 +2136,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         clearInviteLinksForGroup,
         clearInviteExpiries,
         clearPendingDirectInvitesForGroup,
+        clearRumorJournalForGroup,
         reloadGroups,
         markBackupDirty,
       },

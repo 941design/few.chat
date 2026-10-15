@@ -1,0 +1,301 @@
+/**
+ * applicationRumorDispatcher — write-ahead rumor journal integration
+ * (bug: mls-message-lost-on-unload-after-ingest, VQ-3).
+ *
+ *  - journal.ack(groupId, rumorId) runs at the END of the queued block, after
+ *    every matching handler, even when a handler throws.
+ *  - replay(entries) feeds journaled rumors through the IDENTICAL listener
+ *    (sender choke point, LRU dedup, handlers), ahead of later live rumors, and
+ *    a replayed id suppresses its live duplicate.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('@internet-privacy/marmot-ts', () => ({
+  deserializeApplicationData: vi.fn((data: Uint8Array) => JSON.parse(new TextDecoder().decode(data))),
+}));
+
+const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
+
+const A = 'aa'.repeat(32);
+const B = 'bb'.repeat(32);
+
+function rumorBytes(id: string, pubkey = A, kind = 9) {
+  return new TextEncoder().encode(JSON.stringify({ id, pubkey, kind, created_at: 1, tags: [], content: id }));
+}
+
+function makeFakeGroup() {
+  const listeners = new Map<string, (p: never) => unknown>();
+  return {
+    on: vi.fn((e: string, fn: (p: never) => unknown) => { listeners.set(e, fn); }),
+    off: vi.fn((e: string) => { listeners.delete(e); }),
+    emit: (id: string, pubkey = A, kind = 9) =>
+      listeners.get('authenticatedApplicationMessage')?.({ message: rumorBytes(id, pubkey, kind), senderPubkey: pubkey, senderLeafIndex: 0 } as never),
+  };
+}
+
+const ctx = { groupId: 'G1', selfPubkeyHex: B, getActiveGroupId: () => null };
+
+async function settle(rounds = 10) {
+  for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+let warn: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  vi.clearAllMocks();
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function makeJournal(log: string[]) {
+  return { ack: vi.fn(async (g: string, id: string) => { log.push(`ack:${g}:${id}`); }) };
+}
+
+describe('dispatcher journal.ack', () => {
+  it('acks after all matching handlers have finished', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const slow = { kind: 9, handle: vi.fn(async (r: { id: string }) => { await new Promise((res) => setTimeout(res, 5)); log.push(`h1:${r.id}`); }) };
+    const second = { kind: 9, handle: vi.fn((r: { id: string }) => { log.push(`h2:${r.id}`); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([slow, second], { journal }).subscribe(group, ctx);
+
+    group.emit('m1');
+    await sub.drain();
+
+    expect(log).toEqual(['h1:m1', 'h2:m1', 'ack:G1:m1']);
+  });
+
+  it('acks even when a handler throws, and the queue keeps going', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const boom = { kind: 9, handle: vi.fn(async () => { throw new Error('boom'); }) };
+    const ok = { kind: 9, handle: vi.fn((r: { id: string }) => { log.push(`ok:${r.id}`); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom, ok], { journal }).subscribe(group, ctx);
+
+    group.emit('m1');
+    group.emit('m2');
+    await sub.drain();
+
+    expect(log).toEqual(['ok:m1', 'ack:G1:m1', 'ok:m2', 'ack:G1:m2']);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('acks a rumor whose kind has no handler', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const group = makeFakeGroup();
+    const sub = createDispatcher([], { journal }).subscribe(group, ctx);
+    group.emit('m1', A, 4242);
+    await sub.drain();
+    expect(log).toEqual(['ack:G1:m1']);
+  });
+
+  it('a failing ack is warned about and never breaks the queue', async () => {
+    const handled: string[] = [];
+    const journal = { ack: vi.fn(async () => { throw new Error('idb gone'); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([{ kind: 9, handle: (r: { id: string }) => { handled.push(r.id); } }], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    group.emit('m2');
+    await sub.drain();
+    expect(handled).toEqual(['m1', 'm2']);
+    expect(journal.ack).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith('[dispatcher.journalAck]', expect.any(Error));
+  });
+
+  it('a synchronously throwing ack is also contained', async () => {
+    const handled: string[] = [];
+    const journal = { ack: vi.fn(() => { throw new Error('sync'); }) as unknown as (g: string, id: string) => Promise<void> };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([{ kind: 9, handle: (r: { id: string }) => { handled.push(r.id); } }], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    group.emit('m2');
+    await sub.drain();
+    expect(handled).toEqual(['m1', 'm2']);
+  });
+
+  it('a live duplicate of an in-flight rumor never acks before the original handlers finish', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const slow = { kind: 9, handle: vi.fn(async (r: { id: string }) => { await new Promise((res) => setTimeout(res, 5)); log.push(`h:${r.id}`); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([slow], { journal }).subscribe(group, ctx);
+
+    group.emit('m1');
+    await new Promise((r) => setTimeout(r, 0)); // original is now in its handler
+    group.emit('m1'); // duplicate (outer isSeen path)
+    await sub.drain();
+
+    expect(slow.handle).toHaveBeenCalledTimes(1);
+    expect(log).toEqual(['h:m1', 'ack:G1:m1', 'ack:G1:m1']);
+  });
+
+  it('disposal mid-fan-out stops the remaining handlers but still acks (at-most-once)', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    let sub: ReturnType<ReturnType<typeof createDispatcher>['subscribe']>;
+    const first = { kind: 9, handle: vi.fn(() => { log.push('h1'); sub(); }) };
+    const second = { kind: 9, handle: vi.fn(() => { log.push('h2'); }) };
+    const group = makeFakeGroup();
+    sub = createDispatcher([first, second], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    await sub.drain();
+    expect(log).toEqual(['h1', 'ack:G1:m1']);
+  });
+
+  it('a duplicate queued before the original ran (inner isSeen path) is acked, handlers run once', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const h = { kind: 9, handle: vi.fn((r: { id: string }) => { log.push(`h:${r.id}`); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    group.emit('m1'); // both pass the outer check synchronously
+    await sub.drain();
+    expect(h.handle).toHaveBeenCalledTimes(1);
+    expect(log).toEqual(['h:m1', 'ack:G1:m1', 'ack:G1:m1']);
+  });
+
+  it('work skipped because the subscription was disposed is NOT acked (it replays next session)', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    sub(); // dispose before the queued block runs
+    await sub.drain();
+    await settle();
+    expect(h.handle).not.toHaveBeenCalled();
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('a sender-mismatched rumor is never acked (cannot delete another sender\'s entry)', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h], { journal }).subscribe(group, ctx);
+    sub.replay([{ data: rumorBytes('m1', A), senderPubkey: B }]);
+    await sub.drain();
+    expect(h.handle).not.toHaveBeenCalled();
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('without a journal option nothing is acked and dispatch is unchanged', async () => {
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    group.emit('m1');
+    group.emit('m1');
+    await sub.drain();
+    expect(h.handle).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatcher replay', () => {
+  it('feeds entries through the same listener: handlers get the MLS-authenticated sender', async () => {
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    await sub.replay([{ data: rumorBytes('r1', A), senderPubkey: A }]);
+    expect(h.handle).toHaveBeenCalledTimes(1);
+    const [rumor, gotCtx, sender] = h.handle.mock.calls[0];
+    expect(rumor).toMatchObject({ id: 'r1', pubkey: A });
+    expect(gotCtx).toBe(ctx);
+    expect(sender).toEqual({ pubkey: A, authenticity: 'mls' });
+  });
+
+  it('replayed rumors run before live rumors that arrive afterwards, in journal order', async () => {
+    const order: string[] = [];
+    const h = { kind: 9, handle: vi.fn(async (r: { id: string }) => { await new Promise((res) => setTimeout(res, 2)); order.push(r.id); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    void sub.replay([
+      { data: rumorBytes('r1'), senderPubkey: A },
+      { data: rumorBytes('r2'), senderPubkey: A },
+    ]);
+    group.emit('live1');
+    await sub.drain();
+    expect(order).toEqual(['r1', 'r2', 'live1']);
+  });
+
+  it('a replayed id suppresses its live duplicate (and both are acked)', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const h = { kind: 9, handle: vi.fn((r: { id: string }) => { log.push(`h:${r.id}`); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h], { journal }).subscribe(group, ctx);
+    void sub.replay([{ data: rumorBytes('x'), senderPubkey: A }]);
+    group.emit('x');
+    await sub.drain();
+    expect(h.handle).toHaveBeenCalledTimes(1);
+    expect(log[0]).toBe('h:x');
+    expect(log.slice(1)).toEqual(['ack:G1:x', 'ack:G1:x']);
+  });
+
+  it('replay is a no-op after disposal; malformed entries are skipped', async () => {
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    await sub.replay([{ data: new TextEncoder().encode('{not json'), senderPubkey: A }, { data: rumorBytes('ok'), senderPubkey: A }]);
+    expect(h.handle).toHaveBeenCalledTimes(1);
+    sub();
+    await sub.replay([{ data: rumorBytes('late'), senderPubkey: A }]);
+    expect(h.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('drain() covers replayed work', async () => {
+    let done = false;
+    const h = { kind: 9, handle: vi.fn(async () => { await new Promise((r) => setTimeout(r, 5)); done = true; }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    void sub.replay([{ data: rumorBytes('r1'), senderPubkey: A }]);
+    await sub.drain();
+    expect(done).toBe(true);
+  });
+});
+
+describe('re-subscribe after disposal (MarmotContext awaits the old drain before replay)', () => {
+  it('a rumor whose handler was running at disposal is handled exactly once in total; a not-yet-started one is replayed once', async () => {
+    // In-memory journal: entries keyed like rumorJournal, ack deletes.
+    const entries = new Map<string, { data: Uint8Array; senderPubkey: string }>();
+    const journal = { ack: vi.fn(async (g: string, id: string) => { entries.delete(`${g}:${id}`); }) };
+    const handled: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const handler = {
+      kind: 9,
+      handle: vi.fn(async (r: { id: string }) => {
+        handled.push(r.id);
+        if (r.id === 'm1') await gate;
+      }),
+    };
+
+    const group1 = makeFakeGroup();
+    const old = createDispatcher([handler], { journal }).subscribe(group1, ctx);
+    for (const id of ['m1', 'm2']) {
+      entries.set(`G1:${id}`, { data: rumorBytes(id), senderPubkey: A });
+      group1.emit(id);
+    }
+    await new Promise((r) => setTimeout(r, 0)); // m1 is inside its handler
+    old(); // dispose mid-handler; m2 has not started
+
+    // New session-equivalent subscription (same process).
+    const group2 = makeFakeGroup();
+    const next = createDispatcher([handler], { journal }).subscribe(group2, ctx);
+    const drained = old.drain();
+    release();
+    await drained; // MarmotContext: await previous drain BEFORE listing the journal
+    await next.replay([...entries.values()]);
+
+    expect(handled.filter((id) => id === 'm1')).toHaveLength(1);
+    expect(handled.filter((id) => id === 'm2')).toHaveLength(1);
+    expect(entries.size).toBe(0);
+  });
+});

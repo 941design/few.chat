@@ -1,0 +1,79 @@
+{
+  "bug_name": "mls-message-lost-on-unload-after-ingest",
+  "bug_report_file": "bug-reports/mls-message-lost-on-unload-after-ingest-report.md",
+  "created_at": "2026-10-15T08:56:32Z",
+  "updated_at": "2026-10-15T12:45:33Z",
+  "phase": "ACCEPTED",
+  "complexity": "high",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Do epochResolver unit tests prove, for all three ingest loops, that the generator post-yield code (state save) does not run until the journal put resolves, and that a put failure does not abort the generator?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does an integration test with a stub group whose ingest calls store.setItem after the yield show the journal put strictly precedes the state put?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "ARCHITECTURE",
+      "question": "Are replayed rumors fed through the identical dispatcher listener (choke point, LRU, handlers), run before live/history rumors, acked after handlers even when a handler throws, and is the live duplicate suppressed?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "SECURITY",
+      "question": "Is the journal local-only, excluded from relay backup, bounded by sweep, and are no new publishes introduced (privacy invariant)?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Does groups-rumor-reload-atomic.spec.ts (reload right after a peer send; chat + profile) pass --repeat-each 10, and groups-contacts 10/10, on a wiped relay?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on rumorJournal + the dispatcher ack/replay + epochResolver changes shows no real-gap survivors?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "b5e6f4526e67f2af0b8e7e4890940e2c119fc98d",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED; Codex H1-H3 downgraded",
+      "examiner": "VQ-1,2,4 YES; VQ-3 PARTIAL (C5 wording); VQ-5/6 PARTIAL (gate pending)",
+      "decider": "RETRY small round (Fable): C5 wording, guard caveat, drain before replay, doc citation; H1-H3 waived as findings"
+    },
+    {
+      "round": 1,
+      "result": "applied; unit 5066 green; groups bucket 343/0 + non-relay 72/72"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T08:56:32Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T12:45:33Z",
+      "trigger": "remediation_verified_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "non_relay": "72/72",
+    "relay": "343 passed / 0 failed / 19 skipped (make test-e2e-groups, wiped relay, no INVALID)"
+  }
+}

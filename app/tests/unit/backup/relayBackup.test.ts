@@ -66,6 +66,10 @@ vi.mock('idb-keyval', () => ({
     const s = store ?? 'default';
     delete getOrCreateStore(s)[key];
   }),
+  delMany: vi.fn(async (ks: string[], store?: string) => {
+    const s = store ?? 'default';
+    ks.forEach((k) => delete getOrCreateStore(s)[k]);
+  }),
   keys: vi.fn(async (store?: string) => {
     const s = store ?? 'default';
     return Object.keys(getOrCreateStore(s));
@@ -205,6 +209,24 @@ describe('collectBackupPayload', () => {
   // -----------------------------------------------------------------------
   // localStorage data
   // -----------------------------------------------------------------------
+
+  // bug: mls-message-lost-on-unload-after-ingest — the write-ahead rumor
+  // journal is transient, per-device state and must never ride along in the
+  // relay backup.
+  it('never includes the write-ahead rumor journal', async () => {
+    await saveGroup({ id: 'g1', name: 'Test', createdAt: 1700000000000, memberPubkeys: [], relays: [] });
+    const { putRumor, listPendingRumors } = await import('@/src/lib/marmot/rumorJournal');
+    await putRumor({ groupId: 'g1', rumorId: 'journal-marker-rumor', senderPubkey: 'journal-marker-sender', data: new Uint8Array([7, 7, 7]) });
+    expect(await listPendingRumors('g1')).toHaveLength(1);
+
+    const payload = await collectBackupPayload();
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain('journal-marker-rumor');
+    expect(serialized).not.toContain('journal-marker-sender');
+    expect(Object.keys(payload).sort()).toEqual(
+      ['chatMessages', 'createdAt', 'groupStates', 'groups', 'inviteLinks', 'memberProfiles', 'settings', 'userProfile', 'version'],
+    );
+  });
 
   it('reads settings from localStorage', async () => {
     localStore[STORAGE_KEYS.settings] = JSON.stringify({

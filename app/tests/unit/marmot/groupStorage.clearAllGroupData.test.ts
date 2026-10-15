@@ -43,6 +43,7 @@ vi.mock('idb-keyval', () => ({
 }));
 
 const { clearAllGroupData } = await import('@/src/lib/marmot/groupStorage');
+const { putRumor, listPendingRumors } = await import('@/src/lib/marmot/rumorJournal');
 const {
   markPendingDirectInvite,
   loadPendingDirectInviteMarkers,
@@ -71,5 +72,18 @@ describe('clearAllGroupData — real cross-group marker clear (AC-MARKER-9, VQ-S
 
     expect((await loadPendingDirectInviteMarkers(GROUP_A)).size).toBe(0);
     expect((await loadPendingDirectInviteMarkers(GROUP_B)).size).toBe(0);
+  });
+});
+
+describe('clearAllGroupData — write-ahead rumor journal (bug: mls-message-lost-on-unload-after-ingest)', () => {
+  it('drops every pending journal entry of every group', async () => {
+    await putRumor({ groupId: GROUP_A, rumorId: 'r1', senderPubkey: PUBKEY_1, data: new Uint8Array([1]) });
+    await putRumor({ groupId: GROUP_B, rumorId: 'r2', senderPubkey: PUBKEY_2, data: new Uint8Array([2]) });
+    expect(await listPendingRumors(GROUP_A)).toHaveLength(1);
+
+    await clearAllGroupData();
+
+    expect(await listPendingRumors(GROUP_A)).toEqual([]);
+    expect(await listPendingRumors(GROUP_B)).toEqual([]);
   });
 });

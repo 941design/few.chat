@@ -19,10 +19,28 @@ Leaving a subscription cancels work that has not started and detaches its
 listeners. A pending historical fetch that completes after cancellation cannot
 start a live subscription. A handler already running must finish before its
 storage can safely be reassigned to another account; full account-transition
-isolation remains under review. Previously consumed messages whose application
-content was never saved are not guaranteed recoverable because MLS state may have
-advanced beyond their encryption epoch. Offline two-peer recovery and rapid
-React lifecycle transitions still require integration verification.
+isolation remains under review. Offline two-peer recovery and rapid React lifecycle
+transitions still require integration verification.
+
+**A reload or closed tab while a message is being received does not lose it.**
+Decrypting a group message moves the group's keys forward, and the advanced keys are
+saved before the message itself has been stored — once that happens the message can
+never be decrypted again. So each decrypted message is first kept on the device, and
+only then may the advanced keys be saved. A kept message is discarded once it has been
+processed; one whose processing was cut short is processed the next time the group is
+opened, before any newly arriving message, and is not processed twice if it is also
+re-received. Processing remains at most once: a message whose processing had started
+but did not finish is not run again.
+
+- **What this guarantees:** a message that was decrypted is processed once it has been
+  kept, even if the page goes away before it was stored.
+- **What it does not:** if keeping the message fails (for example, the device's storage
+  is full) the message is processed as before, and a reload at that moment can still
+  lose it. A kept message that is not processed within 30 days, or beyond the newest
+  1,000 kept for one group, is discarded.
+- Kept messages stay on this device only: they are not part of the relay backup, are
+  never sent anywhere, and are removed when you leave the group or the account's
+  local data is cleared.
 
 
 ## 1. What a group is
@@ -562,5 +580,8 @@ the shipped implementation, and the automated test suite:
 - Implementation under `app/src/context/MarmotContext.tsx`, `app/src/lib/marmot/`
   (invite links, join requests, cancel, leave, grant, welcome subscription), and the
   group components and page under `app/src/components/groups/` and `app/pages/`.
+- `app/src/lib/marmot/rumorJournal.ts`, `tests/unit/marmot/epochResolver.journalOrdering.test.ts`
+  and the end-to-end `groups-rumor-reload-atomic.spec.ts` — the message kept on the
+  device before the advanced group keys are saved (receiving after reopening).
 - The group-* end-to-end specs and the unit tests for the pure implementations. A few
   behaviours are verified by manual validation rather than automated tests.

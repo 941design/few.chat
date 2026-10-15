@@ -1,0 +1,40 @@
+{
+  "bug_name": "mls-message-lost-on-unload-after-ingest",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/rumorJournal.ts",
+      "app/src/lib/marmot/epochResolver.ts",
+      "app/src/lib/marmot/applicationRumorDispatcher.ts",
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/lib/marmot/welcomeSubscription.ts",
+      "app/src/lib/marmot/groupStorage.ts",
+      "app/src/lib/marmot/leaveGroupImpl.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/**",
+      "app/tests/e2e/groups-rumor-reload-atomic.spec.ts",
+      "docs/behavior/**"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "app/src/lib/backup/relayBackup.ts",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "C1: EpochResolver AWAITS onApplicationMessage({rumor, data, senderPubkey}) for every application-message ingest result in all three ingest loops (processEvent, flushFutureBuffer, rollbackAndReplay), while marmot-ts's generator is suspended at its yield — so the journal put resolves before the library emits the message and before it saves the advanced MLS state. A guard comment at the yield consumer states the guarantee.",
+    "C2: A failing (rejecting, throwing, undeserializable) onApplicationMessage is warned and swallowed; it never aborts the ingest generator (the state save still runs).",
+    "C3: rumorJournal.ts: idb-keyval store few-rumor-journal, key `${groupId}:${rumorId}`, value {groupId, rumorId, senderPubkey, data, receivedAt}; putRumor idempotent, ackRumor deletes, listPendingRumors(groupId) FIFO by receivedAt, sweep by age (30 days) and per-group cap (1000, = dispatcher LRU cap).",
+    "C4: welcomeSubscription.subscribeToGroupMessages wires onApplicationMessage to the journal put for its group.",
+    "C5: Dispatcher acks (journal.ack) at the end of the queued block after all matching handlers, even when a handler throws. Not yet started when disposed: NOT acked — replays next session. Once fan-out has started it is acked in `finally` (at-most-once) even if disposal cuts it short. A sender-mismatched rumor is never acked; a duplicate is acked on the queue, never before the original's handlers finished. Ack failures are warned, never break the queue. On re-subscribe MarmotContext awaits the previous subscription's drain() (bounded) before reading the journal.",
+    "C6: subscription.replay(entries) feeds entries through the identical listener (choke point, LRU, handlers); MarmotContext calls it after dispatcher subscribe and before subscribeToGroupMessages, so replayed rumors run first and suppress live duplicates; drain() covers them.",
+    "C7: The journal is not part of the relay backup payload; it is cleared by clearAllGroupData (account-scoped clear) and per group on leave (leaveGroupImpl purge).",
+    "C8: Privacy invariant untouched: local-only storage, no new network publishes."
+  ],
+  "non_goals": [
+    "Changing marmot-ts (no library patch).",
+    "Making dispatcher handlers idempotent (at-most-once semantics unchanged).",
+    "Hardening the existing id-based dedup against forged rumor ids (pre-existing, same key space as the LRU)."
+  ]
+}

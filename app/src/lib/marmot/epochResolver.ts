@@ -44,15 +44,33 @@ type EpochResolverConfig = {
   maxBufferSize?: number; // default 50
 };
 
+type ApplicationRumorShape = {
+  id: string;
+  kind: number;
+  pubkey: string;
+  created_at: number;
+  content: string;
+  tags: string[][];
+};
+
+/** What `onApplicationMessage` receives for every delivered application message. */
+type ResolvedApplicationMessage = {
+  rumor: ApplicationRumorShape;
+  /** The exact serialized bytes the library emits to the dispatcher. */
+  data: Uint8Array;
+  /** MLS-authenticated sender (hex) from the ingest result. */
+  senderPubkey: string;
+};
+
 type EpochResolverCallbacks = {
-  onApplicationMessage?: (rumor: {
-    id: string;
-    kind: number;
-    pubkey: string;
-    created_at: number;
-    content: string;
-    tags: string[][];
-  }) => void;
+  /**
+   * AWAITED inside the ingest loop, while marmot-ts's generator is suspended at
+   * its `yield` — i.e. before the library emits the message and before it
+   * persists the advanced MLS state. Used for the write-ahead rumor journal
+   * (rumorJournal.ts). A rejection is warned about and swallowed: it must never
+   * abort the generator (that would skip the state save).
+   */
+  onApplicationMessage?: (msg: ResolvedApplicationMessage) => Promise<void> | void;
   onMembersChanged?: (members: string[]) => void;
 };
 
@@ -187,12 +205,8 @@ export class EpochResolver {
 
       if (result.kind === 'processed') {
         if (result.result.kind === 'applicationMessage') {
-          // Dispatch application message immediately
-          const { deserializeApplicationData } = await import('@internet-privacy/marmot-ts');
-          const rumor = deserializeApplicationData(
-            (result.result as { kind: 'applicationMessage'; message: Uint8Array }).message,
-          );
-          this.callbacks.onApplicationMessage?.(rumor);
+          // Write-ahead journal BEFORE the generator resumes (emit + save).
+          await this.journalApplicationMessage(result);
 
           // Add to replay queue if grace window is active
           if (this.snapshot) {
@@ -239,6 +253,44 @@ export class EpochResolver {
     }
 
     return { buffered };
+  }
+
+  /**
+   * GUARD — write-ahead ordering (bug: mls-message-lost-on-unload-after-ingest).
+   *
+   * Every `for await` over `mlsGroup.ingest()` in this class MUST `await` this
+   * call for an application-message result before its loop body finishes.
+   * marmot-ts's ingest generator is suspended at `yield {kind:'processed'}`
+   * until the consumer's loop body completes; only then does it emit
+   * `authenticatedApplicationMessage` and, at batch end, `save()` the advanced
+   * MLS state. Awaiting the journal put here is therefore what guarantees
+   * "journal written ⇒ only then state saved". Dropping the `await` (or adding a
+   * new ingest consumer without it) silently reintroduces the message loss on
+   * page unload. Covered by tests/unit/marmot/epochResolver.journalOrdering.test.ts.
+   *
+   * Caveat: only INGEST-driven saves are sequenced behind the journal put.
+   * Saves outside the ingest generator — the grace-timer
+   * `void this.mlsGroup.save()` in onGraceWindowExpired, and the library's own
+   * send/commit saves — are not; one landing while a put is still pending can
+   * persist the advanced state first. That window is bounded by the put
+   * latency (one small IDB write).
+   *
+   * Never throws: a failed deserialize/put is warned about and the loop goes
+   * on — an exception escaping the loop body would return() the generator and
+   * skip the state save, losing the advanced ratchet as well.
+   */
+  private async journalApplicationMessage(result: IngestResult): Promise<void> {
+    const onApplicationMessage = this.callbacks.onApplicationMessage;
+    if (!onApplicationMessage) return;
+    try {
+      const processed = result as Extract<IngestResult, { kind: 'processed'; senderPubkey: string }>;
+      const data = processed.result.message;
+      const { deserializeApplicationData } = await import('@internet-privacy/marmot-ts');
+      const rumor = deserializeApplicationData(data) as ApplicationRumorShape;
+      await onApplicationMessage({ rumor, data, senderPubkey: processed.senderPubkey });
+    } catch (err) {
+      console.warn('[epochResolver] onApplicationMessage failed; continuing so the MLS state still saves:', err);
+    }
   }
 
   private async handleCommit(event: NostrEvent): Promise<void> {
@@ -300,11 +352,7 @@ export class EpochResolver {
       if (this.disposed) return;
 
       if (result.kind === 'processed' && result.result.kind === 'applicationMessage') {
-        const { deserializeApplicationData } = await import('@internet-privacy/marmot-ts');
-        const rumor = deserializeApplicationData(
-          (result.result as { kind: 'applicationMessage'; message: Uint8Array }).message,
-        );
-        this.callbacks.onApplicationMessage?.(rumor);
+        await this.journalApplicationMessage(result);
       }
     }
 
@@ -330,11 +378,7 @@ export class EpochResolver {
 
       if (result.kind === 'processed') {
         if (result.result.kind === 'applicationMessage') {
-          const { deserializeApplicationData } = await import('@internet-privacy/marmot-ts');
-          const rumor = deserializeApplicationData(
-            (result.result as { kind: 'applicationMessage'; message: Uint8Array }).message,
-          );
-          this.callbacks.onApplicationMessage?.(rumor);
+          await this.journalApplicationMessage(result);
         }
         // Processed — don't re-add to buffer
       } else if (result.kind === 'unreadable') {
@@ -390,4 +434,4 @@ export class EpochResolver {
   }
 }
 
-export type { NostrEvent, EpochSnapshot, EpochResolverConfig, EpochResolverCallbacks, MlsGroupLike };
+export type { NostrEvent, EpochSnapshot, EpochResolverConfig, EpochResolverCallbacks, MlsGroupLike, ResolvedApplicationMessage };

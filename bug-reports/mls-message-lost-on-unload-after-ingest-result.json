@@ -1,0 +1,127 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "marmot-ts ingest yields the processed application message, then emits authenticatedApplicationMessage, then (at batch end) save()s the advanced MLS state with a single store.setItem. The app's dispatcher receives the emit synchronously but runs its handlers asynchronously on its tail queue (several IDB round-trips), so the state save nearly always lands first. A page unload in that window persisted the advanced ratchet but never stored the rumor, which could then never be decrypted again.",
+  "fix": "Write-ahead rumor journal, app-side only. New rumorJournal.ts: idb-keyval store few-rumor-journal (object store 'rumors'), key `${groupId}:${rumorId}`, value {groupId, rumorId, senderPubkey, data, receivedAt (strictly increasing)}; putRumor (idempotent), ackRumor, listPendingRumors (FIFO by receivedAt), sweepRumorJournal, clearRumorJournalForGroup, clearAllRumorJournal, createApplicationMessageJournaler(groupId). Bounds: 30-day max age, 1000 per group (= dispatcher LRU cap), enforced on every list and once per subscribe run. EpochResolver now AWAITS onApplicationMessage({rumor, data, senderPubkey}) in all three ingest loops through one helper, journalApplicationMessage, with a guard comment. It warns and continues on any failure, including an undeserializable payload, which used to throw out of the loop and skip the state save. welcomeSubscription wires the callback to the journal. Dispatcher: createDispatcher(handlers, {journal}) acks in a finally block after the handlers (also when a handler throws, and when disposal cuts the fan-out short). Work skipped because of disposal and sender-mismatched rumors are never acked. A duplicate's ack is queued on the tail, so it never runs before the original's handlers. subscription.replay(entries) feeds entries through the identical listener. buildDispatcher passes the options through. MarmotContext sweeps once per run, subscribes the dispatcher with {journal:{ack}}, then awaits listPendingRumors and calls replay before subscribeToGroupMessages. The journal is cleared in clearAllGroupData (the account-scoped clear) and per group in the leaveGroupImpl purge (new dep clearRumorJournalForGroup). collectBackupPayload is unchanged and reads only its own stores. No new publishes.",
+  "files_changed": [
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/rumorJournal.test.ts",
+    "app/tests/unit/marmot/rumorJournal.integration.test.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.journal.test.ts",
+    "app/tests/unit/marmot/epochResolver.journalOrdering.test.ts",
+    "app/tests/unit/marmot/epochResolver.test.ts",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/e2e/groups-rumor-reload-atomic.spec.ts",
+    "docs/behavior/groups.md",
+    "bug-reports/mls-message-lost-on-unload-after-ingest-contract.json",
+    "bug-reports/mls-message-lost-on-unload-after-ingest-result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/epochResolver.test.ts",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "docs/behavior/groups.md"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/tests/unit/marmot/rumorJournal.test.ts",
+    "app/tests/unit/marmot/rumorJournal.integration.test.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.journal.test.ts",
+    "app/tests/unit/marmot/epochResolver.journalOrdering.test.ts",
+    "app/tests/e2e/groups-rumor-reload-atomic.spec.ts",
+    "bug-reports/mls-message-lost-on-unload-after-ingest-contract.json",
+    "bug-reports/mls-message-lost-on-unload-after-ingest-result.json"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/context/MarmotContext.tsx"
+  ],
+  "tests_added": [
+    "epochResolver.journalOrdering.test.ts (8): put-before-post-yield for loop 1/2/3, exact bytes + sender passed, rejecting/sync-throwing put and undeserializable payload never abort the generator (state save still runs), no callback -> no deserialize. All 8 failed pre-fix; the 3 ordering tests failed on the 'must precede' assertion.",
+    "rumorJournal.test.ts (22): store identity, put/list, idempotent put, ack, group scoping + FIFO, strictly increasing stamps, age drop, 6 malformed-row cases, key-order vs receivedAt sort, sweep age + per-group cap, bounds sanity, per-group/all clear, journaler wiring + 4 id-rejection cases.",
+    "rumorJournal.integration.test.ts (2): real EpochResolver + journal + stub group whose ingest store.setItem()s after the yield -> journal write strictly precedes the state write; simulated unload after the state save -> next session's replay delivers exactly once and acks.",
+    "applicationRumorDispatcher.journal.test.ts (16): ack after all handlers, ack despite a throwing handler, ack for an unhandled kind, ack failures (async/sync) contained, duplicate ack never before the original's handlers (outer and inner isSeen paths), disposal: skipped work not acked, mid-fan-out acked, mismatched sender never acked, no-journal unchanged; replay through the same listener (mls sender), replay before live in journal order, replayed id suppresses its live duplicate, replay after disposal is a no-op and malformed entries are skipped, drain covers replay.",
+    "leaveGroupImpl.test.ts (+3): journal cleared on the abandon, multi-member and no-mlsGroup paths, before reloadGroups.",
+    "groupStorage.clearAllGroupData.test.ts (+1): account clear drops the journal.",
+    "relayBackup.test.ts (+1): the backup payload never contains journal content, and its key set is unchanged.",
+    "app/tests/e2e/groups-rumor-reload-atomic.spec.ts (1): Alice reloads the moment her socket receives Bob's kind-445 (chat, then a nickname update) and must show the message with Bob's name, then the new name."
+  ],
+  "baseline": {
+    "unit_files": 238,
+    "unit_passed": 5001,
+    "unit_skipped": 1,
+    "tsc": "clean"
+  },
+  "final": {
+    "unit_files": 243,
+    "unit_passed": 5066,
+    "unit_skipped": 1,
+    "tsc": "clean"
+  },
+  "e2e": {
+    "postfix": "groups-rumor-reload-atomic --repeat-each=10: 10/10. groups-contacts: 10/10, as 10 separate runs each on a freshly wiped relay. dispatch-related (groups-dispatch-isolation, groups-reactions, groups-polls, groups-message-edit-delete, groups-profile-*): 74/74. Every run held the shared flock and started with down -v / up --wait. The logs have no 'full reload' or ' 500 '.",
+    "note": "A first groups-contacts --repeat-each=10 run on a single wiped relay gave 1 passed and 9 failed. In each failure the bubble count was exactly repeatIndex+1: the spec uses fixed identities and fixed DM text, so the DM history from earlier repeats accumulates on the relay. This is a repeat artifact of the spec, not a regression (the DM path is untouched). Per-run wiping gives 10/10."
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config /tmp/claude-501/mutation/journal/stryker.journal.config.mjs (+ vitest.journal.config.mjs), reports under /tmp/claude-501/mutation/journal/",
+    "mutate": "rumorJournal.ts (module); epochResolver.ts:66-73,208-209,258-288,348,374; applicationRumorDispatcher.ts:96-97,130-138,150-156,186-210,241-247",
+    "before": "80.61% (133 killed, 32 survived, 165 mutants): rumorJournal 80.80%, dispatcher 78.13%, epochResolver 87.50%",
+    "after": "100% (125 killed, 0 survived)",
+    "gaps_closed": "Real gaps: the receivedAt sort was untested, because the Map mock returns rows in insertion order while IDB returns them in key order (new key-order test, and the cap test inserts newest-first). The same-millisecond stamp branch was untested (test now freezes the clock ahead of earlier stamps). Per-field malformed-row checks were missing (6 cases). The duplicate-ack and mid-fan-out disposal paths were untested. Journaler id validation was missing (4 cases). Two log-tag assertions were added. Redundant guards (empty delMany, a !journal pre-check, the replay disposed-break, onlyGroup prefix filtering) were removed instead of being tested.",
+    "audit_record": "recorded via mutation-audits add-audit.sh, slug quizzl: rumorJournal.ts scope module 1.00; epochResolver.ts and applicationRumorDispatcher.ts scope changed_lines 1.00"
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. epochResolver.journalOrdering.test.ts drives processEvent, flushFutureBuffer and rollbackAndReplay with a stub async-generator group that logs its post-yield code, and a put that resolves on a later macrotask. In every loop, put-done comes before post-yield and before state-save. The ordering tests failed pre-fix. Rejecting, synchronously throwing and undeserializable cases all still run the post-yield code and the state save, and warn.",
+    "VQ-2": "Yes. rumorJournal.integration.test.ts uses the real EpochResolver, createApplicationMessageJournaler and rumorJournal, with idb-keyval writes completing on a later macrotask. The write log is exactly [few-rumor-journal:<g>:r1, test-groups-state:<g>].",
+    "VQ-3": "Yes. replay() calls the same listener closure: choke point, LRU, handlers, ack. Tests cover the mls-authenticated sender for replayed entries, replay before later live rumors in journal order, a replayed id suppressing its live duplicate (handler called once), ack after all handlers and despite a throwing handler, and drain() covering replay. MarmotContext calls replay after subscribe and before subscribeToGroupMessages.",
+    "VQ-4": "Yes. The journal is a separate local IDB database (few-rumor-journal). The relayBackup test shows the payload holds no journal content and its key set is unchanged. Bounds are 30 days and 1000 per group, enforced on list and by a sweep per subscribe run. It is cleared on account clear and on leave. No network code was added and there are no new publishes.",
+    "VQ-5": "Yes. groups-rumor-reload-atomic --repeat-each=10 passed 10/10 on a wiped relay (chat, then a profile update, each with a reload at the moment the 445 frame arrives). groups-contacts passed 10/10, each run on a freshly wiped relay; see the e2e note about the single-relay repeat artifact. Caveat: the reload cut point cannot be controlled, so the unit tests carry the branch coverage.",
+    "VQ-6": "Yes. 242 files, 5054 passed, 1 skipped; tsc clean. Stryker at concurrency 1 went from 80.61% to 100% on the journal, the dispatcher ack/replay ranges and the epochResolver changes, with no survivors."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The requested groups-contacts --repeat-each=10 cannot pass on a single wiped relay. The spec uses fixed identities and fixed DM text, so repeat N sees N+1 bubbles. Its 10x gate needs one wipe per run, which costs about 10 relay restarts. Stryker also cannot load a scratch vitest config from /tmp that imports 'vitest/config' (MODULE_NOT_FOUND); a plain-object .mjs config works.",
+    "surprised_by": "The Map-backed idb-keyval mocks used across the unit suite return rows in insertion order, while real IndexedDB returns them in key order. Ordering logic over entries() can look fully tested and still be unexercised; only the mutation run exposed the untested sort.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "findings": [
+      "dispatcher disposal/ack comment imprecise (C5 wording)",
+      "epochResolver guard comment missing non-ingest-save caveat",
+      "re-subscribe could replay an entry whose handler was still running in the torn-down subscription (double run)",
+      "behaviour doc cited bug-reports/"
+    ],
+    "code": "applicationRumorDispatcher.ts: comment reworded as given; contract C5 amended to the same wording (+ re-subscribe drain). epochResolver.ts guard comment: caveat that grace-timer `void this.mlsGroup.save()` and library send/commit saves are not sequenced behind a pending put; guarantee covers ingest-driven saves only, window bounded by put latency. MarmotContext.tsx: new dispatcherDrainsRef Map<groupId, drain>; each subscribe captures the previous subscription's drain for the group (set at dispatcher-subscribe time rather than in cleanup so a setup aborted before subsMap.set is also covered), then before listPendingRumors awaits it raced against a 3 s timeout and rechecks isCurrent(). docs/behavior/groups.md source now cites rumorJournal.ts, epochResolver.journalOrdering.test.ts and groups-rumor-reload-atomic.spec.ts.",
+    "tests_added": "applicationRumorDispatcher.journal.test.ts +1: dispose old sub mid-handler, new sub (fresh LRU), await old drain, replay remaining journal entries -> m1 (running at disposal) handled once in total, m2 (not started) replayed once, journal empty.",
+    "verified": "make test-unit 243 files / 5066 passed / 1 skipped (one extra file from the parallel agent); tsc clean. e2e on wiped relay under the lock: groups-rumor-reload-atomic --repeat-each=5 5/5; make test-e2e-groups 343 passed, 19 skipped, 0 failed, no INVALID marker.",
+    "mutation": "not re-run: the dispatcher change is comment-only (round-0 ranges stay 100%); the MarmotContext drain-await lives in a React effect with no unit seam in this repo (no jsdom/renderHook) and is covered by the new dispatcher-level test of the same sequence."
+  }
+}

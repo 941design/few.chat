@@ -157,7 +157,7 @@ describe('EpochResolver — application message', () => {
     await resolver.ingestEvent(makeEvent());
 
     expect(cb.onApplicationMessage).toHaveBeenCalledTimes(1);
-    expect(cb.onApplicationMessage).toHaveBeenCalledWith(rumor);
+    expect(cb.onApplicationMessage).toHaveBeenCalledWith(expect.objectContaining({ rumor }));
   });
 });
 
@@ -294,7 +294,7 @@ describe('EpochResolver — future buffer', () => {
       // Ingest commit → triggers flush, buffered event now readable
       await resolver.ingestEvent(makeEvent({ id: 'commit-1' }));
       expect(cb.onApplicationMessage).toHaveBeenCalledTimes(1);
-      expect(cb.onApplicationMessage).toHaveBeenCalledWith(rumor);
+      expect(cb.onApplicationMessage).toHaveBeenCalledWith(expect.objectContaining({ rumor }));
     } finally {
       vi.useRealTimers();
     }
