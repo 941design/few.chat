@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T06:48:42Z",
+  "updated_at": "2026-10-15T08:28:36Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -456,19 +456,6 @@
       "kind": "spec-gap"
     },
     {
-      "slug": "group-profile-sync-marmot-profilesync-ts",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/profileSync.ts"
-      },
-      "text": "Group profile-sync (marmot/profileSync.ts payloadToMemberProfile) accepts any avatar.imageUrl from the wire with no scheme allow-list or length cap, unlike the 1:1 dmProfile channel which validates it",
-      "created_at": "2026-07-19",
-      "motivation": "A group member can put a javascript: or data: URL in their profile's avatar and it is stored and later used as an image source for other members — a latent injection/XSS-adjacent vector. The 1:1 profile codec deliberately validates avatar URL scheme (https:// or //) and the code comment in dmProfile/kinds.ts explicitly notes the group path does NOT, so the asymmetry is known but untracked. Surfaced while writing docs/behavior/profiles-and-identity.md.",
-      "behavior": "payloadToMemberProfile reads payload.avatar.imageUrl and stores it as-is with no validation; dmProfile/kinds.ts validates scheme (https/protocol-relative) and rejects malformed avatars, and its own doc comment flags that the MLS group profile-sync mechanism performs no such check. Group member profiles are trusted-member-attested only (ADR-006), so a member can inject an arbitrary avatar URL.",
-      "approach": "Apply the same avatar-URL scheme allow-list and length cap used by the 1:1 dmProfile codec to payloadToMemberProfile before persisting a member profile.",
-      "kind": "spec-gap"
-    },
-    {
       "slug": "you-cannot-re-add-reaction-emoji",
       "scope": "any",
       "anchor": {
@@ -522,19 +509,6 @@
       "success_signal": "Adding a contact to a group from their profile page shows a visible success confirmation even when it was their only addable group"
     },
     {
-      "slug": "display-only-chat-announcements-spoofable-share",
-      "scope": "groups",
-      "anchor": {
-        "path": "app/src/lib/marmot/parseStructured.ts",
-        "line": 26
-      },
-      "text": "Display-only chat announcements are spoofable and share a latent malformed-pubkey crash gap",
-      "created_at": "2026-07-19",
-      "motivation": "All structured timeline notices (group_renamed, leave_intent, invite_cancelled, poll_*, member_admitted) render from any member-sent kind-9 with no authentication, so a member can post a cosmetic fake notice; separately, the leave_intent/invite_cancelled guards accept any string pubkey which can throw in pubkeyToNpub on malformed hex and break the timeline for receivers (member_admitted was hardened to 64-hex in epic group-admission-chat-announcement; the siblings were left for a uniform pass).",
-      "behavior": "Notices are display-only decorations; membership/admin state remains authoritative from MLS, so a spoof cannot change real state, and the actor is always the real protocol sender. Product owner accepted the spoofability as-is for member_admitted (2026-07-19). The malformed-pubkey render throw is latent in the sibling guards.",
-      "approach": "If hardening is desired: add a non-forgeable/authenticated marker (or validate against a real approval/commit event) uniformly across all announcement types; and tighten leave_intent/invite_cancelled pubkey guards to canonical 64-hex like member_admitted now is."
-    },
-    {
       "slug": "poll-vote-store-key-not-group",
       "scope": "any",
       "anchor": {
@@ -573,23 +547,6 @@
       "motivation": "A user signed in through a browser extension or remote signer believes their groups are backed up like everyone else's, but nothing is ever published; losing the device loses all group state. The limit is now documented in docs/behavior/backup-and-recovery.md §3, but not fixed.",
       "behavior": "BackupProvider's effect returns early when privateKeyHex is null, so no BackupScheduler exists in external-signer mode and markDirty is a no-op; publishBackup/fetchBackup also assume a local-key signer (createPrivateKeySigner).",
       "approach": "Handle with the signer-authority work (2026-09-26 review task R04): route backup encrypt/sign through the active signer, decide whether background NIP-44 encrypt/sign prompts are acceptable for NIP-46/NIP-07, and gate the restore flow accordingly."
-    },
-    {
-      "slug": "invite-accept-not-atomic-across-page-unload",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/welcomeSubscription.ts",
-        "range": [
-          511,
-          532
-        ]
-      },
-      "text": "Accepting a group invitation is not atomic across a page unload: navigating away mid-accept can lose the join (MLS-joined but no Group record) or leave a stale invitation next to the joined group",
-      "created_at": "2026-10-14",
-      "motivation": "A user who taps Accept and immediately navigates/reloads can end up MLS-member of a group they never see, with the retry path reporting 'This invitation is no longer valid' — a correctness bug, not cosmetic. Surfaced 2026-10-14 by bug run groups-e2e-suite-flaky-under-shared, where the e2e suite's own navigation aborted joins 1 in 3 times.",
-      "behavior": "joinGroupFromWelcomeCore runs marmotClient.joinGroupFromWelcome (adopts MLS state, consumes key package) → await saveGroup → removePendingInvitation → reloadGroups. Unload between adopt and saveGroup: invitation stays pending, no group card; re-accept likely throws (used key package) and the catch at welcomeSubscription.ts:1363-1370 removes the invitation with an 'invalid' notice. Unload between saveGroup and removePendingInvitation: joined card plus a stale invitation. pendingInvitations.ts never reconciles against joined groups.",
-      "approach": "1) Verify marmot-ts behaviour on re-joining from an already-adopted Welcome. 2) On load, drop pending invitations whose groupId is already a joined group (invitation stores groupId, pendingInvitations.ts:50). 3) For the lost-join window, rebuild the Group record from adopted MLS state on startup (or make the join idempotent). Add an e2e that reloads mid-accept.",
-      "success_signal": "An e2e that reloads the page immediately after clicking Accept ends with exactly one joined group card and no invitation, across 5 runs"
     },
     {
       "slug": "first-relay-backup-fragile-at-cold-start",
@@ -655,6 +612,66 @@
       "behavior": "The leave-chat-announcement row interpolates the leaver's display name; when no profile is known the name is empty and no fallback is applied (the npub is deliberately not shown).",
       "approach": "Owner picks the fallback wording (en+de in i18n.ts); render it when the name is empty; the e2e should then also wait for profile propagation before asserting the name.",
       "success_signal": "With the leaver's profile absent, the row reads the chosen fallback; groups-leave-intent passes across 3 full runs"
+    },
+    {
+      "slug": "left-groups-keep-mls-state-forever",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/leaveGroupImpl.ts",
+        "range": [
+          148,
+          165
+        ]
+      },
+      "text": "Leaving or abandoning a group deletes only the app's overlay record; the MLS group state (secrets, history) stays in IDB forever and is included in every relay backup",
+      "created_at": "2026-10-15",
+      "motivation": "Found 2026-10-15 (Fable design consult for invite-accept-not-atomic): every group ever left is an MLS-only orphan in few-groups-state. Its key material outlives membership on the device and is re-exported by relayBackup.ts:121-126, restored on every device, and caused re-invite-after-leave to fail (fixed separately at accept time).",
+      "behavior": "leaveGroupImpl → removeGroupFromStorage = groupStorage.deleteGroup (overlay only); only clearAllGroupData touches few-groups-state. Startup groups.loadAll() loads the orphans into marmot's cache; nothing purges them.",
+      "approach": "After the leave's fire-and-forget kind-9 send has been handed off (don't race it), call marmotClient.groups.destroy(id) (local-only). Optionally a one-time startup purge of MLS-only groups that have no overlay record and no pending invitation (accepting that a solo group whose creation was interrupted before its overlay write is dropped — it was never shown).",
+      "success_signal": "After leaving, few-groups-state has no entry for the group and the next backup contains none"
+    },
+    {
+      "slug": "reinvite-after-eviction-fails-already-exists",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/welcomeSubscription.ts",
+        "range": [
+          511,
+          532
+        ]
+      },
+      "text": "Re-inviting a member who was evicted (remove-member) fails on their side: their device still holds the overlay + MLS state, so accepting the new Welcome throws 'already exists' and ends as 'This invitation is no longer valid'",
+      "created_at": "2026-10-15",
+      "motivation": "Found 2026-10-15 (Fable design consult): the app has no self-eviction detection, so an evicted member keeps both records; a fresh valid Welcome for a group they still hold means the admin removed and re-added them. groups-remove-member.spec.ts:189 re-invites but never accepts, so this is untested.",
+      "behavior": "Evicted members keep overlay + MLS state. Before 2026-10-15 accepting a re-invite threw 'already exists' → 'This invitation is no longer valid'; after the invite-accept-not-atomic fix the core treats overlay+MLS present as 'already joined', clears the invitation silently and does not adopt the new Welcome — the user stays on stale, dead group state either way.",
+      "approach": "Detect self-removal (own leaf gone after a commit) and/or, on a Welcome for a group whose local epoch/state is stale, replace local state: tear down the per-group subscription (MarmotContext.tsx ~:1522 only re-runs on id add/remove), groups.destroy, re-join. Add an e2e: remove C → re-invite C → C accepts → C can chat.",
+      "success_signal": "e2e: an evicted member who is re-invited can accept and exchange messages"
+    },
+    {
+      "slug": "stored-group-avatars-not-resanitized",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/profileSync.ts"
+      },
+      "text": "Group member avatars stored before the 2026-10-15 avatar-URL check stay in IDB and the contact cache (and render) until that member sends a newer profile",
+      "created_at": "2026-10-15",
+      "motivation": "The untrusted-group-input hardening validates avatar URLs on receipt only; an unsafe URL (http tracker, javascript:/data:) persisted earlier is still used as an image source. Reviewer note, bug run untrusted-group-input-hardening.",
+      "behavior": "payloadToMemberProfile now drops invalid avatars on ingest; stored MemberProfile rows (few-member-profiles) and contact-cache entries are read without re-validation.",
+      "approach": "Apply isAllowedAvatarImageUrl (dmProfile/kinds.ts) on read in the member-profile / contact-cache loaders (drop the avatar, keep the profile), or a one-time sanitise pass at startup.",
+      "success_signal": "A pre-seeded stored member profile with an http:// avatar renders without the avatar after reload"
+    },
+    {
+      "slug": "multi-tab-mls-cache-coherence",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx"
+      },
+      "text": "Multi-tab MLS group cache coherence: each tab caches its own group instances, and a write in one tab leaves another tab at a stale epoch (single active client or cross-tab invalidation needed)",
+      "created_at": "2026-10-15",
+      "motivation": "Each tab builds its own MarmotClient and caches group instances from groups.loadAll(); no BroadcastChannel/leader election exists (only navigator.locks in welcomeSubscription.ts join lock). A write in tab B (commit, leave, or the destroy→re-join in joinIdempotent) leaves tab A's instance stale; A can pass groups.has + loadGroup checks using B's overlay while sending/subscribing with stale state and re-persisting it over B's. Surfaced by a Codex HIGH on bug invite-accept-not-atomic-across-page-unload round 1; waived there by the Decider (pre-existing class, epic-sized).",
+      "behavior": "Two tabs on the same identity; accept (or any epoch-advancing action) in one, then act in the other → the second tab sends undecryptable messages / overwrites fresher MLS state; today's outcome is silent divergence.",
+      "approach": "Choose (a) one active client per origin via navigator.locks leader election, passive tabs render from IDB and forward actions, or (b) BroadcastChannel mls-state-changed {groupId} after every group.save/destroy with receivers evicting and reloading; (a) is simpler to reason about. Add a two-context e2e that advances the epoch in tab 1 and sends from tab 2.",
+      "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
     }
   ],
   "archive": [
