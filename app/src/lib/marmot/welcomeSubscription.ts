@@ -12,7 +12,7 @@
 
 import type { Group } from '@/src/types';
 import { DEFAULT_RELAYS, STORAGE_KEYS } from '@/src/types';
-import { saveGroup } from './groupStorage';
+import { saveGroup, loadGroup, loadAllGroups } from './groupStorage';
 import type { EventSigner } from 'applesauce-core';
 import { verifyEvent, getEventHash } from 'nostr-tools/pure';
 import {
@@ -505,10 +505,83 @@ export async function unwrapGiftWrap(
  * lets a never-enqueued Welcome (auto-accept) join directly without an
  * enqueue-then-immediately-dequeue detour (AC-AUTO-2).
  *
+ * Idempotent against local MLS state for the Welcome's group (bug
+ * invite-accept-not-atomic-across-page-unload). The join is two writes in
+ * two stores — marmot-ts persists MLS state (few-groups-state), then we
+ * persist the overlay (few-groups-meta) — so a page unload in between, or a
+ * leave (which purges only the overlay, leaveGroupImpl), leaves MLS state
+ * behind, and marmot-ts's adoptClientState then throws "Group <hex> already
+ * exists" on every later join. So, with the group id resolved PRE-JOIN
+ * (`knownGroupId` from the pending entry, else the Welcome's groupContext —
+ * never the rumor's self-claimed pubkey):
+ *   - MLS state + overlay → already joined: return the existing Group, no join.
+ *   - MLS state, no overlay → orphan: `groups.destroy(id)` (local-only purge
+ *     of state/history/media/snapshots, no network) then a normal join.
+ * An unresolvable id ('') skips the check (callers' last-resort catch stays).
+ *
+ * Check → destroy → join → saveGroup runs under a per-group lock
+ * ({@link withGroupJoinLock}). Without it, a second accept of the same group
+ * (another tab, or manual accept racing auto-accept) arriving after the first
+ * one's MLS save but before its saveGroup would see "MLS state, no overlay"
+ * and destroy the live join.
+ *
  * Throws on MLS failure — callers are responsible for translating that into
  * their own fallback behavior.
  */
 async function joinGroupFromWelcomeCore(
+  welcomeRumor: unknown,
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  knownGroupId = '',
+): Promise<Group> {
+  const groupId =
+    knownGroupId ||
+    ((await readPreJoinGroupData(welcomeRumor as UnwrappedRumor, marmotClient))?.groupId ?? '');
+  if (!groupId) return joinAndPersist(welcomeRumor, marmotClient);
+  return withGroupJoinLock(groupId, () => joinIdempotent(groupId, welcomeRumor, marmotClient));
+}
+
+/** In-tab fallback for {@link withGroupJoinLock}: per-group promise chains. */
+const groupJoinChains = new Map<string, Promise<unknown>>();
+
+/**
+ * Serializes `fn` per group id. Cross-tab safety relies on the Web Locks API
+ * (`navigator.locks`, lock name `few-join-<groupId>`), which every supported
+ * browser provides. Where it is missing (unit tests under Node, SSR) an
+ * in-module promise chain serializes within this JS realm only. A rejected
+ * run never wedges the chain for later callers.
+ */
+function withGroupJoinLock<T>(groupId: string, fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (locks && typeof locks.request === 'function') {
+    return locks.request(`few-join-${groupId}`, fn) as Promise<T>;
+  }
+  const run = (groupJoinChains.get(groupId) ?? Promise.resolve()).then(fn, fn);
+  const tail = run.catch(() => undefined);
+  groupJoinChains.set(groupId, tail);
+  void tail.then(() => {
+    if (groupJoinChains.get(groupId) === tail) groupJoinChains.delete(groupId);
+  });
+  return run;
+}
+
+async function joinIdempotent(
+  groupId: string,
+  welcomeRumor: unknown,
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+): Promise<Group> {
+  if (await marmotClient.groups.has(groupId)) {
+    const existing = await loadGroup(groupId);
+    if (existing) {
+      logger.info('dm:invite-accept-already-joined', { group: groupId.slice(0, 8) });
+      return existing;
+    }
+    logger.info('dm:invite-accept-orphan-state-purged', { group: groupId.slice(0, 8) });
+    await marmotClient.groups.destroy(groupId);
+  }
+  return joinAndPersist(welcomeRumor, marmotClient);
+}
+
+async function joinAndPersist(
   welcomeRumor: unknown,
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
 ): Promise<Group> {
@@ -1324,6 +1397,61 @@ export async function subscribeToGroupMessages(
 }
 
 /**
+ * Startup reconciliation (bug invite-accept-not-atomic-across-page-unload):
+ * drops pending invitations for groups the user is already in — the residue
+ * of an accept interrupted after `saveGroup` but before
+ * `removePendingInvitation`. "Already in" requires BOTH an overlay record for
+ * the invitation's non-empty `groupId` AND local MLS state
+ * (`marmotClient.groups.has`): an overlay-only group (e.g. a backup restore
+ * interrupted between its overlay and MLS-state writes) cannot be used, and
+ * its invitation is the way back in, so it is kept. A failing MLS-state check
+ * also keeps the invitation. Entries with an empty `groupId` are never touched.
+ * Local-only; returns how many invitations were dropped.
+ */
+export async function dropInvitationsForJoinedGroups(
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+): Promise<number> {
+  const overlayIds = new Set((await loadAllGroups()).map((g) => g.id));
+  let dropped = 0;
+  for (const inv of listPendingInvitations()) {
+    if (!inv.groupId || !overlayIds.has(inv.groupId)) continue;
+    let hasMlsState = false;
+    try {
+      hasMlsState = await marmotClient.groups.has(inv.groupId);
+    } catch {
+      hasMlsState = false;
+    }
+    if (hasMlsState) {
+      removePendingInvitation(inv.id);
+      dropped++;
+    }
+  }
+  return dropped;
+}
+
+/**
+ * MarmotContext init step: load the MLS groups, then reconcile pending
+ * invitations against them ({@link dropInvitationsForJoinedGroups}). When
+ * `groups.loadAll()` fails the local state is in doubt, so reconciliation is
+ * skipped entirely. Never throws.
+ */
+export async function loadGroupsAndReconcileInvitations(
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+): Promise<void> {
+  try {
+    await marmotClient.groups.loadAll();
+  } catch (err) {
+    console.warn('[Marmot] groups.loadAll failed:', err);
+    return;
+  }
+  try {
+    await dropInvitationsForJoinedGroups(marmotClient);
+  } catch (err) {
+    console.warn('[Marmot] invitation reconciliation failed:', err);
+  }
+}
+
+/**
  * Accept a pending invitation: parse the stored welcomeEventJson, call
  * joinGroupFromWelcome, persist the group, and remove the entry from the queue.
  *
@@ -1357,7 +1485,7 @@ export async function acceptPendingInvitation(
     // S4: shared join core — the SAME join-and-persist logic the auto-accept
     // path (inside subscribeToWelcomes) calls, so knownPeers population and
     // downstream effects are identical regardless of path.
-    joinedGroup = await joinGroupFromWelcomeCore(parsedWelcome, marmotClient);
+    joinedGroup = await joinGroupFromWelcomeCore(parsedWelcome, marmotClient, entry.groupId);
     removePendingInvitation(id);
     logger.info('dm:walled-garden-invite-accept', { id: id.slice(0, 8) });
   } catch (err) {

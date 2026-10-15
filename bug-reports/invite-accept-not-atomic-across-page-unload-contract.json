@@ -1,0 +1,33 @@
+{
+  "bug_name": "invite-accept-not-atomic-across-page-unload",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/welcomeSubscription.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/**",
+      "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+      "app/tests/e2e/groups-accept-reload-atomic.spec.ts"
+    ],
+    "must_not_edit": [
+      "app/src/lib/marmot/parseStructured.ts",
+      "app/src/lib/marmot/profileSync.ts",
+      "app/src/lib/dmProfile/kinds.ts",
+      "app/src/components/**/ChatBox.tsx",
+      "BACKLOG.json"
+    ]
+  },
+  "behaviour": [
+    "C1: joinGroupFromWelcomeCore resolves the Welcome's MLS group id PRE-JOIN: the pending entry's groupId when non-empty, else readWelcomeGroupInfo(...).groupContext.groupId via readPreJoinGroupData; never from the rumor's self-claimed pubkey. An unresolvable id ('') skips the checks below.",
+    "C2: id resolved and marmotClient.groups.has(id) and an overlay record exists -> already joined: no joinGroupFromWelcome, the existing Group is returned unchanged; callers remove the invitation / consume the outbound record and fire onGroupJoined.",
+    "C3: id resolved and groups.has(id) but no overlay record -> orphan (interrupted accept or leave residue): await marmotClient.groups.destroy(id) (local only, no raw store deletes, no publish), then the normal join + saveGroup.",
+    "C4: manual accept (acceptPendingInvitation) and auto-accept (subscribeToWelcomes) both go through the same core; the existing catch in acceptPendingInvitation (remove invitation + 'This invitation is no longer valid') stays as the last resort for any other failure, including a failing destroy.",
+    "C5: startup (MarmotContext init, after groups.loadAll()) drops pending invitations whose non-empty groupId has an overlay record; entries with an empty groupId are never touched.",
+    "C6: privacy invariant untouched: no new network publishes; destroy is local."
+  ],
+  "non_goals": [
+    "Global startup purge of orphan MLS groups.",
+    "Destroying MLS state on leave.",
+    "Re-invite after eviction (removed by admin)."
+  ]
+}

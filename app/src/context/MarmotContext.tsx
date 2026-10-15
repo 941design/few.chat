@@ -1227,11 +1227,15 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         clientRef.current = client;
 
-        // Load existing groups from MLS state store
+        // Load existing groups from MLS state store, then drop invitations for
+        // groups already joined (an accept interrupted after the overlay write
+        // but before the invitation was dequeued). Reconciliation is skipped
+        // when loadAll fails; neither step throws.
         try {
-          await client.groups.loadAll();
+          const { loadGroupsAndReconcileInvitations } = await import('@/src/lib/marmot/welcomeSubscription');
+          await loadGroupsAndReconcileInvitations(client);
         } catch (err) {
-          console.warn('[Marmot] groups.loadAll failed:', err);
+          console.warn('[Marmot] group load/reconciliation failed:', err);
         }
 
         // Publish KeyPackages if none exist

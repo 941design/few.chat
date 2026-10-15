@@ -1,0 +1,92 @@
+{
+  "bug_name": "invite-accept-not-atomic-across-page-unload",
+  "bug_report_file": "bug-reports/invite-accept-not-atomic-across-page-unload-report.md",
+  "created_at": "2026-10-15T06:52:43Z",
+  "updated_at": "2026-10-15T08:28:30Z",
+  "phase": "ACCEPTED",
+  "complexity": "high",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Do unit tests cover the three core branches (fresh join; already-joined → no join, existing Group returned; orphan → groups.destroy then join), failing before the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does an e2e (through the app, no raw WebSocket) show leave → re-invite → accept now succeeds (failing before the fix), and does a reload-right-after-Accept e2e end with exactly one group card and no invitation?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SPEC",
+      "question": "Is the group id resolved pre-join from the pending entry / Welcome group context (never from the rumor pubkey), and do manual and auto-accept share the core?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "ARCHITECTURE",
+      "question": "Is orphan removal done only via marmotClient.groups.destroy (no raw store deletes), local-only, with no new network publishes (privacy invariant)?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Startup drops only pending invitations whose non-empty groupId has an overlay record; legacy empty-groupId entries untouched — tested?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; mutation audit of the touched welcomeSubscription join/accept functions has no real-gap survivors; relevant group e2e specs pass on a wiped relay?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "0797fd3bf14c9f74a190f83ae0bf8ec9f7df31f2",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "REJECTED: R1 cross-tab/concurrent accept can destroy a live join (Codex high, confirmed); R2 startup reconciliation drops valid invitation after interrupted restore (Codex high, confirmed)",
+      "examiner": "VQ-1,3,4,5 YES; VQ-2 PARTIAL (reload spec cannot pin cut point); VQ-6 PARTIAL (self-reported numbers)"
+    },
+    {
+      "round": 1,
+      "reviewer": "REJECTED solely on a Codex HIGH judged pre-existing (multi-tab MLS cache coherence); R1/R2 verified fixed",
+      "decider": "ACCEPT (Fable): waived as pre-existing app-wide class; follow-up finding multi-tab-mls-cache-coherence"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T06:49:23Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T07:23:37Z",
+      "trigger": "fast_path_first_retry"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T08:05:29Z",
+      "trigger": "decider_accept"
+    }
+  ],
+  "e2e_gate": {
+    "run": "verify-1 2026-10-15",
+    "result": "72 passed / 1 failed",
+    "own_specs": "groups-reinvite-after-leave, groups-accept-reload-atomic, invitation-preview, direct-invite-lifecycle, pull-only-invitation-accept all passed",
+    "failed": [
+      "groups-leave-intent:198 AC-MEMBERS-2 blank name — pre-existing profile-propagation flake, under diagnosis"
+    ]
+  },
+  "mutation": {
+    "round0": "53.5% -> 69.0%",
+    "round1": "72.3% -> 81.5%, 12 survivors all equivalent/log-only"
+  }
+}

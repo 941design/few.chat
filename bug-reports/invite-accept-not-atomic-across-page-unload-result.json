@@ -1,0 +1,101 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "remediation_round_1": {
+    "findings": [
+      "R1 concurrent accepts can destroy a live join",
+      "R2 startup reconciliation can drop a valid invitation after an interrupted restore"
+    ],
+    "code": "R1: joinGroupFromWelcomeCore now runs check -> destroy -> join -> saveGroup (and the already-joined short-circuit) inside withGroupJoinLock(groupId). That uses navigator.locks.request('few-join-<groupId>') when available (the cross-tab guarantee), else a per-groupId in-module promise chain. A rejected run does not wedge the chain. An unresolvable id takes no lock. R2: dropInvitationsForJoinedGroups(marmotClient) drops an invitation only when an overlay record exists AND groups.has(groupId) is true; a has() failure keeps it. New loadGroupsAndReconcileInvitations(client) replaces MarmotContext's loadAll block, skips reconciliation when loadAll fails, and never throws. Also: the groups-accept-reload-atomic header now states it cannot pick a cut point (the unit tests cover each branch); the docs/behavior/groups.md wording on the brief overlap was softened.",
+    "tests_added": "inviteAcceptIdempotentJoin.test.ts now has 29 tests. New: paused-join race (failed pre-fix: destroy hit the live join), failed-first-accept does not wedge, different groups not serialized, Web Lock name, no lock for unresolvable id, has()/loadGroup() rejection leads to no destroy, overlay-only invitation kept (failed pre-fix), has() failure keeps it, loadAll failure skips reconciliation (failed pre-fix), reconciliation failure swallowed.",
+    "verified": "29/29 tests in the file passed and tsc was clean right after the R1/R2 code change.",
+    "not_verified": "BLOCKED_EXTERNAL: the host root filesystem then began returning EIO on /bin/sh and /tmp, so no process can be spawned (Bash, Monitor and the serena shell all fail). Not yet run: tsc after the final MarmotContext try/catch wrap (a trivial change), the full unit suite, the Stryker re-run and the e2e re-run. The project mount itself is still readable and writable."
+  },
+  "root_cause": "Accepting a Welcome writes two stores non-atomically: marmot-ts joinGroupFromWelcome persists MLS state (few-groups-state), then the app saves the overlay Group (few-groups-meta), then dequeues the invitation. An unload between the writes, or a leave (leaveGroupImpl purges only the overlay), leaves MLS state without an overlay. Any later join of that group hits adoptClientState's 'Group <hex> already exists'; acceptPendingInvitation's catch then drops the invitation as 'no longer valid'. So re-invite after leave always failed, and an interrupted accept left the user an invisible MLS member. An unload after saveGroup but before the dequeue left a joined card plus a stale invitation.",
+  "fix": "joinGroupFromWelcomeCore (shared by manual accept and auto-accept) resolves the group id pre-join: the pending entry's groupId, else readPreJoinGroupData -> readWelcomeGroupInfo groupContext.groupId, never the rumor pubkey. If marmotClient.groups.has(id): with an overlay record it returns the existing Group without joining (already joined); without one it calls await marmotClient.groups.destroy(id), a local-only purge, then joins normally. An unresolvable id skips the check. The existing catch stays as the last resort. New export dropInvitationsForJoinedGroups() runs in MarmotContext init right after groups.loadAll(). It drops pending invitations whose non-empty groupId has an overlay record and leaves legacy empty-groupId entries alone. No publishes were added.",
+  "files_changed": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/context/MarmotContext.tsx",
+    "docs/behavior/groups.md"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/context/MarmotContext.tsx",
+    "docs/behavior/groups.md"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/inviteAcceptIdempotentJoin.test.ts",
+    "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+    "app/tests/e2e/groups-accept-reload-atomic.spec.ts",
+    "bug-reports/invite-accept-not-atomic-across-page-unload-contract.json"
+  ],
+  "tests_added": [
+    "app/tests/unit/marmot/inviteAcceptIdempotentJoin.test.ts (17 tests; 8 failed pre-fix: already-joined, orphan, legacy-id orphan, destroy-failure fallback, auto-accept orphan + already-joined, 2x startup reconciliation; 5 gap-closing tests added after the mutation audit)",
+    "app/tests/e2e/groups-reinvite-after-leave.spec.ts (failed pre-fix at the re-accept: invitation vanished, no group card; passes post-fix)",
+    "app/tests/e2e/groups-accept-reload-atomic.spec.ts (reload right after Accept; 5/5 with --repeat-each=5)"
+  ],
+  "baseline": {
+    "unit_files": 231,
+    "unit_failed_files": 1,
+    "unit_note": "parseStructured.test.ts red from the parallel untrusted-group-input-hardening run's in-progress edits, not this run",
+    "tsc": "clean"
+  },
+  "final": {
+    "unit_files": 232,
+    "unit_passed": 4865,
+    "unit_skipped": 1,
+    "tsc": "clean"
+  },
+  "e2e": {
+    "prefix": "groups-reinvite-after-leave: 1 failed (the re-accept step), 2 passed",
+    "postfix": "groups-reinvite-after-leave 3/3; groups-accept-reload-atomic --repeat-each=5 5/5; groups-invitation-preview, groups-direct-invite-lifecycle, groups-pull-only-invitation-accept, groups-lifecycle, groups-leave-intent, groups-remove-member, groups-error-cases 34/34. Every batch ran on a wiped relay under the shared flock.",
+    "note": "The first post-fix re-invite run failed in its own precondition: Alice's auto-remove of Bob was not seen within 60 s. The spec was hardened to match groups-leave-intent (Alice watches the group detail while Bob leaves, 90 s poll) and then passed."
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config /tmp/claude-501/mutation/stryker.inviteAccept.mjs, mutate welcomeSubscription.ts:525-560,1362-1431",
+    "before": "53.52% (38 killed, 20 survived, 13 no-coverage)",
+    "after": "69.01% (49 killed, 21 survived, 1 no-coverage)",
+    "remaining": "All remaining survivors are side-effect-only (logger event names/payloads; the project has no precedent for asserting logs) or equivalent (line 1424 if(true): joinedGroup is always non-null there; line 1427 the empty catch behaves the same as the logging catch). No real gaps.",
+    "note": "welcomeSubscription.test.ts was ignored in the sandbox because its source-scan test reads the instrumented file text. Audit recorded under slug quizzl, scope changed_lines."
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. inviteAcceptIdempotentJoin.test.ts covers fresh join, already-joined (no join, no destroy, existing Group returned and left unchanged) and orphan (destroy(id) ordered before join). The already-joined and orphan tests failed before the fix.",
+    "VQ-2": "Yes. groups-reinvite-after-leave drives leave -> re-invite -> accept entirely through the app. It failed before the fix (invitation vanished, no group card) and passes after. groups-accept-reload-atomic reloads right after clicking Accept and asserts exactly one joined card and no invitation card, also across a second reload: 5/5.",
+    "VQ-3": "Yes. The id comes from entry.groupId (manual accept), else readPreJoinGroupData's groupContext.groupId. A unit test shows an orphan named by the rumor pubkey is never consulted. acceptPendingInvitation and the auto-accept branch both call joinGroupFromWelcomeCore, and both branches are tested on the auto-accept path.",
+    "VQ-4": "Yes. Orphan removal only calls marmotClient.groups.destroy(id), which runs MarmotGroup.destroy: local history, media, store and snapshot purge, no network. There are no raw store deletes and no new publishes.",
+    "VQ-5": "Yes. dropInvitationsForJoinedGroups is tested to drop only the entry whose non-empty groupId has an overlay record. Not-yet-joined and legacy empty-groupId entries stay, even when an overlay with an empty id exists.",
+    "VQ-6": "Yes. Unit tests pass (232 files, 4855 passed, 1 skipped) and tsc is clean. The mutation audit has no real-gap survivors. The new specs and the 7 accept-related group specs pass on a wiped relay."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The Stryker dry run fails on welcomeSubscription.ts because welcomeSubscription.test.ts contains a source-scan test that reads the file text, which Stryker has instrumented. That test file has to be ignored in the scratch config, which costs some kills from the excluded file.",
+    "surprised_by": "acceptPendingInvitation's pre-existing contract (entry lookup, malformed JSON, callback isolation and awaiting, name/relay fallbacks) had no direct unit coverage. The mutation baseline was 53.5% before the gap-closing tests.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/context/MarmotContext.tsx"
+  ],
+  "mutation_round_1": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config /tmp/claude-501/mutation/stryker.inviteAccept.r1.mjs (+ vitest.inviteAccept.config.ts excluding welcomeSubscription.test.ts, which reads the instrumented source), mutate welcomeSubscription.ts:531-582,1411-1452",
+    "targets": "joinGroupFromWelcomeCore, withGroupJoinLock, joinIdempotent, dropInvitationsForJoinedGroups, loadGroupsAndReconcileInvitations",
+    "before": "72.31% (47 killed, 16 survived, 2 no-coverage; 65 mutants)",
+    "after": "81.54% (53 killed, 12 survived, 0 no-coverage)",
+    "gaps_closed": [
+      "withGroupJoinLock chain cleanup (L562 if(true) / !==): a settling failed accept dropping a newer queued join from the chain was undetected; new test: third accept arriving while the second is mid-join must still wait (no destroy of the live join)",
+      "navigator present without locks.request (L555): new test, falls back to in-tab chain",
+      "navigator absent / SSR (L554 typeof guard): new test, fallback still joins",
+      "loadGroupsAndReconcileInvitations reconciliation-failure catch (L1449-1450 NoCoverage): the existing 'failure is swallowed' test was vacuous (a throwing localStorage is swallowed inside pendingInvitations, so dropInvitationsForJoinedGroups never rejected); rewritten to fail the overlay read (loadAllGroups) and assert invitations kept"
+    ],
+    "tests_added": "app/tests/unit/marmot/inviteAcceptIdempotentJoin.test.ts: 3 new tests + 1 rewritten (29 -> 32)",
+    "remaining": "12 survivors, 0 real gaps: logger event names/payloads (L575, L578) and console.warn texts (L1444, L1450) are side-effect-only; L561/L562 if(false) only skip map-entry cleanup (memory, no behaviour); L1418 initial hasMlsState=true and L1421 empty catch mask each other (try always assigns, catch default already false) -> equivalent.",
+    "product_bugs_found": "none",
+    "verification": "inviteAcceptIdempotentJoin + welcomeSubscription*.test.ts 113/113 green; tsc --noEmit green; make test-unit red ONLY in applicationDispatchPersistence/pollPersistence tests from the concurrent, uncommitted polls-integrity-cluster work (unrelated to this bug)",
+    "audit_record": "recorded via mutation-audits add-audit.sh, slug quizzl, scope changed_lines (531-582,1411-1452), score 0.815"
+  }
+}

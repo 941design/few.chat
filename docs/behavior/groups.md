@@ -434,6 +434,18 @@ outright.
 **A Welcome accepted too late.** If the group's cryptographic state has moved past the
 Welcome, accepting fails with a "no longer valid" message and the entry is discarded.
 
+**Re-inviting someone who left.** Works like a first invitation. Leaving clears the
+group from the leaver's view but keeps its cryptographic state on their device. When
+they accept a new invitation to the same group, that leftover state is deleted on the
+device (nothing is sent) and they rejoin.
+
+**An accept cut short by a reload or a closed tab.** After reopening, the person ends
+up either in the group with the invitation gone, or still seeing the invitation and
+able to accept it again. They never end up in a group that isn't shown to them. A
+leftover invitation for a group they are already in is cleared as the app starts, so
+group and invitation can show together only briefly. Accepting such an invitation
+just clears it. Accepting the same invitation in two tabs at once joins only once.
+
 **The link's admin leaves or is unreachable.** Requests made against that link go
 unanswered — no other admin receives them. This is the single-admin-per-link limitation.
 
