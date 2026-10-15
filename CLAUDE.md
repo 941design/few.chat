@@ -83,6 +83,7 @@ epic's 4 `dm-profile-*.spec.ts` specs) needs Docker
 the only gate.
 
 - **The definitive e2e gate is the full 60-test suite: `make test-e2e-all` (or `make test`, which adds unit tests).** A feature or bug is not e2e-verified until that passes end to end.
+- `scripts/run-e2e.mjs` marks a run **INVALID** (banner + non-zero exit, even if Playwright passed) when the `next dev` server it started logs a Fast Refresh full reload or a 5xx response mid-run — i.e. something edited `app/` during the run. Don't edit `app/` while e2e runs; `E2E_ALLOW_DEV_RELOADS=1` downgrades it to a warning for interactive debugging only.
 - `make test-e2e-fast`, `make test-e2e-groups`, `make test-e2e-image-sharing`, and any filtered `node scripts/run-e2e.mjs <pattern>` run a **subset**. They are dev-iteration aids. A green subset is **never** an e2e pass — `test-e2e-fast` prints a partial-run warning when run standalone for this reason.
 - When the `/feature` or `/bug` workflow reaches its e2e step, the pass criterion is the full suite, not the tests that happen to touch the changed files.
 

@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
 import { createServer, createConnection } from "node:net";
+import { createReloadDetector } from "./e2eReloadDetector.mjs";
+
+// A run is INVALID if the `next dev` server hot-reloads or 5xx-es mid-run (usually
+// something editing app/). Set E2E_ALLOW_DEV_RELOADS=1 to only warn (interactive debugging).
+const allowReloads = process.env.E2E_ALLOW_DEV_RELOADS === "1";
+const reloadDetector = createReloadDetector();
 
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
 const isGroups = !!process.env.E2E_GROUPS;
@@ -63,10 +69,13 @@ if (isGroups) {
 }
 
 const devServer = spawn(npxCommand, ["next", "dev", "--port", String(port)], {
-  stdio: "inherit",
+  stdio: ["inherit", "pipe", "pipe"],
   detached: true,
   env: serverEnv,
 });
+// Pass-through, while scanning for reload/error lines.
+devServer.stdout.on("data", (c) => { process.stdout.write(c); reloadDetector.feed(c); });
+devServer.stderr.on("data", (c) => { process.stderr.write(c); reloadDetector.feed(c); });
 
 function stopServer() {
   if (devServer.exitCode === null) {
@@ -119,7 +128,16 @@ try {
   });
 
   stopServer();
-  process.exit(exitCode ?? 1);
+  reloadDetector.flush();
+  let finalCode = exitCode ?? 1;
+  if (reloadDetector.offending.length > 0) {
+    const bar = "=".repeat(78);
+    console.error(`\n${bar}\n[e2e] ${allowReloads ? "WARNING (E2E_ALLOW_DEV_RELOADS=1)" : "INVALID RUN"}: dev server reloaded/errored during the run — results untrustworthy; was something editing app/?`);
+    for (const l of reloadDetector.offending) console.error(`[e2e]   ${l}`);
+    console.error(`${bar}\n`);
+    if (!allowReloads) finalCode = finalCode === 0 ? 1 : finalCode;
+  }
+  process.exit(finalCode);
 } catch (error) {
   stopServer();
   console.error(error instanceof Error ? error.message : String(error));
