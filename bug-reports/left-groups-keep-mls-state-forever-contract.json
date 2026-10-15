@@ -1,0 +1,38 @@
+{
+  "bug_name": "left-groups-keep-mls-state-forever",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/leftGroupTombstones.ts",
+      "app/src/lib/marmot/leaveGroupImpl.ts",
+      "app/src/lib/marmot/welcomeSubscription.ts",
+      "app/src/lib/marmot/groupStorage.ts",
+      "app/src/lib/backup/relayBackup.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/**",
+      "app/tests/e2e/groups-leave-purges-mls-state.spec.ts",
+      "docs/behavior/**"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "C1: leftGroupTombstones.ts: idb-keyval store few-left-groups/tombstones, key groupId, value {groupId, leftAt}; put, delete, list (malformed rows ignored), listLeftGroupIds, clearAll. Local-only, never published, never exported in the backup.",
+    "C2: leaveGroupImpl writes the tombstone BEFORE removeGroupFromStorage (a failed write is warned and never skips the purge). The purge and reloadGroups stay immediate and never wait on the network.",
+    "C3: With a kind-9 departure announcement in flight, the MLS-state destroy runs only after that send resolves, rejects, or LEAVE_DESTROY_SEND_TIMEOUT_MS (5 s) passes, without being awaited by leaveGroupImpl; then the tombstone is deleted. With no send (abandon/last member, no MLS group, no identity) the destroy runs inline before reloadGroups. A failed destroy is warned, keeps the tombstone, and never throws or rejects unhandled.",
+    "C4: The destroy is welcomeSubscription.destroyLeftGroupState: under withGroupJoinLock(groupId); overlay present -> 'rejoined' (nothing destroyed); no MLS state -> 'absent'; else marmotClient.groups.destroy(groupId) (local-only) -> 'destroyed'.",
+    "C5: Startup sweep sweepLeftGroups runs in loadGroupsAndReconcileInvitations after groups.loadAll() and before dropInvitationsForJoinedGroups (skipped when loadAll fails). For each tombstone it calls destroyLeftGroupState and drops the tombstone; a failure keeps that tombstone (retried next start) and never blocks startup. MLS state without a tombstone is never touched; tombstone + overlay never destroys MLS state (the stale tombstone is dropped so the live group's state is backed up again).",
+    "C6: joinIdempotent's orphan branch deletes the tombstone after its destroy (a delete failure is warned and does not fail the accept).",
+    "C7: collectBackupPayload exports MLS state only for keys that are overlay group ids not in the tombstone set. Restore is unchanged (add/update-only).",
+    "C8: clearAllGroupData clears the tombstone store.",
+    "C9: Privacy invariant untouched: destroy is local, no new publishes."
+  ],
+  "non_goals": [
+    "Part 2 of the design (self-eviction detection, re-invite after eviction).",
+    "Changing marmot-ts.",
+    "Describing what an evicted member sees."
+  ]
+}

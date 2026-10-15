@@ -16,6 +16,7 @@ import {
   IdbGroupStateBackend,
 } from '@/src/lib/marmot/groupStorage';
 import { loadMessages } from '@/src/lib/marmot/chatPersistence';
+import { listLeftGroupIds } from '@/src/lib/marmot/leftGroupTombstones';
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
 import { loadAllInviteLinks, saveInviteLink } from '@/src/lib/marmot/inviteLinkStorage';
 import type { InviteLink } from '@/src/lib/marmot/inviteLinkStorage';
@@ -121,8 +122,17 @@ export async function collectBackupPayload(): Promise<BackupPayload> {
   const stateBackend = new IdbGroupStateBackend();
   const stateKeys = await stateBackend.keys();
 
-  // Load MLS state for all known keys and base64-encode
+  // MLS state (group keys) is exported only for groups this device is still
+  // in: an overlay record exists and the group is not tombstoned as left
+  // (bug: left-groups-keep-mls-state-forever). A left group's state awaiting
+  // its deferred destroy, or an orphan without an overlay, never leaves the
+  // device. The tombstones themselves are never exported.
+  const leftGroupIds = await listLeftGroupIds();
+  const backedUpGroupIds = new Set(groups.map((g) => g.id).filter((id) => !leftGroupIds.has(id)));
+
+  // Load MLS state for those groups and base64-encode
   for (const key of stateKeys) {
+    if (!backedUpGroupIds.has(key)) continue;
     const state = await stateBackend.getItem(key);
     if (state) {
       // SerializedClientState may be a Uint8Array or have a bytes field

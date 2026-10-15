@@ -2115,6 +2115,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     const { clearInviteLinksForGroup } = await import('@/src/lib/marmot/inviteLinkStorage');
     const { clearPendingDirectInvitesForGroup } = await import('@/src/lib/marmot/pendingDirectInviteStorage');
     const { clearRumorJournalForGroup } = await import('@/src/lib/marmot/rumorJournal');
+    const { putLeftGroupTombstone, deleteLeftGroupTombstone } = await import('@/src/lib/marmot/leftGroupTombstones');
+    const { destroyLeftGroupState } = await import('@/src/lib/marmot/welcomeSubscription');
 
     return leaveGroupImpl(
       {
@@ -2137,6 +2139,16 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         clearInviteExpiries,
         clearPendingDirectInvitesForGroup,
         clearRumorJournalForGroup,
+        putLeftGroupTombstone: (id) => putLeftGroupTombstone(id),
+        deleteLeftGroupTombstone,
+        // Local-only MLS-state destroy under the per-group join lock. With no
+        // client (signed out mid-leave) it throws, keeping the tombstone for
+        // the startup sweep.
+        destroyGroupState: (id) => {
+          const client = clientRef.current;
+          if (!client) return Promise.reject(new Error('no marmot client'));
+          return destroyLeftGroupState(id, client);
+        },
         reloadGroups,
         markBackupDirty,
       },

@@ -27,6 +27,7 @@ import { createRumor } from 'nostr-tools/nip59';
 import { sealAndWrap } from '@/src/lib/directMessages';
 import { EpochResolver } from './epochResolver';
 import { createApplicationMessageJournaler } from './rumorJournal';
+import { deleteLeftGroupTombstone, listLeftGroupTombstones } from './leftGroupTombstones';
 import { handleJoinRequest, JOIN_REQUEST_KIND } from './joinRequestHandler';
 import type { JoinRequestReceivedCallback } from './joinRequestHandler';
 import {
@@ -510,14 +511,15 @@ export async function unwrapGiftWrap(
  * invite-accept-not-atomic-across-page-unload). The join is two writes in
  * two stores — marmot-ts persists MLS state (few-groups-state), then we
  * persist the overlay (few-groups-meta) — so a page unload in between, or a
- * leave (which purges only the overlay, leaveGroupImpl), leaves MLS state
- * behind, and marmot-ts's adoptClientState then throws "Group <hex> already
+ * leave whose deferred MLS destroy has not run yet (leaveGroupImpl purges the
+ * overlay at once), leaves MLS state behind, and marmot-ts's adoptClientState then throws "Group <hex> already
  * exists" on every later join. So, with the group id resolved PRE-JOIN
  * (`knownGroupId` from the pending entry, else the Welcome's groupContext —
  * never the rumor's self-claimed pubkey):
  *   - MLS state + overlay → already joined: return the existing Group, no join.
  *   - MLS state, no overlay → orphan: `groups.destroy(id)` (local-only purge
- *     of state/history/media/snapshots, no network) then a normal join.
+ *     of state/history/media/snapshots, no network), then a normal join.
+ * Every successful join drops the group's left-group tombstone, if any.
  * An unresolvable id ('') skips the check (callers' last-resort catch stays).
  *
  * Check → destroy → join → saveGroup runs under a per-group lock
@@ -574,12 +576,81 @@ async function joinIdempotent(
     const existing = await loadGroup(groupId);
     if (existing) {
       logger.info('dm:invite-accept-already-joined', { group: groupId.slice(0, 8) });
+      await dropLeftGroupTombstoneAfterJoin(groupId);
       return existing;
     }
     logger.info('dm:invite-accept-orphan-state-purged', { group: groupId.slice(0, 8) });
     await marmotClient.groups.destroy(groupId);
   }
-  return joinAndPersist(welcomeRumor, marmotClient);
+  const joined = await joinAndPersist(welcomeRumor, marmotClient);
+  await dropLeftGroupTombstoneAfterJoin(groupId);
+  return joined;
+}
+
+/**
+ * A successful (re-)join makes the group live again, so any left-group
+ * tombstone for it is stale — whether the earlier leave's destroy already ran
+ * (but its tombstone delete failed) or is still pending (destroyLeftGroupState
+ * then sees the overlay and skips). Dropped on EVERY successful join, under
+ * the join lock; a lingering tombstone would exclude the live group's MLS
+ * state from the relay backup. A delete failure never fails the accept (the
+ * startup sweep drops a tombstone whose group has an overlay).
+ */
+async function dropLeftGroupTombstoneAfterJoin(groupId: string): Promise<void> {
+  try {
+    await deleteLeftGroupTombstone(groupId);
+  } catch (err) {
+    console.warn('[Marmot] join: left-group tombstone delete failed:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Left groups: destroy MLS state (bug: left-groups-keep-mls-state-forever)
+// ---------------------------------------------------------------------------
+
+/**
+ * Destroys a left group's local MLS state (keys, history, media, snapshots —
+ * `groups.destroy` is local-only, nothing is sent) under the same per-group
+ * lock as the join, so it can never destroy a join in progress:
+ *   - overlay present → `'rejoined'`: the group is live (re-joined since the
+ *     leave, or the leave never completed) — nothing destroyed.
+ *   - no MLS state → `'absent'`.
+ *   - MLS state, no overlay → destroyed.
+ * Used by leaveGroupImpl's deferred destroy and by {@link sweepLeftGroups}.
+ * Throws when a read or the destroy fails; the caller keeps the tombstone.
+ */
+export async function destroyLeftGroupState(
+  groupId: string,
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+): Promise<'destroyed' | 'rejoined' | 'absent'> {
+  return withGroupJoinLock(groupId, async () => {
+    if (await loadGroup(groupId)) return 'rejoined';
+    if (!(await marmotClient.groups.has(groupId))) return 'absent';
+    await marmotClient.groups.destroy(groupId);
+    logger.info('groups:left-group-state-destroyed', { group: groupId.slice(0, 8) });
+    return 'destroyed';
+  });
+}
+
+/**
+ * Startup sweep: finishes every leave whose MLS-state destroy did not complete
+ * (reload/crash before the departure send settled, or a failed destroy). Only
+ * tombstoned groups are considered — the tombstone is what distinguishes a
+ * left group from an interrupted create or an in-flight accept, which also
+ * have MLS state without an overlay. Every outcome drops the tombstone except
+ * a failure, which keeps it for the next start.
+ */
+export async function sweepLeftGroups(
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+): Promise<void> {
+  for (const { groupId } of await listLeftGroupTombstones()) {
+    try {
+      await destroyLeftGroupState(groupId, marmotClient);
+      await deleteLeftGroupTombstone(groupId);
+    } catch (err) {
+      console.warn('[Marmot] left-group sweep failed for a group, retrying next start:', err);
+    }
+  }
 }
 
 async function joinAndPersist(
@@ -1435,8 +1506,9 @@ export async function dropInvitationsForJoinedGroups(
 }
 
 /**
- * MarmotContext init step: load the MLS groups, then reconcile pending
- * invitations against them ({@link dropInvitationsForJoinedGroups}). When
+ * MarmotContext init step: load the MLS groups, destroy the MLS state of
+ * groups left in an earlier session ({@link sweepLeftGroups}), then reconcile
+ * pending invitations against them ({@link dropInvitationsForJoinedGroups}). When
  * `groups.loadAll()` fails the local state is in doubt, so reconciliation is
  * skipped entirely. Never throws.
  */
@@ -1448,6 +1520,11 @@ export async function loadGroupsAndReconcileInvitations(
   } catch (err) {
     console.warn('[Marmot] groups.loadAll failed:', err);
     return;
+  }
+  try {
+    await sweepLeftGroups(marmotClient);
+  } catch (err) {
+    console.warn('[Marmot] left-group sweep failed:', err);
   }
   try {
     await dropInvitationsForJoinedGroups(marmotClient);

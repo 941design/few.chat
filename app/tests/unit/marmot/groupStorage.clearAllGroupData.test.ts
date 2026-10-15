@@ -87,3 +87,18 @@ describe('clearAllGroupData — write-ahead rumor journal (bug: mls-message-lost
     expect(await listPendingRumors(GROUP_B)).toEqual([]);
   });
 });
+
+// bug: left-groups-keep-mls-state-forever — the left-group tombstones are
+// per-account local state and must not survive an account clear.
+describe('clearAllGroupData — left-group tombstones', () => {
+  it('drops every left-group tombstone', async () => {
+    const { putLeftGroupTombstone, listLeftGroupTombstones } = await import('@/src/lib/marmot/leftGroupTombstones');
+    await putLeftGroupTombstone(GROUP_A, 1);
+    await putLeftGroupTombstone(GROUP_B, 2);
+    expect(await listLeftGroupTombstones()).toHaveLength(2);
+
+    await clearAllGroupData();
+
+    expect(await listLeftGroupTombstones()).toEqual([]);
+  });
+});

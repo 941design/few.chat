@@ -1,0 +1,78 @@
+{
+  "bug_name": "left-groups-keep-mls-state-forever",
+  "bug_report_file": "bug-reports/left-groups-keep-mls-state-forever-report.md",
+  "created_at": "2026-10-15T12:46:22Z",
+  "updated_at": "2026-10-15T14:04:53Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Do unit tests show leaveGroupImpl writes the tombstone before deleting the overlay, destroys MLS state only after the kind-9 send resolves, rejects or times out, and destroys inline on the abandon path — failing before the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does the startup sweep destroy only tombstoned MLS-only groups (no tombstone → untouched; tombstone + overlay → untouched) under the per-group join lock, and does joinIdempotent drop the tombstone after its orphan destroy?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SECURITY",
+      "question": "Does collectBackupPayload exclude MLS state of tombstoned / non-overlay groups, and is the tombstone store excluded from backups and cleared by clearAllGroupData?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Does an e2e (through the app) show leave → the peer sees the left announcement → the leaver's few-groups-state entry is gone, and do re-invite-after-leave and the accept specs still pass?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "SPEC",
+      "question": "Is docs/behavior/groups.md updated (leave removes keys after the departure is sent; §12 eviction claim corrected) without describing the undecided eviction UX?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on leaveGroupImpl + the sweep + the backup filter shows no real-gap survivors; full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "36ec95d71794c252e1a369990d004d926e5078b1",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED (Codex one medium)",
+      "examiner": "VQ-1,2,3,5 YES; VQ-4,6 PARTIAL (self-reported); F1 late write-back (→ multi-tab finding), F2 tombstone on fresh re-join"
+    },
+    {
+      "round": 1,
+      "result": "F2 fixed + docs; unit 5103 green; targeted e2e 5/5"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T12:46:22Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T14:04:53Z",
+      "trigger": "polish_round_verified"
+    }
+  ],
+  "e2e_gate": {
+    "full": "non-relay 72 + relay 345 passed / 0 failed (round 0)",
+    "round1": "groups-leave-purges-mls-state + groups-reinvite-after-leave 5/5"
+  }
+}

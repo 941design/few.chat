@@ -22,6 +22,25 @@ type MarmotGroupLike = {
   sendApplicationRumor: (rumor: any) => Promise<unknown>;
 };
 
+/**
+ * Upper bound on how long the MLS-state destroy waits for the kind-9 departure
+ * announcement to settle. The send awaits relay acks; destroying earlier
+ * would discard the keys it is encrypting/publishing with.
+ */
+export const LEAVE_DESTROY_SEND_TIMEOUT_MS = 5_000;
+
+/** Resolves when `promise` settles (either way) or after `ms`, whichever is first. */
+function settledOrTimeout(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    promise.then(done, done);
+  });
+}
+
 type Deps = {
   getGroup: (groupId: string) => Promise<MarmotGroupLike | null>;
   getGroupMembers: (state: any) => string[];
@@ -63,6 +82,21 @@ type Deps = {
    * decrypted plaintext of a left group is not kept — or replayed — locally.
    */
   clearRumorJournalForGroup: (groupId: string) => Promise<void>;
+  /**
+   * Left-group tombstone (leftGroupTombstones.ts, bug:
+   * left-groups-keep-mls-state-forever). Written BEFORE the overlay delete and
+   * deleted only after the MLS state is destroyed, so an interrupted leave is
+   * finished by the startup sweep.
+   */
+  putLeftGroupTombstone: (groupId: string) => Promise<void>;
+  deleteLeftGroupTombstone: (groupId: string) => Promise<void>;
+  /**
+   * Destroys the group's local MLS state (keys, history, snapshots; local-only,
+   * nothing is sent). The boundary wires welcomeSubscription.destroyLeftGroupState,
+   * which runs under the per-group join lock and skips a group that has an
+   * overlay again (re-joined in the meantime).
+   */
+  destroyGroupState: (groupId: string) => Promise<unknown>;
   reloadGroups: () => Promise<void>;
   markBackupDirty: (dirty: boolean) => void;
 };
@@ -89,6 +123,13 @@ type Deps = {
  *    clearInviteLinksForGroup (AC-DEEPLINK-4). `clearPendingDirectInvitesForGroup`
  *    (epic: invite-rescind-and-member-removal, S3, AC-MARKER-9) runs in the
  *    same unconditional block, scoped to exactly the group being left.
+ *  - MLS-state destroy (bug: left-groups-keep-mls-state-forever): a tombstone
+ *    is written before the overlay delete; the group's MLS state is destroyed
+ *    (destroyGroupState) once the kind-9 announcement settles or
+ *    LEAVE_DESTROY_SEND_TIMEOUT_MS passes — without awaiting it, so purge and
+ *    navigation stay immediate — or inline when nothing was sent; then the
+ *    tombstone is deleted. A failed destroy keeps the tombstone for the
+ *    startup sweep.
  *  - Never throws to the caller: a failed kind-13 send is caught and logged;
  *    the purge always proceeds. Returns `true` unconditionally, matching the
  *    pre-extraction signature.
@@ -115,6 +156,9 @@ export async function leaveGroupImpl(
     members = undefined;
   }
   const lastMember = isLastMember(members, selfPubkeyHex);
+  // The kind-9 departure announcement, when one is sent; the MLS-state destroy
+  // waits for it.
+  let departureSent: Promise<unknown> | undefined;
 
   if (mlsGroup && selfPubkeyHex && !lastMember) {
     // AC-SEND-2: kind-13 leave-intent via sendRumorSafe (handles unapplied-
@@ -147,9 +191,18 @@ export async function leaveGroupImpl(
       ),
       selfPubkeyHex,
     );
-    mlsGroup.sendApplicationRumor(kind9Rumor).catch(() => {});
+    departureSent = mlsGroup.sendApplicationRumor(kind9Rumor);
+    departureSent.catch(() => {});
   }
   // AC-SEND-1: solo group — lastMember is true, neither send fires.
+
+  // Tombstone BEFORE the overlay delete: from here on an interruption is
+  // finished by the startup sweep. A failed write must not skip the purge.
+  try {
+    await deps.putLeftGroupTombstone(groupId);
+  } catch (err) {
+    console.warn('[Marmot] leaveGroup: left-group tombstone write failed, proceeding with purge:', err);
+  }
 
   // AC-PURGE-1: purge sequence — runs unconditionally on both paths.
   await deps.removeGroupFromStorage(groupId);
@@ -169,6 +222,26 @@ export async function leaveGroupImpl(
   // see the Deps field doc comment above.
   deps.clearInviteExpiries(groupId);
   await deps.clearRumorJournalForGroup(groupId);
+
+  // Destroy the MLS state (keys, history) — local-only. With a departure
+  // announcement in flight, only after it settles (or the timeout): the send
+  // still needs the keys, and navigation must not wait on relay acks. Without
+  // one (abandon, no group, no identity), inline.
+  const destroyAndDropTombstone = async (): Promise<void> => {
+    try {
+      await deps.destroyGroupState(groupId);
+      await deps.deleteLeftGroupTombstone(groupId);
+    } catch (err) {
+      // Tombstone kept: the startup sweep retries.
+      console.warn('[Marmot] leaveGroup: MLS state destroy (or tombstone delete) failed, left for the startup sweep:', err);
+    }
+  };
+  if (departureSent) {
+    void settledOrTimeout(departureSent, LEAVE_DESTROY_SEND_TIMEOUT_MS).then(destroyAndDropTombstone);
+  } else {
+    await destroyAndDropTombstone();
+  }
+
   await deps.reloadGroups();
   deps.markBackupDirty(true);
   return true;

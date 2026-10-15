@@ -94,6 +94,7 @@ These actions are **admin-only**; a regular member cannot perform them.
 | Create and delete invite links | Yes | No |
 | Approve or decline a join request | Yes | No |
 | Cancel a pending invitation | Yes | No |
+| Remove another member | Yes | No |
 | Rename the group | Yes | No |
 | Grant admin to another member | Yes | No |
 | Finalise a departed member's removal | Yes | No — deferred to an admin |
@@ -105,8 +106,8 @@ remain* — see §7. A sole admin who is also the last member can still leave, w
 dissolves the group.
 
 **Where "admin-only" is actually enforced.** For actions that change the group's
-shared state — inviting, cancelling an invitation, renaming, granting admin, and
-finalising a removal — the restriction is enforced in two independent places: the app
+shared state — inviting, cancelling an invitation, removing a member, renaming,
+granting admin, and finalising a removal — the restriction is enforced in two independent places: the app
 will not initiate the action for a non-admin, *and* the protocol itself rejects such a
 change even from a modified client. Two actions are weaker: creating an invite link
 and *declining* a join request are purely local decisions with no protocol
@@ -239,15 +240,21 @@ else, and any admin can do it once they have synced the group's state — the pe
 status is computed from shared group state, not from anything the inviting admin holds
 privately.
 
-The consequential subtlety: "pending" means only *in the tree, no profile yet* — it
-does not record how the person got there. The same cancellation therefore applies to
-anyone in that state, **including someone who joined through an approved join request**
-but whose profile has not yet propagated. Cancelling is guarded to a harmless no-op
-once the person is confirmed, but that guard closes only when their profile arrives: in
-the window after someone joins but before their profile reaches the admin, cancelling
-still removes them — and a join-requester who supplied no name has no interim profile
-to stand in for them, so that window is exactly when they look cancellable. This is a
-known footgun; removing a *confirmed* member is not possible at all (§8, §12).
+"Pending" means only *in the tree, no profile yet* — it does not record how the person
+got there, so it also covers **someone who joined through an approved join request**
+but whose profile has not yet propagated. Cancelling and removing are the same
+operation (§4.5): both remove whoever is still in the group's tree, so cancelling a
+person who has meanwhile become confirmed removes them too. Only when the person is no
+longer in the tree at all (another admin removed them first) is the cancellation a
+harmless no-op.
+
+### 4.5 Removing a member
+
+An admin can remove **any other member** — confirmed or pending, admin or not. The
+removal is immediate and does not wait on anyone else: the member is dropped from the
+roster on every remaining member's device and the group's keys are refreshed in the
+same step. An admin
+cannot remove themselves this way; their own exit is leaving (§7).
 
 ---
 
@@ -345,6 +352,26 @@ in their own group.
   signal an admin's app later uses to finalise the removal, plus a departure
   announcement in the conversation, and then erases the group from your own device.
 
+**What leaving erases, and when.** The group disappears from your view, with its
+messages and member details, the moment you confirm. Its cryptographic keys and
+encrypted history are deleted from the device once sending the departure announcement
+has finished — whether it was sent or failed — or after about five seconds if it has not
+finished by then, because the announcement is encrypted with those keys. When there is
+nothing to announce (abandon), they are deleted at once. If the app is closed or
+reloaded before that deletion completes, or the deletion fails, it completes the next
+time the app starts. Nothing about this deletion is sent anywhere; it happens on your
+device only.
+
+- **What this guarantees:** a group you left does not keep its keys on this device
+  beyond the next start, and they are never written into your relay backup (see
+  [Backup & recovery](backup-and-recovery.md)).
+- **Rejoining:** accepting a new invitation to a group you left makes it an ordinary
+  group again, backed up like any other. Only if the device fails to record the rejoin
+  as well can the group stay out of the backup — until the next start, which
+  restores it.
+- **What it does not:** leaving is per device. Another device of the same identity, and
+  a relay backup made before the leave, still hold the group until it is left there.
+
 ---
 
 ## 8. Removing a departed member
@@ -368,12 +395,8 @@ conveys that the member has departed and cleanup is pending; it does **not** cla
 message delivery to them has stopped (at the protocol level it has not), and it does not
 promise a timeline — if no admin ever comes online it can persist indefinitely.
 
-There is **no "kick" for a confirmed member** — no way for an admin to remove someone
-the group has fully registered who has not chosen to leave. The deferred finalisation
-here only ever completes a member's own departure. The one exception is the
-cancel-pending action (§4.4): while a member is still unconfirmed an admin can remove
-them, which — in the brief post-join profile-lag window — can catch someone who did
-just join.
+The deferred finalisation here only ever completes a member's own departure. Removing a
+member who has not chosen to leave is a separate, immediate admin action (§4.5).
 
 ---
 
@@ -456,10 +479,11 @@ outright.
 **A Welcome accepted too late.** If the group's cryptographic state has moved past the
 Welcome, accepting fails with a "no longer valid" message and the entry is discarded.
 
-**Re-inviting someone who left.** Works like a first invitation. Leaving clears the
-group from the leaver's view but keeps its cryptographic state on their device. When
-they accept a new invitation to the same group, that leftover state is deleted on the
-device (nothing is sent) and they rejoin.
+**Re-inviting someone who left.** Works like a first invitation and starts with no
+earlier history. If they accept before their leave has finished deleting the group's
+keys from the device (§7), that leftover state is deleted on accept (nothing is sent)
+and they rejoin; the earlier leave's pending deletion then leaves the rejoined group
+alone.
 
 **An accept cut short by a reload or a closed tab.** After reopening, the person ends
 up either in the group with the invitation gone, or still seeing the invitation and
@@ -534,8 +558,6 @@ text message, and the conversation keeps rendering for everyone.
 - **Retroactively demoting members of older all-admin groups** — forward-only; no
   migration.
 - **Role tiers beyond admin / member** (e.g. moderators) — the model is binary.
-- **Kicking a member who has not chosen to leave** — only self-initiated departures are
-  finalised today; there is no admin-initiated eviction of a present member.
 - **An approval-gated exit ("request to leave")** — rejected; it would break the right
   to leave.
 - **Recovering a group whose sole admin lost their key or walked away** — no mechanism
@@ -580,6 +602,11 @@ the shipped implementation, and the automated test suite:
 - Implementation under `app/src/context/MarmotContext.tsx`, `app/src/lib/marmot/`
   (invite links, join requests, cancel, leave, grant, welcome subscription), and the
   group components and page under `app/src/components/groups/` and `app/pages/`.
+- `app/src/lib/marmot/leaveGroupImpl.ts`, `app/src/lib/marmot/leftGroupTombstones.ts`,
+  `tests/unit/marmot/leftGroupStatePurge.test.ts` and the end-to-end
+  `groups-leave-purges-mls-state.spec.ts` — deleting a left group's keys after the
+  departure is sent (§7). `specs/epic-invite-rescind-and-member-removal/` and
+  `groups-remove-member.spec.ts` — removing a member (§4.5).
 - `app/src/lib/marmot/rumorJournal.ts`, `tests/unit/marmot/epochResolver.journalOrdering.test.ts`
   and the end-to-end `groups-rumor-reload-atomic.spec.ts` — the message kept on the
   device before the advanced group keys are saved (receiving after reopening).

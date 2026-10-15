@@ -385,6 +385,38 @@ describe('collectBackupPayload', () => {
     expect(decoded).toEqual(mlsState);
   });
 
+  // bug: left-groups-keep-mls-state-forever — the backup carries MLS state
+  // only for groups the device is still in: a group with an overlay record
+  // that is not tombstoned as left.
+  it('exports MLS state only for overlay groups that are not tombstoned as left', async () => {
+    await saveGroup({ id: 'live', name: 'Live', createdAt: 1, memberPubkeys: [], relays: [] });
+    await saveGroup({ id: 'leaving', name: 'Leaving', createdAt: 1, memberPubkeys: [], relays: [] });
+    const { putLeftGroupTombstone } = await import('@/src/lib/marmot/leftGroupTombstones');
+    await putLeftGroupTombstone('leaving');
+    await putLeftGroupTombstone('left');
+    const stateBackend = new IdbGroupStateBackend();
+    await stateBackend.setItem('live', new Uint8Array([1]) as never);
+    await stateBackend.setItem('leaving', new Uint8Array([2]) as never); // mid-leave: overlay not yet deleted
+    await stateBackend.setItem('left', new Uint8Array([3]) as never); // left: overlay gone, destroy pending
+    await stateBackend.setItem('orphan', new Uint8Array([4]) as never); // no overlay, no tombstone
+
+    const payload = await collectBackupPayload();
+
+    expect(Object.keys(payload.groupStates)).toEqual(['live']);
+    expect(payload.groupStates['live']).toBe(uint8ArrayToBase64(new Uint8Array([1])));
+  });
+
+  it('never includes the left-group tombstones themselves', async () => {
+    await saveGroup({ id: 'g1', name: 'Test', createdAt: 1, memberPubkeys: [], relays: [] });
+    const { putLeftGroupTombstone } = await import('@/src/lib/marmot/leftGroupTombstones');
+    await putLeftGroupTombstone('tombstone-marker-group', 424242);
+
+    const payload = await collectBackupPayload();
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain('tombstone-marker-group');
+    expect(serialized).not.toContain('424242');
+  });
+
   // -----------------------------------------------------------------------
   // Multiple groups
   // -----------------------------------------------------------------------

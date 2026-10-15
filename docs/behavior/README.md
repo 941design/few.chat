@@ -15,8 +15,8 @@ behaviour. UI presentation rules live separately in
 
 - **[Groups](groups.md)** — creating a group; the admin and member roles and granting
   admin; bringing people in (invite by identity, invite links, join requests,
-  cancelling an invitation); joining (pull-only Welcomes, auto-accept, onboarding);
-  renaming; leaving; removing a departed member; historical message processing; and the failure modes.
+  cancelling an invitation, removing a member); joining (pull-only Welcomes, auto-accept,
+  onboarding); renaming; leaving and what it erases; removing a departed member; historical message processing; and the failure modes.
 - **[Contacts & direct messages](contacts-and-direct-messages.md)** — adding a contact
   (by identity, by scanning a card), pending & issuer confirmation, blocking, keeping
   profiles in sync, sending/receiving DMs, and the walled-garden reachability model

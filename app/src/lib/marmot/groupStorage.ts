@@ -13,6 +13,7 @@ import type { StoredKeyPackage, SerializedClientState } from '@internet-privacy/
 import { clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage';
 import { clearAllPendingDirectInvites } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { clearAllRumorJournal } from '@/src/lib/marmot/rumorJournal';
+import { clearAllLeftGroupTombstones } from '@/src/lib/marmot/leftGroupTombstones';
 // KeyValueStoreBackend is an internal utility type — import directly from subpath
 type KeyValueStoreBackend<T> = {
   getItem(key: string): Promise<T | null>;
@@ -137,6 +138,9 @@ export async function clearAllGroupData(): Promise<void> {
   // Write-ahead rumor journal (rumorJournal.ts): decrypted plaintext of the
   // previous identity's groups must not survive an account clear.
   await clearAllRumorJournal();
+  // Left-group tombstones (leftGroupTombstones.ts) belong to the previous
+  // identity's groups; its MLS state was cleared above.
+  await clearAllLeftGroupTombstones();
 }
 
 // ---------------------------------------------------------------------------

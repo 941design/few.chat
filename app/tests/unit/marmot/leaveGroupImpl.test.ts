@@ -59,6 +59,9 @@ function makeDeps(
     clearInviteExpiries: vi.fn(),
     clearPendingDirectInvitesForGroup: vi.fn().mockResolvedValue(undefined),
     clearRumorJournalForGroup: vi.fn().mockResolvedValue(undefined),
+    putLeftGroupTombstone: vi.fn().mockResolvedValue(undefined),
+    deleteLeftGroupTombstone: vi.fn().mockResolvedValue(undefined),
+    destroyGroupState: vi.fn().mockResolvedValue(undefined),
     reloadGroups: vi.fn().mockResolvedValue(undefined),
     markBackupDirty: vi.fn(),
     // Exposed for assertions against the mock passed to getGroup.
@@ -94,9 +97,10 @@ describe('leaveGroupImpl', () => {
     expect(deps.sendRumorSafe).toHaveBeenCalledTimes(1);
     expect(deps.mlsGroup!.sendApplicationRumor).toHaveBeenCalledTimes(1);
 
-    // kind-13 leave-intent rumor
+    // kind-13 leave-intent rumor, naming the leaver
     const [, kind13Rumor] = deps.sendRumorSafe.mock.calls[0];
     expect(kind13Rumor.kind).toBe(13);
+    expect(kind13Rumor.content).toContain(SELF);
 
     // kind-9 announcement rumor
     const kind9Rumor = (deps.mlsGroup!.sendApplicationRumor as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -252,7 +256,7 @@ describe('leaveGroupImpl', () => {
     const result = await leaveGroupImpl(deps, GROUP_ID, SELF);
 
     expect(result).toBe(true);
-    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('kind-13 send failed'), expect.any(Error));
     expect(deps.removeGroupFromStorage).toHaveBeenCalledWith(GROUP_ID);
     expect(deps.reloadGroups).toHaveBeenCalledTimes(1);
     expect(deps.markBackupDirty).toHaveBeenCalledWith(true);
@@ -395,5 +399,181 @@ describe('leaveGroupImpl — AC-MARKER-9 real-storage scoping (VQ-S3-007)', () =
     expect(deps.clearRumorJournalForGroup.mock.invocationCallOrder[0]).toBeLessThan(
       deps.reloadGroups.mock.invocationCallOrder[0],
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug: left-groups-keep-mls-state-forever — the group's MLS state (keys,
+// history) is destroyed after the departure is sent, guarded by a tombstone.
+// ---------------------------------------------------------------------------
+
+describe('leaveGroupImpl — MLS state destroyed after leave (tombstone-guarded)', () => {
+  /** Records the relative order of every tombstone/purge/destroy call. */
+  function withOrderLog(deps: ReturnType<typeof makeDeps>) {
+    const order: string[] = [];
+    const log = (name: string, fn: ReturnType<typeof vi.fn>) => {
+      const impl = fn.getMockImplementation();
+      fn.mockImplementation(async (...args: unknown[]) => {
+        order.push(name);
+        return impl ? impl(...args) : undefined;
+      });
+    };
+    log('put', deps.putLeftGroupTombstone);
+    log('removeOverlay', deps.removeGroupFromStorage);
+    log('destroy', deps.destroyGroupState);
+    log('deleteTombstone', deps.deleteLeftGroupTombstone);
+    log('reload', deps.reloadGroups);
+    return order;
+  }
+
+  /** A kind-9 send the test settles by hand. */
+  function deferredSend() {
+    let resolve!: () => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+    return { fn: vi.fn(() => promise), resolve, reject };
+  }
+
+  const flush = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  };
+
+  it('writes the tombstone {groupId} BEFORE deleting the overlay record', async () => {
+    const deps = makeDeps({ members: [SELF, OTHER] });
+    const order = withOrderLog(deps);
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+
+    expect(deps.putLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID);
+    expect(order.indexOf('put')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('put')).toBeLessThan(order.indexOf('removeOverlay'));
+  });
+
+  it('normal leave: resolves (purge + navigation) while the kind-9 send is still pending, and does NOT destroy before the send settles', async () => {
+    const send = deferredSend();
+    const deps = makeDeps({ members: [SELF, OTHER], mlsGroup: makeMlsGroup({ sendApplicationRumor: send.fn }) });
+
+    await expect(leaveGroupImpl(deps, GROUP_ID, SELF)).resolves.toBe(true);
+    await flush();
+
+    expect(deps.reloadGroups).toHaveBeenCalledTimes(1);
+    expect(deps.destroyGroupState).not.toHaveBeenCalled();
+    expect(deps.deleteLeftGroupTombstone).not.toHaveBeenCalled();
+    send.resolve();
+  });
+
+  it('normal leave: once the kind-9 send RESOLVES, destroys the MLS state, then deletes the tombstone', async () => {
+    const send = deferredSend();
+    const deps = makeDeps({ members: [SELF, OTHER], mlsGroup: makeMlsGroup({ sendApplicationRumor: send.fn }) });
+    const order = withOrderLog(deps);
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+    send.resolve();
+    await vi.waitFor(() => expect(deps.deleteLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID));
+
+    expect(deps.destroyGroupState).toHaveBeenCalledTimes(1);
+    expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+    expect(order).toEqual(['put', 'removeOverlay', 'reload', 'destroy', 'deleteTombstone']);
+  });
+
+  it('normal leave: a REJECTED kind-9 send still destroys the MLS state (no unhandled rejection)', async () => {
+    const send = deferredSend();
+    const deps = makeDeps({ members: [SELF, OTHER], mlsGroup: makeMlsGroup({ sendApplicationRumor: send.fn }) });
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+    send.reject(new Error('no relay acknowledged'));
+    await vi.waitFor(() => expect(deps.deleteLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID));
+
+    expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+  });
+
+  it('normal leave: a kind-9 send that never settles destroys only after the 5 s timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const send = deferredSend(); // never settled
+      const deps = makeDeps({ members: [SELF, OTHER], mlsGroup: makeMlsGroup({ sendApplicationRumor: send.fn }) });
+
+      await leaveGroupImpl(deps, GROUP_ID, SELF);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(deps.destroyGroupState).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+      expect(deps.deleteLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('abandon (last member, no send): destroys INLINE — after the overlay delete, before leaveGroupImpl resolves — then deletes the tombstone', async () => {
+    const deps = makeDeps({ members: [SELF] });
+    const order = withOrderLog(deps);
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+
+    expect(deps.mlsGroup!.sendApplicationRumor).not.toHaveBeenCalled();
+    expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.deleteLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID);
+    expect(order).toEqual(['put', 'removeOverlay', 'destroy', 'deleteTombstone', 'reload']);
+  });
+
+  it('no mlsGroup (nothing to send): destroys inline, like the abandon path', async () => {
+    const deps = makeDeps({ mlsGroup: null });
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+
+    expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.deleteLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID);
+  });
+
+  it('a failing destroy keeps the tombstone (the startup sweep retries) and never throws to the caller', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps({ members: [SELF] });
+    deps.destroyGroupState.mockRejectedValue(new Error('idb failure'));
+
+    await expect(leaveGroupImpl(deps, GROUP_ID, SELF)).resolves.toBe(true);
+
+    expect(deps.deleteLeftGroupTombstone).not.toHaveBeenCalled();
+    expect(deps.reloadGroups).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('destroy'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('a failing deferred destroy (normal leave) keeps the tombstone and causes no unhandled rejection', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps({ members: [SELF, OTHER] });
+    deps.destroyGroupState.mockRejectedValue(new Error('idb failure'));
+
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('destroy'), expect.any(Error)));
+
+    expect(deps.deleteLeftGroupTombstone).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('a failing tombstone write never skips the purge or the destroy', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps({ members: [SELF] });
+    deps.putLeftGroupTombstone.mockRejectedValue(new Error('quota'));
+
+    await expect(leaveGroupImpl(deps, GROUP_ID, SELF)).resolves.toBe(true);
+
+    expect(deps.removeGroupFromStorage).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.reloadGroups).toHaveBeenCalledTimes(1);
+    expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('tombstone'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('a purge failure before the destroy leaves the tombstone in place for the startup sweep', async () => {
+    const deps = makeDeps({ members: [SELF] });
+    deps.clearMessages.mockRejectedValue(new Error('idb failure'));
+
+    await expect(leaveGroupImpl(deps, GROUP_ID, SELF)).rejects.toThrow('idb failure');
+
+    expect(deps.putLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.destroyGroupState).not.toHaveBeenCalled();
+    expect(deps.deleteLeftGroupTombstone).not.toHaveBeenCalled();
   });
 });

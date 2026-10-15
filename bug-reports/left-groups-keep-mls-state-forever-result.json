@@ -1,0 +1,117 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "leaveGroupImpl's purge called removeGroupFromStorage = groupStorage.deleteGroup, which deletes only the overlay record (few-groups-meta). Nothing ever called marmotClient.groups.destroy for a left or abandoned group, so its MLS state (keys, history, snapshots) stayed in few-groups-state forever. It was loaded into marmot's cache at every startup, and collectBackupPayload exported every state key, so the keys also rode along in every relay backup and were restored on other devices.",
+  "fix": "Design Part 1. New leftGroupTombstones.ts: an idb-keyval store few-left-groups/tombstones holding {groupId, leftAt}, with put, delete, list (malformed rows ignored), listLeftGroupIds and clearAll. leaveGroupImpl writes the tombstone before removeGroupFromStorage; a failed write is warned and the purge still runs. When a kind-9 announcement is in flight, the destroy is chained without being awaited: settledOrTimeout(send, LEAVE_DESTROY_SEND_TIMEOUT_MS = 5000) → destroyGroupState → deleteLeftGroupTombstone, so purge and navigation stay immediate. With no send (abandon, no MLS group, no identity) it runs inline before reloadGroups. A failed destroy keeps the tombstone. destroyGroupState is wired in MarmotContext to welcomeSubscription.destroyLeftGroupState. That function runs under withGroupJoinLock(id): overlay present → 'rejoined', nothing destroyed; no MLS state → 'absent'; otherwise groups.destroy(id), which is local-only. This also keeps a late leave-chain destroy from removing a group that was re-joined within the 5 s. sweepLeftGroups runs in loadGroupsAndReconcileInvitations after loadAll and before dropInvitationsForJoinedGroups. It only looks at tombstoned groups and drops each tombstone after destroyLeftGroupState; on a failure it keeps the tombstone and never blocks startup. joinIdempotent's orphan branch deletes the tombstone after its destroy. collectBackupPayload exports state only for overlay group ids that are not tombstoned. clearAllGroupData clears the tombstones. No new publishes. Interpretation (VQ-2): for tombstone + overlay, the sweep never destroys MLS state but does drop the stale tombstone. Otherwise a crash mid-leave would exclude a live group from backups forever.",
+  "files_changed": [
+    "app/src/lib/marmot/leftGroupTombstones.ts",
+    "app/tests/unit/marmot/leftGroupStatePurge.test.ts",
+    "app/tests/e2e/groups-leave-purges-mls-state.spec.ts",
+    "bug-reports/left-groups-keep-mls-state-forever-contract.json",
+    "bug-reports/left-groups-keep-mls-state-forever-result.json",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/backup/relayBackup.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+    "app/tests/e2e/helpers/clear-state.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/README.md"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/backup/relayBackup.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+    "app/tests/e2e/helpers/clear-state.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/README.md"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/leftGroupTombstones.ts",
+    "app/tests/unit/marmot/leftGroupStatePurge.test.ts",
+    "app/tests/e2e/groups-leave-purges-mls-state.spec.ts",
+    "bug-reports/left-groups-keep-mls-state-forever-contract.json",
+    "bug-reports/left-groups-keep-mls-state-forever-result.json"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot/leftGroupTombstones.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/backup/relayBackup.ts",
+    "app/src/context/MarmotContext.tsx"
+  ],
+  "tests_added": [
+    "leaveGroupImpl.test.ts (+11, all failed pre-fix): the tombstone is written before the overlay delete. Normal leave resolves while the send is pending and never destroys before it settles. The destroy then the tombstone delete run after the send resolves, after it rejects, and only after the 5 s timeout (fake timers, nothing at 4999 ms). Abandon and no-mlsGroup destroy inline (order put → removeOverlay → destroy → deleteTombstone → reload). A failing inline or deferred destroy keeps the tombstone and does not throw. A failing tombstone write never skips the purge or the destroy. A purge failure leaves the tombstone for the sweep. Mutation-driven: assertions on the kind-13 content and the warn message.",
+    "leftGroupStatePurge.test.ts (19, new module; did not load pre-fix): store identity (few-left-groups/tombstones); round-trip, leftAt default, malformed rows, clearAll; destroyLeftGroupState destroyed/rejoined/absent; sweep: no tombstone → untouched; tombstone + overlay → MLS untouched and stale tombstone dropped; tombstone + state + no overlay → destroyed after loadAll and before reconciliation; tombstone with no state → dropped; failing destroy keeps that tombstone and continues; failing lookup or listing never blocks startup; skipped when loadAll fails; per-group lock: a sweep concurrent with an accept paused between the MLS save and saveGroup does not destroy the live join. joinIdempotent: the orphan destroy drops the tombstone; a late leave-chain destroy after a re-join is a no-op; a tombstone-delete failure does not fail the accept.",
+    "relayBackup.test.ts (+2, failed pre-fix): only overlay, non-tombstoned groups' state is exported (live yes; mid-leave, left and orphan no); tombstones never appear in the payload.",
+    "groupStorage.clearAllGroupData.test.ts (+1, failed pre-fix): account clear drops all tombstones.",
+    "app/tests/e2e/groups-leave-purges-mls-state.spec.ts (2): Bob holds few-groups-state for the group → leaves → Alice sees 'Bob left the group' → Bob's few-groups-state entry and tombstone are gone (polled), the overlay is gone, and it is still gone after a reload."
+  ],
+  "baseline": {
+    "unit_files": 243,
+    "unit_passed": 5066,
+    "unit_skipped": 1,
+    "tsc": "clean"
+  },
+  "final": {
+    "unit_files": 244,
+    "unit_passed": 5103,
+    "unit_skipped": 1,
+    "tsc": "clean"
+  },
+  "e2e": {
+    "targeted": "Wiped relay, under the lock: groups-leave-purges-mls-state, groups-reinvite-after-leave, groups-leave-intent, groups-lifecycle, groups-accept-reload-atomic, groups-abandon-last-member: 23/23 passed.",
+    "full_gate": "flock make test-e2e-all: non-relay 72 passed; relay 345 passed, 19 skipped, 0 failed (45.5 min, relay wiped by the target). Exit 0. No INVALID marker, full reload or 5xx in the log."
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch /tmp/claude-501/mutation/leave/ (stryker.leave.config.mjs + vitest.leave.config.mjs)",
+    "mutate": "leaveGroupImpl.ts (module), leftGroupTombstones.ts (module), welcomeSubscription.ts:583-641 (orphan tombstone drop, destroyLeftGroupState, sweepLeftGroups) + 1510-1515 (sweep call), relayBackup.ts:125-136 (backup filter)",
+    "before": "89.32% (92 killed, 9 survived, 2 no coverage)",
+    "after": "95.56% (86 killed, 4 survived, 0 no coverage). The remaining survivors are not real gaps: leaveGroupImpl:152 is the existing catch body (members = undefined), which is equivalent because members is already undefined; welcomeSubscription:617 ×3 are the content of the info-level log line.",
+    "gaps_closed": "The sweep's catch in loadGroupsAndReconcileInvitations was uncovered; there is now a test where the tombstone listing fails and startup still reconciles. The store identity was untested; there is now a raw-store read test. The sweep's unused 'destroyed' count let an equality mutant survive, so the return value was removed rather than tested. A redundant typeof/null guard in isTombstone was replaced by optional chaining (equivalent mutant). The kind-13 content and warn-message assertions were missing (existing code).",
+    "audit_record": "Recorded with mutation-audits add-audit.sh, slug quizzl: leaveGroupImpl.ts module 0.97 (1 equivalent); leftGroupTombstones.ts module 1.00; welcomeSubscription.ts changed_lines 0.88 (3 side-effect-only); relayBackup.ts changed_lines 1.00."
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. leaveGroupImpl.test.ts asserts: tombstone put before removeGroupFromStorage; no destroy while the send is pending (and leaveGroupImpl has already resolved); destroy → tombstone delete after the send resolves, after it rejects, and after exactly 5 s when it never settles (fake timers); inline destroy on the abandon and no-group paths, before reloadGroups. All 11 new tests failed before the fix.",
+    "VQ-2": "Yes. leftGroupStatePurge.test.ts: no tombstone → MLS state untouched; tombstone + overlay → MLS state untouched (destroy never called). The stale tombstone is dropped there, which is my interpretation, made so the live group's state is backed up again. Tombstone + state + no overlay → destroyed after loadAll and before reconciliation. destroyLeftGroupState runs under withGroupJoinLock, proven by a concurrent sweep that does not destroy a paused accept. The joinIdempotent orphan branch drops the tombstone after its destroy (order-checked). Round 1: every successful join (fresh or already-joined) drops the tombstone under the lock, not only the orphan branch.",
+    "VQ-3": "Yes. relayBackup.test.ts: groupStates holds only overlay ids that are not tombstoned (mid-leave, left and orphan state excluded), and the tombstones never appear in the payload. groupStorage.clearAllGroupData.test.ts: the account clear drops all tombstones. The store is local IDB, and no publish was added.",
+    "VQ-4": "Yes. groups-leave-purges-mls-state.spec.ts runs through the app: Bob's few-groups-state entry exists, Bob leaves, Alice sees 'Bob left the group', then Bob's few-groups-state entry (readIdbRecord) and tombstone are gone, and it is still gone after a reload. groups-reinvite-after-leave, groups-leave-intent, groups-lifecycle, groups-accept-reload-atomic and groups-abandon-last-member all passed (23/23 on a wiped relay, under the lock).",
+    "VQ-5": "Yes. groups.md §7 now has 'What leaving erases, and when': keys and history are deleted after the departure announcement is sent, or after about 5 s; inline on abandon; finished at next start if interrupted; local-only; per-device, with the backup excluded. The stale no-eviction claims in §4.4, §8 and §12 are corrected, a new §4.5 'Removing a member' describes the admin's immediate removal of any other member, and §3.2 gains a table row. Nothing describes what the removed member sees. backup-and-recovery.md §3 states that left groups are not in the backup. The README index is updated.",
+    "VQ-6": "Yes. make test-unit: 244 files, 5100 passed, 1 skipped; tsc clean. Stryker at concurrency 1 went from 89.32% to 95.56%, with no real-gap survivors (1 equivalent, 3 log-content). The full gate make test-e2e-all is green: 72 non-relay, plus 345 relay passed, 19 skipped, 0 failed."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "Design Part 1 says the leave chain calls groups.destroy(id) directly. Taken literally, it races a re-join inside the 5 s window: joinIdempotent's orphan destroy, then a fresh join, then the late leave destroy wipes the new group. A destroy that runs only after the send resolves could also run before the overlay was deleted. The chained destroy therefore goes through a lock-guarded, overlay-checking destroyLeftGroupState, scheduled after the purge. VQ-2's 'tombstone + overlay → untouched' did not say what happens to the tombstone. Keeping it would exclude a live group's state from backups forever.",
+    "surprised_by": "docs/behavior/groups.md had three stale 'no admin removal of a confirmed member' claims (§4.4, §8, §12), not only the one in §12 the report named. §4.4's 'cancel is a no-op once confirmed' guard also no longer exists: cancelInvitationImpl now gates on tree membership only.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "findings": [
+      "F2 (Codex medium): the tombstone was dropped only in joinIdempotent's orphan branch. Sequence: destroy succeeds, tombstone delete fails, then a re-accept finds groups.has false and skips that branch. The rejoined group kept a stale tombstone and was excluded from the backup until the next start.",
+      "Docs: §7 said the keys are erased after the announcement is 'sent' (it is after sent, failed or 5 s); the backup wording did not hold in the double-failure case."
+    ],
+    "code": "welcomeSubscription.ts joinIdempotent: the orphan-branch delete was replaced by dropLeftGroupTombstoneAfterJoin(groupId). It runs under the join lock after every successful join: the fresh join after joinAndPersist, and the already-joined return. A delete failure is warned and does not fail the accept. A failed join keeps the tombstone.",
+    "docs": "groups.md §7: keys are erased once sending the announcement has finished (sent or failed) or after about 5 s. Interrupted or failed deletion completes at next start. Guarantee reworded to 'beyond the next start'. New 'Rejoining' bullet: a rejoined group is backed up again; if the device also fails to record the rejoin, it stays out of the backup until the next start. backup-and-recovery.md §3 has the same caveat.",
+    "tests_added": "leftGroupStatePurge.test.ts +3. (1) Leave destroy ok and tombstone delete failed, then re-accept with groups.has false: tombstone gone and collectBackupPayload contains the group's state. (2) Already-joined accept drops a stale tombstone. (3) Failed join keeps the tombstone. Cases 1 and 2 fail on the round-0 code by construction (no orphan branch reached).",
+    "verified": "Targeted vitest 55/55. make test-unit: 244 files, 5103 passed, 1 skipped. tsc clean. e2e on a wiped relay under the lock: groups-leave-purges-mls-state + groups-reinvite-after-leave 5/5 passed, no INVALID.",
+    "mutation": "Not re-run: the change moves an existing guarded delete call onto the success paths, and each path is killed by the new tests (1)/(2)."
+  }
+}

@@ -1,12 +1,14 @@
 /**
  * E2E: re-invite after leave (bug invite-accept-not-atomic-across-page-unload).
  *
- * Leaving a group purges only the overlay record (few-groups-meta); the MLS
- * state for the group stays in few-groups-state. Before the fix, accepting a
- * later re-invite to the SAME group hit marmot-ts's "Group <hex> already
- * exists" and the invitation was dropped as "no longer valid" — so re-inviting
- * a member who left never worked. Now the accept core detects the orphan MLS
- * state (no overlay), destroys it locally and joins normally.
+ * Leaving a group purges the overlay record (few-groups-meta) at once; its MLS
+ * state (few-groups-state) is destroyed only after the departure announcement
+ * settles (bug left-groups-keep-mls-state-forever), and older builds never
+ * destroyed it. Before the idempotent-join fix, accepting a re-invite to the
+ * SAME group over leftover state hit marmot-ts's "Group <hex> already exists"
+ * and the invitation was dropped as "no longer valid". Now the accept core
+ * destroys any orphan MLS state (no overlay) locally and joins normally; this
+ * spec guards that a re-invite after leave rejoins.
  *
  * All publishes go through the app (create, invite picker, accept, leave) —
  * no raw WebSocket relay writes.

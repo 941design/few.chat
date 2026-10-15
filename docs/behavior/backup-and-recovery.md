@@ -56,6 +56,12 @@ history), the member profiles you have learned, and your invite links. It does *
 your contacts, your direct messages, your "ever-known" reachability, your relay configuration,
 your choice of external signer, cached media, or unread/reaction state.
 
+Only groups you are still in carry their cryptographic state into the backup: a group you have
+left — including one whose keys are still waiting to be deleted from the device — is never
+written into it. A group you rejoined after leaving is backed up again; in the rare case that the
+device fails to record the rejoin, it stays out of the backup until the app next starts. Restoring only adds or updates groups; it never removes a group the device
+holds, so leaving stays a per-device act (see [Groups](groups.md) §7).
+
 **How it is protected:** the state itself is a **single blob encrypted to yourself** — only your
 own key can decrypt it, and relays see only ciphertext with none of its *contents* labelled.
 What relays (and anyone looking) *can* see is unavoidable: that this identity uses the app, that

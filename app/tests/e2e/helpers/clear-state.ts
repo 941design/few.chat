@@ -16,6 +16,10 @@ const INDEXEDDB_DATABASES = [
   'few-outbound-join-requests',
   'few-media-blobs',
   'few-media-meta',
+  // Left-group tombstones (leftGroupTombstones.ts) and the write-ahead rumor
+  // journal (rumorJournal.ts): per-account local group state.
+  'few-left-groups',
+  'few-rumor-journal',
   'keyval-store', // DM message storage
 ];
 
