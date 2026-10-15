@@ -449,12 +449,12 @@ function stripUndefinedValues<T extends object>(obj: T): T {
  * `tombstoned:true` / `edited:true` row exactly as flagged.
  *
  * `rev` is the revision clock: a real edit or delete signal always carries
- * `rev >= 1` (Unix seconds — see spec §2.4/§2.5). `rev` that is absent,
- * `0`, negative, or non-finite is treated as "not a real signal" — exactly
- * the condition the AC-STORE-3 clobber-guard in `updateMessageInPlace`
- * checks for — and is never persisted onto the stored row (a malformed
- * `rev` is stripped from the patch rather than corrupting the revision
- * clock).
+ * `rev >= 1` (Unix seconds — see spec §2.4/§2.5). `rev` that is absent or
+ * `0` is treated as "not a real signal" — exactly the condition the
+ * AC-STORE-3 clobber-guard in `updateMessageInPlace` checks for — but a
+ * well-formed `0` IS persisted onto the stored row (`rev: 0`). Only a
+ * malformed `rev` (negative or non-finite) is stripped from the patch
+ * rather than corrupting the revision clock.
  *
  * Division of responsibility with S3 (reconciliation core) for rev
  * ordering: storage provides an atomic **strictly-older-rev floor** — a
@@ -731,10 +731,14 @@ export function clearMessages(groupId: string): Promise<void> {
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(() => del(key));
   const settled = next.then(
-    () => { appendQueues.delete(key); },
-    () => { appendQueues.delete(key); },
+    () => {},
+    () => {},
   );
   appendQueues.set(key, settled);
+  // Release only our own slot — a write queued behind us owns the slot now.
+  settled.then(() => {
+    if (appendQueues.get(key) === settled) appendQueues.delete(key);
+  });
   // Edit/delete epic hygiene (S3 round-2 remediation finding 5): prune
   // messageEdits/api.ts's own pending-signal / delete-marker / slot-meta aux
   // state for this thread too, so it doesn't outlive the ChatMessage rows it

@@ -1,0 +1,30 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": "clearMessages' settle handler unconditionally called appendQueues.delete(key), releasing the slot of a write queued behind it; a later append then started from an empty queue and raced it (read-modify-write), dropping a row.",
+  "fix": "clearMessages now settles to a no-op and releases the slot only if appendQueues.get(key) === settled, matching the other writers. Return value and aux cleanup unchanged. MessagePatch doc comment corrected: rev 0 is persisted as rev: 0; only negative/non-finite rev is stripped.",
+  "files_modified": ["app/src/lib/marmot/chatPersistence.ts"],
+  "files_created": ["app/tests/unit/marmot/chatPersistence-clearRace.test.ts"],
+  "files_changed": ["app/src/lib/marmot/chatPersistence.ts", "app/tests/unit/marmot/chatPersistence-clearRace.test.ts"],
+  "modules_touched": ["app/src/lib/marmot"],
+  "tests_added": ["app/tests/unit/marmot/chatPersistence-clearRace.test.ts: append queued during clear + append after both persist ([b, c])"],
+  "baseline": {"test_files": 229, "passed": 4724, "skipped": 1, "tsc": "clean"},
+  "final": {"test_files": 230, "passed": 4725, "skipped": 1, "tsc": "clean"},
+  "verification_answers": {
+    "VQ-1": "Yes. New test failed pre-fix (expected [b, c], received [b]; 'c' missing) and passes after the fix.",
+    "VQ-2": "Yes. Same own-slot check as other writers (appendQueues.get(key) === settled); return value and aux cleanup untouched.",
+    "VQ-3": "Yes. Full unit suite 230 files / 4725 passed / 1 skipped; tsc --noEmit clean.",
+    "VQ-4": "Yes. MessagePatch comment corrected to match behaviour (rev 0 persisted as rev: 0; only malformed rev stripped)."
+  },
+  "retrospective": {
+    "skipped": true,
+    "reason": "Routine single-function fix with a clear report; nothing made the work harder than needed.",
+    "scope": "project_specific",
+    "harder_than_needed": "",
+    "surprised_by": "",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  }
+}

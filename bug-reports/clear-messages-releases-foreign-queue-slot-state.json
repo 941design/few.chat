@@ -1,0 +1,101 @@
+{
+  "bug_name": "clear-messages-releases-foreign-queue-slot",
+  "bug_report_file": "bug-reports/clear-messages-releases-foreign-queue-slot-report.md",
+  "created_at": "2026-10-14T22:44:06Z",
+  "updated_at": "2026-10-15T02:24:31Z",
+  "phase": "ACCEPTED",
+  "complexity": "low",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does a new unit test reproduce the lost-row race and FAIL on the pre-fix code (shown), then pass after the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "QUALITY",
+      "question": "Is the fix minimal and identical in shape to the other writers own-slot release, with clearMessages return value and aux-cleanup behaviour unchanged?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Do all chatPersistence unit tests (incl. the two new mutation-gap files) and the full unit suite pass, tsc clean?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "QUALITY",
+      "question": "Is the stale MessagePatch comment (rev 0 never persisted vs code storing rev: 0) corrected or left with justification?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    "app/src/context/ChatStoreContext.tsx",
+    "app/tests/e2e/groups-dispatch-isolation.spec.ts",
+    "app/tests/e2e/helpers/group-setup.ts",
+    "specs/epic-feature-spec-unified-mls-application-rumor-dispatch/acceptance-criteria.md",
+    "bug-reports/four-invite-flow-e2e-tests-fail-contract.json",
+    "bug-reports/four-invite-flow-e2e-tests-fail-report.md",
+    "bug-reports/four-invite-flow-e2e-tests-fail-result.json",
+    "bug-reports/four-invite-flow-e2e-tests-fail-state.json",
+    "bug-reports/own-send-message-echo-no-longer-contract.json",
+    "bug-reports/own-send-message-echo-no-longer-report.md",
+    "bug-reports/own-send-message-echo-no-longer-result.json",
+    "bug-reports/own-send-message-echo-no-longer-state.json"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "e607b2591ce5a743001d4be56e9f26e9bcb9104c",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED (combined reviewer+examiner, VQ-1..4 YES)",
+      "codex_adversarial": "approve"
+    }
+  ],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-14T22:44:06Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-14T22:49:18Z",
+      "trigger": "fast_path_pass"
+    }
+  ],
+  "e2e_gate": "covered by the cluster full-gate runs (unit-level change)",
+  "e2e_gate_accepted": {
+    "tests": [
+      "groups-leave-intent:198 (2/4)",
+      "groups-contacts:54 (1/4)",
+      "dm-pairing-pending-confirmation:208 (1/4)",
+      "dm-pairing-multi-use:60 (1/4)"
+    ],
+    "reason": "lead-authorized under the owner delegation (work autonomously; only product decisions to the owner): residual full-gate failures are rotating one-offs or member-profile propagation latency in specs untouched by these fixes; every fix own specs green in all full runs 3-6; tracked in BACKLOG groups-e2e-suite-flaky-under-shared and leave-announcement-blank-name-when-profile-unknown"
+  },
+  "e2e_gate_runs": [
+    {
+      "run": "#3",
+      "relay": "334 passed / 3 failed"
+    },
+    {
+      "run": "#4",
+      "relay": "336 / 2"
+    },
+    {
+      "run": "#5",
+      "relay": "337 / 1"
+    },
+    {
+      "run": "#6 (+idb fix)",
+      "relay": "335 / 2"
+    }
+  ]
+}
