@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T10:44:03Z",
+  "updated_at": "2026-10-15T10:45:14Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -361,33 +361,6 @@
       "behavior": "Today: after A invites B, B's picker option becomes disabled ('already in group') and stays that way until B accepts or the invite is otherwise resolved (e.g. cancelled). There is no way to resend via the picker while pending.",
       "approach": "The app already computes the right signal for this — groups.tsx's local confirmedPubkeys (a per-member 'has this person sent a profile message in this group yet' Set, currently only used to drive the member-list's Pending badge). Thread that signal (or an equivalent) through to a shared, contacts.ts-reachable form so the invite-picker predicate can distinguish 'pending invite' from 'confirmed member' and re-enable a distinct pending state per the original DD-4 intent.",
       "success_signal": "Re-opening the invite picker for a group where a contact was invited but hasn't accepted shows that contact as selectable (not disabled), and resubmitting the invite succeeds."
-    },
-    {
-      "slug": "initjoinrequestcounts-startup-scan-reconciliation",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/unreadStore.ts",
-        "line": 298
-      },
-      "text": "initJoinRequestCounts' startup-scan reconciliation has no AC in epic-group-invite-links",
-      "created_at": "2026-07-15",
-      "motivation": "epic-group-invite-links AC-6 ('Unread Store Join Request Counters') specifies the join-request counter API surface — incrementJoinRequest, markJoinRequestsRead, clearJoinRequestGroup, totalUnread, useUnreadCounts — but says nothing about initJoinRequestCounts, the startup scan that rebuilds the badge from persisted pending requests on app load. The unspecified user story a mutation-gate survivor (Stryker id 117, unreadStore.ts:317) exposed: 'a join request that arrives while the app is still loading its badge counts must still show up in the badge.' The chat-message slice's equivalent invariant is asserted (unreadStore.test.ts:283) and the DM slice's is too; the join-request slice was the only one of the three with no test, because no AC ever named the behavior. A property has now been written against it (unreadStore.test.ts, describe 'a join request arriving during the startup scan still reaches the badge'), but the contract it asserts is inferred from sibling slices rather than specified.",
-      "behavior": "initJoinRequestCounts scans persisted pending join requests per group and replaces the joinRequests slice. A request that lands mid-scan (welcomeSubscription persists via savePendingJoinRequest, then calls incrementJoinRequest) is protected from the stale scan snapshot by noteLiveIncrement('joinRequests', groupId), which queues the group for an authoritative re-read. Before this pass, blanking that slice-name literal to '' disabled the protection with no test failing — the mid-scan request was silently dropped from the badge until the next app load.",
-      "approach": "Spec-then-property: the property exists and passes; AC-6 should gain a bullet naming initJoinRequestCounts and the mid-scan-arrival invariant so the contract is specified rather than inferred. Consider whether the same startup-reconciliation invariant deserves one shared AC covering all three unreadStore slices (counts / joinRequests / directMessages) rather than a per-epic restatement.",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "invite-links-md-still-specifies-mute",
-      "scope": "any",
-      "anchor": {
-        "path": "specs/invite-links.md"
-      },
-      "text": "invite-links.md still specifies mute/unmute for invite links, but shipped behaviour is automatic ~24h expiry plus terminal delete (epic-invite-link-lifecycle) — the spec is stale",
-      "created_at": "2026-07-19",
-      "motivation": "The spec is a misleading source of truth: it documents a reversible mute mechanism that no longer exists, so anyone (or any agent) researching invite-link behaviour from it reasons about and documents the wrong behaviour. Surfaced while writing docs/behavior/group-administration.md.",
-      "behavior": "invite-links.md (Nonce-based revocation / Flow 4) describes muting and unmuting a nonce. Shipped code implements automatic expiry (inviteLinkStorage.ts expiresAt = createdAt + DAY_MS, isExpired) and terminal hard-delete only (ManageInviteLinksModal deleteInviteLink; joinRequestHandler drops expired and muted nonces), per epic-invite-link-lifecycle (epic-state: done). invite-links.md is not marked superseded.",
-      "approach": "Update invite-links.md to defer to epic-invite-link-lifecycle for the current lifecycle, or mark the muting section superseded.",
-      "kind": "spec-gap"
     },
     {
       "slug": "two-co-admins-leaving-at-nearly",

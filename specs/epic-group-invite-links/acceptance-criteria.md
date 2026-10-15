@@ -53,6 +53,7 @@
 - `totalUnread` in `useUnreadCounts()` sums both `counts` and `joinRequests` values
 - `useUnreadCounts()` returns `joinRequests` alongside existing `counts`
 - The test bridge on `window.__nostlingUnread` exposes the new functions
+- `initJoinRequestCounts(groupIds)` seeds `joinRequests` from the persisted pending requests via the startup scan (`reconcileInit('joinRequests', ...)`). A join request persisted while that scan is running must not be dropped from the badge: `incrementJoinRequest` calls `noteLiveIncrement('joinRequests', groupId)`, which queues the group for an authoritative re-read after the scan. Covered by the unit test `a join request that lands mid-scan is still counted once the scan finishes` (`app/tests/unit/unreadStore.test.ts`). The same startup-reconciliation invariant holds for the `counts` and `directMessages` slices (see `reconcileInit` / `noteLiveIncrement` in `app/src/lib/unreadStore.ts`); it is stated here only as a cross-reference.
 
 ## AC-7: Notification Bell Integration
 - `NotificationBell` badge count reflects the combined total from chat messages and join requests

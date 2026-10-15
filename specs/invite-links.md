@@ -1,8 +1,10 @@
 # Feature Spec: Group Invite Links
 
+> **Superseded in part (2026-10-15):** the mute/unmute material (Key Decision 4, `InviteLink.muted`, Flow 4, `muteInviteLink`, "No expiry in v1", implementation step 7) describes the original v1 design and is no longer current. Shipped behaviour (see `specs/epic-invite-link-lifecycle/`, status done): links expire automatically ~24 h after creation (`expiresAt = createdAt + DAY_MS`, `isExpired` in `app/src/lib/marmot/inviteLinkStorage.ts`) and the only admin action in `ManageInviteLinksModal` is a terminal, confirmed hard delete (`deleteInviteLink`). `joinRequestHandler` silently drops requests for unknown, expired, and legacy-muted nonces. There is no UI to mute or unmute.
+
 ## Goal
 
-Let group admins share a URL that anyone can open to request membership in a group — without needing to exchange npubs manually. Links contain a nonce so admins can revoke individual links at any time.
+Let group admins share a URL that anyone can open to request membership in a group — without needing to exchange npubs manually. Links contain a nonce so admins can delete individual links at any time (links also expire automatically after ~24 h).
 
 ## Background
 
@@ -22,7 +24,7 @@ When the invitee opens a link, their app sends a **gift-wrapped direct message**
 
 Every join request requires explicit admin approval. There is no toggle to auto-accept requests. This keeps the security model simple: the admin always decides who enters the MLS group.
 
-### 4. Nonce-based revocation (muting)
+### 4. Nonce-based revocation (muting) — SUPERSEDED by epic-invite-link-lifecycle (expiry + hard delete)
 
 Each generated link has a unique nonce. Admins can **mute** (disable) a nonce, causing the app to silently ignore any join requests that reference it. Muted nonces are persisted locally (IndexedDB). The link itself still opens the app and the invitee still sees the join UI, but the admin's app drops the request on receipt. This is a deliberate UX choice: the invitee is not told the link is dead, avoiding social awkwardness — their request simply never gets approved.
 
@@ -171,7 +173,7 @@ Stored in a new IndexedDB object store: `quizzl-join-requests`, keyed by `eventI
    - Decrement the bell counter.
    - No notification is sent to the requester (they simply never receive a Welcome).
 
-### Flow 4: Admin mutes an invite link
+### Flow 4: Admin mutes an invite link — SUPERSEDED (now: admin deletes a link; links also auto-expire after ~24 h; see epic-invite-link-lifecycle)
 
 1. Admin opens group detail view.
 2. A "Manage Invite Links" section (or button) shows all active invite links for this group.
@@ -266,9 +268,9 @@ inviteLinks: InviteLink[];
 
 The link encodes one admin's npub. If that admin is unavailable, the request stalls. A future enhancement could encode multiple admin npubs or a "group admin" concept, but for v1 the single-admin model is acceptable and keeps the protocol simple.
 
-### No expiry in v1
+### No expiry in v1 — SUPERSEDED
 
-Links do not expire automatically. Admins can mute them manually. Time-based expiry (e.g., "valid for 7 days") is a natural follow-up but adds complexity to v1.
+(Superseded: links now expire ~24 h after creation; see epic-invite-link-lifecycle.) Original v1 text: links do not expire automatically. Admins can mute them manually. Time-based expiry (e.g., "valid for 7 days") is a natural follow-up but adds complexity to v1.
 
 ### No rate limiting
 
@@ -286,6 +288,6 @@ By design, denied requests produce no notification to the invitee. This avoids s
 4. **Join request receiving** — Gift-wrap handler extension in `MarmotContext`, nonce validation, persistence.
 5. **Bell integration** — Extend `unreadStore` with join request counters, update `NotificationBell`.
 6. **Pending requests UI** — `PendingRequestsSection` in group detail, approve/deny handlers.
-7. **Muting** — `ManageInviteLinksModal`, mute toggle, filter in gift-wrap handler.
+7. **Muting** (superseded by expiry + hard delete) — `ManageInviteLinksModal`, mute toggle, filter in gift-wrap handler.
 8. **Backup integration** — Add `inviteLinks` to `BackupPayload`.
 9. **E2E tests** — Full flow: generate link, open as User B, approve, verify Welcome received.
