@@ -2,7 +2,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 // USER_B is configured as the maintainer in the e2e test environment
 // (NEXT_PUBLIC_MAINTAINER_NPUBS in run-e2e.mjs). The contacts page filters out
@@ -69,12 +69,9 @@ test.describe.serial('Contacts and direct chat', () => {
     await pageB.goto('/groups/');
     // Wait for the pending invitations section to appear with an invitation row
     await expect(pageB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 60_000 });
-    // Click the Accept button on the most recently received invitation (.last()).
-    // Stale invitations from prior relay history are queued earlier; Alice's
-    // fresh invite is the newest and last in the pending list.
-    await pageB.locator('[data-testid^="accept-invitation-"]').last().click();
-    // After accepting, the group card should appear
-    await expect(pageB.getByText('Contacts Test Group')).toBeVisible({ timeout: 90_000 });
+    // Accept the invitation for THIS group (scoped by name, not position) and
+    // wait until the joined group-card appears.
+    await acceptInvitationAndWaitJoined(pageB, 'Contacts Test Group');
     await pageB.locator('[data-testid^="group-card-"]', { hasText: 'Contacts Test Group' }).click();
     await expect(pageB.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
 

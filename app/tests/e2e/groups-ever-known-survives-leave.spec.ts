@@ -23,7 +23,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { readIdbRecord } from './helpers/idb-record';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const GROUP_NAME = 'Ever-Known Survives Leave Group';
@@ -111,10 +111,7 @@ test.describe.serial('Ever-known peer survives group leave (AC-TEST-7)', () => {
     // See the pending invitation and Accept it
     await expect(bobPage.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
     await expect(bobPage.locator('[data-testid^="pending-invitation-row-"]').first()).toBeVisible({ timeout: 30_000 });
-    await bobPage.locator('[data-testid^="accept-invitation-"]').first().click();
-
-    // Group card should appear after acceptance
-    await expect(bobPage.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(bobPage, GROUP_NAME);
   });
 
   test('Alice DMs Bob; message lands (baseline — both in group)', async () => {

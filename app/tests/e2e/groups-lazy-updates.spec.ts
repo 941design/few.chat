@@ -2,7 +2,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -69,11 +69,9 @@ async function inviteAndJoin(
 
   // Invitee receives Welcome and joins
   await inviteePage.goto('/groups/');
-  // Pull-only invitations (Walled Garden v2): accept the most recently received
-  // invitation before the group appears in the joined list.
-  await expect(inviteePage.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-  await inviteePage.locator('[data-testid^="accept-invitation-"]').last().click();
-  await expect(inviteePage.getByText(groupName)).toBeVisible({ timeout: 60_000 });
+  // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+  // and wait for the real joined group-card before continuing.
+  await acceptInvitationAndWaitJoined(inviteePage, groupName);
 
   // Wait for profile exchange to complete
   await inviteePage.waitForTimeout(10_000);
@@ -131,11 +129,9 @@ test.describe.serial('Live group detail updates without navigation', () => {
   test('B joins — Bob name appears on A detail without navigation', async () => {
     // B receives Welcome and joins
     await pgB.goto('/groups/');
-    // Pull-only invitations (Walled Garden v2): accept the most recently received
-    // invitation before the group appears in the joined list.
-    await expect(pgB.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pgB.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(pgB.getByText(GROUP_NAME)).toBeVisible({ timeout: 60_000 });
+    // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+    // and wait for the real joined group-card before continuing.
+    await acceptInvitationAndWaitJoined(pgB, GROUP_NAME);
 
     // Wait for B's profile to propagate
     await pgB.waitForTimeout(10_000);

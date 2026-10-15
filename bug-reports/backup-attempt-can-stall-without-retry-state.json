@@ -1,0 +1,78 @@
+{
+  "bug_name": "backup-attempt-can-stall-without-retry",
+  "bug_report_file": "bug-reports/backup-attempt-can-stall-without-retry-report.md",
+  "created_at": "2026-10-14T22:50:39Z",
+  "updated_at": "2026-10-14T23:06:28Z",
+  "phase": "ESCALATED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Is the hanging step identified by runtime evidence (instrumented run / deterministic repro), not just by reading code?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "SPEC",
+      "question": "Does every backup attempt now settle within a bounded time, turning a stall into a logged failure that enters the EXISTING retry schedule unchanged?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SECURITY",
+      "question": "Are backup contents, NIP-44 self-encryption, kind 30078, d-tag and relay selection unchanged (privacy invariant in CLAUDE.md)?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Does a unit regression test with a never-settling dependency fail before the fix and pass after?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Does groups-backup-restore-outcomes pass ≥5 consecutive wiped-relay runs, and does the deterministic stall repro (scratch) now show a logged failure + kick + pass?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "QUALITY",
+      "question": "Is the change minimal (no retry-schedule change, no unrelated refactor), unit suite + tsc green?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    "app/src/context/ChatStoreContext.tsx",
+    "app/tests/e2e/groups-dispatch-isolation.spec.ts",
+    "app/tests/e2e/helpers/group-setup.ts",
+    "specs/epic-feature-spec-unified-mls-application-rumor-dispatch/acceptance-criteria.md",
+    "bug-reports/four-invite-flow-e2e-tests-fail-contract.json",
+    "bug-reports/four-invite-flow-e2e-tests-fail-report.md",
+    "bug-reports/four-invite-flow-e2e-tests-fail-result.json",
+    "bug-reports/four-invite-flow-e2e-tests-fail-state.json",
+    "bug-reports/own-send-message-echo-no-longer-contract.json",
+    "bug-reports/own-send-message-echo-no-longer-report.md",
+    "bug-reports/own-send-message-echo-no-longer-result.json",
+    "bug-reports/own-send-message-echo-no-longer-state.json"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "e607b2591ce5a743001d4be56e9f26e9bcb9104c",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-14T22:50:39Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ESCALATED",
+      "timestamp": "2026-10-14T23:06:28Z",
+      "trigger": "fixer_found_premise_wrong_lead_rerouted"
+    }
+  ],
+  "outcome": "NOT_A_PRODUCT_BUG: attempt never started — test setup race (profile seed consumed by pre-reload page, in-memory pendingDirty lost on reload); fixed test-side as round 3 of groups-e2e-suite-flaky-under-shared; optional product hardening filed as finding backup-dirty-mark-lost-on-early-reload"
+}

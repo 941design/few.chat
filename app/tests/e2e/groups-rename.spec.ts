@@ -15,7 +15,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { queryRelayForEvents } from './helpers/relay-query';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -97,11 +97,7 @@ async function waitForGroupAndOpen(page: Page, groupName: string): Promise<void>
   await expect(
     page.getByTestId('groups-empty-state').or(page.getByTestId('groups-list')),
   ).toBeVisible({ timeout: 60_000 });
-  await expect(
-    page.locator('[data-testid^="accept-invitation-"]').last(),
-  ).toBeVisible({ timeout: 60_000 });
-  await page.locator('[data-testid^="accept-invitation-"]').last().click();
-  await expect(page.getByText(groupName)).toBeVisible({ timeout: 60_000 });
+  await acceptInvitationAndWaitJoined(page, groupName);
   await openGroupDetail(page, groupName);
 }
 

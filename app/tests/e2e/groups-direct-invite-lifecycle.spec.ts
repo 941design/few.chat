@@ -25,7 +25,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker, seedContact } from './helpers/group-setup';
+import { inviteContactViaPicker, seedContact, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 import { queryRelayForEvents } from './helpers/relay-query';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
@@ -165,9 +165,7 @@ test.describe.serial('Direct invite lifecycle — modal path, reload persistence
       pageB.getByTestId('groups-empty-state').or(pageB.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 60_000 });
     await expect(pageB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 60_000 });
-    await expect(pageB.locator('[data-testid^="accept-invitation-"]').first()).toBeVisible({ timeout: 90_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').first().click();
-    await expect(pageB.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageB, GROUP_NAME);
 
     // A stays on the SAME already-loaded group-detail page (from the AC-SCEN-6
     // reload above) — no navigation, no reload — and observes the live flip.
@@ -223,9 +221,7 @@ test.describe.serial('Direct invite lifecycle — modal path, reload persistence
       pageC.getByTestId('groups-empty-state').or(pageC.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 60_000 });
     await expect(pageC.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 60_000 });
-    await expect(pageC.locator('[data-testid^="accept-invitation-"]').first()).toBeVisible({ timeout: 90_000 });
-    await pageC.locator('[data-testid^="accept-invitation-"]').first().click();
-    await expect(pageC.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageC, GROUP_NAME);
 
     // A stays on the group-detail page from the previous test — no reload.
     const cPrefix = USER_C.pubkeyHex.slice(0, 8);

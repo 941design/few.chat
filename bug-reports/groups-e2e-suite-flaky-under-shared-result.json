@@ -1,0 +1,131 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 3,
+  "root_cause": "After clicking accept-invitation-*, 34 call sites (31 spec files) plus createGroupAndInvite waited on getByText(groupName), which the still-pending InvitationCard already renders (name decoded pre-join from the Welcome), so the wait passed instantly while joinGroupFromWelcome was still running. The next page.goto('/groups/') then unloaded the page mid-accept. A probe replaying the old flow showed this directly: in 1 of 3 runs the navigation aborted the join, the invitation stayed pending (lp_pendingInvitations_v1 still populated, 0 group cards for 30 s), and openGroupDetail's group-card click timed out with the same error as the reported groups-rename:127 failure. In the other 2 runs the join had already finished.",
+  "fix": "One helper, acceptInvitationAndWaitJoined(page, groupName, {timeout=90_000}), in app/tests/e2e/helpers/group-setup.ts. It finds the invitation card whose name element exactly matches groupName (newest if there are duplicates, never a positional pick over all invitations), counts the joined group-cards with that exact name, clicks that card's own Accept button, then waits until there is one more joined group-card than before and the clicked invitation card is gone. Every vacuous site was replaced mechanically, including createGroupAndInvite step 10, and the stale '.last() = most recent' comments were updated. Readiness gates before the accept (pending-invitations-section and pending-invitation-row waits) were left as they were. No production code changed.",
+  "files_changed": [
+    "app/tests/e2e/helpers/group-setup.ts",
+    "app/tests/e2e/dm-walled-garden-group-member-allowed.spec.ts",
+    "app/tests/e2e/groups-admin.spec.ts",
+    "app/tests/e2e/groups-announcement-roster-gate.spec.ts",
+    "app/tests/e2e/groups-approved-requester-label.spec.ts",
+    "app/tests/e2e/groups-blackout-guard.spec.ts",
+    "app/tests/e2e/groups-contacts.spec.ts",
+    "app/tests/e2e/groups-direct-invite-lifecycle.spec.ts",
+    "app/tests/e2e/groups-ever-known-survives-leave.spec.ts",
+    "app/tests/e2e/groups-forward-secrecy.spec.ts",
+    "app/tests/e2e/groups-image-sharing.spec.ts",
+    "app/tests/e2e/groups-invite-lifecycle-announcements.spec.ts",
+    "app/tests/e2e/groups-lazy-updates.spec.ts",
+    "app/tests/e2e/groups-leave-intent.spec.ts",
+    "app/tests/e2e/groups-lifecycle.spec.ts",
+    "app/tests/e2e/groups-member-admitted-announcement.spec.ts",
+    "app/tests/e2e/groups-member-profiles.spec.ts",
+    "app/tests/e2e/groups-message-edit-delete.spec.ts",
+    "app/tests/e2e/groups-migration-backfill.spec.ts",
+    "app/tests/e2e/groups-poll-after-leave.spec.ts",
+    "app/tests/e2e/groups-polls.spec.ts",
+    "app/tests/e2e/groups-profile-forwarded-attribution.spec.ts",
+    "app/tests/e2e/groups-profile-reactive.spec.ts",
+    "app/tests/e2e/groups-profile-request.spec.ts",
+    "app/tests/e2e/groups-profile-update-propagation.spec.ts",
+    "app/tests/e2e/groups-reactions.spec.ts",
+    "app/tests/e2e/groups-remove-member.spec.ts",
+    "app/tests/e2e/groups-rename.spec.ts",
+    "app/tests/e2e/groups-transitive-invite.spec.ts",
+    "app/tests/e2e/groups-dispatch-isolation.spec.ts (one call site; earlier uncommitted hunks kept)",
+    "app/tests/e2e/groups-pending-invite-live-idle.spec.ts",
+    "app/tests/e2e/groups-invitation-preview.spec.ts",
+    "app/tests/e2e/groups-backup-restore-outcomes.spec.ts",
+    "app/tests/e2e/groups-dm-reactions.spec.ts"
+  ],
+  "tests_added": [],
+  "baseline": {
+    "unit": "227 files, 4493 passed, 1 skipped",
+    "tsc": "clean",
+    "e2e_full_gate_before": "non-relay 72/72; relay 331 passed, 2 failed (groups-rename:127, groups-dm-reactions:366), 19 skipped, 5 did not run",
+    "rename_isolated_before": "1 of 2 runs failed AC-RENAME-3"
+  },
+  "final": {
+    "unit": "227 files, 4493 passed, 1 skipped",
+    "tsc": "clean",
+    "touched_specs_batch": "29 files on a wiped relay: 212 passed, 14 skipped (existing skips), 0 failed",
+    "groups_rename": "4/4 runs, 6/6 tests each",
+    "e2e_full_gate": "make test-e2e-all: non-relay 72/72; relay 337 passed, 1 failed, 19 skipped, 0 did not run (exit 2)",
+    "residual": "groups-dm-reactions.spec.ts:228 (AC-46, line 247): alicePage chat-input locator.press('Enter') timed out after 30 s. Bob's join through createGroupAndInvite had already completed (screenshot shows the joined AC-46 card). This is a different class from the vacuous wait: the page did not respond to a key press under full-suite load. It passed 2/2 in isolation on a wiped relay. AC-47 (spec:366) did not recur."
+  },
+  "sabotage_evidence": "Temporarily added an early return as the first line of MarmotContext.acceptPendingInvitation, making accept a no-op. groups-rename.spec.ts then failed in test 1 at helpers/group-setup.ts:165, the joinedCards.toHaveCount(1) wait (Expected 1, Received 0); 5 tests did not run. The file was then restored from a backup copy, and git diff confirmed MarmotContext.tsx is clean.",
+  "ac_rename_3_diagnosis": "Not reproduced after the fix. groups-rename passed 4/4, and 2 more runs passed with the old flow. A debug dump of every leaf element containing 'Rename Test Original' (with its nearest data-testid ancestor), taken 4 times over 15 s after the renamed name appeared, found 0 matches in every run. So it is not a selector defect: no preview line or announcement contains the old name. The best-supported cause is an interrupted accept from the old flow. If the page unloads after the join has stored the group but before removePendingInvitation runs, the joined card and the stale invitation card (which shows the Welcome's original name) both remain. I could not catch that intermediate state directly. The assertion was left unchanged, so the test would still fail if a stale card appeared. Flagged to the lead: it may be a product robustness gap (accept is not atomic across page unload, and nothing reconciles pending invitations against joined groups). It only appears when the user navigates away mid-accept, so I did not escalate it as a blocker.",
+  "verification_answers": {
+    "VQ-1": "Yes. Grep: `grep -rn \"accept-invitation-\" app/tests/e2e`. All 34 click sites in 31 spec files plus createGroupAndInvite now use the helper, which waits for a new joined group-card. The remaining matches are deliberate: groups-pull-only-invitation-accept already waits for the group-card and for the invitation card to be gone; groups-invite-link and groups-awaiting-confirmation only count accept buttons (toHaveCount(0) or a poll), with no accept click. After the change, no spec file except those three contains 'accept-invitation-'.",
+    "VQ-2": "Yes. One shared helper and mechanical call-site replacements, plus comment updates. No skips or quarantines. The helper's default 90 s budget was already the suite's join budget (createGroupAndInvite and most specs). Some sites previously used 60 s for the vacuous wait, which never covered the join at all; now the join itself is waited on. This is a real wait, not a looser one.",
+    "VQ-3": "Partly. Evidence rules out a selector defect: the leaf dump found 0 elements containing the old name in all runs. The failure did not recur in 4 runs after the fix. The probe showed that mid-accept navigation, which the fix removes, leaves invitations pending, which supports the interrupted-accept explanation. The possible product gap (no reconciliation of a stale invitation after an interrupted accept) is reported to the lead, not hidden. The assertion was not loosened.",
+    "VQ-4": "Touched specs: 212 passed, 0 failed on a wiped relay. Full gate: not 0 failures. 1 residual: groups-dm-reactions:228, a 30 s press('Enter') hang on Alice's DM input after a completed join. That is a different class (page unresponsive under suite load), it passed 2/2 in isolation, and the target failure (groups-rename:127) and AC-47 did not recur.",
+    "VQ-5": "Yes. With a no-op accept, the helper fails at the group-card count wait (Expected 1, Received 0) instead of passing silently. The old pattern passed that point vacuously.",
+    "VQ-6": "Yes. Unit 227/4493/1 skipped is unchanged and tsc is clean. No production code changed; the sabotage edit was reverted and verified clean with git diff."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "`[data-testid^=\"group-card-\"]` also matches the child `group-card-preview-<id>` element, so a raw prefix count reports 2 per group. My first probe made it look like a duplicate-group product bug until I traced the testids. The helper avoids this by requiring an exact-name descendant. Round 1: the suggested in-page backup re-trigger could not work, because the scheduler swallows marks while a retry is pending; this only shows when reading BackupScheduler.markDirty, not BackupContext.",
+    "surprised_by": "The old flow does more than wait vacuously: the following page.goto actively aborts the in-flight MLS join (reproduced 1 of 3 runs), so the reported failure was caused by the test, not just exposed by it.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "diagnoses": {
+      "groups-pending-invite-live-idle:110": "CONFIRMED. The spec gated only on create-group-btn, which renders regardless of MarmotContext `ready` (pages/groups.tsx ~:1209). createGroup returns null while clientRef is unset (MarmotContext.tsx:1903; the client is assigned only after connectNdk and other awaits, ~:1228), so the modal shows create-group-error and nothing retries. groups-empty-state/groups-list render only when `ready`. groups-invitation-preview.spec.ts had the same create-group-btn-only gate after a goto. All other hand-rolled create flows (about 40 local copies) are gated, either inline or by their boot helper waiting for groups-empty-state/groups-list, so they were left unchanged.",
+      "groups-backup-restore-outcomes:65": "CONFIRMED that the cause is latency made fatal by the budget, but the proposed fix is REFUTED. BackupScheduler.markDirty returns early while retryPending is set (relayBackup.ts:607, deliberately no backoff bypass), so an in-page trigger such as a simulated hidden tab cannot cut the 30 s/2 min retry wait. Only a fresh page load gets a fresh scheduler. Proven with a scratch copy that blocked the relay WebSocket for the first 35 s: two '[Backup] publish failed: Not enough relays received the event (0 published, 1 required)' warnings, 2 kicks, then the backup landed and the test passed in 56 s. Without the kicks the next retry would come about 2.5 min in, well past the 90 s budget. The scratch file was deleted.",
+      "groups-dm-reactions:228 AC-46": "NOT DIAGNOSED (no artifacts survived). Static reading: locator.press only needs the element attached, so a 30 s timeout right after a successful fill means chat-input was detached for 30 s or the page's main thread was unresponsive. Checked and ruled out: ChatBox does not hide the composer while loading; pages/contacts.tsx would unmount it only via `restricted` (archived or pendingConfirmationSince), via !contact, or via a missing identity, and none of these applies to a contact seeded through /add. No clear test defect, so the flow is unchanged. Added evidence instead: sendDmViaComposer rethrows with the page URL and chat-input count. Separately CONFIRMED the positional-pick risk: lifecycle announcements render as msg-* bubbles too (ChatBox.tsx:691), so groups-reactions getFirstMessageId could target an announcement. It was replaced by getMessageIdByText, and the dm-reactions .first() picks now filter by the sent text."
+    },
+    "fixes": [
+      "helpers/group-setup.ts: new createGroup(page, name), which gates on groups-empty-state/groups-list (60 s), counts the exact-name group-cards, submits through the modal, waits for one more card OR create-group-error, throws on the error, and waits for the modal to close. createGroupAndInvite steps 4+5 now use it.",
+      "groups-pending-invite-live-idle.spec.ts and groups-invitation-preview.spec.ts: the hand-rolled create flow is replaced by createGroup.",
+      "groups-backup-restore-outcomes.spec.ts: waitForOwnBackupOnRelay polls the relay (read only) for up to 90 s. Every 20 s without a backup it re-seeds the avatar-less profile (same nickname) and reloads, so the app's own mount-time avatar backfill marks the backup dirty immediately; the mark is queued until the new scheduler exists, so it cannot race. pageA console '[Backup' lines are captured and included in the failure message. Product retry and timeouts are unchanged.",
+      "groups-reactions.spec.ts: getFirstMessageId is replaced by getMessageIdByText at both call sites.",
+      "groups-dm-reactions.spec.ts: a sendDmViaComposer evidence wrapper is used at all 4 send sites, msg-* picks filter by the sent text, and the unused sendDmAndGetMessageId was removed as dead code."
+    ],
+    "runs": {
+      "batch_wiped_relay": "16 specs (5 touched + the 11 other createGroupAndInvite consumers): 48 passed, 5 skipped (existing), 0 failed",
+      "flaky_3x": "pending-invite-live-idle + backup-restore-outcomes + dm-reactions, 3 runs each on a freshly wiped relay: 7/7, 7/7, 7/7",
+      "kick_path_proof": "scratch spec with the relay WebSocket blocked for 35 s: passed, kicks=2",
+      "unit": "229 files, 4722 passed, 1 skipped (higher count comes from the concurrent mutation work's new tests)",
+      "tsc": "clean",
+      "full_gate": "not run (lead runs it)"
+    },
+    "residual": "AC-46's press timeout is still unexplained; the next occurrence will report the URL and composer count. Optional product hardening (the lead will file it): backup retry backoff and tight NDK timeouts mean a cold-start backup can take more than 2.5 min after two transient failures."
+  },
+  "remediation_round_2": {
+    "changes": [
+      "groups-backup-restore-outcomes.spec.ts waitForOwnBackupOnRelay: the 20 s timer kick is gone. The helper tracks seenLogs (an index into backupLogs) and counts failed attempts, meaning new lines that start with '[Backup' and contain 'failed'. Strings verified in source: BackupContext.tsx:58 '[Backup] relay connection failed', :62 '[Backup] publish failed', lib/backup/relayBackup.ts:431 '[Backup] relay backup lookup failed', :647 '[BackupScheduler] publish failed'. 'relay backup unusable' (:428) does not count. A kick (re-seed the avatar-less profile, then reload) happens as soon as at least one failed attempt has been logged since the last kick, and only while at least MIN_KICK_HEADROOM_MS (10 s) of budget is left. The 90 s budget and the read-only relay poll are unchanged. The thrown error now states the failed attempts observed, the kicks performed and the captured log lines. The doc comment now says a kick restarts the scheduler after an OBSERVED transient failure, and that an unattempted publish must fail the test.",
+      "helpers/group-setup.ts createGroup: the readiness gate (groups-empty-state/groups-list) is back to 30_000, the HEAD value at every site it replaced (createGroupAndInvite steps 1 and 4, and the specs' create-group-btn gates). No duration over 30 s was ever measured."
+    ],
+    "proofs": {
+      "a_relay_blocked_35s": "Scratch copy (deleted). An addInitScript wrapper sends ws://...:7777 to a refused port for 35 s, across reloads. Result: 'SCRATCH_RESULT found after 33368ms failedAttempts=2 kicks=2', 1 passed (46.0s). A first attempt used context.routeWebSocket with ws.close(). It logged NO [Backup] line and the backup never landed in 90 s: 0 failed attempts, 0 kicks, failed. So a mid-connection close stalls the publish silently, while a refused connection fails it quickly.",
+      "b_no_backfill_sabotage": "Scratch copy (deleted). The profile was seeded WITH an avatar, so markBackupDirty is never called. Result: 'No kind-30078 backup for d5daa8e9... on the relay after 90s (0 failed attempt(s) observed, 0 kick(s) performed). App backup log: (none)', 1 failed, as expected."
+    },
+    "runs": {
+      "flaky_3x": "groups-backup-restore-outcomes + groups-pending-invite-live-idle, each run on a freshly wiped relay with no stryker or e2e run active. run1: 2 passed, 1 FAILED. run2: 3 passed (30.9s). run3: 3 passed (37.4s). pending-invite-live-idle passed 3/3.",
+      "run1_failure": "backup-restore-outcomes 'a found backup...': 'No kind-30078 backup for 59d4cabc... after 90s (0 failed attempt(s) observed, 0 kick(s) performed). App backup log: (none)'. The cold-start backup neither landed nor logged a failure for 90 s in isolation. This is the silent-stall class that proof (a)'s routeWebSocket variant also reproduced. Candidate (not instrumented): publishScheduledBackup -> publishBackup -> ndkEvent.publish(relaySet) at relayBackup.ts:229 has no explicit timeout, and getBackupRelays/collectBackupPayload come before it. In round 1 the 20 s timer kick masked this by reloading.",
+      "unit": "230 files, 4725 passed, 1 skipped",
+      "tsc": "clean",
+      "full_gate": "not run (lead runs it)"
+    },
+    "residual": "With the observed-failure-only kick, backup-restore-outcomes failed 1 of 3 isolated runs: the app's first backup stalls silently, logs no failure, and the scheduler's retry never fires because the attempt never settles. The test now reports this honestly instead of hiding it. The Decider must choose between a product fix (e.g. a publish timeout in publishBackup/publishScheduledBackup so a stall becomes a logged, retried failure; product code was out of scope this round) and accepting the test as red. A [Backup] 'attempt started' log line would also let the helper tell 'unattempted' from 'stalled'."
+  },
+  "remediation_round_3": {
+    "changes": [
+      "groups-backup-restore-outcomes.spec.ts 'a found backup is offered...': after goto('/') and BEFORE clearAppState+seed+reload, poll (30 s) until lp_userProfile_v1 has an avatar AND lp_nostrIdentity_v1 has pubkeyHex. Once both exist the first page (ProfileProvider backfills+persists once at hydration; identity created once) has nothing left to write, so the seed can no longer be consumed by the first page and the RELOADED page does the backfill + markBackupDirty with a live scheduler. Seeding stays page.evaluate after clearAppState (no guarded initScript). Round-2 log-gated kick and firstTargetLog untouched. No product code, no BACKLOG.json, no commit."
+    ],
+    "verification": {
+      "target_test_runs": "passed in 6 of 7 wiped-relay runs (runs 1-4, 7 fully green; runs 5 and 6 target test green but the OTHER test failed)",
+      "kicks": "0 in every run",
+      "tsc": "npx tsc --noEmit clean"
+    },
+    "residual_finding": "Test 1 'an identity without a backup is told no backup was found' (untouched by this change) failed in runs 5 and 6: no backup-notice/restore-error-alert within 45 s; dev-server log showed a Fast Refresh full reload during first /settings compile around recoverIdentity. Separate flake, not investigated.",
+    "note": "pgrep reported a run-e2e.mjs process at start of run 1 (pid gone by run 5); possible interference with early runs."
+  }
+}

@@ -16,7 +16,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { queryRelayForEvents } from './helpers/relay-query';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -83,10 +83,17 @@ async function getCurrentGroupId(page: Page): Promise<string> {
   throw new Error('Could not determine group id from page URL: ' + url);
 }
 
-/** Get the id of the first visible chat message bubble. */
-async function getFirstMessageId(page: Page): Promise<string> {
+/**
+ * Get the id of the chat message bubble showing `text`.
+ *
+ * Selected by its unique text, never positionally: invitation-lifecycle
+ * announcements (e.g. the "accepted" notice authored when the invitee's join
+ * profile arrives) render as `msg-*` bubbles too and can precede the user's
+ * message, so a `.first()` pick could target an announcement.
+ */
+async function getMessageIdByText(page: Page, text: string): Promise<string> {
   // message bubbles have data-testid="msg-{id}"
-  const el = page.locator('[data-testid^="msg-"]').first();
+  const el = page.locator('[data-testid^="msg-"]', { hasText: text }).first();
   await expect(el).toBeVisible({ timeout: 15_000 });
   const testId = await el.getAttribute('data-testid');
   if (!testId) throw new Error('Could not get message id');
@@ -132,8 +139,7 @@ test.describe.serial('Group Reactions — story-06', () => {
     await pageB.goto('/groups/');
     await expect(pageB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
     await expect(pageB.locator('[data-testid^="pending-invitation-row-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(pageB.getByText('Reactions Test Group')).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageB, 'Reactions Test Group');
     await pageB.locator('[data-testid^="group-card-"]', { hasText: 'Reactions Test Group' }).click();
     await expect(pageB.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
 
@@ -157,7 +163,7 @@ test.describe.serial('Group Reactions — story-06', () => {
     await expect(pageB.locator('text=Hello from Alice!')).toBeVisible({ timeout: 30_000 });
 
     // Capture the message id for reaction tests
-    sharedMessageId = await getFirstMessageId(pageA);
+    sharedMessageId = await getMessageIdByText(pageA, 'Hello from Alice!');
   });
 
   test('Bob reacts to Alice\'s message — Alice sees the badge (AC-40)', async () => {
@@ -271,7 +277,7 @@ test.describe.serial('Group Reactions UI — story-08', () => {
     await pageA.getByTestId('chat-input').fill('React to this message!');
     await pageA.getByTestId('chat-send-btn').click();
     await expect(pageA.locator('text=React to this message!')).toBeVisible({ timeout: 15_000 });
-    ui08MessageId = await getFirstMessageId(pageA);
+    ui08MessageId = await getMessageIdByText(pageA, 'React to this message!');
   });
 
   test.afterAll(async () => {

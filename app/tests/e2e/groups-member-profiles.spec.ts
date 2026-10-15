@@ -2,7 +2,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const TEST_AVATAR = {
@@ -83,11 +83,9 @@ test.describe.serial('Group member profiles — names instead of npubs', () => {
 
     // User B receives Welcome and joins
     await pageB.goto('/groups/');
-    // Pull-only invitations (Walled Garden v2): accept the most recently received
-    // invitation before the group appears in the joined list.
-    await expect(pageB.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(pageB.getByText('Profile Test Group')).toBeVisible({ timeout: 60_000 });
+    // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+    // and wait for the real joined group-card before continuing.
+    await acceptInvitationAndWaitJoined(pageB, 'Profile Test Group');
 
     // Wait for User B's profile to be published and User A to receive it.
     // TODO: This 10-second timeout is a conservative workaround added during initial
@@ -157,11 +155,9 @@ test.describe.serial('New member receives all existing member profiles', () => {
 
     // B receives Welcome and joins
     await pgB.goto('/groups/');
-    // Pull-only invitations (Walled Garden v2): accept the most recently received
-    // invitation before the group appears in the joined list.
-    await expect(pgB.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pgB.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(pgB.getByText('Three Member Profile Group')).toBeVisible({ timeout: 60_000 });
+    // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+    // and wait for the real joined group-card before continuing.
+    await acceptInvitationAndWaitJoined(pgB, 'Three Member Profile Group');
 
     // Wait for profile exchange between A and B
     await pgB.waitForTimeout(10_000);
@@ -186,11 +182,9 @@ test.describe.serial('New member receives all existing member profiles', () => {
 
     // C receives Welcome and joins
     await pgC.goto('/groups/');
-    // Pull-only invitations (Walled Garden v2): accept the most recently received
-    // invitation before the group appears in the joined list.
-    await expect(pgC.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pgC.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(pgC.getByText('Three Member Profile Group')).toBeVisible({ timeout: 60_000 });
+    // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+    // and wait for the real joined group-card before continuing.
+    await acceptInvitationAndWaitJoined(pgC, 'Three Member Profile Group');
 
     // Wait for A and B to republish profiles after detecting new member
     await pgC.waitForTimeout(10_000);

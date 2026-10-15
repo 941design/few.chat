@@ -34,7 +34,7 @@ import { USER_A, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 const USER_B = USER_C;
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -136,15 +136,9 @@ test.describe.serial('DM walled garden: group member allowed (AC-TEST-5)', () =>
 
     // Under pull-only invitations (Walled Garden v2), Bob must explicitly accept
     // the pending invitation before the group appears in his joined list.
-    // Use .last() — Alice's fresh invite is the most recently received one;
-    // stale invitations from prior runs (same Alice keypair) come first.
-    await expect(
-      bobPage.locator('[data-testid^="accept-invitation-"]').last(),
-    ).toBeVisible({ timeout: 60_000 });
-    await bobPage.locator('[data-testid^="accept-invitation-"]').last().click();
-
-    // Wait for the group to appear (Welcome delivery can take time)
-    await expect(bobPage.getByText('Walled Garden Test Group')).toBeVisible({ timeout: 90_000 });
+    // The helper scopes Accept to the invitation card for this group by name
+    // (newest if duplicated) and waits for the real joined group-card.
+    await acceptInvitationAndWaitJoined(bobPage, 'Walled Garden Test Group');
   });
 
   test('Bob DMs Alice via publishDirectMessage; Alice Contacts pill increments and message renders', async () => {

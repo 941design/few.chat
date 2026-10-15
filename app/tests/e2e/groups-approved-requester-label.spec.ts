@@ -54,6 +54,7 @@ import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-help
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { sendNamelessJoinRequest } from './helpers/namelessJoinRequestFixture';
+import { acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -296,9 +297,7 @@ test.describe.serial('AC-SCEN-2 — approved join-requester (no nickname) always
     await dismissErrorOverlay(pageC);
 
     await expect(pageC.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 60_000 });
-    await expect(pageC.locator('[data-testid^="accept-invitation-"]').first()).toBeVisible({ timeout: 90_000 });
-    await pageC.locator('[data-testid^="accept-invitation-"]').first().click();
-    await expect(pageC.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageC, GROUP_NAME);
   });
 
   test('(b) After C\'s real signed profile round-trips, the row STILL shows Remove Member, never Cancel Invite', async () => {

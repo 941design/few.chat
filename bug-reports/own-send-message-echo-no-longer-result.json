@@ -1,0 +1,67 @@
+{
+  "root_cause": "The page-global onChatIdbWrite hook also fires for Alice's own 'accepted' invite_lifecycle announcement (authored when Bob's join profile reaches her, ~265ms after the user message). Not a duplicate of the own message; intended product behaviour. Separately the spec's getFirstMessageId picked the first msg-* bubble, which is the 'invited' announcement, so sharedMessageId was wrong and the row/bubble assertions were vacuous.",
+  "fix": "Spec: hook now records {groupId,messageId} into window.__chatIdbWrites; own-send test selects the bubble by unique text (getMessageIdByText), asserts exactly one row with the sent content (catches second-id duplicates), id==sharedMessageId, one row by id, one bubble, and exactly one hook write for that messageId. Removed dead installChatIdbWriteCounter/getChatIdbWriteCount. Comments corrected. ChatStoreContext header corrected (it claimed an applicationMessage handler that no longer exists).",
+  "files_changed": [
+    "app/tests/e2e/groups-dispatch-isolation.spec.ts",
+    "app/src/context/ChatStoreContext.tsx"
+  ],
+  "tests_added": [
+    "strengthened own-send e2e (sent-content row uniqueness + id-filtered write assertion)"
+  ],
+  "baseline": {
+    "unit": "227 files, 4493 passed, 1 skipped",
+    "tsc": "clean",
+    "lint": "NO_LINT",
+    "e2e": "spec failing (writeCount 2)"
+  },
+  "final": {
+    "unit": "227 files, 4493 passed, 1 skipped",
+    "tsc": "clean",
+    "lint": "NO_LINT",
+    "e2e": "groups-dispatch-isolation 2 passed on wiped relay (run twice after fix)"
+  },
+  "instrumentation_evidence": {
+    "writes": [
+      {
+        "messageId": "f9d9b949...7ec6",
+        "content": "dispatch-isolation-<ts> (user message)"
+      },
+      {
+        "messageId": "58c05e3c...2432",
+        "content": "{type:invite_lifecycle,event:accepted,...} authored by Alice, +265ms"
+      }
+    ],
+    "sharedMessageId_before_fix": "853be8c4... = invite_lifecycle 'invited' announcement (first row in log)"
+  },
+  "sabotage_evidence": {
+    "sabotage1": "ChatStoreContext.sendMessage: added void appendMessage(groupId,{...optimistic,id:optimistic.id+'dup'}) -> spec FAILED at toHaveLength(1) on sentRows (received 2 rows with same content, ids X and Xdup). Reverted from /tmp copy; git diff shows only intended comment change.",
+    "sabotage2": "chatPersistence.appendMessage insert-if-absent disabled (if(false&&...)) -> spec still passed: no same-id echo reaches appendMessage in this flow (marmot-ts drops own echoes), so this mutation is unobservable here. Reverted; chatPersistence.ts unmodified."
+  },
+  "verification_answers": {
+    "VQ-1": "Yes: captured two hook records (own message + accepted announcement) on a real wiped-relay run; root cause follows.",
+    "VQ-2": "Yes: one row by id + one row by content + one bubble on sender; peer test unchanged (one bubble, one row by id) and now uses the correct id.",
+    "VQ-3": "Yes, demonstrated by sabotage 1 (second-id double insert fails). Same-id echo mutation (sabotage 2) is not observable in this flow; honest limitation.",
+    "VQ-4": "Was NOT true before (it was the 'invited' announcement). Now selected by unique text and cross-checked against IDB row content.",
+    "VQ-5": "Yes: test-only plus one header comment; no product behaviour change.",
+    "VQ-6": "Yes: spec doc comments and ChatStoreContext header corrected; specs/ untouched.",
+    "VQ-7": "Yes: spec 2/2 pass, unit 4493 pass/1 skipped, tsc clean, NO_LINT."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The spec had a dead helper (installChatIdbWriteCounter, never called) next to the real inline hook, so first instrumentation edit hit the wrong one. A positional bubble pick made the spec's row/bubble assertions vacuous for months.",
+    "surprised_by": "sharedMessageId was the invited announcement, not the user message.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "lead_caveats": [
+    "Lead reworded spec comment (echo dropped by marmot-ts #sentEventIds; insert-if-absent is the fallback) and removed a stray blank line; added page-global-hook note to AC-AR-22",
+    "Same-class positional bubble pick remains in groups-reactions.spec.ts:87-94 (getFirstMessageId) — out of scope",
+    "Original finding misattributed the cause to the author-auth epic; the extra write comes from invite-lifecycle (4912f9a)"
+  ]
+}

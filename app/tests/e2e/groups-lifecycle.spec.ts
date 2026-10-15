@@ -3,7 +3,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { queryRelayForEvents } from './helpers/relay-query';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -100,13 +100,9 @@ test.describe.serial('Group Lifecycle', () => {
       pageB.getByTestId('groups-empty-state').or(pageB.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 60_000 });
 
-    // Pull-only invitations (Walled Garden v2): accept the most recently received
-    // invitation before the group appears in the joined list.
-    await expect(pageB.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').last().click();
-
-    // Wait for the group to appear (Welcome delivery can take 5-30s)
-    await expect(pageB.getByText('E2E Test Group')).toBeVisible({ timeout: 60_000 });
+    // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+    // and wait for the real joined group-card before continuing.
+    await acceptInvitationAndWaitJoined(pageB, 'E2E Test Group');
   });
 
   test('User B leaves group (soft-leave, no MLS proposal)', async () => {

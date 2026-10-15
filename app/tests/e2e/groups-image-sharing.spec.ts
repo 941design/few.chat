@@ -4,7 +4,7 @@ import path from 'node:path';
 import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const FIXTURE_IMAGE = path.join(__dirname, '../fixtures/test-image.png');
@@ -93,12 +93,9 @@ test.describe.skip('Image Sharing', () => {
       pageB.getByTestId('groups-empty-state').or(pageB.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 60_000 });
 
-    // Pull-only invitations (Walled Garden v2): accept the most recently received
-    // invitation before the group appears in the joined list.
-    await expect(pageB.locator('[data-testid^="accept-invitation-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').last().click();
-
-    await expect(pageB.getByText('Image Test Group')).toBeVisible({ timeout: 60_000 });
+    // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+    // and wait for the real joined group-card before continuing.
+    await acceptInvitationAndWaitJoined(pageB, 'Image Test Group');
     await pageB.locator(`[data-testid^="group-card-"]`, { hasText: 'Image Test Group' }).click();
     await expect(pageB.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
     await dismissErrorOverlay(pageB);

@@ -3,7 +3,7 @@ import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-help
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { queryRelayForEvents } from './helpers/relay-query';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -95,13 +95,9 @@ async function waitForGroupAndOpen(page: Page, groupName: string): Promise<void>
   await expect(
     page.getByTestId('groups-empty-state').or(page.getByTestId('groups-list')),
   ).toBeVisible({ timeout: 60_000 });
-  // Pull-only invitations (Walled Garden v2): accept the most recently received
-  // invitation (.last()) before the group appears in the joined list.
-  await expect(
-    page.locator('[data-testid^="accept-invitation-"]').last(),
-  ).toBeVisible({ timeout: 60_000 });
-  await page.locator('[data-testid^="accept-invitation-"]').last().click();
-  await expect(page.getByText(groupName)).toBeVisible({ timeout: 60_000 });
+  // Pull-only invitations (Walled Garden v2): accept THIS group's invitation
+  // and wait for the real joined group-card before continuing.
+  await acceptInvitationAndWaitJoined(page, groupName);
   await openGroupDetail(page, groupName);
 }
 

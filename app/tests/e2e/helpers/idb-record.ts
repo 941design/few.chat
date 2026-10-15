@@ -17,6 +17,14 @@ export async function deleteIdbRecord(
     ({ dbName: db, storeName: store, key: k }) =>
       new Promise<void>((resolve, reject) => {
         const req = indexedDB.open(db);
+        // Every target DB is an idb-keyval createStore(db, store) store, created
+        // only in the upgrade that creates the DB. If this helper opens first, the
+        // open creates the DB here: create the store in that same upgrade so the
+        // result is identical whoever opens first (otherwise an empty v1 DB breaks
+        // the app's store too — "object store missing").
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(store)) req.result.createObjectStore(store);
+        };
         req.onsuccess = () => {
           const database = req.result;
           let tx: IDBTransaction;
@@ -54,6 +62,14 @@ export async function readIdbRecord<T = unknown>(
     ({ dbName: db, storeName: store, key: k }) =>
       new Promise<unknown>((resolve, reject) => {
         const req = indexedDB.open(db);
+        // Every target DB is an idb-keyval createStore(db, store) store, created
+        // only in the upgrade that creates the DB. If this helper opens first, the
+        // open creates the DB here: create the store in that same upgrade so the
+        // result is identical whoever opens first (otherwise an empty v1 DB breaks
+        // the app's store too — "object store missing").
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(store)) req.result.createObjectStore(store);
+        };
         req.onsuccess = () => {
           const database = req.result;
           let tx: IDBTransaction;
@@ -135,6 +151,14 @@ export async function writeIdbRecord(
     ({ dbName: db, storeName: store, key: k, value: v }) =>
       new Promise<void>((resolve, reject) => {
         const req = indexedDB.open(db);
+        // Every target DB is an idb-keyval createStore(db, store) store, created
+        // only in the upgrade that creates the DB. If this helper opens first, the
+        // open creates the DB here: create the store in that same upgrade so the
+        // result is identical whoever opens first (otherwise an empty v1 DB breaks
+        // the app's store too — "object store missing").
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(store)) req.result.createObjectStore(store);
+        };
         req.onsuccess = () => {
           const database = req.result;
           let tx: IDBTransaction;

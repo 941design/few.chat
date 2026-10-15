@@ -61,7 +61,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 import { queryRelayForEvents } from './helpers/relay-query';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
@@ -197,9 +197,7 @@ test.describe.serial('Group invite lifecycle announcements — invited/accepted/
       pageB.getByTestId('groups-empty-state').or(pageB.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 60_000 });
     await expect(pageB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 60_000 });
-    await expect(pageB.locator('[data-testid^="accept-invitation-"]').first()).toBeVisible({ timeout: 90_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').first().click();
-    await expect(pageB.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageB, GROUP_NAME);
 
     // A stays on the already-open group-detail page from the previous test —
     // no navigation, no reload — and observes the live updates.

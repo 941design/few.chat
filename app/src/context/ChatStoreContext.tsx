@@ -1,13 +1,14 @@
 /**
  * ChatStoreContext — manages chat messages and reactions for the active group.
  *
- * Wraps a MarmotGroup's applicationMessage events, provides optimistic send,
- * and persists messages to IndexedDB via chatPersistence.
+ * Provides optimistic send and persists messages to IndexedDB via chatPersistence.
+ * Inbound MLS application rumors (chat, reactions, edits) are NOT subscribed here:
+ * the single applicationRumorDispatcher wired in MarmotContext routes them.
  *
  * Story-06 additions:
  * - sendReaction(emoji, targetMessage, isRemoval?): optimistic write + MLS send + rollback (D7)
  * - reactionsByMessageId: Map<string, ReactionAggregate[]> derived from subscribeReactions
- * - Kind-7 dispatch in applicationMessage handler (for own-send echo via marmot-ts event bus)
+ * - Kind-7 rumors are ingested by the dispatcher; this context only aggregates them
  */
 
 import React, {

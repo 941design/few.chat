@@ -1,0 +1,42 @@
+{
+  "story_id": "S1",
+  "status": "escalated",
+  "remediation_rounds": 0,
+  "escalation_reason": "The premise (an awaited step in a backup attempt never settles) is refuted by instrumented runs. No attempt is ever started in the failing runs. The fix direction (test-setup fix vs. persisting a pre-hydration dirty mark in the product) is a lead/owner decision; the brief's prescribed fix (bounding a hanging await) would not change the failure.",
+  "root_cause": "A race in the e2e setup, plus a latent product gap. The test does goto('/') -> clearAppState -> seed lp_userProfile_v1 {avatar:null} -> reload. When the seed lands BEFORE the first page's ProfileProvider mount effect runs (dev-mode hydration is ~20-30 ms after goto resolves), that doomed page consumes the seed. It backfills and persists an avatar, then calls markBackupDirty(true) while no scheduler exists yet (identity not hydrated), so the mark is held only in the module-level pendingDirty. The test then reloads. The in-memory mark dies with the page. The surviving page reads a profile that already has an avatar, so nothing marks it dirty. activateBackupScheduler then receives pending=null, the scheduler never runs, and nothing is logged. Product side: BackupContext's pendingDirty is not persisted, so a change marked dirty before identity hydration is never backed up if the page unloads first.",
+  "fix": null,
+  "files_changed": [],
+  "files_modified": [],
+  "files_created": [],
+  "tests_added": [],
+  "baseline": {"unit_files": 230, "unit_passed": 4725, "unit_skipped": 1, "tsc": "clean"},
+  "final": {"unit_files": 230, "unit_passed": 4725, "unit_skipped": 1, "tsc": "clean", "note": "no product/test source changed; all temporary instrumentation reverted (git diff empty for BackupContext.tsx, relayBackup.ts, ndkClient.ts, ProfileContext.tsx), scratch spec deleted"},
+  "evidence": {
+    "ndk_semantics": "NDK 3.0.3: NDKRelaySet.publish(event, undefined) calls relay.publish(event, undefined). The per-relay publisher's default parameter timeoutMs = 2500 then applies (dist/index.mjs:1502), and it races publish/connect against a rejecting 2.5 s timer in both the connected and not-connected branches. NDKPool.connect(2500) races a 2.5 s timer. getBackupRelays uses fetchEventsWithTimeout (8 s, sub.stop()). So every awaited step in the attempt is bounded.",
+    "ws_closed_trace": "With a scratch routeWebSocket ws.close() for 25 s, 2 runs reached an attempt: connectNdk +2.54 s, collect/encrypt/sign about 10 ms, getBackupRelays +8.0 s (relay status 4/CONNECTING), ndkEvent.publish rejected after +2.5 s with 'Not enough relays received the event (0 published, 1 required)'. '[Backup] publish failed' was logged at about +13 s, the retry was scheduled, the kick fired, and the backup landed. So a closed socket gives a LOGGED, retried failure, not a stall.",
+    "silent_failure_trace": "In the failing runs (2 of 3 with the route, 2 of 4 with NO route at all, i.e. pure race): 'seeded {avatar:null}' at +2083 ms was followed by the doomed page's 'ProfileProvider mount storedAvatar=null' + 'markBackupDirty active=false' at +2110 ms. After the reload, the surviving page logged 'ProfileProvider mount storedAvatar=set' and 'activateBackupScheduler pending=null', then nothing more for 90 s. In passing runs the doomed page mounted BEFORE the seed (raw=none), and the surviving page showed storedAvatar=null -> markBackupDirty -> attempt -> found in about 4.7 s.",
+    "previous_routeWebSocket_repro": "Same race. The route is irrelevant: the 0-log failure reproduces without any WebSocket interference."
+  },
+  "verification_answers": {
+    "VQ-1": "Yes, and the instrumented runs refute the hypothesis. No awaited step hangs. In failing runs the attempt is never STARTED: the dirty mark is consumed and lost by a page that the test reloads before identity hydration (activateBackupScheduler pending=null). Evidence is above.",
+    "VQ-2": "Not applicable as framed. Every step of an attempt is already bounded (2.5 s + 8 s + 2.5 s, about 13 s worst case observed) and a failure is logged and retried on the unchanged schedule. No change was made.",
+    "VQ-3": "Unchanged. No product code was modified.",
+    "VQ-4": "Not written. A never-settling dependency is not the failure mode, so such a test would pin a non-bug. A regression test for the real cause depends on the fix direction the lead chooses.",
+    "VQ-5": "Not run as a fix verification. The pure race reproduces (2 of 4 runs fail with no route) on wiped relays. The 5x gate awaits the chosen fix.",
+    "VQ-6": "No change was made. The unit suite and tsc are green at baseline."
+  },
+  "lead_decision_needed": [
+    "Option A (test-only): in groups-backup-restore-outcomes, let the first page finish its mount backfill before clearAppState+seed (e.g. wait for lp_nostrIdentity_v1 / lp_userProfile_v1 to be written, or seed via addInitScript before the first goto). This removes the flake; the product is unchanged.",
+    "Option B (product): persist the pre-hydration dirty mark (e.g. a localStorage flag consumed by activateBackupScheduler) so a change marked before identity hydration is backed up on the next load. This closes the real but narrow gap of an unload within about 50 ms of first load. It changes when backups fire (behaviour docs), but not their contents, kind or encryption. Possibly both A and B."
+  ],
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The bug report and the previous fixer framed the failure as a hanging publish, based on an uninstrumented routeWebSocket run. The 0-log signature was read as 'attempt stalls' when it actually meant 'attempt never started'. The report had no start-of-attempt log, so the two could not be told apart.",
+    "surprised_by": "The WebSocket route was irrelevant: the silent failure reproduces with no network interference, and is purely an ordering race between the test's localStorage seed and the dev-mode React mount effect.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "escalated_no_merge"
+  }
+}

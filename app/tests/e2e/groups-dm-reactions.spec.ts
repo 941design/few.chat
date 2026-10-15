@@ -172,6 +172,27 @@ async function openDmWithPeer(page: Page, peerPubkeyHex: string): Promise<void> 
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Type `content` into the DM composer and press Enter.
+ *
+ * If the key press cannot be delivered (the composer vanished or the page
+ * stopped responding — seen once under full-suite load, AC-46, undiagnosed),
+ * fail with the page URL and the composer count instead of a bare timeout.
+ */
+async function sendDmViaComposer(page: Page, content: string): Promise<void> {
+  const chatInput = page.getByTestId('chat-input');
+  await chatInput.fill(content);
+  try {
+    await chatInput.press('Enter');
+  } catch (err) {
+    const url = page.url();
+    const inputs = await page.getByTestId('chat-input').count().catch(() => -1);
+    throw new Error(
+      `DM composer key press failed (url=${url}, chat-input count=${inputs}): ${(err as Error).message}`,
+    );
+  }
+}
+
 /** Wait for the __fewDmReactions bridge to be available. */
 async function waitForDmReactionsBridge(page: Page): Promise<void> {
   await page.waitForFunction(
@@ -201,22 +222,6 @@ async function sendDmReactionViaBridge(
   );
 }
 
-/**
- * Send a text DM and return the first visible message's id from the chat.
- * Returns the data-message-id attribute of the first message bubble.
- */
-async function sendDmAndGetMessageId(page: Page, content: string): Promise<string> {
-  const chatInput = page.getByTestId('chat-input');
-  await chatInput.fill(content);
-  await chatInput.press('Enter');
-
-  // Wait for the message bubble to appear
-  const messageBubble = page.locator('[data-testid^="msg-"]').first();
-  await expect(messageBubble).toBeVisible({ timeout: 15_000 });
-  const messageId = await messageBubble.getAttribute('data-testid');
-  return messageId?.replace('msg-', '') ?? '';
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe('DM reactions — outbound and inbound (AC-46)', () => {
@@ -243,11 +248,12 @@ test.describe('DM reactions — outbound and inbound (AC-46)', () => {
     // Alice opens the DM with Bob and sends a message
     await openDmWithPeer(alicePage, bobKeys.pubkeyHex);
     const msgContent = `Hello Bob from Alice ${Date.now()}`;
-    await alicePage.getByTestId('chat-input').fill(msgContent);
-    await alicePage.getByTestId('chat-input').press('Enter');
+    await sendDmViaComposer(alicePage, msgContent);
 
     // Wait for Alice's message to appear
-    await expect(alicePage.locator('[data-testid^="msg-"]').first()).toBeVisible({ timeout: 15_000 });
+    await expect(
+      alicePage.locator('[data-testid^="msg-"]', { hasText: msgContent }).first(),
+    ).toBeVisible({ timeout: 15_000 });
 
     // Bob opens the DM with Alice and waits for the message to arrive
     await openDmWithPeer(bobPage, aliceKeys.pubkeyHex);
@@ -321,12 +327,11 @@ test.describe('DM reactions — outbound and inbound (AC-46)', () => {
     await openDmWithPeer(alicePage, bobKeys.pubkeyHex);
 
     // Send a message first so we have a target
-    await alicePage.getByTestId('chat-input').fill('test message for AC-60');
-    await alicePage.getByTestId('chat-input').press('Enter');
-    await expect(alicePage.locator('[data-testid^="msg-"]').first()).toBeVisible({ timeout: 15_000 });
+    await sendDmViaComposer(alicePage, 'test message for AC-60');
+    const bubble = alicePage.locator('[data-testid^="msg-"]', { hasText: 'test message for AC-60' }).first();
+    await expect(bubble).toBeVisible({ timeout: 15_000 });
 
     // Get message id
-    const bubble = alicePage.locator('[data-testid^="msg-"]').first();
     const bubbleTestId = await bubble.getAttribute('data-testid');
     const messageId = bubbleTestId?.replace('msg-', '') ?? '';
 
@@ -377,10 +382,10 @@ test.describe('DM reactions UI — story-08', () => {
     await openDmWithPeer(alicePage, bobKeys.pubkeyHex);
 
     // Send a message to react to
-    await alicePage.getByTestId('chat-input').fill(`DM react test ${Date.now()}`);
-    await alicePage.getByTestId('chat-input').press('Enter');
+    const sentText = `DM react test ${Date.now()}`;
+    await sendDmViaComposer(alicePage, sentText);
 
-    const firstBubble = alicePage.locator('[data-testid^="msg-"]').first();
+    const firstBubble = alicePage.locator('[data-testid^="msg-"]', { hasText: sentText }).first();
     await expect(firstBubble).toBeVisible({ timeout: 15_000 });
     const bubbleTestId = await firstBubble.getAttribute('data-testid');
     const messageId = bubbleTestId?.replace('msg-', '') ?? '';
@@ -444,10 +449,10 @@ test.describe('DM reactions UI — story-08', () => {
 
     await openDmWithPeer(alicePage, bobKeys.pubkeyHex);
 
-    await alicePage.getByTestId('chat-input').fill(`Wire test ${Date.now()}`);
-    await alicePage.getByTestId('chat-input').press('Enter');
+    const sentText = `Wire test ${Date.now()}`;
+    await sendDmViaComposer(alicePage, sentText);
 
-    const firstBubble = alicePage.locator('[data-testid^="msg-"]').first();
+    const firstBubble = alicePage.locator('[data-testid^="msg-"]', { hasText: sentText }).first();
     await expect(firstBubble).toBeVisible({ timeout: 15_000 });
     const bubbleTestId = await firstBubble.getAttribute('data-testid');
     const messageId = bubbleTestId?.replace('msg-', '') ?? '';

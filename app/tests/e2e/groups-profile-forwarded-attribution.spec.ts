@@ -63,7 +63,7 @@ import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-help
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { deleteIdbRecord } from './helpers/idb-record';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const RELAY_BACKOFF_MAX_MS = 30_000;
@@ -132,8 +132,7 @@ async function inviteAndJoin(
   await inviteePage.goto('/groups/');
   await expect(inviteePage.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
   await expect(inviteePage.locator('[data-testid^="pending-invitation-row-"]').last()).toBeVisible({ timeout: 30_000 });
-  await inviteePage.locator('[data-testid^="accept-invitation-"]').last().click();
-  await expect(inviteePage.getByText(groupName)).toBeVisible({ timeout: 90_000 });
+  await acceptInvitationAndWaitJoined(inviteePage, groupName);
 }
 
 test.describe.serial('Forwarded profile attribution (AC-FWD-4, epic: group-message-author-auth-app-layer S7)', () => {

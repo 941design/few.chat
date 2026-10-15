@@ -460,6 +460,12 @@ The hook fires after the IDB write resolves. The declaration file `app/tests/e2e
 
 This hook is required by AC-AR-6 and AC-AR-21 for the e2e write-count verification approach. The unit test alternative (Map-mock idb-keyval `set` call count) does not require this hook, but the e2e variant does.
 
+> **Note (2026-10-14, bug `own-send-message-echo-no-longer`):** the hook is page-global — it fires for
+> every chat-row insert, including background writes the user's client authors itself (e.g. the
+> invite-lifecycle `accepted` announcement, epic group-invite-lifecycle). E2E write counts must
+> therefore be filtered by `messageId` (and `groupId`), never taken as a raw page total. (The hook now
+> lives on `window.__fewTest` after the rebrand.)
+
 ### Verification method
 Code inspection: `app/src/lib/marmot/chatPersistence.ts` contains the guarded hook call in `appendMessage`.
 Code inspection: `app/tests/e2e/helpers/rumor-counter.ts` (or equivalent) declares `onChatIdbWrite` on `window.__nostlingTest`.

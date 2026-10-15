@@ -26,8 +26,8 @@
 import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
-import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { suppressErrorOverlay } from './helpers/dismiss-error-overlay';
+import { createGroup, inviteContactViaPicker } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const GROUP_NAME = 'Idle Live Update Group';
@@ -102,14 +102,7 @@ test.describe.serial('Pending invitation live update while idle (bug repro)', ()
     // Alice creates a group and invites Bob through the real contact-picker
     // flow (production path, no raw WebSocket).
     await alicePage.goto('/groups/');
-    await expect(alicePage.getByTestId('create-group-btn')).toBeVisible({ timeout: 30_000 });
-    await alicePage.getByTestId('create-group-btn').click();
-    await expect(alicePage.getByTestId('create-group-modal-content')).toBeVisible();
-    await alicePage.getByTestId('create-group-name-input').fill(GROUP_NAME);
-    await alicePage.getByTestId('create-group-submit-btn').click();
-    await expect(alicePage.getByText(GROUP_NAME)).toBeVisible({ timeout: 30_000 });
-    await expect(alicePage.getByTestId('create-group-modal-content')).not.toBeVisible({ timeout: 10_000 });
-    await dismissErrorOverlay(alicePage);
+    await createGroup(alicePage, GROUP_NAME);
     await alicePage.waitForTimeout(3_000);
 
     await alicePage.locator('[data-testid^="group-card-"]', { hasText: GROUP_NAME }).click();

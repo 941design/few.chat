@@ -18,7 +18,7 @@ import path from 'node:path';
 import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const FIXTURE_IMAGE = path.join(__dirname, '../fixtures/test-image.png');
@@ -174,8 +174,7 @@ test.describe.serial('Group message edit & delete — S7', () => {
     await pageB.goto('/groups/');
     await expect(pageB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
     await expect(pageB.locator('[data-testid^="pending-invitation-row-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(pageB.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageB, GROUP_NAME);
     await pageB.locator('[data-testid^="group-card-"]', { hasText: GROUP_NAME }).click();
     await expect(pageB.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
     await dismissErrorOverlay(pageB);

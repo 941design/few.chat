@@ -1,0 +1,44 @@
+{
+  "root_cause": "Stale test-helper contract: commit 26d1606 made add.tsx router.replace a non-blocked already_exists re-add to /contacts?id=<hex>&exists=1 (contacts.tsx renders contact-already-exists-info). seedContact still waited for contact-added-success OR add-page-error, so the second seed of the same contact timed out.",
+  "fix": "seedContact now waits for contact-added-success OR contact-already-exists-info, then asserts URL matches /contacts/?\\?id=<expectedHex>&(added|exists)=1(&|$). add-page-error no longer accepted (blocked/self/invalid must fail loudly). Doc comment rewritten.",
+  "files_changed": [
+    "app/tests/e2e/helpers/group-setup.ts"
+  ],
+  "tests_added": "none - the three existing failing specs are the reproduction",
+  "baseline": {
+    "unit": "227 files / 4493 passed, 1 skipped",
+    "tsc": "clean",
+    "lint": "not configured (next lint prompts interactively; no eslint config) - not runnable",
+    "e2e_3_specs": "16 tests: 3 failed, 2 did not run, 11 passed"
+  },
+  "final": {
+    "unit": "227 files / 4493 passed, 1 skipped (unchanged)",
+    "tsc": "clean",
+    "e2e_3_specs": "16 passed",
+    "e2e_regression_rename_cancel_pending": "14 passed"
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. groups-invitation-preview, groups-profile-update-propagation, groups-remove-member: 16/16 pass on a wiped relay (was 3 failed + 2 not run).",
+    "VQ-2": "Yes. Accepts only contact-added-success / contact-already-exists-info AND a URL with id=<expected hex> and added=1|exists=1. add-page-error and unrelated navigation fail. Not separately e2e-tested for blocked/self/invalid (no negative test added).",
+    "VQ-3": "Yes. Only app/tests/e2e/helpers/group-setup.ts changed; no production or per-spec edits.",
+    "VQ-4": "Yes. groups-rename + groups-cancel-pending (first-seed path via inviteContactViaPicker) 14/14 pass; the first-add path in the 3 target specs also passes. First attempt of the regex omitted the trailing slash Next adds (/contacts/?id=) and broke first-add; corrected.",
+    "VQ-5": "Yes. Doc comment now describes the exists=1 landing and states add-page-error is not success."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "Static export serves routes with a trailing slash (/contacts/?id=...), so a URL regex written from the router.replace source string (/contacts?id=) failed every first-add path; cost one 6-min e2e cycle. Also, `npm run lint` is interactive (no ESLint config) so there is no lint gate to run.",
+    "surprised_by": "next lint prompts for configuration instead of linting.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "lead_caveats": [
+    "VQ-5: lead corrected a stale pre-existing doc-comment sentence (helper is not the only /add#c= navigator) after review; comment-only",
+    "No negative e2e for blocked/self/invalid seeds (strictness by code reading)"
+  ]
+}

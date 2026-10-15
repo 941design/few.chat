@@ -31,24 +31,36 @@ function npubToHex(npub: string): string {
  * `processContactInput` -> `addContactByNpub` and lands on
  * `/contacts?id=<hex>&added=1`.
  *
- * Idempotent by design: re-seeding an npub that is already a contact lands on
- * `add.tsx`'s `already_exists` error branch (`add-page-error`) instead of the
- * success redirect (`contact-added-success`) — both outcomes mean the
- * contact is present in `page`'s contact list afterward, so both are treated
- * as success here. This lets `inviteContactViaPicker` be called more than
- * once for the same invitee (AC-E2E-8's re-invite) without a special case.
+ * Idempotent by design: re-seeding an npub that is already a (non-blocked)
+ * contact makes `add.tsx` `router.replace` to `/contacts?id=<hex>&exists=1`
+ * (commit 26d1606) instead of the fresh-add `/contacts?id=<hex>&added=1`.
+ * The first renders `contact-already-exists-info`, the second
+ * `contact-added-success`; both mean the contact is present afterward, so both
+ * are treated as success here — but only when bound to THIS npub's hex (the
+ * URL's `id`), so unrelated navigation never passes. This lets
+ * `inviteContactViaPicker` be called more than once for the same invitee
+ * (AC-E2E-8's re-invite) without a special case. The `add-page-error` alert
+ * (invalid npub, self, blocked contact) is deliberately NOT a success: a
+ * blocked contact cannot be invited, so seeding it must fail loudly.
  *
- * This is the ONLY function in the e2e suite that may navigate to `/add#c=`
- * — every spec that needs a seeded contact goes through this helper (or
+ * Every spec that merely needs a seeded contact goes through this helper (or
  * `inviteContactViaPicker`, which calls it), rather than duplicating the
- * navigation inline. No production code is bypassed: this is the same
+ * navigation inline; only specs that test the `/add#c=` deep link itself
+ * (contact-card-deeplink, dm-pairing-readd-lands-on-dm, add-welcome) navigate
+ * there directly. No production code is bypassed: this is the same
  * `page.goto` a real user's deep-link tap would trigger.
  */
 export async function seedContact(page: Page, npub: string): Promise<void> {
+  const hex = npubToHex(npub);
   await page.goto('/add#c=' + npub);
   await expect(
-    page.getByTestId('contact-added-success').or(page.getByTestId('add-page-error')),
+    page.getByTestId('contact-added-success').or(page.getByTestId('contact-already-exists-info')),
   ).toBeVisible({ timeout: 30_000 });
+  // Bind the outcome to this contact: either landing carries `id=<hex>` and
+  // exactly one of `added=1` / `exists=1`.
+  await expect(page).toHaveURL(
+    new RegExp(`/contacts/?\\?id=${hex}&(added|exists)=1(&|$)`),
+  );
   await dismissErrorOverlay(page);
 }
 
@@ -103,6 +115,108 @@ export async function inviteContactViaPicker(inviterPage: Page, inviteeNpub: str
 }
 
 /**
+ * Accept the pending invitation for `groupName` on `page` and wait until the
+ * join has GENUINELY completed.
+ *
+ * Why this exists: the former inline pattern (`accept-invitation-*` click →
+ * `expect(getByText(groupName)).toBeVisible()`) was vacuous — the still-pending
+ * InvitationCard already renders the group name (decoded pre-join from the
+ * Welcome), so the wait passed immediately while the MLS join was still in
+ * flight, and the caller's next `page.goto('/groups/')` / group-card click
+ * raced it (bug: groups-e2e-suite-flaky-under-shared).
+ *
+ * Precondition: `page` is on `/groups/` (the caller navigates, so specs that
+ * assert on the pending section/row first keep doing so).
+ *
+ * Steps:
+ *  1. Wait for an `invitation-card-*` whose name element reads exactly
+ *     `groupName` (scoped — never a positional `.first()`/`.last()` over all
+ *     invitations); if several share the name, the newest (last) is taken.
+ *  2. Snapshot how many joined `group-card-*` with that exact name already
+ *     exist, then click THAT card's `accept-invitation-*` button.
+ *  3. Wait until one more joined `group-card-*` with that name exists than
+ *     before (only `reloadGroups()` after a successful `joinGroupFromWelcome`
+ *     produces it), and until the clicked invitation card is gone (it is
+ *     removed from the queue on success AND on MLS failure, so the group-card
+ *     wait is the discriminating one).
+ *
+ * A join that never completes (MLS failure, accept no-op) fails at step 3.
+ */
+export async function acceptInvitationAndWaitJoined(
+  page: Page,
+  groupName: string,
+  opts: { timeout?: number } = {},
+): Promise<void> {
+  const timeout = opts.timeout ?? 90_000;
+  const exactName = page.getByText(groupName, { exact: true });
+
+  const invitation = page
+    .locator('[data-testid^="invitation-card-"]', { has: exactName })
+    .last();
+  await expect(invitation).toBeVisible({ timeout });
+  const invitationTestId = await invitation.getAttribute('data-testid');
+  if (!invitationTestId) throw new Error('invitation card without data-testid');
+
+  // NB: the `group-card-` prefix also matches each card's child
+  // `group-card-preview-<id>`; the exact-name `has` filter excludes it, so a
+  // raw prefix count would report 2 per group.
+  const joinedCards = page.locator('[data-testid^="group-card-"]', { has: exactName });
+  const joinedBefore = await joinedCards.count();
+
+  await page.getByTestId(invitationTestId).locator('[data-testid^="accept-invitation-"]').click();
+
+  await expect(joinedCards).toHaveCount(joinedBefore + 1, { timeout });
+  await expect(joinedCards.last()).toBeVisible();
+  await expect(page.getByTestId(invitationTestId)).toHaveCount(0, { timeout });
+}
+
+/**
+ * Create a group named `name` on `page` through the real create-group modal,
+ * and wait until its joined `group-card-*` is listed.
+ *
+ * Precondition: `page` is on the `/groups/` list view.
+ *
+ * Why the readiness gate: `create-group-btn` renders before MarmotContext is
+ * `ready`, but `createGroup` returns null while the MLS client is still
+ * initialising (MarmotContext `if (!client ...) return null`) — the modal then
+ * shows `create-group-error` and nothing retries. `groups-empty-state` /
+ * `groups-list` render only once `ready`, so gating on them closes that race
+ * (bug: groups-e2e-suite-flaky-under-shared, groups-pending-invite-live-idle).
+ *
+ * A `create-group-error` fails loudly here instead of surfacing later as a
+ * "group name not visible" timeout.
+ */
+export async function createGroup(
+  page: Page,
+  name: string,
+  opts: { timeout?: number } = {},
+): Promise<void> {
+  const timeout = opts.timeout ?? 30_000;
+  await expect(
+    page.getByTestId('groups-empty-state').or(page.getByTestId('groups-list')),
+  ).toBeVisible({ timeout: 30_000 });
+
+  const exactName = page.getByText(name, { exact: true });
+  const joinedCards = page.locator('[data-testid^="group-card-"]', { has: exactName });
+  const before = await joinedCards.count();
+
+  await page.getByTestId('create-group-btn').click();
+  const modal = page.getByTestId('create-group-modal-content');
+  await expect(modal).toBeVisible();
+  await page.getByTestId('create-group-name-input').fill(name);
+  await page.getByTestId('create-group-submit-btn').click();
+
+  const createError = page.getByTestId('create-group-error');
+  await expect(joinedCards.nth(before).or(createError)).toBeVisible({ timeout });
+  if (await createError.isVisible()) {
+    throw new Error(`create-group-error shown while creating "${name}": ${await createError.innerText()}`);
+  }
+  await expect(joinedCards).toHaveCount(before + 1);
+  await expect(modal).not.toBeVisible({ timeout: 10_000 });
+  await dismissErrorOverlay(page);
+}
+
+/**
  * Alice creates a named group, invites Bob by npub, and waits for Bob to join.
  *
  * Bob navigates to /groups/ BEFORE Alice's flow so that stale gift wraps from
@@ -139,20 +253,10 @@ export async function createGroupAndInvite(
     localStorage.removeItem('lp_pendingInvitations_v1');
   });
 
-  // Step 4: Alice navigates to the groups page.
+  // Step 4+5: Alice navigates to the groups page and creates the group
+  // (createGroup gates on MarmotContext readiness first).
   await alicePage.goto('/groups/');
-  await expect(
-    alicePage.getByTestId('groups-empty-state').or(alicePage.getByTestId('groups-list')),
-  ).toBeVisible({ timeout: 30_000 });
-
-  // Step 5: Alice creates the group.
-  await alicePage.getByTestId('create-group-btn').click();
-  await expect(alicePage.getByTestId('create-group-modal-content')).toBeVisible();
-  await alicePage.getByTestId('create-group-name-input').fill(groupName);
-  await alicePage.getByTestId('create-group-submit-btn').click();
-  await expect(alicePage.getByText(groupName)).toBeVisible({ timeout: 30_000 });
-  await expect(alicePage.getByTestId('create-group-modal-content')).not.toBeVisible({ timeout: 10_000 });
-  await dismissErrorOverlay(alicePage);
+  await createGroup(alicePage, groupName);
   // Give the group state time to stabilise before inviting.
   await alicePage.waitForTimeout(3_000);
 
@@ -178,12 +282,9 @@ export async function createGroupAndInvite(
   // the pending invitation before the group appears in his list.
   await expect(bobPage.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 30_000 });
 
-  // Step 10: Accept the first (and only) pending invitation.
-  // The queue contains exactly one entry — Alice's fresh invite — because stale
-  // eventIds were cleared above and the seen-set prevented their re-enqueue.
-  await bobPage.locator('[data-testid^="accept-invitation-"]').first().click();
-
-  await expect(bobPage.getByText(groupName)).toBeVisible({ timeout: 90_000 });
+  // Step 10: Accept Alice's invitation for THIS group and wait for the real
+  // joined group-card (not the pending card, which already shows the name).
+  await acceptInvitationAndWaitJoined(bobPage, groupName);
 
   // Decode inviteeNpub to hex so the IDB poll can compare memberPubkeys
   // (IDB stores hex pubkeys, not bech32).

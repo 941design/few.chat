@@ -23,7 +23,7 @@ import { USER_A, USER_B, USER_C, computeTestKeypairs } from './helpers/auth-help
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { writeIdbRecord, readIdbRecord } from './helpers/idb-record';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const GROUP_NAME = 'Migration Backfill Test Group';
@@ -114,8 +114,7 @@ test.describe.serial('Migration backfill: knownPeers seeded from groups; strange
     await bobPage.goto('/groups/');
     await expect(bobPage.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
     await expect(bobPage.locator('[data-testid^="pending-invitation-row-"]').last()).toBeVisible({ timeout: 30_000 });
-    await bobPage.locator('[data-testid^="accept-invitation-"]').last().click();
-    await expect(bobPage.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(bobPage, GROUP_NAME);
     // Wait for MLS group state to propagate on Alice's side
     await alicePage.waitForTimeout(10_000);
   });

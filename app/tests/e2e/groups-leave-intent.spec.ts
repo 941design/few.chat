@@ -17,7 +17,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { queryRelayForEvents } from './helpers/relay-query';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const GROUP_NAME = 'Leave Intent E2E';
@@ -134,10 +134,7 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
     await pgB.goto('/groups/');
     await expect(pgB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
     await expect(pgB.locator('[data-testid^="pending-invitation-row-"]').last()).toBeVisible({ timeout: 60_000 });
-    await pgB.locator('[data-testid^="accept-invitation-"]').last().click();
-
-    // Wait for the group to appear in USER_B's group list after acceptance.
-    await expect(pgB.getByText(GROUP_NAME)).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pgB, GROUP_NAME);
 
     // Open the group — this triggers the full MLS subscription and sync.
     await pgB.locator(`[data-testid^="group-card-"]`, { hasText: GROUP_NAME }).click();

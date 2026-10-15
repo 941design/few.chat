@@ -24,7 +24,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { readIdbRecord } from './helpers/idb-record';
-import { inviteContactViaPicker } from './helpers/group-setup';
+import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -69,35 +69,32 @@ async function getCurrentGroupId(page: Page): Promise<string> {
 }
 
 /**
- * Get the data-testid of the first visible chat message bubble and return the
- * message id embedded in the testid (strips the "msg-" prefix).
+ * Resolve the id of the chat message bubble that renders `text`.
+ *
+ * Selects by the unique text, NOT "the first msg-* bubble": the group chat
+ * also renders invite-lifecycle announcement bubbles (`invited`, `accepted`)
+ * under the same `msg-{id}` testid, and the `invited` one is the first bubble
+ * in the log, so a positional pick would silently track the wrong message.
  */
-async function getFirstMessageId(page: Page): Promise<string> {
-  const el = page.locator('[data-testid^="msg-"]').first();
+async function getMessageIdByText(page: Page, text: string): Promise<string> {
+  const el = page.locator('[data-testid^="msg-"]', { hasText: text }).first();
   await expect(el).toBeVisible({ timeout: 15_000 });
   const testId = await el.getAttribute('data-testid');
   if (!testId) throw new Error('Could not read data-testid from message bubble');
   return testId.replace(/^msg-/, '');
 }
 
-/**
- * Install the window.__fewTest.onChatIdbWrite counter on the page.
- * Must be called via page.addInitScript BEFORE the page navigates so the
- * hook is in place when appendMessage fires.  (AC-AR-22)
- */
-async function installChatIdbWriteCounter(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    (window as any).__fewTest = (window as any).__fewTest ?? {};
-    (window as any).__chatIdbWriteCount = 0;
-    (window as any).__fewTest.onChatIdbWrite = (_args: { groupId: string; messageId: string }) => {
-      (window as any).__chatIdbWriteCount++;
-    };
-  });
-}
+type ChatIdbWrite = { groupId: string; messageId: string };
 
-/** Read the accumulated IDB write count for the page. */
-async function getChatIdbWriteCount(page: Page): Promise<number> {
-  return page.evaluate(() => (window as any).__chatIdbWriteCount ?? 0);
+/**
+ * Every chat-row insert reported by the dev-only `__fewTest.onChatIdbWrite`
+ * hook since the page booted (installed inline in beforeAll), in order.
+ * The counter is NOT scoped to one message: background lifecycle
+ * announcements (e.g. the `accepted` announcement Alice authors when Bob's
+ * join profile reaches her) also fire it, so assertions must filter by id.
+ */
+async function getChatIdbWrites(page: Page): Promise<ChatIdbWrite[]> {
+  return page.evaluate(() => (window as any).__chatIdbWrites ?? []);
 }
 
 // ─── Module-scoped state shared across serial tests ───────────────────────
@@ -121,11 +118,11 @@ test.describe.serial('groups-dispatch-isolation', () => {
     await contextA.addInitScript(({ privateKeyHex, pubkeyHex, seedHex, nickname }) => {
       localStorage.setItem('lp_nostrIdentity_v1', JSON.stringify({ privateKeyHex, pubkeyHex, seedHex }));
       localStorage.setItem('lp_userProfile_v1', JSON.stringify({ nickname, avatar: null }));
-      // IDB write counter for AC-AR-22
+      // IDB write recorder for AC-AR-22
       (window as any).__fewTest = (window as any).__fewTest ?? {};
-      (window as any).__chatIdbWriteCount = 0;
-      (window as any).__fewTest.onChatIdbWrite = (_args: { groupId: string; messageId: string }) => {
-        (window as any).__chatIdbWriteCount++;
+      (window as any).__chatIdbWrites = [];
+      (window as any).__fewTest.onChatIdbWrite = (args: { groupId: string; messageId: string }) => {
+        (window as any).__chatIdbWrites.push({ groupId: args.groupId, messageId: args.messageId });
       };
     }, {
       privateKeyHex: USER_A.privateKeyHex,
@@ -184,8 +181,7 @@ test.describe.serial('groups-dispatch-isolation', () => {
     await pageB.goto('/groups/');
     await expect(pageB.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
     await expect(pageB.locator('[data-testid^="pending-invitation-row-"]').first()).toBeVisible({ timeout: 30_000 });
-    await pageB.locator('[data-testid^="accept-invitation-"]').first().click();
-    await expect(pageB.getByText('Dispatch Isolation Test')).toBeVisible({ timeout: 90_000 });
+    await acceptInvitationAndWaitJoined(pageB, 'Dispatch Isolation Test');
     await pageB.locator('[data-testid^="group-card-"]', { hasText: 'Dispatch Isolation Test' }).click();
     await expect(pageB.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
   });
@@ -199,16 +195,17 @@ test.describe.serial('groups-dispatch-isolation', () => {
    * Scenario 1 (AC-AR-21, AC-AR-22): own-send produces exactly one IDB row
    * and exactly one rendered bubble.
    *
-   * The IDB write counter (onChatIdbWrite) must fire exactly once: the
-   * optimistic write from sendMessage.  marmot-ts drops own-send relay echoes
-   * via its internal #sentEventIds Set, so the dispatcher never processes the
-   * own-send and the counter stays at 1.  (Architecture constraint Q1 in
-   * architecture.md confirms this behaviour.)
+   * The IDB write hook (onChatIdbWrite) must fire exactly once FOR THE SENT
+   * MESSAGE: the optimistic write from sendMessage.  marmot-ts drops the
+   * relay echo of an own-send (#sentEventIds), so it normally never reaches
+   * the dispatcher; should one ever get through, appendMessage's
+   * insert-if-absent check (same rumor id) skips it without firing the hook,
+   * so the sent id is still reported once.  The hook is global to the page, so it is
+   * filtered by message id: unrelated background writes (the `accepted`
+   * lifecycle announcement Alice authors when Bob's join profile arrives)
+   * legitimately fire it too and are not a double-write.
    */
   test('own-send: exactly one IDB row and one rendered bubble (AC-AR-21, AC-AR-22)', async () => {
-    // Reset counter before the send.
-    await pageA.evaluate(() => { (window as any).__chatIdbWriteCount = 0; });
-
     const uniqueText = `dispatch-isolation-${Date.now()}`;
     await pageA.getByTestId('chat-input').fill(uniqueText);
     await pageA.getByTestId('chat-send-btn').click();
@@ -217,7 +214,7 @@ test.describe.serial('groups-dispatch-isolation', () => {
     await expect(pageA.locator(`text=${uniqueText}`)).toBeVisible({ timeout: 15_000 });
 
     // Capture the message id from the rendered bubble.
-    sharedMessageId = await getFirstMessageId(pageA);
+    sharedMessageId = await getMessageIdByText(pageA, uniqueText);
 
     // Allow the relay round-trip time to settle — if a double-write were to
     // occur it would happen within this window.
@@ -226,8 +223,14 @@ test.describe.serial('groups-dispatch-isolation', () => {
     // --- IDB row count assertion (AC-AR-21) ---
     // Read the raw array stored under "few:messages:{groupId}".
     const idbKey = `few:messages:${sharedGroupId}`;
-    const storedMessages = await readIdbRecord<{ id: string }[]>(pageA, CHAT_IDB_DB, CHAT_IDB_STORE, idbKey);
+    const storedMessages = await readIdbRecord<{ id: string; content: string }[]>(pageA, CHAT_IDB_DB, CHAT_IDB_STORE, idbKey);
     expect(storedMessages).not.toBeNull();
+    // The id must belong to the user-sent chat message, not an announcement.
+    const sentRows = (storedMessages ?? []).filter((m) => m.content === uniqueText);
+    // Exactly one row carries the sent text — catches a duplicate written
+    // under a second id/key, which the id filter below cannot see.
+    expect(sentRows).toHaveLength(1);
+    expect(sentRows[0].id).toBe(sharedMessageId);
     const matching = (storedMessages ?? []).filter((m) => m.id === sharedMessageId);
     // Exactly one row for the sent message id — a double-write would produce 2
     // rows (dedup would prevent it in practice, but this assertion verifies
@@ -238,14 +241,13 @@ test.describe.serial('groups-dispatch-isolation', () => {
     // Exactly one [data-testid="msg-{id}"] element must be in the DOM.
     await expect(pageA.locator(`[data-testid="msg-${sharedMessageId}"]`)).toHaveCount(1);
 
-    // --- onChatIdbWrite counter (AC-AR-22) ---
-    // Must be exactly 1: the optimistic write.  The own-send echo from the
-    // relay is suppressed by marmot-ts (#sentEventIds), so the dispatcher
-    // never re-calls appendMessage for this message.
-    const writeCount = await getChatIdbWriteCount(pageA);
-    // AC-AR-22: counter is 1 (optimistic write only — own-send echo is dropped
-    // by marmot-ts per architecture.md Q1).
-    expect(writeCount).toBe(1);
+    // --- onChatIdbWrite hook (AC-AR-22) ---
+    // Exactly one insert for the sent message: the optimistic write.  Writes
+    // for other messages (lifecycle announcements) are out of scope here.
+    const writes = await getChatIdbWrites(pageA);
+    const sentWrites = writes.filter((w) => w.messageId === sharedMessageId);
+    expect(sentWrites).toHaveLength(1);
+    expect(sentWrites[0].groupId).toBe(sharedGroupId);
   });
 
   /**

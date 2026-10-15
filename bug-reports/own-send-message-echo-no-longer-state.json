@@ -1,0 +1,112 @@
+{
+  "bug_name": "own-send-message-echo-no-longer",
+  "bug_report_file": "bug-reports/own-send-message-echo-no-longer-report.md",
+  "created_at": "2026-10-14T18:03:52Z",
+  "updated_at": "2026-10-15T02:24:31Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Was the identity (messageId/kind/content) of the second counted write established by instrumentation on a real run, and does the root cause stated in result.json follow from that evidence?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "SPEC",
+      "question": "Does the fixed spec still enforce AC-AR-21 as written: exactly one IDB row with the sent message id and exactly one rendered bubble for it, on the sender AND the peer?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Would the fixed spec still FAIL if a genuine own-send double insert occurred (e.g. echo written under a second id/key, or the dispatcher appending the own message twice)? Is this demonstrated (mutation/sabotage run) rather than argued?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Does sharedMessageId provably refer to the user-sent chat message (not an invited/accepted announcement bubble)?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "QUALITY",
+      "question": "Is the change minimal and confined to what the root cause requires (no product change if the cause is test measurement; no test weakening if the cause is product)?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "ARCHITECTURE",
+      "question": "Are the misleading comments (spec comment claiming the dispatcher never processes own-send; stale ChatStoreContext header) corrected where they caused the misdiagnosis, without rewriting governing specs beyond what is factually wrong?"
+    },
+    {
+      "id": "VQ-7",
+      "category": "TEST",
+      "question": "Do the remaining groups-dispatch-isolation tests and the full unit suite pass, with no new lint/type errors?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    "bug-reports/four-invite-flow-e2e-tests-fail-report.md",
+    "bug-reports/four-invite-flow-e2e-tests-fail-state.json"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "e607b2591ce5a743001d4be56e9f26e9bcb9104c",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED",
+      "codex_adversarial": "approve",
+      "examiner": "VQ-1,2,4,5,7 YES; VQ-3 PARTIAL sev6 (same-id echo not exercised) — adjudicated non-blocking by Fable consult + reviewer: old counter could not observe it either, AC-AR-10/19 require tolerance not prohibition; VQ-6 PARTIAL sev3 comment overstated — fixed by lead (comment-only)",
+      "fable_consult": "CLOSE-WITH-FOLLOWUP: correct misattributed root cause on close; AC-AR-22 page-global hook note (applied)"
+    }
+  ],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-14T18:03:52Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIX_READY",
+      "timestamp": "2026-10-14T18:32:02Z",
+      "trigger": "fixer_result"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-14T18:35:16Z",
+      "trigger": "fast_path_pass_after_consult"
+    }
+  ],
+  "e2e_gate_accepted": {
+    "tests": [
+      "groups-leave-intent:198 (2/4)",
+      "groups-contacts:54 (1/4)",
+      "dm-pairing-pending-confirmation:208 (1/4)",
+      "dm-pairing-multi-use:60 (1/4)"
+    ],
+    "reason": "lead-authorized under the owner delegation (work autonomously; only product decisions to the owner): residual full-gate failures are rotating one-offs or member-profile propagation latency in specs untouched by these fixes; every fix own specs green in all full runs 3-6; tracked in BACKLOG groups-e2e-suite-flaky-under-shared and leave-announcement-blank-name-when-profile-unknown"
+  },
+  "e2e_gate_runs": [
+    {
+      "run": "#3",
+      "relay": "334 passed / 3 failed"
+    },
+    {
+      "run": "#4",
+      "relay": "336 / 2"
+    },
+    {
+      "run": "#5",
+      "relay": "337 / 1"
+    },
+    {
+      "run": "#6 (+idb fix)",
+      "relay": "335 / 2"
+    }
+  ]
+}

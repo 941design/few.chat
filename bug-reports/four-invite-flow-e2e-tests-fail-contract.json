@@ -1,0 +1,6 @@
+{
+  "scope": "Make e2e helper seedContact (app/tests/e2e/helpers/group-setup.ts) recognise the two legitimate /add outcomes: fresh add (contact-added-success) and already-exists landing (/contacts?id=<hex>&exists=1, contact-already-exists-info), bound to the expected pubkey hex via URL.",
+  "files_to_modify": ["app/tests/e2e/helpers/group-setup.ts"],
+  "constraints": ["No production code changes", "No per-spec workarounds", "Helper stays strict: add-page-error (invalid/self/blocked) is no longer accepted as success", "Update doc comment"],
+  "non_goals": ["Changing add.tsx re-add behaviour", "Fixing lint config", "Refactoring other e2e helpers"]
+}
