@@ -4,7 +4,9 @@
  * Polls are stored per-group under the key `few:polls:{groupId}`.
  * Votes are stored per (group, poll) under `few:poll-votes:{groupId}:{pollId}`.
  * Early votes (poll not yet received) are queued per group under
- * `few:poll-pending-votes:{groupId}`.
+ * `few:poll-pending-votes:{groupId}`; early closes and early poll_close chat
+ * announcements likewise under `few:poll-pending-closes:{groupId}` and
+ * `few:poll-pending-close-announcements:{groupId}`.
  */
 
 import { get, set, del, keys, delMany } from 'idb-keyval';
@@ -50,7 +52,44 @@ export interface PollVote {
   pollId: string;
   voterPubkey: string;
   responses: string[];
+  /** Sender's rumor created_at, in ms. */
   votedAt: number;
+  /**
+   * Per-(poll, voter) Lamport sequence number from the wire (pollSync
+   * PollVotePayload.seq). Absent on rows stored before it existed and on
+   * votes from legacy clients — ranked as 0 (isNewerVote).
+   */
+  seq?: number;
+  /** Id of the vote rumor — last tie-breaker of the order. Absent = ''. */
+  rumorId?: string;
+}
+
+/** The fields that order two votes of the same voter for the same poll. */
+export interface VoteOrderKey {
+  seq?: number;
+  votedAt: number;
+  rumorId?: string;
+}
+
+/**
+ * Total order on a voter's votes for one poll: seq, then created_at
+ * (votedAt), then rumor id (lexicographic). Returns true when `a` is strictly
+ * newer than `b`. Every member applies the same order, so all converge on the
+ * same vote regardless of delivery order (bug:
+ * poll-vote-ordering-and-early-close).
+ *
+ * Legacy votes (no seq) rank as seq 0 and with rumor id '' when absent, so a
+ * vote carrying seq >= 1 always beats a legacy vote of the same voter — the
+ * transitional case where one device still runs an old client: its later
+ * vote cannot override a seq-carrying one. Legacy-vs-legacy falls back to
+ * created_at, then id.
+ */
+export function isNewerVote(a: VoteOrderKey, b: VoteOrderKey): boolean {
+  const seqA = a.seq ?? 0;
+  const seqB = b.seq ?? 0;
+  if (seqA !== seqB) return seqA > seqB;
+  if (a.votedAt !== b.votedAt) return a.votedAt > b.votedAt;
+  return (a.rumorId ?? '') > (b.rumorId ?? '');
 }
 
 /**
@@ -65,7 +104,44 @@ export interface PendingPollVote {
   voterPubkey: string;
   responses: string[];
   votedAt: number;
+  /** Wire seq (absent = legacy, ranks as 0). */
+  seq?: number;
+  /** Id of the vote rumor (order tie-breaker). */
+  rumorId?: string;
   /** Local receipt time (ms) — drives TTL expiry and oldest-first eviction. */
+  receivedAt: number;
+}
+
+/**
+ * A poll-close received before its poll-open (AC-9). Bound to the
+ * authenticated sender; applied at the open only if that sender is the
+ * open's authenticated creator.
+ */
+export interface PendingPollClose {
+  groupId: string;
+  pollId: string;
+  /** Authenticated sender of the close rumor — never a payload field. */
+  closerPubkey: string;
+  /** Sender's rumor created_at, in ms. */
+  closedAt: number;
+  /** Local receipt time (ms) — drives TTL expiry and oldest-first eviction. */
+  receivedAt: number;
+}
+
+/**
+ * A poll_close chat announcement received before its poll-open. Its content
+ * is not kept: the chat gate re-derives title and tally from the stored poll
+ * and votes, so only the identity of the rumor is needed to re-run it.
+ */
+export interface PendingCloseAnnouncement {
+  groupId: string;
+  pollId: string;
+  /** Authenticated sender of the announcement rumor. */
+  senderPubkey: string;
+  rumorId: string;
+  /** Rumor created_at, in SECONDS (as on the wire). */
+  createdAt: number;
+  /** Local receipt time (ms). */
   receivedAt: number;
 }
 
@@ -74,6 +150,8 @@ export interface PendingPollVote {
 const POLLS_PREFIX = 'few:polls:';
 const VOTES_PREFIX = 'few:poll-votes:';
 const PENDING_PREFIX = 'few:poll-pending-votes:';
+const PENDING_CLOSES_PREFIX = 'few:poll-pending-closes:';
+const PENDING_ANNOUNCEMENTS_PREFIX = 'few:poll-pending-close-announcements:';
 
 function pollsKey(groupId: string): string {
   return `${POLLS_PREFIX}${groupId}`;
@@ -176,7 +254,7 @@ export async function migrateLegacyVotes(): Promise<void> {
   }
 
   // Per touched key: the legacy rows to merge in. Every write below re-reads
-  // the key inside the per-key write queue (the same one saveVote uses), so a
+  // the key inside the per-key write queue (the same one saveVoteIfNewer uses), so a
   // vote saved concurrently — e.g. while a retried migration is in flight —
   // is merged, never clobbered by a stale snapshot.
   const additions = new Map<string, PollVote[]>();
@@ -261,22 +339,34 @@ export async function loadVotes(groupId: string, pollId: string): Promise<PollVo
   return (stored ?? []).filter((v) => v.groupId === groupId && v.pollId === pollId);
 }
 
-/** Save or replace a vote (keyed by pollId:voterPubkey within its group — latest wins). */
-export async function saveVote(vote: PollVote): Promise<void> {
+/**
+ * Store a vote only if it is newer (isNewerVote) than the voter's stored vote
+ * for the poll — a compare-and-set inside the per-key write queue, so it is
+ * the single serialisation point for every vote write path (live handleVote,
+ * the early-vote replay, castVote, and rumor-journal replay through
+ * handleVote). Because "max wins", the stored vote is the greatest one seen,
+ * whatever order the writes arrive or interleave in. Resolves true when it
+ * wrote.
+ */
+export async function saveVoteIfNewer(vote: PollVote): Promise<boolean> {
   // A write lands under the group-scoped key regardless of legacy rows, and
   // the legacy merge lets an existing group-scoped row win — safe to proceed.
   await settleVotesMigration();
   const key = votesKey(vote.groupId, vote.pollId);
-  return enqueue(key, async () => {
+  let wrote = false;
+  await enqueue(key, async () => {
     const existing = (await get<PollVote[]>(key)) ?? [];
     const idx = existing.findIndex((v) => v.id === vote.id);
     if (idx >= 0) {
+      if (!isNewerVote(vote, existing[idx])) return;
       existing[idx] = vote;
     } else {
       existing.push(vote);
     }
     await set(key, existing);
+    wrote = true;
   });
+  return wrote;
 }
 
 // ---- Pending (early) votes — AC-9 ----
@@ -334,7 +424,12 @@ export function queuePendingVote(
     const entry: PendingPollVote = { ...vote, receivedAt: now };
     const idx = entries.findIndex((e) => e.pollId === vote.pollId && e.voterPubkey === vote.voterPubkey);
     if (idx >= 0) {
-      // Same voter, same poll: latest arrival replaces (matches live votes).
+      // Same voter, same poll: the NEWER vote by the shared order is kept
+      // (not the latest arrival), exactly as saveVoteIfNewer decides.
+      if (!isNewerVote(entry, entries[idx])) {
+        await storePending(key, entries);
+        return;
+      }
       entries.splice(idx, 1);
     } else if (entries.filter((e) => e.voterPubkey === vote.voterPubkey).length >= MAX_PENDING_VOTES_PER_VOTER) {
       await storePending(key, entries);
@@ -364,8 +459,8 @@ const samePending = (a: PendingPollVote, b: PendingPollVote) =>
  * time), after they have been applied. A newer early vote queued in the
  * meantime by the same voter is a different entry and survives. Called only
  * AFTER the replayed votes are saved, so an interruption leaves the entries
- * queued (re-replay is idempotent: saveVote upserts by vote id) rather than
- * lost.
+ * queued (re-replay is idempotent: saveVoteIfNewer never stores a vote that
+ * is not newer) rather than lost.
  */
 export function removePendingVotes(
   groupId: string,
@@ -379,7 +474,155 @@ export function removePendingVotes(
   });
 }
 
-/** Clear all poll data for a group (polls, every vote list and queued early votes). */
+// ---- Pending (early) closes and close announcements — AC-9 ----
+
+/** Upper bound on distinct early polls one sender may hold in a group's close queue. */
+export const MAX_PENDING_CLOSES_PER_SENDER = 10;
+/** Upper bound on queued early closes per group (oldest-received evicted). */
+export const MAX_PENDING_CLOSES_PER_GROUP = 50;
+
+interface BoundedQueueSpec<T> {
+  prefix: string;
+  sender: (e: T) => string;
+  isShaped: (e: unknown) => e is T;
+}
+
+/**
+ * One entry per (poll, sender) — the first is kept — at most
+ * MAX_PENDING_CLOSES_PER_SENDER polls per sender (extras dropped, so a single
+ * member cannot flush others' entries), at most MAX_PENDING_CLOSES_PER_GROUP
+ * per group (oldest-received evicted), expiring after PENDING_VOTE_TTL_MS.
+ * Keyed by sender, not by poll alone: a member's forged early close must not
+ * occupy the slot of the creator's genuine one.
+ */
+function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: BoundedQueueSpec<T>) {
+  const keyOf = (groupId: string) => `${spec.prefix}${groupId}`;
+  const loadLive = async (key: string, now: number): Promise<T[]> => {
+    const stored = await get<unknown[]>(key);
+    return (Array.isArray(stored) ? stored : []).filter(
+      (e): e is T => spec.isShaped(e) && now - e.receivedAt <= PENDING_VOTE_TTL_MS,
+    );
+  };
+  const store = async (key: string, entries: T[]): Promise<void> => {
+    if (entries.length > 0) {
+      await set(key, entries);
+    } else {
+      await del(key);
+    }
+  };
+  return {
+    queue(groupId: string, entry: T, now: number): Promise<void> {
+      const key = keyOf(groupId);
+      return enqueue(key, async () => {
+        const entries = await loadLive(key, now);
+        const who = spec.sender(entry);
+        const own = entries.filter((e) => spec.sender(e) === who);
+        if (own.some((e) => e.pollId === entry.pollId) || own.length >= MAX_PENDING_CLOSES_PER_SENDER) {
+          await store(key, entries);
+          return;
+        }
+        entries.push(entry);
+        entries.sort((a, b) => a.receivedAt - b.receivedAt);
+        await store(key, entries.slice(-MAX_PENDING_CLOSES_PER_GROUP));
+      });
+    },
+    async load(groupId: string, pollId: string, now: number): Promise<T[]> {
+      return (await loadLive(keyOf(groupId), now)).filter((e) => e.pollId === pollId);
+    },
+    remove(groupId: string, match: (e: T) => boolean, now: number): Promise<void> {
+      const key = keyOf(groupId);
+      return enqueue(key, async () => {
+        const entries = await loadLive(key, now);
+        await store(key, entries.filter((e) => !match(e)));
+      });
+    },
+  };
+}
+
+const closeQueue = boundedQueue<PendingPollClose>({
+  prefix: PENDING_CLOSES_PREFIX,
+  sender: (e) => e.closerPubkey,
+  isShaped: (e): e is PendingPollClose => {
+    if (!e || typeof e !== 'object') return false;
+    const o = e as Record<string, unknown>;
+    return (
+      typeof o.pollId === 'string' &&
+      typeof o.closerPubkey === 'string' &&
+      typeof o.closedAt === 'number' &&
+      typeof o.receivedAt === 'number'
+    );
+  },
+});
+
+const announcementQueue = boundedQueue<PendingCloseAnnouncement>({
+  prefix: PENDING_ANNOUNCEMENTS_PREFIX,
+  sender: (e) => e.senderPubkey,
+  isShaped: (e): e is PendingCloseAnnouncement => {
+    if (!e || typeof e !== 'object') return false;
+    const o = e as Record<string, unknown>;
+    return (
+      typeof o.pollId === 'string' &&
+      typeof o.senderPubkey === 'string' &&
+      typeof o.rumorId === 'string' &&
+      typeof o.createdAt === 'number' &&
+      typeof o.receivedAt === 'number'
+    );
+  },
+});
+
+/** Queue a close whose poll is not (yet) known in its group. */
+export function queuePendingClose(
+  close: Omit<PendingPollClose, 'receivedAt'>,
+  now: number = Date.now(),
+): Promise<void> {
+  return closeQueue.queue(close.groupId, { ...close, receivedAt: now }, now);
+}
+
+/** Read (without removing) the live queued closes for one poll of one group. */
+export function loadPendingCloses(
+  groupId: string,
+  pollId: string,
+  now: number = Date.now(),
+): Promise<PendingPollClose[]> {
+  return closeQueue.load(groupId, pollId, now);
+}
+
+/** Drop every queued close of one poll of one group (applied or discarded). */
+export function removePendingCloses(groupId: string, pollId: string, now: number = Date.now()): Promise<void> {
+  return closeQueue.remove(groupId, (e) => e.pollId === pollId, now);
+}
+
+/** Queue a poll_close chat announcement whose poll is not (yet) known. */
+export function queuePendingCloseAnnouncement(
+  announcement: Omit<PendingCloseAnnouncement, 'receivedAt'>,
+  now: number = Date.now(),
+): Promise<void> {
+  return announcementQueue.queue(announcement.groupId, { ...announcement, receivedAt: now }, now);
+}
+
+/** Read (without removing) the live queued announcements for one poll. */
+export function loadPendingCloseAnnouncements(
+  groupId: string,
+  pollId: string,
+  now: number = Date.now(),
+): Promise<PendingCloseAnnouncement[]> {
+  return announcementQueue.load(groupId, pollId, now);
+}
+
+/** Remove exactly the given announcements (matched by poll, sender and rumor id). */
+export function removePendingCloseAnnouncements(
+  groupId: string,
+  applied: PendingCloseAnnouncement[],
+  now: number = Date.now(),
+): Promise<void> {
+  return announcementQueue.remove(
+    groupId,
+    (e) => applied.some((a) => a.pollId === e.pollId && a.senderPubkey === e.senderPubkey && a.rumorId === e.rumorId),
+    now,
+  );
+}
+
+/** Clear all poll data for a group (polls, every vote list and every early-message queue). */
 export async function clearPollData(groupId: string): Promise<void> {
   // Leaving must not be blocked by a failed migration; legacy rows left
   // behind for this group's polls are dropped by a later run (poll unknown).
@@ -392,6 +635,8 @@ export async function clearPollData(groupId: string): Promise<void> {
     await delMany(voteKeys);
   }
   await del(pendingKey(groupId));
+  await del(`${PENDING_CLOSES_PREFIX}${groupId}`);
+  await del(`${PENDING_ANNOUNCEMENTS_PREFIX}${groupId}`);
   await del(pollsKey(groupId));
 }
 
@@ -409,7 +654,11 @@ export async function clearAllPollData(): Promise<void> {
   const targets = allKeys.filter(
     (k): k is string =>
       typeof k === 'string' &&
-      (k.startsWith(POLLS_PREFIX) || k.startsWith(VOTES_PREFIX) || k.startsWith(PENDING_PREFIX)),
+      (k.startsWith(POLLS_PREFIX) ||
+        k.startsWith(VOTES_PREFIX) ||
+        k.startsWith(PENDING_PREFIX) ||
+        k.startsWith(PENDING_CLOSES_PREFIX) ||
+        k.startsWith(PENDING_ANNOUNCEMENTS_PREFIX)),
   );
   if (targets.length > 0) {
     await delMany(targets);

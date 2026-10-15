@@ -17,8 +17,11 @@ import {
   loadPolls,
   savePoll,
   loadVotes,
-  saveVote,
+  loadPendingVotes,
+  saveVoteIfNewer,
+  isNewerVote,
 } from '@/src/lib/marmot/pollPersistence';
+import { createVoteCaster } from '@/src/lib/marmot/pollCast';
 import {
   POLL_OPEN_KIND,
   POLL_VOTE_KIND,
@@ -31,6 +34,13 @@ import type { PollOpenPayload, PollVotePayload, PollClosePayload } from '@/src/l
 import { useChatStore } from './ChatStoreContext';
 
 type MarmotGroupType = import('@internet-privacy/marmot-ts').MarmotGroup;
+
+/**
+ * Module-wide so casts on the same (group, poll) are serialised even across
+ * provider remounts: the seq of a cast is derived from the stored own vote,
+ * which the previous cast must have written first.
+ */
+const castPollVote = createVoteCaster({ loadVotes, loadPendingVotes, saveVoteIfNewer });
 
 interface PollStoreContextValue {
   polls: Poll[];
@@ -234,26 +244,26 @@ export function PollStoreProvider({
     async (pollId: string, responses: string[]) => {
       if (!groupId || !group) return;
 
-      const votePayload: PollVotePayload = { pollId, responses };
-
-      // Send vote MLS message (kind 11)
-      const rumor = await buildRumor(POLL_VOTE_KIND, serialisePollVote(votePayload), pubkey);
-      await sendRumorSafe(group, rumor as any);
-
-      // Persist locally
-      const vote: PollVote = {
-        id: `${pollId}:${pubkey}`,
+      // Derive the vote's seq, send the vote MLS message (kind 11) and
+      // persist it through the compare-and-set — serialised per poll.
+      const vote = await castPollVote({
         groupId,
         pollId,
         voterPubkey: pubkey,
         responses,
-        votedAt: Date.now(),
-      };
-      await saveVote(vote);
+        send: async (votePayload: PollVotePayload) => {
+          const rumor = await buildRumor(POLL_VOTE_KIND, serialisePollVote(votePayload), pubkey);
+          await sendRumorSafe(group, rumor as any);
+          return rumor;
+        },
+      });
 
-      // Optimistically update state
+      // Optimistically update state — with the same order as the store, so a
+      // newer vote (e.g. from another device) already shown is not replaced.
       setVotes((prev) => {
         const existing = prev[pollId] ?? [];
+        const current = existing.find((v) => v.id === vote.id);
+        if (current && !isNewerVote(vote, current)) return prev;
         const filtered = existing.filter((v) => v.id !== vote.id);
         return { ...prev, [pollId]: [...filtered, vote] };
       });

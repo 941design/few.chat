@@ -77,7 +77,7 @@ function makeSender(pubkey: string = PEER_PUBKEY): { pubkey: string; authenticit
 
 function makeDeps() {
   return {
-    appendMessage: vi.fn(async () => {}),
+    appendMessage: vi.fn(async () => true),
     incrementUnread: vi.fn(),
     // notification-domain-invariants (INV-2): called instead of incrementUnread
     // when the message's group is the active view.
@@ -98,9 +98,12 @@ function makeDeps() {
     isGroupMember: vi.fn(async () => false),
     getPoll: vi.fn(async () => null as import('@/src/lib/marmot/pollPersistence').Poll | null),
     loadVotes: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PollVote[]),
-    saveVote: vi.fn(async () => {}),
+    saveVoteIfNewer: vi.fn(async () => {}),
     loadPendingVotes: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PendingPollVote[]),
     removePendingVotes: vi.fn(async () => {}),
+    queuePendingCloseAnnouncement: vi.fn(async () => {}),
+    loadPendingCloseAnnouncements: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PendingCloseAnnouncement[]),
+    removePendingCloseAnnouncements: vi.fn(async () => {}),
   };
 }
 
@@ -258,7 +261,7 @@ describe('chatHandler', () => {
   it('S5: resolvePendingSignalsForSlot is called after appendMessage, before setChatVersion, for a plain original', async () => {
     const deps = makeDeps();
     const callOrder: string[] = [];
-    deps.appendMessage.mockImplementation(async () => { callOrder.push('appendMessage'); });
+    deps.appendMessage.mockImplementation(async () => { callOrder.push('appendMessage'); return true; });
     deps.resolvePendingSignalsForSlot.mockImplementation(async () => {
       callOrder.push('resolvePendingSignalsForSlot');
       return { thread: { kind: 'group' as const, groupId: GROUP_ID }, slotId: null, kind: 'noop' as const };
@@ -726,7 +729,7 @@ describe('chatHandler', () => {
       assertFullyRejected(deps);
     });
 
-    it('poll_close announcement for an UNKNOWN poll (not yet observed by this client) is rejected — fail closed', async () => {
+    it('poll_close announcement for an UNKNOWN poll (not yet observed by this client) is not shown now but queued for the poll-open (AC-9)', async () => {
       const deps = makeDeps(); // getPoll defaults to null
       const handler = createChatHandler(deps);
       const rumor = makeRumor({
@@ -736,6 +739,24 @@ describe('chatHandler', () => {
 
       await handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
 
+      assertFullyRejected(deps);
+      expect(deps.queuePendingCloseAnnouncement).toHaveBeenCalledWith({
+        groupId: GROUP_ID,
+        pollId: 'unknown-poll',
+        senderPubkey: PEER_PUBKEY,
+        rumorId: rumor.id,
+        createdAt: rumor.created_at,
+      });
+    });
+
+    it('a failing early-announcement queue write still rejects the row (no side effect)', async () => {
+      const deps = makeDeps();
+      deps.queuePendingCloseAnnouncement.mockRejectedValueOnce(new Error('quota'));
+      const rumor = makeRumor({
+        pubkey: PEER_PUBKEY,
+        content: JSON.stringify({ type: 'poll_close', pollId: 'unknown-poll', title: 'X', results: [], totalVoters: 0 }),
+      });
+      await createChatHandler(deps).handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
       assertFullyRejected(deps);
     });
 
@@ -772,8 +793,11 @@ describe('chatHandler', () => {
         content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'X', results: [], totalVoters: 0 }),
       });
 
-      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).resolves.not.toThrow();
+      // Indeterminate ≠ rejected: the read failure THROWS (the dispatcher catches it per handler; no row either way).
+      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).rejects.toThrow('poll store unavailable');
       assertFullyRejected(deps);
+      // An indeterminate lookup is not "unknown poll": nothing is queued.
+      expect(deps.queuePendingCloseAnnouncement).not.toHaveBeenCalled();
     });
 
     it('VQ-S6-014/F2 (Stage-2 review): a throwing loadVotes lookup fails CLOSED — MUST NOT swallow into an empty-votes accept with a fabricated "0 votes, 0 voters" tally', async () => {
@@ -796,7 +820,7 @@ describe('chatHandler', () => {
         content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'Lunch?', results: [], totalVoters: 0 }),
       });
 
-      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).resolves.not.toThrow();
+      await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).rejects.toThrow('vote store unavailable');
       // F2: fail-closed means NO appendMessage at all — never a persisted
       // row with a fabricated zero tally. assertFullyRejected covers
       // appendMessage/setChatVersion/unread/markAsRead/resolvePendingSignals.
@@ -817,5 +841,31 @@ describe('chatHandler', () => {
       expect(deps.isGroupMember).not.toHaveBeenCalled();
       expect(deps.getPoll).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('appendMessage result gates the new-message side effects (remediation 2, M1)', () => {
+  it('a duplicate id (append returned false): no version bump, no unread, no mark-read — signals still resolved', async () => {
+    const deps = makeDeps();
+    deps.appendMessage.mockResolvedValue(false);
+    await createChatHandler(deps).handle(makeRumor({ content: 'again' }), makeCtx(), makeSender());
+    expect(deps.resolvePendingSignalsForSlot).toHaveBeenCalledOnce();
+    expect(deps.setChatVersion).not.toHaveBeenCalled();
+    expect(deps.incrementUnread).not.toHaveBeenCalled();
+    expect(deps.markAsRead).not.toHaveBeenCalled();
+  });
+
+  it('a duplicate id in the active group does not mark-read either', async () => {
+    const deps = makeDeps();
+    deps.appendMessage.mockResolvedValue(false);
+    await createChatHandler(deps).handle(makeRumor({ content: 'again' }), makeCtx({ getActiveGroupId: () => GROUP_ID }), makeSender());
+    expect(deps.markAsRead).not.toHaveBeenCalled();
+  });
+
+  it('an inserted row (append returned true) bumps and rings exactly once', async () => {
+    const deps = makeDeps();
+    await createChatHandler(deps).handle(makeRumor({ content: 'new' }), makeCtx(), makeSender());
+    expect(deps.setChatVersion).toHaveBeenCalledOnce();
+    expect(deps.incrementUnread).toHaveBeenCalledOnce();
   });
 });

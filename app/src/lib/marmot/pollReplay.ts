@@ -12,7 +12,7 @@ import type { Poll, PollVote, PendingPollVote } from './pollPersistence';
 export interface PollReplayDeps {
   loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   removePendingVotes: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
-  saveVote: (vote: PollVote) => Promise<void>;
+  saveVoteIfNewer: (vote: PollVote) => Promise<boolean>;
   loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
 }
 
@@ -35,6 +35,8 @@ export function buildSanitizedVote(
   voterPubkey: string,
   responses: string[],
   votedAt: number,
+  seq: number = 0,
+  rumorId: string = '',
 ): PollVote | null {
   const validOptionIds = new Set(poll.options.map((option) => option.id));
   let sanitizedResponses = responses.filter((response) => validOptionIds.has(response));
@@ -49,6 +51,8 @@ export function buildSanitizedVote(
     voterPubkey,
     responses: sanitizedResponses,
     votedAt,
+    seq,
+    rumorId,
   };
 }
 
@@ -61,30 +65,25 @@ export function buildSanitizedVote(
  * the poll, so entries stranded by an interrupted earlier replay are recovered
  * by the next poll message (and always before a close computes its tally).
  *
- * Newer wins: a queued vote is skipped when the voter already has a stored
- * vote at least as new (votedAt), so a stranded older early vote can never
- * override a later live vote. Skipped entries are still removed.
- * Deliberately replay-only: the live path (handleVote, castVote) stays
- * arrival-ordered, because a newer-wins check there would silently drop a
- * genuine vote change made on a second device whose clock runs behind. The
- * resulting replay/live ordering mismatch is a known, bounded gap (BACKLOG
- * poll-vote-ordering-single-key) whose fix is a wire-level ordering key.
+ * Order-insensitive: every vote write — this replay, the live handleVote,
+ * castVote and rumor-journal replay — stores through the same
+ * compare-and-set (pollPersistence.saveVoteIfNewer) on the total order
+ * (seq, created_at, rumor id). A stranded older early vote therefore never
+ * overrides a newer stored vote, and a newer one always replaces an older
+ * one, whichever path runs first. Entries that lose the compare are still
+ * removed.
  *
  * Order is read → save → remove: an interruption before the removal leaves
- * the entries queued, and replaying them again is idempotent (saveVote upserts
- * by `${pollId}:${voter}`; the newer-wins check skips what is already stored).
+ * the entries queued, and replaying them again is idempotent (the
+ * compare-and-set never stores a vote that is not newer).
  */
 export async function replayPendingVotes(poll: Poll, deps: PollReplayDeps): Promise<void> {
   const pending = await deps.loadPendingVotes(poll.groupId, poll.id);
   if (pending.length === 0) return;
-  const stored = new Map((await deps.loadVotes(poll.groupId, poll.id)).map((v) => [v.id, v]));
   for (const early of pending) {
-    const vote = buildSanitizedVote(poll, early.voterPubkey, early.responses, early.votedAt);
+    const vote = buildSanitizedVote(poll, early.voterPubkey, early.responses, early.votedAt, early.seq ?? 0, early.rumorId ?? '');
     if (!vote) continue;
-    const existing = stored.get(vote.id);
-    if (existing && existing.votedAt >= vote.votedAt) continue;
-    await deps.saveVote(vote);
-    stored.set(vote.id, vote);
+    await deps.saveVoteIfNewer(vote);
   }
   await deps.removePendingVotes(poll.groupId, pending);
 }

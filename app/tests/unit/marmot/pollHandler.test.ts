@@ -31,9 +31,9 @@ const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } =
 const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND } = await import('@/src/lib/marmot/pollSync');
 // Real storage layer (AC-XCUT-2 duplication test, epic: group-message-author-auth-app-layer
-// S9) — exercises the actual upsert-by-id behavior of saveVote/loadVotes against the
+// S9) — exercises the actual upsert-by-id behavior of saveVoteIfNewer/loadVotes against the
 // idb-keyval mock above, rather than a hand-fabricated votes array.
-const { saveVote: realSaveVote, loadVotes: realLoadVotes } = await import('@/src/lib/marmot/pollPersistence');
+const { saveVoteIfNewer: realSaveVote, loadVotes: realLoadVotes } = await import('@/src/lib/marmot/pollPersistence');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ function makeDeps(
 ) {
   return {
     savePoll: vi.fn(async () => {}),
-    saveVote: vi.fn(async () => {}),
+    saveVoteIfNewer: vi.fn(async () => {}),
     getPoll: vi.fn(async () => storedPoll),
     // AC-POLL-4: injected like getPoll/savePoll — the handler reads stored
     // votes exclusively through this deps bag, never a direct storage import.
@@ -166,12 +166,22 @@ function makeDeps(
     queuePendingVote: vi.fn(async () => {}),
     loadPendingVotes: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PendingPollVote[]),
     removePendingVotes: vi.fn(async () => {}),
+    queuePendingClose: vi.fn(async () => {}),
+    loadPendingCloses: vi.fn(async () => [] as import('@/src/lib/marmot/pollPersistence').PendingPollClose[]),
+    removePendingCloses: vi.fn(async () => {}),
     setPollVersion: vi.fn(),
   };
 }
 
 /** Deps-bag fragment for the AC-9 early-vote queue (no queued votes). */
-const noQueue = () => ({ queuePendingVote: vi.fn(async () => {}), loadPendingVotes: vi.fn(async () => []), removePendingVotes: vi.fn(async () => {}) });
+const noQueue = () => ({
+  queuePendingVote: vi.fn(async () => {}),
+  loadPendingVotes: vi.fn(async () => []),
+  removePendingVotes: vi.fn(async () => {}),
+  queuePendingClose: vi.fn(async () => {}),
+  loadPendingCloses: vi.fn(async () => []),
+  removePendingCloses: vi.fn(async () => {}),
+});
 
 // S3 (marmot-ts 0.7.0 authenticated-sender migration): the dispatcher now
 // registers TWO listeners — 'authenticatedApplicationMessage' (message-
@@ -288,7 +298,7 @@ describe('pollHandler / POLL_OPEN', () => {
     const setPollVersion = vi.fn();
     let storedPollAfterFirstOpen: ReturnType<typeof makeStoredPoll> | null = null;
     const getPoll = vi.fn(async () => storedPollAfterFirstOpen);
-    const deps = { savePoll, saveVote: vi.fn(async () => {}), getPoll, loadVotes: vi.fn(async () => []), ...noQueue(), setPollVersion };
+    const deps = { savePoll, saveVoteIfNewer: vi.fn(async () => {}), getPoll, loadVotes: vi.fn(async () => []), ...noQueue(), setPollVersion };
     const handler = createPollOpenHandler(deps);
     const ctx = makeCtx();
 
@@ -332,7 +342,7 @@ describe('pollHandler / POLL_OPEN', () => {
 // ---- POLL_VOTE ---------------------------------------------------------------
 
 describe('pollHandler / POLL_VOTE', () => {
-  it('happy-path: saveVote called with correct shape, setPollVersion bumped', async () => {
+  it('happy-path: saveVoteIfNewer called with correct shape, setPollVersion bumped', async () => {
     const storedPoll = makeStoredPoll(false);
     const deps = makeDeps(storedPoll);
     const handler = createPollVoteHandler(deps);
@@ -342,8 +352,8 @@ describe('pollHandler / POLL_VOTE', () => {
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.getPoll).toHaveBeenCalledOnce();
-    expect(deps.saveVote).toHaveBeenCalledOnce();
-    const [savedVote] = deps.saveVote.mock.calls[0];
+    expect(deps.saveVoteIfNewer).toHaveBeenCalledOnce();
+    const [savedVote] = deps.saveVoteIfNewer.mock.calls[0];
     expect(savedVote.pollId).toBe(POLL_ID);
     expect(savedVote.voterPubkey).toBe(VOTER_PUBKEY);
     expect(savedVote.responses).toEqual(['A']);
@@ -361,14 +371,14 @@ describe('pollHandler / POLL_VOTE', () => {
 
     await handler.handle(rumor, ctx, forgedSender);
 
-    expect(deps.saveVote).toHaveBeenCalledOnce();
-    const [savedVote] = deps.saveVote.mock.calls[0];
+    expect(deps.saveVoteIfNewer).toHaveBeenCalledOnce();
+    const [savedVote] = deps.saveVoteIfNewer.mock.calls[0];
     expect(savedVote.voterPubkey).toBe(SELF_PUBKEY);
     expect(savedVote.voterPubkey).not.toBe(rumor.pubkey);
     expect(savedVote.id).toBe(`${POLL_ID}:${SELF_PUBKEY}`);
   });
 
-  it('vote against closed poll: saveVote NOT called', async () => {
+  it('vote against closed poll: saveVoteIfNewer NOT called', async () => {
     const closedPoll = makeStoredPoll(true);
     const deps = makeDeps(closedPoll);
     const handler = createPollVoteHandler(deps);
@@ -377,7 +387,7 @@ describe('pollHandler / POLL_VOTE', () => {
 
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
-    expect(deps.saveVote).not.toHaveBeenCalled();
+    expect(deps.saveVoteIfNewer).not.toHaveBeenCalled();
     expect(deps.setPollVersion).not.toHaveBeenCalled();
   });
 
@@ -399,8 +409,10 @@ describe('pollHandler / POLL_VOTE', () => {
       voterPubkey: SELF_PUBKEY,
       responses: ['A', 'zz'],
       votedAt: rumor.created_at * 1000,
+      seq: 0,
+      rumorId: rumor.id,
     });
-    expect(deps.saveVote).not.toHaveBeenCalled();
+    expect(deps.saveVoteIfNewer).not.toHaveBeenCalled();
     expect(deps.setPollVersion).not.toHaveBeenCalled();
   });
 
@@ -408,7 +420,7 @@ describe('pollHandler / POLL_VOTE', () => {
     const deps = makeDeps(makeStoredPoll(true));
     await createPollVoteHandler(deps).handle(makePollVoteRumor(), makeCtx(), makeSender(VOTER_PUBKEY));
     expect(deps.queuePendingVote).not.toHaveBeenCalled();
-    expect(deps.saveVote).not.toHaveBeenCalled();
+    expect(deps.saveVoteIfNewer).not.toHaveBeenCalled();
   });
 
   it('malformed payload: does not throw, no deps called', async () => {
@@ -418,10 +430,10 @@ describe('pollHandler / POLL_VOTE', () => {
     const ctx = makeCtx();
 
     await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
-    expect(deps.saveVote).not.toHaveBeenCalled();
+    expect(deps.saveVoteIfNewer).not.toHaveBeenCalled();
   });
 
-  it('duplicate-id: dispatcher LRU prevents second saveVote call', async () => {
+  it('duplicate-id: dispatcher LRU prevents second saveVoteIfNewer call', async () => {
     const storedPoll = makeStoredPoll(false);
     const deps = makeDeps(storedPoll);
     const handler = createPollVoteHandler(deps);
@@ -437,14 +449,14 @@ describe('pollHandler / POLL_VOTE', () => {
     await group.emit();
     await group.emit();
 
-    expect(deps.saveVote).toHaveBeenCalledOnce();
+    expect(deps.saveVoteIfNewer).toHaveBeenCalledOnce();
   });
 });
 
 // ---- POLL_VOTE response sanitization (F4) -------------------------------------
 
 /**
- * Runs a vote through createPollVoteHandler, captures whatever saveVote
+ * Runs a vote through createPollVoteHandler, captures whatever saveVoteIfNewer
  * actually received (the sanitized responses, or nothing if the vote was
  * dropped), then feeds that exact set into createPollCloseHandler's
  * loadVotes so the assertions read through the real computeTally recompute
@@ -456,21 +468,21 @@ async function voteThenClose(
   voterPubkey: string,
 ) {
   const savePoll = vi.fn(async () => {});
-  const saveVote = vi.fn(async () => {});
+  const saveVoteIfNewer = vi.fn(async () => {});
   const getPoll = vi.fn(async () => poll);
   const setPollVersion = vi.fn();
   const ctx = makeCtx();
 
-  const voteHandler = createPollVoteHandler({ savePoll, saveVote, getPoll, loadVotes: vi.fn(async () => []), ...noQueue(), setPollVersion });
+  const voteHandler = createPollVoteHandler({ savePoll, saveVoteIfNewer, getPoll, loadVotes: vi.fn(async () => []), ...noQueue(), setPollVersion });
   const voteRumor = makePollVoteRumor(POLL_ID, {
     pubkey: voterPubkey,
     content: JSON.stringify({ pollId: POLL_ID, responses: voteResponses }),
   });
   await voteHandler.handle(voteRumor, ctx, makeSender(voterPubkey));
 
-  const savedVotes = saveVote.mock.calls.map((call) => call[0]);
+  const savedVotes = saveVoteIfNewer.mock.calls.map((call) => call[0]);
 
-  const closeHandler = createPollCloseHandler({ savePoll, saveVote, getPoll, loadVotes: vi.fn(async () => savedVotes), ...noQueue(), setPollVersion });
+  const closeHandler = createPollCloseHandler({ savePoll, saveVoteIfNewer, getPoll, loadVotes: vi.fn(async () => savedVotes), ...noQueue(), setPollVersion });
   await closeHandler.handle(makePollCloseRumor(poll.creatorPubkey), ctx, makeSender(poll.creatorPubkey));
 
   const [savedPoll] = savePoll.mock.calls[0] ?? [undefined];
@@ -614,6 +626,13 @@ describe('pollHandler / POLL_CLOSE', () => {
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.savePoll).not.toHaveBeenCalled();
+    // AC-9: queued for the poll-open, bound to the authenticated sender.
+    expect(deps.queuePendingClose).toHaveBeenCalledWith({
+      groupId: GROUP_ID,
+      pollId: POLL_ID,
+      closerPubkey: CREATOR_PUBKEY,
+      closedAt: rumor.created_at * 1000,
+    });
   });
 
   it('malformed payload: does not throw, no deps called', async () => {
@@ -840,7 +859,7 @@ describe('pollHandler / vote redelivery through real storage (AC-XCUT-2, epic: g
 
       const voteHandler = createPollVoteHandler({
         savePoll: vi.fn(async () => {}),
-        saveVote: realSaveVote,
+        saveVoteIfNewer: realSaveVote,
         getPoll: vi.fn(async () => storedPoll),
         loadVotes: realLoadVotes,
         ...noQueue(),
@@ -858,7 +877,7 @@ describe('pollHandler / vote redelivery through real storage (AC-XCUT-2, epic: g
       }
 
       // Real storage: exactly one row per unique voter — the redelivery
-      // upserted over the original (pollPersistence.saveVote keys by
+      // upserted over the original (pollPersistence.saveVoteIfNewer keys by
       // `${pollId}:${voterPubkey}`), it never appended a second row.
       const storedVotes = await realLoadVotes(GROUP_ID, pollId);
       expect(storedVotes).toHaveLength(2);
@@ -867,7 +886,7 @@ describe('pollHandler / vote redelivery through real storage (AC-XCUT-2, epic: g
       const savePoll = vi.fn(async () => {});
       const closeHandler = createPollCloseHandler({
         savePoll,
-        saveVote: vi.fn(async () => {}),
+        saveVoteIfNewer: vi.fn(async () => {}),
         getPoll: vi.fn(async () => storedPoll),
         loadVotes: vi.fn(async () => realLoadVotes(GROUP_ID, pollId)),
         ...noQueue(),

@@ -1,0 +1,178 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 3,
+  "root_cause": "Votes had no ordering key: the live handleVote and castVote upserted by arrival, the early-vote replay alone compared sender created_at, and the early-vote queue kept the latest arrival. Delivery order, a journal replay after a failed ack, or clock skew between a voter's devices therefore decided which vote a member kept, so members could diverge. Separately, handleClose (and the chatHandler poll_close announcement gate) dropped a close whose poll was not yet known, so under MLS reordering the poll stayed open forever on that member.",
+  "fix": "Implemented the adopted design (bug-reports/poll-ordering-design-2026-10-15.md). §1: PollVotePayload.seq (optional non-negative safe integer, parsePollVote rejects anything else); isNewerVote total order (seq, created_at, rumorId), legacy = seq 0 / ''. §2: saveVote replaced by saveVoteIfNewer, a compare-and-set inside pollPersistence's per-key enqueue used by handleVote, replayPendingVotes (votedAt skip removed), castVote and thereby journal replay; queuePendingVote keeps the newer entry; new pollCast.ts (createVoteCaster/nextVoteSeq) derives seq = max(stored own, own queued, 0)+1 with per-(group,poll) serialisation, stores the sent rumor's created_at/id, and PollStoreContext's optimistic setVotes applies the comparator. §3: persisted bounded pending-close queue (few:poll-pending-closes:{groupId}, <=10 polls per sender per group, <=50 per group oldest evicted, 7-day TTL) applied in handleOpen's new-poll path after the vote replay only when closer == authenticated creator (case-insensitive), else discarded; the chatHandler poll_close gate now queues an announcement for an unknown poll (few:poll-pending-close-announcements:{groupId}, same bounds) and createPollCloseAnnouncementReplayer re-runs it through the same handle()/gate after the open (wired via pollHandler onPollOpened in registerHandlers); a getPoll throw still rejects without queueing. clearPollData/clearAllPollData clear both new queues. AC-9 amended, docs/behavior/polls.md updated, pollReplay.ts doc comment rewritten.",
+  "deviations_from_design": [
+    "Pending-close and pending-announcement entries are unique per (group, poll, SENDER), first kept, instead of per (group, poll): with one slot per poll, any member who learned a fresh poll id could pre-empt the slot with a forged close that is later discarded, and the creator's genuine close (arriving second) would have been dropped. All other bounds are as designed; the AC-9 text says 'one entry per poll and sender'.",
+    "The chatHandler gate consistency (design: 'queue/re-evaluate consistently') is realised as a second queue holding only the announcement rumor's identity (id, sender, created_at); on the open it is re-run through the unchanged chat handle() path, so the row appears with the recomputed tally, at its original timestamp, and counts as unread at that moment."
+  ],
+  "files_changed": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollCast.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/pollReplay.ts",
+    "app/src/lib/marmot/pollSync.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/tests/unit/chatPersistence-purge.test.ts",
+    "app/tests/unit/marmot/admissionDigest.test.ts",
+    "app/tests/unit/marmot/applicationDispatchPersistence.test.ts",
+    "app/tests/unit/marmot/autoCommitLeave.test.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/chatPersistence-appendDedup.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/pollPersistence.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "bug-reports/poll-vote-ordering-and-early-close-contract.json",
+    "bug-reports/poll-vote-ordering-and-early-close-result.json",
+    "docs/behavior/polls.md",
+    "specs/epic-group-polls/acceptance-criteria.md"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/pollCast.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "bug-reports/poll-vote-ordering-and-early-close-contract.json",
+    "bug-reports/poll-vote-ordering-and-early-close-result.json"
+  ],
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/pollReplay.ts",
+    "app/src/lib/marmot/pollSync.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/tests/unit/chatPersistence-purge.test.ts",
+    "app/tests/unit/marmot/admissionDigest.test.ts",
+    "app/tests/unit/marmot/applicationDispatchPersistence.test.ts",
+    "app/tests/unit/marmot/autoCommitLeave.test.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/chatPersistence-appendDedup.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "app/tests/unit/marmot/pollPersistence.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "docs/behavior/polls.md",
+    "specs/epic-group-polls/acceptance-criteria.md"
+  ],
+  "modules_touched": [
+    "app/src/context",
+    "app/src/lib/marmot",
+    "app/src/lib/marmot/handlers",
+    "app/tests/unit",
+    "docs/behavior",
+    "specs/epic-group-polls"
+  ],
+  "tests_added": [
+    "app/tests/unit/marmot/pollOrdering.test.ts (new, 88 tests): seq wire validation; comparator table + seeded total-order property; saveVoteIfNewer CAS under all 6 call orders incl. concurrent; two-device clock-skew (A,B / B,A / both queued / queued+live / journal replay after failed ack / stranded replay / closed tally); concurrent same-seq tie-breaks both orders; legacy-after-new; queue keep-newer; replay rumor-id tie-break; castVote seq derivation (3+5->6, rapid casts 6,7, failed send, superseded cast, per-poll isolation); close-then-open, close-vote-open, non-creator discard, attacker-first, cross-group, TTL, bounds, eviction by receipt time, reload persistence, malformed entries, clear/reset; poll_close announcement queued then appended with recomputed tally, non-creator discarded, getPoll-throw not queued, replay failure keeps entries",
+    "chatHandler.test.ts: unknown-poll announcement queued; queue-write failure still rejects; getPoll throw queues nothing",
+    "pollHandler.test.ts: unknown-poll close queued with authenticated closer",
+    "registerHandlers.test.ts: announcement replayer built from the same chat deps slice and handed to the poll handlers"
+  ],
+  "counts": {
+    "baseline": {
+      "unit_files": 244,
+      "unit_passed": 5103,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT (eslint has no flat config; next lint unusable)"
+    },
+    "final": {
+      "unit_files": 245,
+      "unit_passed": 5193,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT"
+    },
+    "pre_fix_repro": "throwaway repro (deleted) on HEAD code: skew order B,A stored A instead of B; close-before-open left the poll open — both FAILED as expected; pollOrdering.test.ts failed to load pre-fix (new APIs absent)"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch /tmp/claude-501/mutation/poll-order/ (own vitest + stryker config, own tempDir)",
+    "scope": "pollPersistence.ts, handlers/pollHandler.ts, pollReplay.ts, pollSync.ts, pollCast.ts (castVote logic extracted from PollStoreContext), chatHandler.ts:147-198,313-331",
+    "before_prior_audit": "pre-fix code (2026-10-15 audit): pollPersistence 87.9%, pollHandler 96.8%, pollReplay 91.9%, pollSync 97.6%",
+    "before": "round 1 on post-fix code: 87.16% (801 killed, 115 survived, 3 no-coverage)",
+    "after": "round 2: 91.62% (842 killed, 75 survived, 2 no-coverage); pollPersistence 90.8%, pollHandler 92.0%, pollReplay 87.9%, pollSync 97.3%, pollCast 84.6%, chatHandler ranges 82.4%",
+    "closed": "absent-rumorId tie-break both sides, case-insensitive own-pubkey match in nextVoteSeq, queue eviction by receipt time, malformed close/announcement entries, announcement removal matching, full-reset of announcement keys, replay rumor-id tie-break",
+    "remaining": "No real gaps. Equivalent: >= vs > inside an inequality branch of isNewerVote, shape-guard sub-conditions whose wrong-typed field can never match the requested poll id, empty-array/length>0 guards before store/remove, synthesized-rumor tags/results/authenticity (gate rebuilds content), pre-existing migration/sanitise survivors. Side-effect-only: console.warn catch blocks, onPollOpened presence check (absent -> caught TypeError), enqueue/caster chain map cleanup, migration write ordering.",
+    "recorded": "base:mutation-audits add-audit (slug quizzl): scope module for pollPersistence, pollHandler, pollReplay, pollSync, pollCast; scope changed_lines for chatHandler"
+  },
+  "e2e": {
+    "polls_specs": "groups-polls + groups-poll-after-leave: 42/42 passed on a wiped relay under /tmp/claude-501/e2e.lock",
+    "full_gate": "flock make test-e2e-all: exit 0 — non-relay bucket 72 passed / 19 skipped, groups/relay bucket 345 passed; no INVALID marker",
+    "note": "No new e2e (MLS reordering cannot be forced through the app)."
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. pollPersistence.saveVoteIfNewer is the only vote write (saveVote removed); it reads, compares with isNewerVote and writes inside enqueue(votesKey). handleVote, replayPendingVotes, castVote (pollCast) and journal replay (which re-dispatches through handleVote) all call it. Evidence: pollOrdering 'keeps the greatest vote for every call order, also when the calls race' (6 orders via Promise.all).",
+    "VQ-2": "Yes. pollOrdering 'two devices of one user with clock skew' covers A,B; B,A; both queued then open (both orders); queued+live (both orders); journal replay re-delivering A after B; stranded replay; closed tally — all converge on B. The equivalent throwaway repro against HEAD code failed (stored A).",
+    "VQ-3": "Yes. nextVoteSeq = max(own stored seq, own queued seq, 0)+1 (case-insensitive own match); createVoteCaster chains casts per group:poll. Tests: stored 3 + queued 5 -> 6; two rapid casts -> 6, 7; failed send consumes nothing. isNewerVote treats absent seq as 0; tests 'seq >= 1 beats a legacy vote', 'legacy vote arriving after a seq vote is ignored', 'stored legacy row replaced by any seq>=1 vote'.",
+    "VQ-4": "Yes. parsePollVote rejects present seq that is negative, fractional, string, null, boolean, object or > MAX_SAFE_INTEGER (it.each). handleClose queues an unknown-poll close with the authenticated closer; handleOpen applies it only when closer equals the authenticated creator (case-insensitive), else removes it (tests: non-creator discarded, attacker-first cannot crowd out, cross-group). Bounds: <=10 per sender, <=50 per group oldest-by-receipt evicted, 7-day TTL incl. boundary, persisted across reload. Deviation: unique per (poll, sender) instead of per poll — see deviations_from_design.",
+    "VQ-5": "Yes. The chatHandler poll_close gate queues (not drops) an announcement for an unknown poll and re-runs it through the same gate after the open (createPollCloseAnnouncementReplayer via onPollOpened); lookup failures still reject. AC-9 has both designed sentences (queue wording 'one entry per poll and sender'); docs/behavior/polls.md replaces the arrival-order text (§3, §7, §8, Sources); pollReplay.ts comment replaced with the CAS/order-insensitive explanation.",
+    "VQ-6": "Yes. Unit 5193 passed / 1 skipped (245 files), tsc clean. Stryker concurrency 1: no real-gap survivors after round 2 (91.62%). Poll e2e 42/42 and full gate (72 + 345 passed, 19 skipped) green."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The design's 'one pending close per (group, poll), first kept' let a forged early close pre-empt the creator's, and its chatHandler item ('queue/re-evaluate consistently') named the goal but not the mechanism, so both needed implementation-time decisions that are recorded as deviations rather than settled in the design.",
+    "surprised_by": "pgrep -f in a Monitor until-loop matches the monitor's own command line, so a 'wait until process gone' monitor never fires; the background task's own completion notice is the reliable signal.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Reviewer REJECT (Codex HIGH, confirmed) + examiner VQ-5 PARTIAL: a failure after the open savePoll (vote replay, tally read, closed savePoll, announcement replay) stranded the creator held close and held announcement, because the dispatcher acks failed handlers and the existing-poll path never looked at them.",
+    "fix": "pollHandler.ts: extracted settleHeldCloses (apply the creator held close if the poll is still open: loadVotesWithPending -> computeTally -> savePoll closed, all BEFORE removing held entries; discard non-creator entries; then replay held announcements best-effort) + best-effort recoverHeldCloses. Called on the open new-poll path (after replayPendingVotes, still throwing as before), the open existing-poll branch, handleVote (also for an already-closed poll, announcements only; a vote arriving after a recovered close is dropped) and handleClose known-poll path (also for a non-creator close). A close of an already-closed poll is now a no-op (closing is final; previously recomputed the same tally). UI bumped once when recovery closes the poll. Misleading comment replaced. Dep onPollOpened renamed replayHeldCloseAnnouncements (no longer open-only). docs/behavior/polls.md §7 states the retry.",
+    "tests_added": "pollOrdering.test.ts: 16 handler-entry-point recovery tests (each of vote replay / tally read / closed save / announcement replay failing during the open x next vote / duplicate open / creator close / non-creator close -> closed, correct tally, exactly one announcement, queues empty, one UI bump) + strand-free failure, creator binding on recovery, non-creator held announcement discarded, closed poll never re-closed/re-announced, fail-closed while the tally read keeps failing. 14 failed before the fix.",
+    "counts": {
+      "unit_files": 245,
+      "unit_passed": 5214,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker concurrency 1 on pollHandler.ts: 80.17% -> 93.16% (109 killed, 8 survived, 0 no-coverage) after asserting UI-bump updater semantics on recovery paths; remaining are console.warn blocks/strings and the replayer-presence check (side-effect-only) and an equivalent length>0 guard. Recorded via mutation-audits (scope module).",
+    "e2e": "groups-polls + groups-poll-after-leave 42/42 on a wiped relay under the lock."
+  },
+  "remediation_round_2": {
+    "trigger": "Round-1 re-review REJECT (Codex H1, H2, M1) + Decider RETRY: stored state is truth, cleanup is best-effort, indeterminate != rejected.",
+    "fix": [
+      "pollHandler.ts settleHeldCloses: removePendingCloses wrapped in try/catch (logged; a later message retries) — cleanup never gates correctness; load/tally/savePoll errors still throw before the closed save. recoverHeldCloses returns the STORED poll on failure (re-read via getPoll; input only if that read fails), so a vote is never saved into a poll already stored closed (H1). handleOpen new-poll path bumps setPollVersion in a finally after savePoll.",
+      "chatHandler.ts gateAnnouncement poll_close: getPoll and loadVotesWithPending failures THROW; null now means definitively rejected (non-creator) only; comment explains throw == null on the live path (dispatcher markSeen before fan-out, per-handler catch) and why they differ for the held-announcement replay (H2).",
+      "createPollCloseAnnouncementReplayer: per-entry try/catch; removes only entries whose handle() completed (appended, duplicate or rejected); never removes one whose run threw; rethrows the first error after the loop (H2).",
+      "chatPersistence.appendMessage -> Promise<boolean> (true iff a row was inserted or a materialized placeholder superseded); chatHandler handle() runs setChatVersion and the unread/markAsRead block only when it returned true; resolvePendingSignalsForSlot stays unconditional. ChatHandlerDeps/HandlerDeps types updated; every other caller ignores the value (await only) and compiles unchanged (M1).",
+      "Doc comments (settleHeldCloses, recoverHeldCloses, replayer, appendMessage) and docs/behavior/polls.md §7 updated: the stored poll is authoritative, clean-up failures are retried, a failed read leaves a held summary held."
+    ],
+    "tests_added": "pollOrdering.test.ts: fault-injection matrix — a rejection at each of loadPendingCloses, loadVotes, loadPendingVotes, savePoll(closed), removePendingCloses, loadPendingCloseAnnouncements, gate getPoll, gate loadVotesWithPending, appendMessage, removePendingCloseAnnouncements, both while the poll arrives and while recovering at a later vote (20 tests): stored poll = last successful write, held entries kept iff their effect did not land, no vote saved into a poll stored closed, convergence on the next message with exactly one row and incrementUnread exactly once; plus H1 repro, indeterminate closed save (write lands then rejects), failed re-read fallback, arrival bump on failure, replayer partial-failure/rethrow and all-complete. chatHandler.test.ts: read failures now reject (2 updated) + 3 append-result gating tests. chatPersistence-appendDedup.test.ts: true/false return incl. placeholder supersede. chatPersistence-purge.test.ts: expectation updated to resolves true. Matrix: 11 failed before the fix.",
+    "counts": {
+      "unit_files": 245,
+      "unit_passed": 5245,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker concurrency 1 on pollHandler.ts + chatHandler.ts:153-195,255-265,320-346 + chatPersistence.ts:388-427: 87.00% -> 88.34% after closing 3 real gaps (stored-truth re-read, re-read fallback, replayer resolve path). pollHandler 92.0% (115/10), chatHandler ranges 74.4% (32/11), chatPersistence range 90.9% (50/5). Remaining: console.warn blocks/strings and dev hook / queue-cleanup (side-effect-only); length>0 guards, empty-pending early return, synthesized-rumor literals, initial completed array (equivalent). Recorded via mutation-audits.",
+    "e2e": "groups-polls + groups-poll-after-leave + groups-dispatch-isolation + groups-reactions: 54/54 on a wiped relay under the lock."
+  },
+  "remediation_round_3": {
+    "trigger": "Round-2 re-review REJECT (Codex HIGH, double fault): closed savePoll lands-then-rejects AND the stored-poll re-read fails -> recoverHeldCloses returned the caller's OPEN copy -> handleVote wrote a vote into a poll stored closed. Decider RETRY, one item.",
+    "fix": "pollHandler.ts recoverHeldCloses returns Poll | 'unknown': on a failed (or empty) re-read it returns 'unknown', never the unverified caller copy (doc: a step may have failed after the closed poll was already saved; without a confirmed read we must not write). handleVote returns without saveVoteIfNewer and without a version bump; handleClose returns without closing; handleOpen existing-poll branch returns without further writes.",
+    "tests_added": "pollOrdering.test.ts: fallback test flipped (no vote write, no close write, no version bump, held close + announcement kept); two-fault matrix {closed savePoll lands-then-rejects, removePendingCloses rejects, announcement replay rejects} x {re-read rejects} x {vote, creator close, non-creator close, duplicate open} = 12 tests (stored poll stays closed with frozen results, no vote row, next message converges: closed once, one row, incrementUnread once, queues empty); plus 4 tests for re-read {rejects, finds no poll} x {vote, creator close} after exactly one failing tally read (no vote, no save, no bump). Pre-fix: the flipped test and the savePoll-lands x vote case FAILED (vote row written).",
+    "counts": {
+      "unit_files": 245,
+      "unit_passed": 5261,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker concurrency 1 on pollHandler.ts: 89.21% -> 91.37% (127 killed, 12 survived) after the re-read-finds-no-poll and creator-close sentinel tests. Remaining: console.warn blocks/strings and the replayer-presence check (side-effect-only); the length>0 guard and the open-branch sentinel return (equivalent: falls through to no write, no bump). Recorded via mutation-audits.",
+    "e2e": "groups-polls + groups-poll-after-leave 42/42 on a wiped relay under the lock (exit 0). Two earlier attempts also ran 42/42 but were flagged INVALID by the reload detector: next dev logged 'Fast Refresh had to perform a full reload' while compiling /groups on demand in the first spec; no file under app/ changed during either run. Third attempt clean."
+  }
+}

@@ -68,7 +68,20 @@ export interface PollOpenPayload {
 export interface PollVotePayload {
   pollId: string;
   responses: string[];
+  /**
+   * Per-(poll, voter) Lamport sequence number (bug:
+   * poll-vote-ordering-and-early-close). The sender sets it to one more than
+   * the highest seq it has seen for its own vote on this poll, so a later vote
+   * outranks an earlier one regardless of clock skew between the voter's
+   * devices or MLS delivery order. Optional on the wire: absent = a legacy
+   * client, ranked as seq 0 (pollPersistence.isNewerVote).
+   */
+  seq?: number;
 }
+
+/** A present seq must be a non-negative safe integer. */
+const isVoteSeq = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 
 export interface PollClosePayload {
   pollId: string;
@@ -138,7 +151,10 @@ export function parsePollVote(content: string): PollVotePayload | null {
       // list is never legitimate — also bounds what the early-vote queue
       // (pollPersistence.queuePendingVote) can be asked to hold.
       d.responses.length > POLL_LIMITS.MAX_OPTIONS ||
-      !d.responses.every((r: any) => isOptionId(r))
+      !d.responses.every((r: any) => isOptionId(r)) ||
+      // A crafted huge seq only locks the (authenticated) sender out of
+      // changing their own vote; the safe-integer bound keeps `seq + 1` exact.
+      (d.seq !== undefined && !isVoteSeq(d.seq))
     ) {
       return null;
     }

@@ -380,11 +380,17 @@ export async function loadMessages(
  * `materializedFromEdit` — every ordinary original, and any row already
  * confirmed real by a prior genuine `appendMessage` — keeps the original
  * insert-if-absent behavior unchanged.
+ *
+ * Resolves true iff this call changed the stored thread (a row inserted, or a
+ * placeholder superseded); false for an insert-if-absent no-op. Callers that
+ * count "new messages" (chatHandler's version bump / unread) gate on it.
  */
-export function appendMessage(groupId: string, message: ChatMessage): Promise<void> {
+export function appendMessage(groupId: string, message: ChatMessage): Promise<boolean> {
   const key = storageKey(groupId);
   const prev = appendQueues.get(key) ?? Promise.resolve();
-  const next = prev.then(async () => {
+  // Resolves true iff a row was inserted, or a materialized placeholder was
+  // superseded by the real announcement; false for an insert-if-absent no-op.
+  const next = prev.then(async (): Promise<boolean> => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
     const existingIndex = existing.findIndex((m) => m.id === message.id);
     if (existingIndex !== -1) {
@@ -394,7 +400,7 @@ export function appendMessage(groupId: string, message: ChatMessage): Promise<vo
         !existing[existingIndex].materializedFromEdit ||
         !isInformativeAnnouncementContent(message.content)
       ) {
-        return; // real row already present, or arrival isn't an announcement — never clobber
+        return false; // real row already present, or arrival isn't an announcement — never clobber
       }
       const replaced = existing.slice();
       replaced[existingIndex] = message;
@@ -402,15 +408,16 @@ export function appendMessage(groupId: string, message: ChatMessage): Promise<vo
       if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
         (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
       }
-      return;
+      return true;
     }
     await set(key, [...existing, message]);
     // Dev-only hook: notify E2E tests when a message is written to IDB.
     if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
       (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
     }
+    return true;
   });
-  const settled = next.catch(() => {});
+  const settled: Promise<void> = next.then(() => {}, () => {});
   appendQueues.set(key, settled);
   settled.then(() => {
     if (appendQueues.get(key) === settled) appendQueues.delete(key);

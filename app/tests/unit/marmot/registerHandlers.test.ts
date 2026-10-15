@@ -44,8 +44,10 @@ const KIND = {
   deleteEdit: 5,
 } as const;
 
+const announcementReplayer = vi.fn(async () => {});
 vi.mock('@/src/lib/marmot/handlers/chatHandler', () => ({
   createChatHandler: vi.fn((_deps) => ({ kind: KIND.chat, handle: vi.fn() })),
+  createPollCloseAnnouncementReplayer: vi.fn((_deps) => announcementReplayer),
 }));
 vi.mock('@/src/lib/marmot/handlers/reactionHandler', () => ({
   createReactionHandler: vi.fn((_deps) => ({ kind: KIND.reaction, handle: vi.fn() })),
@@ -70,7 +72,7 @@ vi.mock('@/src/lib/marmot/handlers/leaveHandler', () => ({
 
 // ─── Dynamic imports after vi.mock ───────────────────────────────────────────
 const { buildDispatcher } = await import('@/src/lib/marmot/registerHandlers');
-const { createChatHandler } = await import('@/src/lib/marmot/handlers/chatHandler');
+const { createChatHandler, createPollCloseAnnouncementReplayer } = await import('@/src/lib/marmot/handlers/chatHandler');
 const { createReactionHandler } = await import('@/src/lib/marmot/handlers/reactionHandler');
 const { createProfileHandler } = await import('@/src/lib/marmot/handlers/profileHandler');
 const { createProfileRequestHandler } = await import('@/src/lib/marmot/handlers/profileRequestHandler');
@@ -79,7 +81,8 @@ const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } =
 );
 const { createLeaveIntentHandler } = await import('@/src/lib/marmot/handlers/leaveHandler');
 const { createDeleteEditHandler } = await import('@/src/lib/marmot/handlers/deleteEditHandler');
-const { queuePendingVote: realQueuePendingVote, loadPendingVotes: realLoadPendingVotes, removePendingVotes: realRemovePendingVotes } = await import('@/src/lib/marmot/pollPersistence');
+const persistence = await import('@/src/lib/marmot/pollPersistence');
+const { queuePendingVote: realQueuePendingVote, loadPendingVotes: realLoadPendingVotes, removePendingVotes: realRemovePendingVotes } = persistence;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function makeDeps(overrides: Record<string, unknown> = {}) {
@@ -112,7 +115,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     handleIncomingProfileRequest: vi.fn(async () => {}),
     // poll
     savePoll: vi.fn(async () => {}),
-    saveVote: vi.fn(async () => {}),
+    saveVoteIfNewer: vi.fn(async () => {}),
     getPoll: vi.fn(async () => null),
     loadVotes: vi.fn(async () => []),
     setPollVersion: vi.fn(),
@@ -192,10 +195,23 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       isGroupMember: deps.isGroupMember,
       getPoll: deps.getPoll,
       loadVotes: deps.loadVotes,
-      saveVote: deps.saveVote,
+      saveVoteIfNewer: deps.saveVoteIfNewer,
       loadPendingVotes: realLoadPendingVotes,
       removePendingVotes: realRemovePendingVotes,
+      // AC-9 early poll_close announcements (bug: poll-vote-ordering-and-early-close).
+      queuePendingCloseAnnouncement: persistence.queuePendingCloseAnnouncement,
+      loadPendingCloseAnnouncements: persistence.loadPendingCloseAnnouncements,
+      removePendingCloseAnnouncements: persistence.removePendingCloseAnnouncements,
     });
+  });
+
+  it('builds the early-announcement replayer from the SAME chat deps slice and hands it to the poll handlers', () => {
+    const deps = makeDeps();
+    buildDispatcher(deps);
+    const chatSlice = (createChatHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
+    expect(createPollCloseAnnouncementReplayer).toHaveBeenCalledWith(chatSlice);
+    const pollArg = (createPollOpenHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>;
+    expect(pollArg.replayHeldCloseAnnouncements).toBe(announcementReplayer);
   });
 
   it('routes the reaction deps slice to createReactionHandler', () => {
@@ -245,7 +261,7 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
     buildDispatcher(deps);
     const pollBag = {
       savePoll: deps.savePoll,
-      saveVote: deps.saveVote,
+      saveVoteIfNewer: deps.saveVoteIfNewer,
       getPoll: deps.getPoll,
       loadVotes: deps.loadVotes,
       // AC-9 early-vote queue: defaults to the IDB-backed persistence
@@ -253,6 +269,11 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       queuePendingVote: realQueuePendingVote,
       loadPendingVotes: realLoadPendingVotes,
       removePendingVotes: realRemovePendingVotes,
+      // AC-9 early-close queue (bug: poll-vote-ordering-and-early-close).
+      queuePendingClose: persistence.queuePendingClose,
+      loadPendingCloses: persistence.loadPendingCloses,
+      removePendingCloses: persistence.removePendingCloses,
+      replayHeldCloseAnnouncements: announcementReplayer,
       setPollVersion: deps.setPollVersion,
     };
     expect(createPollOpenHandler).toHaveBeenCalledWith(pollBag);

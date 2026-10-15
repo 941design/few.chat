@@ -47,7 +47,7 @@ import { buildDispatcher } from '@/src/lib/marmot/registerHandlers';
 import { clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { applyInboundRumor } from '@/src/lib/reactions/api';
 import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdminsProvider, isRegisteredGroupAdmin } from '@/src/lib/messageEdits/api';
-import { savePoll, saveVote, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
+import { savePoll, saveVoteIfNewer, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
 import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
@@ -1750,7 +1750,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             },
             // Polls
             savePoll,
-            saveVote,
+            saveVoteIfNewer,
             getPoll,
             loadVotes,
             setPollVersion,

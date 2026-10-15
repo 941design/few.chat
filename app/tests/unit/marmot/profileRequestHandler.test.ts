@@ -159,7 +159,7 @@ vi.mock('@/src/lib/messageEdits/api', () => ({
 
 vi.mock('@/src/lib/marmot/pollPersistence', () => ({
   savePoll: vi.fn(),
-  saveVote: vi.fn(),
+  saveVoteIfNewer: vi.fn(),
   getPoll: vi.fn(),
   loadVotes: vi.fn(),
   clearPollData: vi.fn(),

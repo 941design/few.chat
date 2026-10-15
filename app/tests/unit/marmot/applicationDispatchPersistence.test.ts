@@ -4,7 +4,7 @@ import { clear } from 'idb-keyval';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createDispatcher, type DispatcherSubscription } from '@/src/lib/marmot/applicationRumorDispatcher';
 import { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } from '@/src/lib/marmot/handlers/pollHandler';
-import { getPoll, loadVotes, savePoll, saveVote, queuePendingVote, loadPendingVotes, removePendingVotes } from '@/src/lib/marmot/pollPersistence';
+import { getPoll, loadVotes, savePoll, saveVoteIfNewer, queuePendingVote, loadPendingVotes, removePendingVotes } from '@/src/lib/marmot/pollPersistence';
 
 vi.mock('@internet-privacy/marmot-ts', () => ({
   deserializeApplicationData: (bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(bytes)),
@@ -29,7 +29,7 @@ function emit(group: EventEmitter, kind: number, id: string, content: unknown = 
   });
 }
 function pollFixture() {
-  const deps = { getPoll, loadVotes, savePoll, saveVote, queuePendingVote, loadPendingVotes, removePendingVotes, setPollVersion: vi.fn() };
+  const deps = { getPoll, loadVotes, savePoll, saveVoteIfNewer, queuePendingVote, loadPendingVotes, removePendingVotes, setPollVersion: vi.fn() };
   const group = new EventEmitter();
   const subscription = createDispatcher([
     createPollOpenHandler(deps), createPollVoteHandler(deps), createPollCloseHandler(deps),

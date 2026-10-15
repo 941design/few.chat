@@ -17,7 +17,7 @@ const {
   savePoll,
   getPoll,
   loadVotes,
-  saveVote,
+  saveVoteIfNewer,
   clearPollData,
 } = await import('@/src/lib/marmot/pollPersistence');
 
@@ -108,30 +108,30 @@ describe('pollPersistence', () => {
     });
   });
 
-  describe('loadVotes / saveVote', () => {
+  describe('loadVotes / saveVoteIfNewer', () => {
     it('returns empty array when no votes exist', async () => {
       const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toEqual([]);
     });
 
     it('persists a vote', async () => {
-      await saveVote(makeVote());
+      await saveVoteIfNewer(makeVote());
       const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toHaveLength(1);
       expect(votes[0].responses).toEqual(['A']);
     });
 
     it('replaces existing vote by compound key', async () => {
-      await saveVote(makeVote({ responses: ['A'] }));
-      await saveVote(makeVote({ responses: ['B'], votedAt: 3000 }));
+      await saveVoteIfNewer(makeVote({ responses: ['A'] }));
+      await saveVoteIfNewer(makeVote({ responses: ['B'], votedAt: 3000 }));
       const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toHaveLength(1);
       expect(votes[0].responses).toEqual(['B']);
     });
 
     it('stores votes from different voters', async () => {
-      await saveVote(makeVote({ id: 'poll-1:voter1', voterPubkey: 'voter1' }));
-      await saveVote(makeVote({ id: 'poll-1:voter2', voterPubkey: 'voter2' }));
+      await saveVoteIfNewer(makeVote({ id: 'poll-1:voter1', voterPubkey: 'voter1' }));
+      await saveVoteIfNewer(makeVote({ id: 'poll-1:voter2', voterPubkey: 'voter2' }));
       const votes = await loadVotes('group-1', 'poll-1');
       expect(votes).toHaveLength(2);
     });
@@ -141,8 +141,8 @@ describe('pollPersistence', () => {
     it('removes all polls and votes for a group', async () => {
       await savePoll(makePoll({ id: 'p1' }));
       await savePoll(makePoll({ id: 'p2' }));
-      await saveVote(makeVote({ id: 'p1:v', pollId: 'p1' }));
-      await saveVote(makeVote({ id: 'p2:v', pollId: 'p2' }));
+      await saveVoteIfNewer(makeVote({ id: 'p1:v', pollId: 'p1' }));
+      await saveVoteIfNewer(makeVote({ id: 'p2:v', pollId: 'p2' }));
 
       await clearPollData('group-1');
 

@@ -1,0 +1,46 @@
+{
+  "bug_name": "poll-vote-ordering-and-early-close",
+  "story_id": "S1",
+  "design": "bug-reports/poll-ordering-design-2026-10-15.md",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/pollSync.ts",
+      "app/src/lib/marmot/pollPersistence.ts",
+      "app/src/lib/marmot/pollReplay.ts",
+      "app/src/lib/marmot/pollCast.ts",
+      "app/src/lib/marmot/handlers/pollHandler.ts",
+      "app/src/lib/marmot/handlers/chatHandler.ts",
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/context/PollStoreContext.tsx",
+      "app/src/context/MarmotContext.tsx (saveVote -> saveVoteIfNewer wiring only)",
+      "app/tests/unit/**",
+      "specs/**/acceptance-criteria*.md (AC-9 amendment only)",
+      "docs/behavior/polls.md"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "app/tests/e2e/**",
+      "app/src/lib/marmot/applicationRumorDispatcher.ts",
+      "app/src/lib/marmot/rumorJournal*"
+    ]
+  },
+  "behaviour": [
+    "C1: PollVotePayload carries optional `seq` (non-negative safe integer); parsePollVote rejects any other present value; absent = legacy = seq 0.",
+    "C2: isNewerVote orders votes by (seq, created_at, rumorId) with legacy seq 0 / rumorId ''; strict total order.",
+    "C3: every vote write (handleVote, early-vote replay, castVote, journal replay via handleVote) goes through saveVoteIfNewer, a compare-and-set inside pollPersistence's per-key write queue; the plain upsert saveVote no longer exists.",
+    "C4: queuePendingVote keeps the newer entry by the comparator; replayPendingVotes relies on the CAS (no votedAt skip).",
+    "C5: castVote derives seq = max(stored own seq, own queued seq, 0) + 1, serialised per (group, poll); stores votedAt/rumorId of the sent rumor; optimistic UI update applies the comparator.",
+    "C6: a close for an unknown poll is queued per (group, poll, authenticated closer), first kept, <=10 polls per sender per group, <=50 per group oldest evicted, 7-day TTL, persisted; applied on the poll-open's new-poll path after the early-vote replay only when closer == authenticated creator (case-insensitive), else discarded.",
+    "C7: a poll_close chat announcement for an unknown poll is queued the same way (rumor id, sender, created_at) and re-run through the same chat gate after the open; never appended for a non-creator; a lookup failure still rejects (fail closed).",
+    "C8: AC-9 amended, docs/behavior/polls.md updated, pollReplay.ts doc comment updated."
+  ],
+  "non_goals": [
+    "No new e2e spec (MLS reordering cannot be forced through the app).",
+    "No migration rewriting stored votes to carry seq (legacy rows rank as seq 0 at read time).",
+    "No change to the dispatcher, the rumor journal, or closePoll's local tally.",
+    "Applying a pending close on a re-delivered open of an already-known poll (design: new-poll path only)."
+  ],
+  "deviations_from_design": [
+    "Pending-close (and announcement) queue entries are keyed per (group, poll, sender) instead of per (group, poll): with first-kept per poll, a member who forged a close for a not-yet-opened poll id would occupy the slot and the creator's genuine close would be dropped. Per-sender keying keeps every bound of the design (one entry per poll per sender, <=10 per sender, <=50 per group)."
+  ]
+}

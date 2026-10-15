@@ -29,7 +29,7 @@ vi.mock('idb-keyval', () => ({
 
 const persistence = await import('@/src/lib/marmot/pollPersistence');
 const {
-  savePoll, getPoll, loadVotes, saveVote, clearPollData, clearAllPollData,
+  savePoll, getPoll, loadVotes, saveVoteIfNewer, clearPollData, clearAllPollData,
   queuePendingVote, loadPendingVotes, removePendingVotes, migrateLegacyVotes,
   PENDING_VOTE_TTL_MS, MAX_PENDING_VOTES_PER_GROUP, MAX_PENDING_VOTES_PER_VOTER,
 } = persistence;
@@ -67,12 +67,15 @@ function openPayload(overrides: Record<string, unknown> = {}) {
 function realDeps() {
   return {
     savePoll,
-    saveVote,
+    saveVoteIfNewer,
     getPoll,
     loadVotes,
     queuePendingVote,
     loadPendingVotes,
     removePendingVotes,
+    queuePendingClose: persistence.queuePendingClose,
+    loadPendingCloses: persistence.loadPendingCloses,
+    removePendingCloses: persistence.removePendingCloses,
     setPollVersion: vi.fn(),
   };
 }
@@ -129,7 +132,7 @@ describe('VQ-1: vote store is group-scoped', () => {
   it('loadVotes(group, poll) never returns a row stored for another group with the same pollId (both directions)', async () => {
     const groups = [GROUP_A, GROUP_B];
     for (const g of groups) {
-      await saveVote({ id: `${POLL_ID}:${VOTER_A}`, groupId: g, pollId: POLL_ID, voterPubkey: VOTER_A, responses: [g === GROUP_A ? 'A' : 'B'], votedAt: 1 });
+      await saveVoteIfNewer({ id: `${POLL_ID}:${VOTER_A}`, groupId: g, pollId: POLL_ID, voterPubkey: VOTER_A, responses: [g === GROUP_A ? 'A' : 'B'], votedAt: 1 });
     }
     for (const g of groups) {
       const rows = await loadVotes(g, POLL_ID);
@@ -203,8 +206,8 @@ describe('VQ-2: legacy vote-row migration', () => {
   });
 
   it('a group-scoped row already present wins over a legacy row with the same id', async () => {
-    await saveVote({ ...legacyVote('p-only-a', VOTER_A, ['B']), groupId: GROUP_A, votedAt: 99 });
-    // saveVote ran the migration first; re-seed a stale legacy duplicate.
+    await saveVoteIfNewer({ ...legacyVote('p-only-a', VOTER_A, ['B']), groupId: GROUP_A, votedAt: 99 });
+    // saveVoteIfNewer ran the migration first; re-seed a stale legacy duplicate.
     idbStore.set('few:poll-votes:p-only-a', [legacyVote('p-only-a', VOTER_A, ['A'])]);
     await migrateLegacyVotes();
     const rows = await loadVotes(GROUP_A, 'p-only-a');
@@ -267,7 +270,8 @@ describe('VQ-3: early votes are queued and applied on poll-open (AC-9)', () => {
       await open(GROUP_B, CREATOR, payload);
       const queued = await loadVotes(GROUP_B, `prop-${i}`);
 
-      expect(queued.map(({ groupId: _g, ...rest }) => rest)).toEqual(live.map(({ groupId: _g, ...rest }) => rest));
+      // rumorId identifies the (distinct) vote rumor of each run — not part of what is compared.
+      expect(queued.map(({ groupId: _g, rumorId: _r, ...rest }) => rest)).toEqual(live.map(({ groupId: _g, rumorId: _r, ...rest }) => rest));
     }
   });
 
@@ -279,7 +283,7 @@ describe('VQ-3: early votes are queued and applied on poll-open (AC-9)', () => {
     expect(await loadVotes(GROUP_B, POLL_ID)).toHaveLength(1);
   });
 
-  it('the latest-arriving early vote of a voter replaces their earlier early vote', async () => {
+  it('two early votes of a voter (same created_at) collapse to one queue entry — the greater by (seq, created_at, rumor id) is applied', async () => {
     await vote(GROUP_A, VOTER_A, ['A']);
     await vote(GROUP_A, VOTER_A, ['B']);
     await open(GROUP_A, CREATOR);
@@ -506,7 +510,7 @@ describe('early-vote replay is crash-safe (read → save → remove)', () => {
   it('a save failure during replay leaves the queued votes in the queue (not lost)', async () => {
     await vote(GROUP_A, VOTER_A, ['A']);
     await vote(GROUP_A, VOTER_B, ['B']);
-    const deps = { ...realDeps(), saveVote: vi.fn(async () => { throw new Error('unload'); }) };
+    const deps = { ...realDeps(), saveVoteIfNewer: vi.fn(async () => { throw new Error('unload'); }) };
     await expect(
       createPollOpenHandler(deps).handle(rumor(POLL_OPEN_KIND, CREATOR, openPayload()), ctx(GROUP_A), sender(CREATOR)),
     ).rejects.toThrow('unload');
@@ -650,7 +654,7 @@ describe('legacy migration edge cases', () => {
     const idb = await import('idb-keyval');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.mocked(idb.keys).mockRejectedValueOnce(new Error('idb down'));
-    await saveVote({ id: `p:${VOTER_A}`, groupId: GROUP_A, pollId: 'p', voterPubkey: VOTER_A, responses: ['A'], votedAt: 1 });
+    await saveVoteIfNewer({ id: `p:${VOTER_A}`, groupId: GROUP_A, pollId: 'p', voterPubkey: VOTER_A, responses: ['A'], votedAt: 1 });
     expect(await loadVotes(GROUP_A, 'p')).toHaveLength(1);
     warn.mockRestore();
   });
@@ -726,7 +730,7 @@ describe('stranded queued votes are recovered at the next poll message (re-entra
 
   it('(ii) a save failing during open-replay → the next live vote recovers the queued one', async () => {
     await vote(GROUP_A, VOTER_A, ['A']);
-    await expect(openWith({ ...realDeps(), saveVote: failOnce(saveVote) })).rejects.toThrow('unload');
+    await expect(openWith({ ...realDeps(), saveVoteIfNewer: failOnce(saveVoteIfNewer) })).rejects.toThrow('unload');
     expect(await loadVotes(GROUP_A, POLL_ID)).toEqual([]);
 
     await vote(GROUP_A, VOTER_B, ['B']);
@@ -786,7 +790,7 @@ describe('stranded queued votes are recovered at the next poll message (re-entra
       isGroupMember: vi.fn(async () => true),
       getPoll,
       loadVotes,
-      saveVote,
+      saveVoteIfNewer,
       loadPendingVotes,
       removePendingVotes,
     };
@@ -805,7 +809,7 @@ describe('stranded queued votes are recovered at the next poll message (re-entra
     expect(closed?.totalVoters).toBe(persisted.totalVoters);
   });
 
-  it('(vi) a migration target write serialises with a concurrent saveVote — the live vote is not lost', async () => {
+  it('(vi) a migration target write serialises with a concurrent saveVoteIfNewer — the live vote is not lost', async () => {
     const idb = await import('idb-keyval');
     await loadVotes(GROUP_A, 'warm-up'); // settle the session migration memo
     idbStore.set(`few:polls:${GROUP_A}`, [storedPoll(GROUP_A, 'pp')]);
@@ -824,7 +828,7 @@ describe('stranded queued votes are recovered at the next poll message (re-entra
     try {
       const migrating = migrateLegacyVotes(); // parks on its first read of the target key
       await new Promise((r) => setTimeout(r, 0));
-      const saving = saveVote({ id: `pp:${VOTER_B}`, groupId: GROUP_A, pollId: 'pp', voterPubkey: VOTER_B, responses: ['B'], votedAt: 9 });
+      const saving = saveVoteIfNewer({ id: `pp:${VOTER_B}`, groupId: GROUP_A, pollId: 'pp', voterPubkey: VOTER_B, responses: ['B'], votedAt: 9 });
       await new Promise((r) => setTimeout(r, 10)); // give the save every chance to overtake
       release();
       await Promise.all([migrating, saving]);
@@ -852,7 +856,7 @@ describe('round-2 mutation-gap closers', () => {
     expect(await loadVotes(GROUP_A, POLL_ID)).toHaveLength(1);
   });
 
-  it('newer-wins ties keep the stored vote (equal votedAt never overrides)', async () => {
+  it('equal seq and votedAt: the rumor id decides — a queued entry without one never overrides the stored vote', async () => {
     await open(GROUP_A, CREATOR);
     await vote(GROUP_A, VOTER_A, ['A'], POLL_ID, 100);
     await queuePendingVote({ groupId: GROUP_A, pollId: POLL_ID, voterPubkey: VOTER_A, responses: ['B'], votedAt: 100_000 });

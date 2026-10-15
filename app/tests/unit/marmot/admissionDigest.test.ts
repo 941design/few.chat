@@ -95,7 +95,7 @@ vi.mock('@/src/lib/reactions/api', () => ({
 
 vi.mock('@/src/lib/marmot/pollPersistence', () => ({
   savePoll: vi.fn(),
-  saveVote: vi.fn(),
+  saveVoteIfNewer: vi.fn(),
   getPoll: vi.fn(),
   clearPollData: vi.fn(),
 }));

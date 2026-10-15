@@ -333,7 +333,7 @@ describe('purgeStrangerDmThreads — in-flight write drain (Sev-5 regression)', 
       senderPubkey: STRANGER_HEX,
       groupId: strangerId,
       createdAt: 2000,
-    })).resolves.toBeUndefined();
+    })).resolves.toBe(true); // inserted
   });
 });
 

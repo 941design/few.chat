@@ -258,3 +258,19 @@ describe('appendMessage — __fewTest.onChatIdbWrite fires exactly once per actu
     expect((await loadMessages('partial')).messages).toEqual([makeMsg('p', { content: ANNOUNCEMENT })]);
   });
 });
+
+// ── appendMessage result: true iff the stored thread changed (remediation 2) ──
+
+describe('appendMessage resolves true iff a row was inserted or a placeholder superseded', () => {
+  it('insert → true; same id again → false', async () => {
+    expect(await appendMessage('ret-1', makeMsg('x'))).toBe(true);
+    expect(await appendMessage('ret-1', makeMsg('x', { content: 'other' }))).toBe(false);
+  });
+
+  it('a placeholder superseded by a real announcement → true; by an ordinary arrival → false', async () => {
+    await appendMessage('ret-2', makeMsg('p', { content: 'fabricated', materializedFromEdit: true }));
+    expect(await appendMessage('ret-2', makeMsg('p', { content: 'plain' }))).toBe(false);
+    expect(await appendMessage('ret-2', makeMsg('p', { content: ANNOUNCEMENT }))).toBe(true);
+    expect(await appendMessage('ret-2', makeMsg('p', { content: ANNOUNCEMENT }))).toBe(false);
+  });
+});

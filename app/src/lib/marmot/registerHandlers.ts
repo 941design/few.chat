@@ -4,10 +4,20 @@ import type { ReactionThreadKey } from '@/src/lib/reactions/types';
 import type { ApplicationRumor, AuthenticatedSender } from './applicationRumorDispatcher';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
 import type { Poll, PollVote, PendingPollVote } from '@/src/lib/marmot/pollPersistence';
-import { queuePendingVote, loadPendingVotes, removePendingVotes } from '@/src/lib/marmot/pollPersistence';
+import {
+  queuePendingVote,
+  loadPendingVotes,
+  removePendingVotes,
+  queuePendingClose,
+  loadPendingCloses,
+  removePendingCloses,
+  queuePendingCloseAnnouncement,
+  loadPendingCloseAnnouncements,
+  removePendingCloseAnnouncements,
+} from '@/src/lib/marmot/pollPersistence';
 import type { ProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
-import { createChatHandler } from './handlers/chatHandler';
+import { createChatHandler, createPollCloseAnnouncementReplayer } from './handlers/chatHandler';
 import { createReactionHandler } from './handlers/reactionHandler';
 import { createProfileHandler } from './handlers/profileHandler';
 import { createProfileRequestHandler } from './handlers/profileRequestHandler';
@@ -18,7 +28,8 @@ import { createDeleteEditHandler } from './handlers/deleteEditHandler';
 // Composition root — all application rumor handlers registered here.
 export interface HandlerDeps {
   // Chat handler deps
-  appendMessage: (groupId: string, message: ChatMessage) => Promise<void>;
+  /** Resolves true iff a row was inserted (chatPersistence.appendMessage). */
+  appendMessage: (groupId: string, message: ChatMessage) => Promise<boolean>;
   incrementUnread: (groupId: string) => void;
   // notification-domain-invariants (INV-2): mark-read the active group instead
   // of ringing the bell for its own messages.
@@ -72,11 +83,13 @@ export interface HandlerDeps {
   }) => Promise<void>;
   // Poll handler deps
   savePoll: (poll: Poll) => Promise<void>;
-  saveVote: (vote: PollVote) => Promise<void>;
+  saveVoteIfNewer: (vote: PollVote) => Promise<boolean>;
   getPoll: (groupId: string, pollId: string) => Promise<Poll | null>;
   loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
-  // AC-9 early-vote queue. Optional so existing wiring keeps compiling; when
-  // omitted, the IDB-backed pollPersistence implementations are used.
+  // AC-9 early-vote queue (and, always IDB-backed, the early-close and
+  // early-close-announcement queues). Optional so existing wiring keeps
+  // compiling; when omitted, the IDB-backed pollPersistence implementations
+  // are used.
   queuePendingVote?: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<void>;
   loadPendingVotes?: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   removePendingVotes?: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
@@ -86,33 +99,44 @@ export interface HandlerDeps {
 }
 
 export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = {}): Dispatcher {
+  const chatDeps = {
+    appendMessage: deps.appendMessage,
+    incrementUnread: deps.incrementUnread,
+    markAsRead: deps.markAsRead,
+    setChatVersion: deps.setChatVersion,
+    applyDeleteEditSignal: deps.applyDeleteEditSignal,
+    resolvePendingSignalsForSlot: deps.resolvePendingSignalsForSlot,
+    isGroupAdmin: deps.isGroupAdmin,
+    isGroupMember: deps.isGroupMember,
+    getPoll: deps.getPoll,
+    loadVotes: deps.loadVotes,
+    saveVoteIfNewer: deps.saveVoteIfNewer,
+    loadPendingVotes: deps.loadPendingVotes ?? loadPendingVotes,
+    removePendingVotes: deps.removePendingVotes ?? removePendingVotes,
+    queuePendingCloseAnnouncement,
+    loadPendingCloseAnnouncements,
+    removePendingCloseAnnouncements,
+  };
+
   const pollDeps = {
     savePoll: deps.savePoll,
-    saveVote: deps.saveVote,
+    saveVoteIfNewer: deps.saveVoteIfNewer,
     getPoll: deps.getPoll,
     loadVotes: deps.loadVotes,
     queuePendingVote: deps.queuePendingVote ?? queuePendingVote,
-    loadPendingVotes: deps.loadPendingVotes ?? loadPendingVotes,
-    removePendingVotes: deps.removePendingVotes ?? removePendingVotes,
+    loadPendingVotes: chatDeps.loadPendingVotes,
+    removePendingVotes: chatDeps.removePendingVotes,
+    queuePendingClose,
+    loadPendingCloses,
+    removePendingCloses,
+    // A poll_close announcement that arrived before its open is re-run
+    // through the chat gate once the open (and any queued close) is stored.
+    replayHeldCloseAnnouncements: createPollCloseAnnouncementReplayer(chatDeps),
     setPollVersion: deps.setPollVersion,
   };
 
   const handlers: RumorHandler[] = [
-    createChatHandler({
-      appendMessage: deps.appendMessage,
-      incrementUnread: deps.incrementUnread,
-      markAsRead: deps.markAsRead,
-      setChatVersion: deps.setChatVersion,
-      applyDeleteEditSignal: deps.applyDeleteEditSignal,
-      resolvePendingSignalsForSlot: deps.resolvePendingSignalsForSlot,
-      isGroupAdmin: deps.isGroupAdmin,
-      isGroupMember: deps.isGroupMember,
-      getPoll: deps.getPoll,
-      loadVotes: deps.loadVotes,
-      saveVote: deps.saveVote,
-      loadPendingVotes: pollDeps.loadPendingVotes,
-      removePendingVotes: pollDeps.removePendingVotes,
-    }),
+    createChatHandler(chatDeps),
     createReactionHandler({
       loadMessages: deps.loadMessages,
       applyInboundRumor: deps.applyInboundRumor,

@@ -1,0 +1,97 @@
+{
+  "bug_name": "poll-vote-ordering-and-early-close",
+  "bug_report_file": "bug-reports/poll-vote-ordering-and-early-close-report.md",
+  "created_at": "2026-10-15T14:05:17Z",
+  "updated_at": "2026-10-15T17:56:47Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "SPEC",
+      "question": "Do all vote write paths (handleVote, replayPendingVotes, castVote, journal replay) go through one compare-and-set on the total order (seq, created_at, rumorId) inside the per-key persistence queue, so the stored vote is the greatest regardless of call order?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does the two-device clock-skew unit test (device B behind by 60 s, saw A, votes later with higher seq) converge on B's vote for every delivery order, queued-then-open, and replay-after-failed-ack — failing before the fix?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Is castVote's seq derived as max(stored own seq, own queued seq, 0) + 1 with casts serialised per poll, and do legacy votes (no seq) rank as seq 0 with a seq>=1 vote always winning over a legacy one?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "SECURITY",
+      "question": "Does parsePollVote validate seq (non-negative safe integer, else reject) and does a close-before-open get applied only when its authenticated sender equals the open's authenticated creator, discarded otherwise, with bounds/TTL as designed?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "SPEC",
+      "question": "Is the chatHandler poll_close announcement gate consistent with the pending-close queue (no irrecoverable drop), AC-9 amended with the two designed sentences, docs/behavior/polls.md and the pollReplay.ts comment updated?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on pollPersistence/pollHandler/pollReplay/pollSync shows no real-gap survivors; polls e2e specs and the full e2e gate pass?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "90eec4c1e4b1af490056f41552bffa1b6241b7c1",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "REJECTED: Codex HIGH stranded pending close after post-savePoll failure",
+      "examiner": "VQ-1..4 YES; VQ-5 PARTIAL (no retry for closes/announcements); VQ-6 PARTIAL"
+    },
+    {
+      "round": 1,
+      "reviewer": "REJECTED: Codex HIGH H1 stale open state after cleanup failure; HIGH H2 announcement deleted on transient read failure; MEDIUM repeated unread",
+      "decider": "RETRY (Fable): stored state is truth, cleanup best-effort, indeterminate != rejected; mandatory per-storage-step failure injection"
+    },
+    {
+      "round": 2,
+      "reviewer": "REJECTED: Codex HIGH double-fault fallback to open copy",
+      "decider": "RETRY round 3 (Fable): unknown sentinel, flip fallback test, two-fault matrix; non-blocking items filed as poll-close-announcement-live-gate-retry"
+    },
+    {
+      "round": 3,
+      "reviewer": "ACCEPTED; Codex approve"
+    }
+  ],
+  "remediation_round": 3,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T14:05:17Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T16:05:03Z",
+      "trigger": "decider_retry_round_2"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T16:32:04Z",
+      "trigger": "decider_retry_round_3"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-15T17:56:47Z",
+      "trigger": "round_3_accepted_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "full": "non-relay 72 + relay 345 passed / 0 failed / 19 skipped, no INVALID (with route warm-up)"
+  }
+}
