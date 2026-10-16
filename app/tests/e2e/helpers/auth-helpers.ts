@@ -1,5 +1,5 @@
 import { test, Page } from '@playwright/test';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 /**
  * Pre-computed deterministic test keypairs.
@@ -22,6 +22,18 @@ import { createHash } from 'node:crypto';
  * in the same file share identities (intra-file, tolerated); different files
  * get disjoint identities, so each file starts with an empty relay history —
  * the same clean-slate condition it gets when run alone.
+ *
+ * Per-test identities (`computeTestKeypairs({ perTest: true })`, called in a
+ * `beforeEach`): the per-file salt still leaves every test of one file — and
+ * every `--repeat-each` repeat or retry of it, and every earlier invocation on
+ * a relay that was not wiped since — sharing ONE identity set, so a test that
+ * counts or reveals relay-held events (e.g. held DMs between A and B) sees the
+ * leftovers of every previous run (BACKLOG: e2e-pending-confirmation-relay-
+ * pollution). `perTest` additionally salts with the test id, repeat index,
+ * retry and a random nonce, so each test execution starts with an empty relay
+ * history for all three users. Use it for specs whose tests are independent
+ * (each boots its own contexts); do NOT use it in a `describe.serial` whose
+ * tests share state across test boundaries.
  *
  * Exception: `dm-feedback-channel.spec.ts` must keep the BASE USER_B because
  * that identity's npub is baked into the dev server as NEXT_PUBLIC_MAINTAINER_
@@ -86,15 +98,26 @@ function saltedPrivateKeyHex(baseSeedHex: string, salt: string): string {
 /**
  * Compute pubkeys at runtime using the same derivation as the app, re-deriving
  * a per-spec-file identity for each USER_* (except in UNSALTED_SPEC_FILES).
- * Call this once in each spec's beforeAll (before booting any user).
+ * Call this once in each spec's beforeAll (before booting any user), or with
+ * `{ perTest: true }` in a beforeEach for a fresh identity set per test execution.
  */
-export async function computeTestKeypairs(): Promise<void> {
+export async function computeTestKeypairs(options?: { perTest?: boolean }): Promise<void> {
   // Dynamic import to avoid top-level await issues
   const { getPublicKey } = await import('nostr-tools/pure');
   const { nip19 } = await import('nostr-tools');
 
   const specFile = currentSpecFile();
-  const salt = specFile && !UNSALTED_SPEC_FILES.has(specFile) ? specFile : null;
+  if (options?.perTest && specFile && UNSALTED_SPEC_FILES.has(specFile)) {
+    throw new Error(`[auth-helpers] ${specFile} must keep the base identities; perTest is not allowed there`);
+  }
+  let salt = specFile && !UNSALTED_SPEC_FILES.has(specFile) ? specFile : null;
+  if (options?.perTest) {
+    // test.info() throws outside a running test/hook — perTest needs one.
+    const info = test.info();
+    salt = `${salt}#${info.testId}#${info.repeatEachIndex}#${info.retry}#${randomUUID()}`;
+    // Record the salt so an identity-dependent failure can be traced/replayed.
+    info.annotations.push({ type: 'e2e-identity-salt', description: salt });
+  }
 
   const users: Array<[typeof USER_A, { seedHex: string; privateKeyHex: string }]> = [
     [USER_A, BASE.A],

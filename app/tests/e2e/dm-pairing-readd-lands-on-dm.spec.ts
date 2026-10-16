@@ -32,8 +32,10 @@ import { bootIdentity, getShareCardLink, extractCardPayload } from './helpers/co
 import { readContactPubkeys } from './helpers/pairing';
 
 test.describe('Re-add of an existing contact lands on the DM page (not a dead-end error)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

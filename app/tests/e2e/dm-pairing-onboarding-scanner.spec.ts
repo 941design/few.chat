@@ -41,8 +41,10 @@ import { bootIdentity, newAnonymousContext, getShareCardLink, extractCardPayload
 import { waitForAdmission, readContactPubkeys } from './helpers/pairing';
 
 test.describe('Pairing: nameless onboarding scanner completes a deferred echo (AC-PAIR-10)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

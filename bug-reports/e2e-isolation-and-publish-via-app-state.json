@@ -1,0 +1,64 @@
+{
+  "bug_name": "e2e-isolation-and-publish-via-app",
+  "bug_report_file": "bug-reports/e2e-isolation-and-publish-via-app-report.md",
+  "created_at": "2026-10-16T04:45:00Z",
+  "updated_at": "2026-10-16T06:05:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "small",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does dm-pairing-pending-confirmation pass --repeat-each 4 on one relay while still asserting exact counts (1 while pending, 2 after confirm, 0 after opening)?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Are all dm-pairing-* specs independent of relay history (fresh identities per execution), and is computeTestKeypairs() unchanged for every other spec?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Does any dm-* spec still hand-sign or publish events from the test process?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "CODE",
+      "question": "Is window.__fewPublishDm identical in name, behaviour and production guard after the move, and still available on every page used by the e2e callers?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "consumer_sha": "829d7f1",
+  "models": {
+    "implementer": "opus"
+  },
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T04:45:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T05:07:00Z",
+      "trigger": "fixer_complete_awaiting_review"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T06:05:00Z",
+      "trigger": "codex_review_no_high_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-e2eiso1.log",
+    "post_gate_edit": "salt annotation (Codex low) in auth-helpers.ts; dm-pairing-* rerun 12/12 passed"
+  },
+  "review": {
+    "codex": "no high; medium (historical-recovery can be satisfied by live-sub replay \u2014 same as before the rewrite; e2e asserts user-visible outcome, accepted) ; low (salt not recorded \u2014 fixed via test annotation)"
+  }
+}

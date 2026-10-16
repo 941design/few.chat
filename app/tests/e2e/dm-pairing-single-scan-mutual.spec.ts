@@ -46,8 +46,10 @@ import { bootIdentity, getShareCardLink, extractCardPayload } from './helpers/co
 import { waitForAdmission, readKnownPeers } from './helpers/pairing';
 
 test.describe('Pairing: single-scan mutual admission (AC-ADMIT-6)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

@@ -964,6 +964,8 @@ describe('initDirectMessageCounts — NoCoverage baseline: IDB-backed DM counts'
 
 // ── Unclassified survivors: test-bridge blocks (lines 342, 354-364) ───────────
 // Re-classified as equivalent / side-effect-only:
+// (Historical line numbers. The L354-364 __fewPublishDm bridge has since moved
+// to src/lib/dmPublishTestBridge.ts; only the __fewUnread bridge remains here.)
 //  L342 ObjectLiteral — window.__fewUnread assignment: this is the dev-only
 //    test bridge setup. The bridge is never observable through any exported API
 //    in unit tests (window is undefined in Vitest). Equivalent.
@@ -980,8 +982,8 @@ describe('initDirectMessageCounts — NoCoverage baseline: IDB-backed DM counts'
 
 describe('test-bridge window assignment (lines 342, 354-364) — classified as equivalent', () => {
   /**
-   * The window.__fewUnread and window.__fewPublishDm bridges are dev-only
-   * side effects that run only in browser (window !== undefined) and are not
+   * The window.__fewUnread bridge is a dev-only
+   * side effect that runs only in browser (window !== undefined) and are not
    * observable through the module's exported functions in a Vitest environment.
    * These mutations are equivalent: no exported function's return value changes.
    *

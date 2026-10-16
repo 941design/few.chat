@@ -861,27 +861,6 @@ if (typeof window !== 'undefined') {
   };
 }
 
-// --- DM publish test bridge (dev only) ---
-// Exposes publishDirectMessage via the page's own identity so e2e tests can
-// send DMs without dynamic-importing webpack-aliased modules from page.evaluate.
-// The bridge reads the private key from localStorage at call time.
-if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
-  (window as any).__fewPublishDm = async (peerPubkeyHex: string, content: string): Promise<void> => {
-    try {
-      const identityRaw = localStorage.getItem('lp_nostrIdentity_v1');
-      if (!identityRaw) throw new Error('No identity in localStorage');
-      const identity = JSON.parse(identityRaw) as { privateKeyHex: string };
-      const { connectNdk } = await import('@/src/lib/ndkClient');
-      const { publishDirectMessage } = await import('@/src/lib/directMessages');
-      const ndk = await connectNdk(identity.privateKeyHex);
-      await publishDirectMessage({ ndk, privateKeyHex: identity.privateKeyHex, peerPubkeyHex, content });
-    } catch (err) {
-      console.error('[__fewPublishDm] failed:', err);
-      throw err;
-    }
-  };
-}
-
 // --- React hook ---
 
 /** Returns the current unread state (counts per group + total). */

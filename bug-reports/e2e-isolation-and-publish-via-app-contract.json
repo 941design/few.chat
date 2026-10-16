@@ -1,0 +1,40 @@
+{
+  "bug_name": "e2e-isolation-and-publish-via-app",
+  "story_id": "S1",
+  "findings": [
+    "e2e-pending-confirmation-relay-pollution",
+    "dm-e2e-publish-via-app-refactor",
+    "unreadstore-publish-dm-bridge-module-cohesion"
+  ],
+  "scope": {
+    "may_edit": [
+      "app/tests/e2e/helpers/auth-helpers.ts (opt-in per-test identities)",
+      "app/tests/e2e/dm-pairing-*.spec.ts (beforeAll -> beforeEach perTest identities)",
+      "app/tests/e2e/dm-historical-recovery.spec.ts (publish via the app)",
+      "app/src/lib/dmPublishTestBridge.ts (new; relocated __fewPublishDm bridge)",
+      "app/src/lib/unreadStore.ts (bridge removed)",
+      "app/pages/_app.tsx (side-effect import of the bridge)",
+      "app/tests/unit/unreadStore-property.test.ts (comment only)"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "product behaviour (no user-facing change)",
+      "dm-feedback-channel.spec.ts (must keep base USER_B = maintainer)",
+      "helpers/forgedPairingAck.ts, helpers/namelessJoinRequestFixture.ts (already documented narrow exceptions)"
+    ]
+  },
+  "behaviour": [
+    "C1: every dm-pairing-* test execution (each test, repeat, retry, invocation) uses fresh USER_A/B/C keys, so no relay history between them exists; specs keep their exact count assertions (pending DMs not counted; confirm reveals exactly this test's 2 held DMs).",
+    "C2: computeTestKeypairs() without options is unchanged (per-file salt); perTest is opt-in and refused for UNSALTED_SPEC_FILES.",
+    "C3: no dm-* spec publishes from the test process; dm-historical-recovery's peer sends through his own app page (__fewPublishDm -> publishDirectMessage) while the recipient is offline.",
+    "C4: window.__fewPublishDm keeps its name, signature, behaviour and the typeof window / NODE_ENV !== 'production' guard; it is installed app-wide from pages/_app.tsx instead of unreadStore.ts."
+  ],
+  "non_goals": [
+    "No product code change beyond moving the dev-only bridge.",
+    "No per-test identities for non-pairing specs.",
+    "Root cause of the dm-pairing-single-scan-mutual:109 click hang (not reproduced; not relay pollution)."
+  ],
+  "deviations_from_finding": [
+    "dm-e2e-publish-via-app-refactor: dm-giftwrap-bell already publishes via __fewPublishDm and dm-third-party-inbound no longer exists; only dm-historical-recovery still published from the test process. It needed no narrow exception: 'historical' only requires the messages to be on the relay before the chat mounts, which an offline recipient gives through the real publish path."
+  ]
+}

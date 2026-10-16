@@ -82,7 +82,11 @@ async function readContactLastSeenAt(page: Page, peerHex: string): Promise<strin
  * surfaces on the `contacts-nav-badge` count pill, whose total is
  * (unread DMs) + (pending contacts). In this spec only peer B is involved and
  * A has no other contacts/groups, so this total equals B's own contribution —
- * the exact scalar the removed bell badge used to show here.
+ * the exact scalar the removed bell badge used to show here. That holds only
+ * because A and B are fresh identities per test execution (beforeEach,
+ * `perTest`): with reused keys, held DMs between A and B from earlier tests,
+ * repeats or runs on the same relay were revealed on confirm too (count 5/7/11
+ * instead of 2), so the exact counts below would measure relay history.
  */
 async function readBadgeCount(page: Page): Promise<number> {
   return page.evaluate(() => {
@@ -93,8 +97,10 @@ async function readBadgeCount(page: Page): Promise<number> {
 }
 
 test.describe('Pending contact confirmation — message hold, notification-count delay, confirmation UI', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

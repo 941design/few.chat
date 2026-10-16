@@ -1,0 +1,100 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": "(1) e2e identities are salted per spec FILE only, so every test of dm-pairing-pending-confirmation, every --repeat-each repeat/retry and every run on a non-wiped relay shared one USER_A/USER_B pair; on confirm the app correctly reveals ALL held DMs from B on the relay, including earlier runs' (count 5/7/11 instead of 2). Test-isolation defect, not a product defect. (2) dm-historical-recovery hand-signed back-dated gift wraps in the test process and wrote them to strfry over raw WebSocket. (3) The dev-only __fewPublishDm bridge lived in unreadStore.ts.",
+  "fix": "auth-helpers.ts: computeTestKeypairs({ perTest: true }) additionally salts with testId + repeatEachIndex + retry + randomUUID (opt-in; refused for UNSALTED_SPEC_FILES; default unchanged). All 8 dm-pairing-* specs switched beforeAll(computeTestKeypairs()) -> beforeEach(computeTestKeypairs({ perTest: true })); exact count assertions kept. dm-historical-recovery: Alice's page is closed, Bob sends 5 DMs through his own app page via __fewPublishDm (>1 s apart for distinct rumor seconds), Alice reopens and must render exactly 5 in order [0..4] (was >=5 / non-strict), dedup on reopen unchanged; no test-process publish, nostr-tools/nip59 and raw WS removed. Bridge moved verbatim to app/src/lib/dmPublishTestBridge.ts (same name, same guards), side-effect-imported from pages/_app.tsx.",
+  "deviations_from_design": [
+    "dm-giftwrap-bell already used the bridge and dm-third-party-inbound no longer exists; only dm-historical-recovery needed rewriting, and it needed no narrow exception (no fixture loader created).",
+    "Per-test identities applied to all dm-pairing-* specs (not just pending-confirmation) for uniform history independence; single-test specs were not observed polluted in the gate."
+  ],
+  "files_changed": [
+    "app/tests/e2e/helpers/auth-helpers.ts",
+    "app/tests/e2e/dm-pairing-expired-grace.spec.ts",
+    "app/tests/e2e/dm-pairing-multi-use.spec.ts",
+    "app/tests/e2e/dm-pairing-onboarding-scanner.spec.ts",
+    "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
+    "app/tests/e2e/dm-pairing-readd-lands-on-dm.spec.ts",
+    "app/tests/e2e/dm-pairing-sender-binding.spec.ts",
+    "app/tests/e2e/dm-pairing-single-scan-mutual.spec.ts",
+    "app/tests/e2e/dm-pairing-unknown-nonce.spec.ts",
+    "app/tests/e2e/dm-historical-recovery.spec.ts",
+    "app/src/lib/dmPublishTestBridge.ts",
+    "app/src/lib/unreadStore.ts",
+    "app/pages/_app.tsx",
+    "app/tests/unit/unreadStore-property.test.ts",
+    "bug-reports/e2e-isolation-and-publish-via-app-report.md",
+    "bug-reports/e2e-isolation-and-publish-via-app-contract.json",
+    "bug-reports/e2e-isolation-and-publish-via-app-result.json",
+    "bug-reports/e2e-isolation-and-publish-via-app-state.json"
+  ],
+  "files_created": [
+    "app/src/lib/dmPublishTestBridge.ts",
+    "bug-reports/e2e-isolation-and-publish-via-app-report.md",
+    "bug-reports/e2e-isolation-and-publish-via-app-contract.json",
+    "bug-reports/e2e-isolation-and-publish-via-app-result.json",
+    "bug-reports/e2e-isolation-and-publish-via-app-state.json"
+  ],
+  "files_modified": [
+    "app/tests/e2e/helpers/auth-helpers.ts",
+    "app/tests/e2e/dm-pairing-expired-grace.spec.ts",
+    "app/tests/e2e/dm-pairing-multi-use.spec.ts",
+    "app/tests/e2e/dm-pairing-onboarding-scanner.spec.ts",
+    "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
+    "app/tests/e2e/dm-pairing-readd-lands-on-dm.spec.ts",
+    "app/tests/e2e/dm-pairing-sender-binding.spec.ts",
+    "app/tests/e2e/dm-pairing-single-scan-mutual.spec.ts",
+    "app/tests/e2e/dm-pairing-unknown-nonce.spec.ts",
+    "app/tests/e2e/dm-historical-recovery.spec.ts",
+    "app/src/lib/unreadStore.ts",
+    "app/pages/_app.tsx",
+    "app/tests/unit/unreadStore-property.test.ts"
+  ],
+  "modules_touched": [
+    "app/tests/e2e",
+    "app/tests/e2e/helpers",
+    "app/src/lib",
+    "app/pages",
+    "app/tests/unit"
+  ],
+  "tests_added": [],
+  "counts": {
+    "baseline": {
+      "unit_files": 250,
+      "unit_passed": 5589,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "pre_fix_repro": "lead, 2026-10-16: HEAD worktree dm-pairing-pending-confirmation --repeat-each 4 -> 3/4 fail on repeats (count 5/7/11)"
+    },
+    "final": {
+      "unit_files": 250,
+      "unit_passed": 5589,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT"
+    }
+  },
+  "mutation": "not run: no correctness-critical src change (verbatim move of a dev-only bridge)",
+  "e2e": {
+    "relay": "wiped once (down -v && up -d --wait), then NOT wiped between the runs below",
+    "runs": [
+      "dm-pairing-pending-confirmation --repeat-each 4: 20 passed",
+      "dm-pairing- dm-historical-recovery --repeat-each 3: 41 passed, 1 failed (dm-historical-recovery repeat1: an added 'no stored thread before opening' precondition was wrong, see report; removed)",
+      "dm-historical-recovery --repeat-each 3 (after the fix): 6 passed",
+      "bridge callers once (dm-giftwrap-bell, dm-block-contact, dm-feedback-channel, dm-walled-garden-*, groups-pull-only-invitation-*, groups-ever-known-survives-leave, groups-notification-domain-invariants): 31 passed"
+    ],
+    "invalid_markers": "none",
+    "full_gate": "not run (lead)"
+  },
+  "open_questions": [
+    "dm-pairing-single-scan-mutual:109 (gate 2026-10-16) is NOT the relay-pollution class: the gate wipes the relay at start, the file's identities are unique to it, it has one test and no retries, so A/B had no earlier history. Playwright's log stops at 'performing click action' with the button visible+enabled+stable, i.e. the click never returned (A's renderer busy/blocked for 30 s), cause unknown. Not reproduced: 3/3 here plus the lead's 2/2 rerun. Suggest a separate finding if it recurs; per-test identities do not address it.",
+    "The pending-confirmation spec comment (step 4) says DM content is only persisted once the peer's ContactChat mounts. In dm-historical-recovery, Alice (Bob is a co-member of a group) had 4 of Bob's 5 offline-sent messages stored under few:messages:dm:<bob> right after loading /contacts, before opening the chat. Either some boot-time path persists known-peer DM content or the comment is stale; not investigated further (no assertion depends on it now)."
+  ],
+  "verification_answers": {},
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Two of the three specs named in the publish-via-app finding had already been fixed or deleted, and the finding still referenced the pre-rebrand bridge name (__nostlingPublishDm); verifying against code first saved a pointless rewrite. A spec comment's claim about when DM content gets persisted was not true for a group-member peer, which cost one e2e cycle on a precondition built on it.",
+    "scope": "project_specific",
+    "outcome": "merged"
+  }
+}

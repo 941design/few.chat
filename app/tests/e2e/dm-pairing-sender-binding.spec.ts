@@ -32,8 +32,10 @@ import { extractV2PairingFields, readKnownPeers, readContactPubkeys, waitForAdmi
 import { sendForgedPairingAck } from './helpers/forgedPairingAck';
 
 test.describe('Pairing: sender binding rejects a harvested third-party card (AC-SEC-1 / AC-PAIR-6b)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

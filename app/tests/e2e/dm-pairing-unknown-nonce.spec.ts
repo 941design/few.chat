@@ -34,8 +34,10 @@ function randomNonceHex(): string {
 }
 
 test.describe('Pairing: unknown-nonce echo is silently ignored (AC-PAIR-6, AC-ADMIT-2)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

@@ -1,9 +1,9 @@
 /**
  * E2E: DM historical recovery — AC-13
  *
- * Pre-seeds 5 gift-wrapped DMs from Bob to Alice on the relay before Alice's
- * session starts, then verifies that opening the DM chat recovers all 5 in
- * created_at order with no duplicates.
+ * Bob sends 5 gift-wrapped DMs to Alice while Alice is OFFLINE (her page is
+ * closed), then verifies that opening the DM chat recovers all 5 from the relay
+ * in created_at order with no duplicates.
  *
  * This exercises the §3.5 order-of-operations:
  *   Step 1: loadMessages (0 pre-existing messages)
@@ -15,10 +15,17 @@
  * Setup order (walled-garden compatible):
  *   1. Boot Alice and Bob on /groups/.
  *   2. Alice creates a group and invites Bob (walled-garden prerequisite).
- *   3. Seed 5 historical gift-wrapped DMs from Bob to Alice on the relay.
- *   4. Alice navigates to Bob's DM chat and waits for all 5 to render.
+ *   3. Alice goes offline (page closed); Bob sends 5 DMs THROUGH THE APP — his
+ *      own `__fewPublishDm` bridge (publishDirectMessage with his real signer and
+ *      NDK) — at least 1 s apart so each rumor has its own created_at second.
+ *   4. Alice comes back, opens Bob's DM chat and waits for all 5 to render.
  *
- * Keypairs: alice (USER_A), bob (USER_B) from helpers/auth-helpers.ts.
+ * No event is hand-signed or sent via raw WebSocket from the test process
+ * (project CLAUDE.md "E2E tests"; this spec used to seed back-dated wraps that
+ * way — "historical" only needs the messages to be on the relay before the chat
+ * mounts, which an offline recipient gives us through the real publish path).
+ *
+ * Keypairs: alice (USER_A), bob (USER_C) from helpers/auth-helpers.ts.
  * Requires the strfry relay harness: make e2e-up.
  * Run: node scripts/run-e2e.mjs tests/e2e/dm-historical-recovery.spec.ts
  */
@@ -36,94 +43,37 @@ import { suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { createGroupAndInvite } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
-const E2E_RELAY_URL = process.env.E2E_RELAY_URL ?? 'ws://localhost:7777';
 
 /**
- * Build a kind-1059 gift wrap from sender to recipient using nostr-tools.
- * Returns the fully signed wrap event ready to publish.
- */
-async function buildGiftWrap(args: {
-  senderPrivHex: string;
-  recipientPubHex: string;
-  rumorContent: string;
-  rumorCreatedAt: number;
-}): Promise<{ wrapEvent: { id: string; pubkey: string; created_at: number; kind: number; tags: string[][]; content: string; sig: string } }> {
-  const { wrapEvent } = await import('nostr-tools/nip59');
-  const senderPrivBytes = new Uint8Array(Buffer.from(args.senderPrivHex, 'hex'));
-  const wrap = wrapEvent(
-    {
-      kind: 14,
-      tags: [['p', args.recipientPubHex]],
-      content: args.rumorContent,
-      created_at: args.rumorCreatedAt,
-    },
-    senderPrivBytes,
-    args.recipientPubHex,
-  );
-  return { wrapEvent: wrap };
-}
-
-/**
- * Publish a Nostr event directly to the relay via WebSocket (Node 22+ global).
- *
- * Narrow exception: historical seeding from a non-Few context is acceptable
- * here because the app cannot produce events in the past. The focus of this test
- * is the ContactChat recovery and dedup logic, not the publishing path.
- */
-async function publishToRelay(event: object): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(E2E_RELAY_URL);
-    const timeout = setTimeout(() => {
-      try { ws.close(); } catch { /* ignore */ }
-      reject(new Error(`Timed out publishing to ${E2E_RELAY_URL}`));
-    }, 10_000);
-    ws.onopen = () => {
-      ws.send(JSON.stringify(['EVENT', event]));
-      setTimeout(() => {
-        clearTimeout(timeout);
-        try { ws.close(); } catch { /* ignore */ }
-        resolve();
-      }, 500);
-    };
-    ws.onerror = () => {
-      clearTimeout(timeout);
-      reject(new Error(`WebSocket error publishing to ${E2E_RELAY_URL}`));
-    };
-  });
-}
-
-/**
- * Pre-seed 5 gift-wrapped DMs from Bob to Alice on the relay.
- * Uses past timestamps so all events look "historical" to Alice's chat.
+ * Bob sends 5 DMs to Alice through the app's own publish path (his page's
+ * `__fewPublishDm` bridge → publishDirectMessage → NIP-17 gift wrap via NDK).
+ * Sends are spaced > 1 s apart so the rumors' created_at (whole seconds) are
+ * strictly increasing — the order the recipient's chat must reproduce.
  * Returns a run-unique tag used to filter these messages out of relay history.
  */
-async function seedHistoricalDMs(
-  bobPrivHex: string,
-  alicePubHex: string,
-): Promise<{ wrapIds: string[]; runTag: string }> {
+async function sendDMsViaApp(bobPage: Page, alicePubHex: string): Promise<{ runTag: string }> {
   const runTag = `hist-test-${Date.now()}`;
-  const wrapIds: string[] = [];
   const labels = ['First', 'Second', 'Third', 'Fourth', 'Fifth'];
   const messages = labels.map((label, i) =>
     `${label} msg [${runTag}]${i === 0 ? ' — oldest' : i === 4 ? ' — newest' : ''}`,
   );
-  // Use timestamps well in the past so ContactChat's historical fetch window includes them.
-  const baseTime = Math.floor(Date.now() / 1000) - 3600; // 1h ago
 
+  await bobPage.waitForFunction(
+    () => typeof (window as any).__fewPublishDm === 'function',
+    null,
+    { timeout: 10_000 },
+  );
   for (let i = 0; i < messages.length; i++) {
-    const { wrapEvent } = await buildGiftWrap({
-      senderPrivHex: bobPrivHex,
-      recipientPubHex: alicePubHex,
-      rumorContent: messages[i],
-      rumorCreatedAt: baseTime + i * 60, // 1 minute apart
-    });
-    wrapIds.push(wrapEvent.id);
-    await publishToRelay(wrapEvent);
-    // Small delay so the relay processes events in deterministic order.
-    await new Promise((r) => setTimeout(r, 100));
+    if (i > 0) await bobPage.waitForTimeout(1_100);
+    await bobPage.evaluate(
+      async ({ peer, content }) => {
+        await (window as any).__fewPublishDm(peer, content);
+      },
+      { peer: alicePubHex, content: messages[i] },
+    );
   }
 
-  return { wrapIds, runTag };
+  return { runTag };
 }
 
 /**
@@ -197,19 +147,25 @@ test.describe.serial('DM historical recovery — AC-13', () => {
 
   test('alice recovers 5 historical gift-wrapped DMs in created_at order with no duplicates (AC-13)', async () => {
     const alicePub = USER_A.pubkeyHex;
-    const bobPriv = USER_B.privateKeyHex;
     const bobPub = USER_B.pubkeyHex;
 
-    // 1. Seed 5 historical gift-wrapped DMs on the relay (past timestamps, via raw WS —
-    //    narrow exception because the app cannot produce events in the past).
-    //    Returns a unique runTag to isolate THIS run's messages from relay history.
-    const { runTag } = await seedHistoricalDMs(bobPriv, alicePub);
+    // 1. Alice goes offline: close her page (the context — her identity and
+    //    stored state — survives). Nothing of Alice's runs while Bob sends.
+    await alicePage.close();
 
-    // 2. Navigate Alice to Bob's DM chat (IDB was cleared in beforeAll so this is a
-    //    fresh chat with 0 stored messages — all 5 must come from the historical fetch).
+    // 2. Bob sends 5 DMs through the app while Alice is offline.
+    //    Returns a unique runTag to isolate THIS run's messages from relay history.
+    const { runTag } = await sendDMsViaApp(bobPage, alicePub);
+
+    // 3. Alice comes back and opens Bob's chat. She was offline for every send,
+    //    so all 5 messages can only come from the relay. (Do not assert an empty
+    //    local thread here: the app's boot-time DM catch-up may already have
+    //    stored some of them by then — still recovered from the relay, and the
+    //    dedup check below covers both ingestion paths meeting.)
+    alicePage = await aliceCtx.newPage();
     await alicePage.goto(`/contacts?id=${bobPub}`);
 
-    // 3. Wait for all 5 run-tagged messages to render (historical fetch resolves after mount).
+    // 4. Wait for all 5 run-tagged messages to render (historical fetch resolves after mount).
     await alicePage.waitForFunction(
       (tag) => {
         const bubbles = document.querySelectorAll('[data-testid^="msg-"]');
@@ -224,12 +180,12 @@ test.describe.serial('DM historical recovery — AC-13', () => {
     );
     await alicePage.waitForTimeout(1000); // let upsert settle
 
-    // 4. Assert at least 5 run-tagged messages rendered.
+    // 5. Assert exactly 5 run-tagged messages rendered (no duplicates).
     const allTexts = await alicePage.locator('[data-testid^="msg-"]').allTextContents();
     const seededTexts = allTexts.filter((t) => t.includes(runTag));
-    expect(seededTexts.length).toBeGreaterThanOrEqual(5);
+    expect(seededTexts.length).toBe(5);
 
-    // 5. Assert messages are in created_at order (oldest → newest, top → bottom).
+    // 6. Assert messages are in created_at order (oldest → newest, top → bottom).
     //    Labels: 'First msg [runTag]', 'Second msg [runTag]', etc.
     const orderedIndices = seededTexts.map((t) => {
       if (t.includes('First')) return 0;
@@ -239,12 +195,10 @@ test.describe.serial('DM historical recovery — AC-13', () => {
       if (t.includes('Fifth')) return 4;
       return -1;
     });
-    // Confirm strictly increasing — DOM order matches created_at order.
-    for (let i = 1; i < orderedIndices.length; i++) {
-      expect(orderedIndices[i]).toBeGreaterThanOrEqual(orderedIndices[i - 1]);
-    }
+    // DOM order matches created_at (= send) order exactly.
+    expect(orderedIndices).toEqual([0, 1, 2, 3, 4]);
 
-    // 6. Re-open the chat to verify dedup — run-tagged message count must not double.
+    // 7. Re-open the chat to verify dedup — run-tagged message count must not double.
     const seededCountBefore = seededTexts.length;
     await alicePage.goto('/contacts');
     await alicePage.waitForTimeout(500);

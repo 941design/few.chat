@@ -36,8 +36,10 @@ import { extractV2PairingFields, readContactPubkeys, readKnownPeers, seedIssuerN
 const NONCE_GRACE_SEC = 2 * 60 * 60;
 
 test.describe('Pairing: nonce past the 2h grace window admits nobody (AC-PAIR-5 / AC-NONCE-5)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {

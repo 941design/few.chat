@@ -49,8 +49,10 @@ import { bootIdentity, getShareCardLink, extractCardPayload } from './helpers/co
 import { waitForAdmission } from './helpers/pairing';
 
 test.describe('Pairing: multi-use within the active window (AC-PAIR-4)', () => {
-  test.beforeAll(async () => {
-    await computeTestKeypairs();
+  // Fresh identities per test execution: no relay history from earlier tests,
+  // repeats, retries or runs (BACKLOG: e2e-pending-confirmation-relay-pollution).
+  test.beforeEach(async () => {
+    await computeTestKeypairs({ perTest: true });
   });
 
   test.afterEach(async ({ browser }) => {
