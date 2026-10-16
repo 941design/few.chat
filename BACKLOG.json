@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T04:39:41Z",
+  "updated_at": "2026-10-16T06:01:19Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -263,25 +263,6 @@
     }
   ],
   "findings": [
-    {
-      "slug": "dm-e2e-publish-via-app-refactor",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/e2e/dm-giftwrap-bell.spec.ts"
-      },
-      "text": "DM e2e specs (dm-giftwrap-bell, dm-historical-recovery, dm-third-party-inbound) publish gift-wraps / kind-4 events directly to strfry via raw WebSocket from the test process. Violates the publish-via-app guideline (see CLAUDE.md \"E2E tests\"): tests pass even when the app's NDK/publish path is broken. Rewrite to publish through a second browser.newContext() that boots the peer and calls the app's publish helper. Open question for dm-third-party-inbound: the app likely has no kind-4 NIP-04 publish path; either confirm an existing UI/bridge route, or document this spec as the narrow exception with a fixture-loader pattern rather than inline WebSocket.",
-      "created_at": "2026-05-19"
-    },
-    {
-      "slug": "unreadstore-publish-dm-bridge-module-cohesion",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/unreadStore.ts",
-        "line": 354
-      },
-      "text": "The __nostlingPublishDm test bridge lives in unreadStore.ts but has nothing to do with unread counts (module cohesion smell, flagged in DM walled-garden Opus review). Relocating it out of scope for this epic (risk of regressions). Revisit in a dedicated cleanup pass.",
-      "created_at": "2026-06-03"
-    },
     {
       "slug": "extract-dm-profilemap-builder-tidy-feedback",
       "scope": "any",
@@ -598,20 +579,6 @@
       "behavior": "clearAllReactions deletes reaction keys without posting; cache-first loadReactions in another tab keeps serving deleted badges.",
       "approach": "Post an account-changed cross-tab event on switch/wipe; receivers reload or show the takeover screen per the multi-tab design.",
       "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
-    },
-    {
-      "slug": "e2e-pending-confirmation-relay-pollution",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
-        "line": 183
-      },
-      "text": "dm-pairing-pending-confirmation:104 fails when earlier USER_A/USER_B gift-wraps remain on the relay: the post-confirm unread count reads 5/7/11 instead of 2",
-      "created_at": "2026-10-16",
-      "motivation": "Seen in the full gate on 2026-10-16 (backup run) and reproduced at HEAD in a clean worktree: passes on a freshly wiped relay, fails on every --repeat-each repeat with a growing count. The full gate does not wipe between specs, so the result depends on spec order — a red gate that is not a product signal.",
-      "behavior": "Step 5 asserts readBadgeCount == 2 after confirming B; held DMs from previous runs/specs between the deterministic USER_A/USER_B keys are also revealed as unread, so the count includes them.",
-      "approach": "Make the spec independent of relay history: use fresh per-test keypairs for the pending peer (if the pairing helpers allow), or assert the delta from a baseline captured before B's two DMs; verify with --repeat-each 4 on one relay.",
-      "success_signal": "node scripts/run-e2e.mjs dm-pairing-pending-confirmation --repeat-each 4 passes on a single relay"
     }
   ],
   "archive": [
