@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T09:03:02Z",
+  "updated_at": "2026-10-16T12:49:50Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -421,19 +421,6 @@
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
     },
     {
-      "slug": "poll-kept-votes-held-close-aware-pruning",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollPersistence.ts"
-      },
-      "text": "Kept per-voter vote snapshots are pruned without regard to held closes; beyond the 20-snapshot cap a voter can drop out of a held close's tally",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Exact pruning needs held-close receipt times at write time.",
-      "behavior": "When a voter's kept votes exceed MAX_VOTES_KEPT_PER_VOTER the earliest-received is dropped, so a held close whose receipt precedes all kept snapshots does not count that voter (pinned by a cap+1 unit test).",
-      "approach": "Read pending closes inside the vote write; keep voteAsOf per held-close cut-off plus the newest; fall back to the current rule when that read fails.",
-      "success_signal": "The cap+1 'not counted' unit test flips to counted"
-    },
-    {
       "slug": "poll-receipt-clock-and-seq-cross-tab",
       "scope": "any",
       "anchor": {
@@ -445,45 +432,6 @@
       "behavior": "Per-tab in-memory receipt counters are not ordered across tabs and the lease get-max-set is serialised only in-tab (a tab can regress the persisted mark); allocateVoteSeq is cross-tab unique only where navigator.locks exists.",
       "approach": "Resolve under multi-tab-mls-cache-coherence: shared lock around the lease write, or a single-writer tab.",
       "success_signal": "Two-instance unit test with shared IDB orders receipts and seqs across instances without Web Locks"
-    },
-    {
-      "slug": "poll-receipt-clock-seed-failure-backward-step",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollPersistence.ts"
-      },
-      "text": "A failed receipt-clock seed read after a backward wall-clock step can stamp a receipt below one persisted before the reload",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Refusing receipts on a failed read would block ingestion on an indeterminate read, which the storage-failure rule forbids.",
-      "behavior": "receiptNow falls back to Date.now when the few:poll-receipt-clock read fails; after a backward clock step a vote can sort before an older held close.",
-      "approach": "Retry the seed read with short backoff before the first receipt, or mark receipts as unordered until seeded.",
-      "success_signal": "Unit: seed read fails once + clock set back; next receipt still above the pre-reload mark"
-    },
-    {
-      "slug": "poll-superseded-prune-at-close",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollPersistence.ts"
-      },
-      "text": "Superseded vote snapshots are kept after a poll is stored closed, where no held close can use them",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Low: storage dead weight only.",
-      "behavior": "The superseded snapshot list on stored vote rows survives the closed-poll write.",
-      "approach": "Drop superseded snapshots in the closed-poll write.",
-      "success_signal": "Unit: after close, stored vote rows carry no superseded snapshots"
-    },
-    {
-      "slug": "poll-held-close-startup-sweep",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/MarmotContext.tsx"
-      },
-      "text": "Held poll closes and close announcements are only retried by a later message of the same poll; a closed poll can stay open on a device until expiry",
-      "created_at": "2026-10-16",
-      "motivation": "Reviewer F2 on bug run poll-residual-ordering-and-close-retry (2026-10-16): the creator's close is usually the poll's last message, so the retry trigger may never come.",
-      "behavior": "A close or summary held after a storage failure waits for the next poll message (or its poll_close summary); without one it persists until the 7-day expiry.",
-      "approach": "After journal replay in MarmotContext (~1835), enqueue a maintenance task through the dispatcher FIFO (e.g. enqueueMaintenance) that settles held closes and replays held announcements; must not run outside the FIFO (settle is read-then-save).",
-      "success_signal": "Unit/e2e: close held after a failure applies on next app start with no further poll message"
     },
     {
       "slug": "reactions-rejected-write-cache-reconcile",
@@ -539,19 +487,6 @@
       "success_signal": "Unit: live capture fails, fallback used, persist fails, reload → replay still removes the member"
     },
     {
-      "slug": "pending-vote-cap-drop-observable",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollPersistence.ts"
-      },
-      "text": "queuePendingVote silently stores nothing when the voter's per-voter pending cap is reached, so handleVote's save-failure fallback cannot tell the vote was dropped",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). Observability gap behind accepted residual W1/W2.",
-      "behavior": "queuePendingVote resolves without storing at MAX_PENDING_VOTES_PER_VOTER.",
-      "approach": "Return whether it stored; warn in handleVote's fallback when the cap dropped it.",
-      "success_signal": "Unit: capped fallback logs a warning and returns false"
-    },
-    {
       "slug": "idb-keyval-update-lint-ban",
       "scope": "any",
       "anchor": {
@@ -576,6 +511,33 @@
       "behavior": "Transactional journal paths are only partially covered under real IndexedDB semantics.",
       "approach": "Add a fake-indexeddb companion suite for the journal's transactional paths, with abort/error injection.",
       "success_signal": "Journal transactional paths have fake-indexeddb tests incl. abort/error"
+    },
+    {
+      "slug": "poll-pending-queues-recreated-after-purge",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts"
+      },
+      "text": "A non-requirePoll early-vote queue write or a close/announcement queue removal racing a group purge can re-create a pending* poll key after clearPollData",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) follow-up from bug run poll-followups round 1 (2026-10-16). Pre-existing; bounded by the 7-day TTL.",
+      "behavior": "queuePendingVote (unknown poll) and queue read-modify-write removals are not guarded by poll existence, so they can write a pending list back after the purge transaction.",
+      "approach": "Verify whether a remove on a null/empty list writes [] back; route these writes through pollTxn with a group-tombstone or no-write-on-empty rule.",
+      "success_signal": "Unit: purge racing a queue write/removal leaves no few:poll-pending* key"
+    },
+    {
+      "slug": "leave-clearpolldata-unguarded",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/leaveGroupImpl.ts",
+        "line": 218
+      },
+      "text": "leaveGroupImpl awaits clearPollData without try/catch while neighbouring purge steps are guarded, so a poll storage failure aborts the rest of the leave purge",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) follow-up from bug run poll-followups round 1 (2026-10-16). Pre-existing.",
+      "behavior": "A rejected clearPollData propagates out of leaveGroupImpl and skips the later purge steps.",
+      "approach": "Guard it like the neighbouring steps (best-effort, logged) and keep going; consider a retry on next startup.",
+      "success_signal": "Unit: clearPollData rejects during leave → remaining purge steps still run"
     }
   ],
   "archive": [
