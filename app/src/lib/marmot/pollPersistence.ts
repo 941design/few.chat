@@ -185,28 +185,6 @@ function capKept<T extends { receivedAt?: number }>(sorted: T[], cutoffs: readon
 }
 
 /**
- * Receipt times of the poll's held closes — the cut-offs pruning must keep a
- * vote for. Every sender's close counts (the creator may not be known yet;
- * extra cut-offs only keep more). A failed read falls back to no cut-offs
- * (the plain cap) and is logged: it must not fail the vote write.
- */
-async function heldCloseCutoffs(groupId: string, pollId: string): Promise<number[]> {
-  try {
-    return (await closeQueue.load(groupId, pollId, Date.now())).map((c) => c.receivedAt);
-  } catch (err) {
-    console.warn('[pollPersistence] reading held closes for vote pruning failed; earliest-received votes may be dropped:', err);
-    return [];
-  }
-}
-
-/** keptVotes for a write: reads the held closes only when the cap bites. */
-async function keepForWrite<T extends VoteOrderKey & { receivedAt?: number }>(votes: T[], groupId: string, pollId: string): Promise<T[]> {
-  const sorted = undominated(votes);
-  if (sorted.length <= MAX_VOTES_KEPT_PER_VOTER) return sorted;
-  return capKept(sorted, await heldCloseCutoffs(groupId, pollId));
-}
-
-/**
  * The vote of a stored row that counts for a close this member received at
  * `cutoff`: the newest of the row and its superseded votes that arrived no
  * later than the cut-off, or null when none did. Without a cut-off the row
@@ -412,6 +390,27 @@ function enqueue(key: string, fn: () => Promise<void>): Promise<void> {
     if (writeQueues.get(key) === settled) writeQueues.delete(key);
   });
   return next;
+}
+
+// ---- Purge mark (finding poll-pending-queues-recreated-after-purge) ----
+
+/**
+ * Groups whose poll data clearPollData purged in this page session. A handler
+ * still in flight for a left group (it started before the leave) must not
+ * write an early-vote / close / announcement queue (or a vote row) back after
+ * the purge: every such write checks the mark INSIDE its readwrite
+ * transaction and writes nothing. Set synchronously when clearPollData is
+ * called, so a write that starts after that call sees it. Released by a
+ * (re-)join of the group (releasePollPurgeMark) and by clearAllPollData.
+ * In-memory only: after a reload no handler of a left group runs (its
+ * dispatcher is never subscribed again). Another tab's writer is not covered
+ * (residual; clearAllPollData removes such rows).
+ */
+const purgedGroups = new Set<string>();
+
+/** The group is live again (re-joined): its poll writes are allowed again. */
+export function releasePollPurgeMark(groupId: string): void {
+  purgedGroups.delete(groupId);
 }
 
 // ---- Read-check-write transactions ----
@@ -768,6 +767,7 @@ export async function saveVoteIfNewer(vote: PollVote, opts: { requirePoll?: bool
           },
         );
       };
+      if (purgedGroups.has(vote.groupId)) return; // group purged: write nothing
       if (!opts.requirePoll) return txn.read(key, merge);
       txn.read(pollsKey(vote.groupId), (polls) => {
         if (!Array.isArray(polls) || !polls.some((p: Poll) => p.id === vote.pollId)) return; // purged: write nothing
@@ -874,19 +874,30 @@ function isPendingShaped(e: unknown): e is PendingPollVote {
   );
 }
 
-async function loadLivePending(key: string, now: number): Promise<PendingPollVote[]> {
-  const stored = await get<unknown[]>(key);
-  return (Array.isArray(stored) ? stored : []).filter(
-    (e): e is PendingPollVote => isPendingShaped(e) && now - e.receivedAt <= PENDING_VOTE_TTL_MS,
-  );
+/** The live (well-formed, unexpired) entries of a raw queue value. */
+function liveEntries<T extends { receivedAt: number }>(raw: unknown, isShaped: (e: unknown) => e is T, now: number): T[] {
+  return (Array.isArray(raw) ? raw : []).filter((e): e is T => isShaped(e) && now - e.receivedAt <= PENDING_VOTE_TTL_MS);
 }
 
-async function storePending(key: string, entries: PendingPollVote[]): Promise<void> {
-  if (entries.length > 0) {
-    await set(key, entries);
-  } else {
-    await del(key);
+async function loadLivePending(key: string, now: number): Promise<PendingPollVote[]> {
+  return liveEntries(await get<unknown>(key), isPendingShaped, now);
+}
+
+/**
+ * Write a queue's next entry list inside a pollTxn (finding
+ * poll-pending-queues-recreated-after-purge). `raw` is what the same
+ * transaction read. Nothing is written when the list is unchanged (same
+ * entries, same order); an empty list deletes the key only when one was read.
+ * So a queue step never re-creates a key: the read, the decision and the
+ * write are atomic against clearPollData's purge transaction.
+ */
+function writeQueue(txn: PollTxn, key: string, raw: unknown, next: readonly unknown[]): void {
+  if (next.length === 0) {
+    if (raw !== undefined) txn.delete(key);
+    return;
   }
+  if (Array.isArray(raw) && raw.length === next.length && raw.every((e, i) => e === next[i])) return;
+  txn.put(key, next);
 }
 
 /**
@@ -909,25 +920,47 @@ export async function queuePendingVote(
   const at = now ?? (await receiptNow());
   const key = pendingKey(vote.groupId);
   let held = false;
+  // One readwrite transaction (read, reduce, write), like saveVoteIfNewer:
+  // atomic against clearPollData's purge, and a purged group's queue is
+  // never written (resolves false).
   await enqueue(key, async () => {
-    const entries = await loadLivePending(key, at);
-    const entry: PendingPollVote = { ...vote, receivedAt: at };
-    const mine = (e: PendingPollVote) => e.pollId === vote.pollId && e.voterPubkey === vote.voterPubkey;
-    const own = entries.filter(mine);
-    const otherPolls = new Set(entries.filter((e) => e.voterPubkey === vote.voterPubkey && !mine(e)).map((e) => e.pollId));
-    if (own.length === 0 && otherPolls.size >= MAX_PENDING_VOTES_PER_VOTER) {
-      await storePending(key, entries);
-      return;
-    }
-    const kept = await keepForWrite([...own, entry], vote.groupId, vote.pollId);
-    const next = [...entries.filter((e) => !mine(e)), ...kept];
-    next.sort((a, b) => a.receivedAt - b.receivedAt);
-    const stored = next.slice(-MAX_PENDING_VOTES_PER_GROUP);
-    await storePending(key, stored);
-    // Dominated: an equal-or-newer vote of the voter received no later is
-    // kept, so this one could never change a tally.
-    const dominated = !undominated([...own, entry]).includes(entry);
-    held = stored.includes(entry) || (dominated && stored.some(mine));
+    held = await pollTxn<boolean>((txn, done) => {
+      if (purgedGroups.has(vote.groupId)) return;
+      txn.read(key, (raw) => {
+        const entries = liveEntries(raw, isPendingShaped, at);
+        const entry: PendingPollVote = { ...vote, receivedAt: at };
+        const mine = (e: PendingPollVote) => e.pollId === vote.pollId && e.voterPubkey === vote.voterPubkey;
+        const own = entries.filter(mine);
+        const otherPolls = new Set(entries.filter((e) => e.voterPubkey === vote.voterPubkey && !mine(e)).map((e) => e.pollId));
+        if (own.length === 0 && otherPolls.size >= MAX_PENDING_VOTES_PER_VOTER) {
+          writeQueue(txn, key, raw, entries);
+          return;
+        }
+        const sorted = undominated([...own, entry]);
+        const finish = (kept: PendingPollVote[]) => {
+          const next = [...entries.filter((e) => !mine(e)), ...kept];
+          next.sort((a, b) => a.receivedAt - b.receivedAt);
+          const stored = next.slice(-MAX_PENDING_VOTES_PER_GROUP);
+          writeQueue(txn, key, raw, stored);
+          // Dominated: an equal-or-newer vote of the voter received no later
+          // is kept, so this one could never change a tally.
+          const dominated = !sorted.includes(entry);
+          done(stored.includes(entry) || (dominated && stored.some(mine)));
+        };
+        if (sorted.length <= MAX_VOTES_KEPT_PER_VOTER) return finish(sorted);
+        // The cap bites: keep the vote each held close of the poll would
+        // count (every sender's close; extra cut-offs only keep more). A
+        // failed read falls back to the plain cap — it must not fail the write.
+        txn.read(
+          `${PENDING_CLOSES_PREFIX}${vote.groupId}`,
+          (closes) => finish(capKept(sorted, liveCloseCutoffs(closes, vote.pollId, Date.now()))),
+          () => {
+            console.warn('[pollPersistence] reading held closes for vote pruning failed; earliest-received votes may be dropped');
+            finish(capKept(sorted, []));
+          },
+        );
+      });
+    }, false);
   });
   return held;
 }
@@ -959,10 +992,15 @@ export function removePendingVotes(
   now: number = Date.now(),
 ): Promise<void> {
   const key = pendingKey(groupId);
-  return enqueue(key, async () => {
-    const entries = await loadLivePending(key, now);
-    await storePending(key, entries.filter((e) => !applied.some((a) => samePending(a, e))));
-  });
+  return enqueue(key, () =>
+    pollTxn<void>((txn) => {
+      if (purgedGroups.has(groupId)) return;
+      txn.read(key, (raw) => {
+        const entries = liveEntries(raw, isPendingShaped, now);
+        writeQueue(txn, key, raw, entries.filter((e) => !applied.some((a) => samePending(a, e))));
+      });
+    }, undefined),
+  );
 }
 
 // ---- Pending (early) closes and close announcements — AC-9 ----
@@ -988,33 +1026,27 @@ interface BoundedQueueSpec<T> {
  */
 function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: BoundedQueueSpec<T>) {
   const keyOf = (groupId: string) => `${spec.prefix}${groupId}`;
-  const loadLive = async (key: string, now: number): Promise<T[]> => {
-    const stored = await get<unknown[]>(key);
-    return (Array.isArray(stored) ? stored : []).filter(
-      (e): e is T => spec.isShaped(e) && now - e.receivedAt <= PENDING_VOTE_TTL_MS,
+  const loadLive = async (key: string, now: number): Promise<T[]> => liveEntries(await get<unknown>(key), spec.isShaped, now);
+  // Read-decide-write in one readwrite transaction; nothing for a purged group
+  // (see writeQueue and purgedGroups).
+  const modify = (groupId: string, now: number, compute: (entries: T[]) => T[]): Promise<void> => {
+    const key = keyOf(groupId);
+    return enqueue(key, () =>
+      pollTxn<void>((txn) => {
+        if (purgedGroups.has(groupId)) return;
+        txn.read(key, (raw) => writeQueue(txn, key, raw, compute(liveEntries(raw, spec.isShaped, now))));
+      }, undefined),
     );
-  };
-  const store = async (key: string, entries: T[]): Promise<void> => {
-    if (entries.length > 0) {
-      await set(key, entries);
-    } else {
-      await del(key);
-    }
   };
   return {
     queue(groupId: string, entry: T, now: number): Promise<void> {
-      const key = keyOf(groupId);
-      return enqueue(key, async () => {
-        const entries = await loadLive(key, now);
+      return modify(groupId, now, (entries) => {
         const who = spec.sender(entry);
         const own = entries.filter((e) => spec.sender(e) === who);
-        if (own.some((e) => e.pollId === entry.pollId) || own.length >= MAX_PENDING_CLOSES_PER_SENDER) {
-          await store(key, entries);
-          return;
-        }
-        entries.push(entry);
-        entries.sort((a, b) => a.receivedAt - b.receivedAt);
-        await store(key, entries.slice(-MAX_PENDING_CLOSES_PER_GROUP));
+        if (own.some((e) => e.pollId === entry.pollId) || own.length >= MAX_PENDING_CLOSES_PER_SENDER) return entries;
+        const next = [...entries, entry];
+        next.sort((a, b) => a.receivedAt - b.receivedAt);
+        return next.slice(-MAX_PENDING_CLOSES_PER_GROUP);
       });
     },
     async load(groupId: string, pollId: string, now: number): Promise<T[]> {
@@ -1024,11 +1056,7 @@ function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: Bo
       return loadLive(keyOf(groupId), now);
     },
     remove(groupId: string, match: (e: T) => boolean, now: number): Promise<void> {
-      const key = keyOf(groupId);
-      return enqueue(key, async () => {
-        const entries = await loadLive(key, now);
-        await store(key, entries.filter((e) => !match(e)));
-      });
+      return modify(groupId, now, (entries) => entries.filter((e) => !match(e)));
     },
   };
 }
@@ -1156,6 +1184,9 @@ export async function listHeldPollIds(groupId: string, now: number = Date.now())
  * the poll list). Rejects when the transaction fails (nothing deleted).
  */
 export async function clearPollData(groupId: string): Promise<void> {
+  // Before anything else (synchronously): from here on no queue or vote
+  // write of the group lands (purgedGroups).
+  purgedGroups.add(groupId);
   // Leaving must not be blocked by a failed migration; legacy rows left
   // behind for this group's polls are dropped by a later run (poll unknown).
   await settleVotesMigration();
@@ -1205,4 +1236,6 @@ export async function clearAllPollData(): Promise<void> {
   clockSeed = null;
   // A later restore may bring legacy rows back; let the next read migrate them.
   migration = null;
+  // Account-wide reset/restore: any group may be live again.
+  purgedGroups.clear();
 }

@@ -433,6 +433,44 @@ describe('leaveGroupImpl — durable pending removals', () => {
   });
 });
 
+// finding leave-clearpolldata-unguarded — a poll storage failure is
+// best-effort: the rest of the purge, the destroy and the reload still run.
+describe('leaveGroupImpl — clearPollData failure does not abort the leave', () => {
+  const LATER_STEPS = [
+    'clearGroupMedia',
+    'clearProfileRequestMemos',
+    'clearUnreadGroup',
+    'clearPendingJoinRequestsForGroup',
+    'clearInviteLinksForGroup',
+    'clearPendingDirectInvitesForGroup',
+    'clearInviteExpiries',
+    'clearRumorJournalForGroup',
+    'clearPendingRemovalsForGroup',
+    'destroyGroupState',
+    'deleteLeftGroupTombstone',
+  ] as const;
+
+  it.each([
+    ['solo/abandon (inline destroy)', { members: [SELF] }],
+    ['multi-member (deferred destroy)', { members: [SELF, OTHER] }],
+  ] as const)('%s: rejecting clearPollData → resolves true, every later step runs once with the group id, warned', async (_l, opts) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps(opts as never);
+    deps.clearPollData.mockRejectedValueOnce(new Error('poll idb down'));
+    await expect(leaveGroupImpl(deps, GROUP_ID, SELF)).resolves.toBe(true);
+    await vi.waitFor(() => expect(deps.deleteLeftGroupTombstone).toHaveBeenCalled());
+    for (const step of LATER_STEPS) {
+      expect(deps[step], step).toHaveBeenCalledTimes(1);
+      expect(deps[step], step).toHaveBeenCalledWith(GROUP_ID);
+    }
+    expect(deps.reloadGroups).toHaveBeenCalledTimes(1);
+    expect(deps.markBackupDirty).toHaveBeenCalledWith(true);
+    expect(deps.clearPollData.mock.invocationCallOrder[0]).toBeLessThan(deps.clearGroupMedia.mock.invocationCallOrder[0]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('poll data cleanup failed'), expect.any(Error));
+    warn.mockRestore();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // bug: left-groups-keep-mls-state-forever — the group's MLS state (keys,
 // history) is destroyed after the departure is sent, guarded by a tombstone.

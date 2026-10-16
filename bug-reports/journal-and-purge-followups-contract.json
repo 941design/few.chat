@@ -1,0 +1,35 @@
+{
+  "bug_name": "journal-and-purge-followups",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/rumorJournal.ts",
+      "app/src/lib/marmot/pendingRemovalStorage.ts",
+      "app/src/lib/marmot/leaveGroupImpl.ts",
+      "app/src/lib/marmot/pollPersistence.ts",
+      "app/src/lib/marmot/welcomeSubscription.ts",
+      "app/tests/unit/**",
+      "docs/behavior/groups.md",
+      "docs/behavior/polls.md"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "F1 (idb-keyval-update-lint-ban): any use of idb-keyval update() under app/src or app/pages (named/aliased/re-exported import, dynamic-import destructure or member, namespace member) fails `make test-unit`; comments and look-alike names do not.",
+    "F2 (rumor-journal-real-idb-suite): the journal's transactional and delete paths (recordRumorFailure, ackRumor + remembered failed acks, listPendingRumors, sweepRumorJournal, clearRumorJournalForGroup, getJournaledSenderLeafIdentity) are covered on fake-indexeddb with reject/abort/put-throw and per-call failure injection; every fault settles and leaves stored rows unchanged.",
+    "F5 (leave-fallback-identity-writeback): REJECTED in remediation round 1 \u2014 no write-back; a replayed leave without a journaled identity is skipped (never evicts a possibly re-joined member).",
+    "F3 (leave-clearpolldata-unguarded): a rejecting clearPollData during leave is warned and every later purge step, the MLS-state destroy, the tombstone delete, reloadGroups and markBackupDirty still run; the getGroupMembers guard and every other purge step are unchanged.",
+    "F4 (poll-pending-queues-recreated-after-purge): early-vote/close/announcement queue adds and removals read and write in ONE readwrite transaction, write nothing when unchanged, delete only a key that was read; clearPollData sets a per-group in-memory purge mark synchronously, and every queue write and saveVoteIfNewer (also without requirePoll) of a marked group writes nothing (queuePendingVote resolves false). The mark is released at the join choke point joinAndPersist (by the joined group's id, after saveGroup) and the already-joined accept, i.e. on every successful (re-)join, and by clearAllPollData.",
+    "P1: Privacy invariant untouched: local storage only, no new publishes."
+  ],
+  "non_goals": [
+    "Cross-tab purge mark (another tab still processing a left group's poll messages can re-create a queue key; clearAllPollData removes it).",
+    "Guarding other leave purge steps (clearMessages etc.) or the getGroupMembers guard.",
+    "Purge-marking savePoll / allocateVoteSeq / receipt clock writes.",
+    "Retrying a failed clearPollData (left poll rows stay until clearAllPollData)."
+  ]
+}

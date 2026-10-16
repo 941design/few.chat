@@ -443,3 +443,58 @@ describe('re-join after leave (joinIdempotent orphan branch)', () => {
     warn.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding poll-pending-queues-recreated-after-purge: a leave's poll purge mark
+// blocks the group's early poll queues until the group is joined again.
+// ---------------------------------------------------------------------------
+
+describe('re-join releases the poll purge mark', () => {
+  const earlyVote = { groupId: GROUP_HEX, pollId: 'p', voterPubkey: OTHER_HEX, responses: ['A'], votedAt: 1, seq: 1 };
+
+  it.each([
+    ['a fresh join', () => new Set<string>()],
+    ['the orphan-state re-join', () => new Set([GROUP_HEX])],
+  ])('%s: early votes of the group are held again', async (_l, mls) => {
+    const polls = await import('@/src/lib/marmot/pollPersistence');
+    await polls.clearAllPollData();
+    await polls.clearPollData(GROUP_HEX); // the leave purge
+    expect(await polls.queuePendingVote(earlyVote)).toBe(false);
+    enqueuePendingInvitation(makeEntry());
+    await acceptPendingInvitation('inv-1', makeClient(mls()) as never, vi.fn());
+    expect(await polls.queuePendingVote(earlyVote)).toBe(true);
+    expect(await polls.loadPendingVotes(GROUP_HEX, 'p')).toHaveLength(1);
+  });
+
+  it('accepting an already-joined group releases it too; a failed join does not', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const polls = await import('@/src/lib/marmot/pollPersistence');
+    await polls.clearAllPollData();
+    await polls.clearPollData(GROUP_HEX);
+    const failing = makeClient(new Set());
+    failing.joinGroupFromWelcome.mockRejectedValue(new Error('stale welcome'));
+    enqueuePendingInvitation(makeEntry());
+    await expect(acceptPendingInvitation('inv-1', failing as never, vi.fn())).rejects.toThrow();
+    expect(await polls.queuePendingVote(earlyVote)).toBe(false);
+
+    await saveGroup(overlay());
+    enqueuePendingInvitation(makeEntry({ id: 'inv-2' }));
+    await acceptPendingInvitation('inv-2', makeClient(new Set([GROUP_HEX])) as never, vi.fn());
+    expect(await polls.queuePendingVote(earlyVote)).toBe(true);
+    warn.mockRestore();
+  });
+});
+
+describe('re-join releases the poll purge mark: one choke point for every join', () => {
+  it('the Welcome without a resolvable pre-join group id (join-request auto-accept path) releases the mark by the joined group\'s id', async () => {
+    const polls = await import('@/src/lib/marmot/pollPersistence');
+    await polls.clearAllPollData();
+    await polls.clearPollData(GROUP_HEX);
+    const vote = { groupId: GROUP_HEX, pollId: 'p', voterPubkey: OTHER_HEX, responses: ['A'], votedAt: 1, seq: 1 };
+    expect(await polls.queuePendingVote(vote)).toBe(false);
+    // No groupId on the entry and no readable pre-join data → joinAndPersist directly.
+    enqueuePendingInvitation(makeEntry({ groupId: '' as never }));
+    await acceptPendingInvitation('inv-1', makeClient(new Set()) as never, vi.fn());
+    expect(await polls.queuePendingVote(vote)).toBe(true);
+  });
+});

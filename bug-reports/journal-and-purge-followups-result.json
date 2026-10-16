@@ -1,0 +1,115 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": {
+    "idb-keyval-update-lint-ban": "No eslint and no test guarded against idb-keyval update(), which never settles on a get error/abort; only code comments warned.",
+    "rumor-journal-real-idb-suite": "rumorJournal.test.ts runs on a Map mock; recordRumorFailure failure paths, ack/remembered-ack, listing, sweep, per-group clear and identity read were never run under real IDB semantics with fault injection.",
+    "leave-fallback-identity-writeback": "REJECTED (remediation round 1): a live capture may read a re-joined membership's leaf, so writing it onto the old rumor could evict the re-joined member on replay; only an epoch-bound capture would be sound and live handling cannot obtain it. Prior behaviour kept: a replayed identity-less leave is skipped.",
+    "leave-clearpolldata-unguarded": "leaveGroupImpl awaited clearPollData bare; a rejection aborted the rest of the purge, the MLS-state destroy, reloadGroups and markBackupDirty (the startup sweep never re-runs the purge).",
+    "poll-pending-queues-recreated-after-purge": "Queue adds/removals were get-then-set outside a transaction (a read before and a write after clearPollData's purge transaction re-created the key), cap rejects rewrote unchanged lists, and adds from handlers in flight for a left group wrote after the purge. TTL is only applied on read, so the key persisted."
+  },
+  "fix": {
+    "update_ban": "tests/unit/idbKeyvalUpdateBan.test.ts: string-aware comment stripping + regex scan of app/src and app/pages for every import form of update; self-tests.",
+    "journal_suite": "tests/unit/marmot/rumorJournal.realIdb.test.ts on fake-indexeddb with reject/abort/put-throws store faults and per-call spies; no recordRumorFailure source change needed (fake-indexeddb aborts on a throwing success handler).",
+    "identity_writeback": "Removed in remediation round 1 (finding closed as rejected); pinned by a replay-skip test in leaveJournalReplay.test.ts.",
+    "clearpolldata_guard": "try/catch + warn around clearPollData only; getGroupMembers guard and other steps untouched.",
+    "purge_safe_queues": "queuePendingVote / removePendingVotes / boundedQueue.queue / boundedQueue.remove read-decide-write in one pollTxn (held-close cut-offs read in-txn only when the kept-votes cap bites); writeQueue writes nothing when unchanged and deletes only a read key; in-memory purgedGroups mark set synchronously by clearPollData, checked in-txn by every queue writer and saveVoteIfNewer (also without requirePoll); released by releasePollPurgeMark from dropLeftGroupTombstoneAfterJoin and by clearAllPollData. pollPersistence.ts +112/-79. Remediation round 1: the release moved to the join choke point joinAndPersist (by the joined group's id, after saveGroup) plus joinIdempotent's already-joined branch, so the no-pre-join-id path (join-request auto-accept) releases too."
+  },
+  "files_changed": [
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/tests/unit/marmot/leaveJournalReplay.test.ts",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/marmot/pollFollowups.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/leftGroupStatePurge.test.ts",
+    "docs/behavior/polls.md",
+    "app/tests/unit/idbKeyvalUpdateBan.test.ts",
+    "app/tests/unit/marmot/rumorJournal.realIdb.test.ts",
+    "bug-reports/journal-and-purge-followups-report.md",
+    "bug-reports/journal-and-purge-followups-contract.json",
+    "bug-reports/journal-and-purge-followups-result.json",
+    "bug-reports/journal-and-purge-followups-state.json",
+    "app/tests/unit/marmot/joinPollPurgeRelease.scan.test.ts"
+  ],
+  "files_created": [
+    "app/tests/unit/idbKeyvalUpdateBan.test.ts",
+    "app/tests/unit/marmot/rumorJournal.realIdb.test.ts",
+    "bug-reports/journal-and-purge-followups-report.md",
+    "bug-reports/journal-and-purge-followups-contract.json",
+    "bug-reports/journal-and-purge-followups-result.json",
+    "bug-reports/journal-and-purge-followups-state.json",
+    "app/tests/unit/marmot/joinPollPurgeRelease.scan.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/tests/unit/marmot/leaveJournalReplay.test.ts",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/marmot/pollFollowups.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/leftGroupStatePurge.test.ts",
+    "docs/behavior/polls.md"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot",
+    "app/tests/unit",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/idbKeyvalUpdateBan.test.ts": 23,
+    "app/tests/unit/marmot/rumorJournal.realIdb.test.ts": 22,
+    "app/tests/unit/marmot/leaveJournalReplay.test.ts": 1,
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts": 2,
+    "app/tests/unit/marmot/pollFollowups.test.ts": 48,
+    "app/tests/unit/marmot/leftGroupStatePurge.test.ts": 4,
+    "app/tests/unit/marmot/joinPollPurgeRelease.scan.test.ts": 1
+  },
+  "tests_adapted": {
+    "app/tests/unit/marmot/pollFollowups.test.ts": "4: two set/del fault injections moved to in-transaction put/delete; 'without requirePoll it still writes' now pins no write for a purged group and a write after release; R2 race test starts the purge in a microtask after the vote txn body"
+  },
+  "counts": {
+    "unit_before": "5866 passed, 1 skipped (257 files)",
+    "unit_after": "5967 passed, 1 skipped (260 files)",
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config in the session scratchpad (stryker-jp/stryker.scratch.mjs, vitest.scratch.mjs)",
+    "mutate": "rumorJournal.ts 178-198; pendingRemovalStorage.ts 157-162, 173-184; leaveGroupImpl.ts 222-226; pollPersistence.ts 409-414, 770, 877-883, 894-901, 923-963, 995-1003, 1029-1049, 1059, 1189, 1240; welcomeSubscription.ts 603 (no mutants)",
+    "before": "95.24% (160 killed, 8 survived)",
+    "after": "98.20% (164 killed, 3 survived equivalent; 1 mutant removed with a dead assignment)",
+    "survivors_justified": [
+      "pollPersistence.ts:879 ArrayDeclaration on the non-array fallback: the injected string fails the shape filter (equivalent)",
+      "pollPersistence.ts:935 own.length === 0 -> true: own entry plus MAX other polls of one voter is unreachable through the API (equivalent)",
+      "pollPersistence.ts:959 capKept(sorted, []) -> ['Stryker was here']: number <= string is always false, no cut-off selects a vote (equivalent)"
+    ]
+  },
+  "e2e": "not run (fixer brief); MarmotContext.tsx and welcomeSubscription.ts touched -> full gate make test-e2e-all required",
+  "open_questions": [
+    "Cross-tab: the purge mark is per page; another tab still processing the left group's poll messages can re-create a queue key (clearAllPollData removes it). Documented in polls.md.",
+    "Same bug class, out of scope: savePoll (open poll), allocateVoteSeq and the receipt clock are not purge-marked; an in-flight poll-open of a left group can still write few:polls:<group> after the purge. Candidate follow-up finding.",
+    "handleVote's save-failure fallback warns 'early-vote cap reached' also when queuePendingVote returned false for a purged group (cosmetic).",
+    "A failed clearPollData is not retried; left poll rows stay until clearAllPollData (documented)."
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine; plan matched the code at 68b8dea; only friction was the welcomeSubscription source-scan suites failing the Stryker dry run (excluded, release call covered elsewhere)",
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Codex: HIGH identity write-back can evict a re-joined member; MEDIUM purge mark not released on the no-pre-join-id join path",
+    "fixes": {
+      "write_back": "Removed entirely (lead decision); finding leave-fallback-identity-writeback closed as rejected; groups.md \u00a78 lines reverted; pin test: replay of an identity-less leave whose live persist failed removes nothing.",
+      "release_choke_point": "releasePollPurgeMark(joinedGroup.id) in joinAndPersist after saveGroup (the only joinGroupFromWelcome call) + already-joined branch; scan test pins the single choke point.",
+      "unreviewed_case": "Verified: mark is set only in clearPollData, which runs after the overlay delete; an abort before it never sets the mark; a failing clearPollData leaves a harmless mark on a gone group. Tests added; no failure-time clear needed."
+    },
+    "unit": "5967 passed, 1 skipped (260 files); tsc clean",
+    "mutation": {
+      "mutate": "welcomeSubscription.ts 578-582, 683-687",
+      "after": "no mutants on the changed lines; 3 survivors on the pre-existing logger line 579 (out of diff); release calls pinned by deletion-checked tests"
+    }
+  }
+}

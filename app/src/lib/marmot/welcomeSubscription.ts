@@ -28,6 +28,7 @@ import { sealAndWrap } from '@/src/lib/directMessages';
 import { EpochResolver } from './epochResolver';
 import { createApplicationMessageJournaler } from './rumorJournal';
 import { deleteLeftGroupTombstone, listLeftGroupTombstones } from './leftGroupTombstones';
+import { releasePollPurgeMark } from './pollPersistence';
 import { handleJoinRequest, JOIN_REQUEST_KIND } from './joinRequestHandler';
 import type { JoinRequestReceivedCallback } from './joinRequestHandler';
 import {
@@ -576,6 +577,7 @@ async function joinIdempotent(
     const existing = await loadGroup(groupId);
     if (existing) {
       logger.info('dm:invite-accept-already-joined', { group: groupId.slice(0, 8) });
+      releasePollPurgeMark(groupId); // live group (see joinAndPersist)
       await dropLeftGroupTombstoneAfterJoin(groupId);
       return existing;
     }
@@ -653,6 +655,13 @@ export async function sweepLeftGroups(
   }
 }
 
+/**
+ * The ONLY place a Welcome is joined (every accept path: invite accept,
+ * join-request auto-accept, pull-only invitations, with or without a
+ * pre-join group id). After the overlay is saved the group is live again, so
+ * its poll purge mark (pollPersistence.clearPollData, set by a leave in this
+ * session) is released here, by the joined group's own id.
+ */
 async function joinAndPersist(
   welcomeRumor: unknown,
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
@@ -673,6 +682,7 @@ async function joinAndPersist(
   };
 
   await saveGroup(joinedGroup);
+  releasePollPurgeMark(joinedGroup.id);
   return joinedGroup;
 }
 

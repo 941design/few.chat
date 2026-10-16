@@ -215,7 +215,15 @@ export async function leaveGroupImpl(
   await deps.removeGroupFromStorage(groupId);
   await deps.clearMemberProfiles(groupId);
   await deps.clearMessages(groupId);
-  await deps.clearPollData(groupId);
+  // Best-effort (finding leave-clearpolldata-unguarded): a poll storage
+  // failure must not abort the rest of the purge, the MLS-state destroy or the
+  // reload. Residual: the left group's poll rows may survive (nothing reads
+  // them for a group without an overlay; clearAllPollData removes them).
+  try {
+    await deps.clearPollData(groupId);
+  } catch (err) {
+    console.warn('[Marmot] leaveGroup: poll data cleanup failed, proceeding with purge:', err);
+  }
   await deps.clearGroupMedia(groupId);
   await deps.clearProfileRequestMemos(groupId);
   deps.clearUnreadGroup(groupId);

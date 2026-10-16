@@ -2130,7 +2130,9 @@ describe('R2 + poll-followups: the kept-votes cap is held-close aware — a held
     const getFn = idb.get as unknown as ReturnType<typeof vi.fn>;
     const failClosesRead = () => {
       if (!failCutoffRead) return;
-      // Stored-row path: the read inside the vote transaction; queue path: a plain get.
+      // Both paths read the held closes inside their transaction (the queue
+      // path since finding poll-pending-queues-recreated-after-purge); the
+      // plain get stays failed for any other reader.
       txnFaults.failGet = (key) => key.startsWith('few:poll-pending-closes:');
       getFn.mockImplementation(async (key: string) => {
         if (key.startsWith('few:poll-pending-closes:')) throw new Error('closes read');

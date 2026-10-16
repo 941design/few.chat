@@ -210,3 +210,26 @@ describe('remediation round 2: replay-aware leave identity', () => {
     expect((await storage.listPendingRemovals(GROUP)).map((r) => r.leafIdentity)).toEqual([JOURNALED_ID]);
   });
 });
+
+describe('leave without a journaled identity: a replay never evicts (finding leave-fallback-identity-writeback, rejected)', () => {
+  it('identity-less row, LIVE leave captures an identity, the removal persist fails → the replay does NOT remove (skipped and acked)', async () => {
+    await journal.putRumor({ groupId: GROUP, rumorId: 'W1', senderPubkey: MEMBER, data: leaveBytes('W1') });
+    const s1 = session(async () => { throw new Error('QuotaExceeded'); }, { captureCurrent: async () => CURRENT_ID });
+    s1.group.deliver('W1');
+    await s1.sub.drain();
+    s1.sub();
+    // The live capture is never written onto the journal row: it may be a
+    // re-joined membership's leaf, not the one that sent the leave.
+    expect(await journal.getJournaledSenderLeafIdentity(GROUP, 'W1')).toEqual({ journaled: true });
+    expect(await storage.listPendingRemovals(GROUP)).toEqual([]);
+
+    const captureAgain = vi.fn(async () => CURRENT_ID);
+    const s2 = session(undefined, { captureCurrent: captureAgain });
+    await s2.replayPending();
+    expect(captureAgain).not.toHaveBeenCalled();
+    expect(s2.queue.size).toBe(0);
+    expect(await storage.listPendingRemovals(GROUP)).toEqual([]);
+    expect(await journal.listPendingRumors(GROUP)).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`replayed leave of ${MEMBER} in group ${GROUP}`));
+  });
+});

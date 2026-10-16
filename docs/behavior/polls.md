@@ -289,9 +289,14 @@ votes never mix with the other group's (§7).
 **A member joins the group after a poll was created.** They never see that poll or its result
 — earlier group messages are undecryptable to a later joiner and polls are not re-sent (§7).
 
-**You leave a group.** Your local copy of that group's polls, votes and held early votes is
-deleted along with the rest of the group. A retry of held poll messages still under way at
-that moment stops, and never brings a deleted poll or its votes back.
+**You leave a group.** Your local copy of that group's polls, votes and held early votes,
+closes and close announcements is deleted along with the rest of the group. Poll messages of
+that group still being processed at that moment, including a retry of held ones, never bring
+a deleted poll, its votes or a held early message back. This holds for the app tab you left
+from; another tab still open on the same device is not covered. Re-joining the group makes
+it an ordinary group again, whose early messages are held as usual. If deleting the poll
+data fails, the leave still completes: the left group's poll data then stays on the device,
+unused, until the account's local data is cleared.
 
 **A crafted single-choice vote that lists several options.** Counts for the first valid
 option only (§3).

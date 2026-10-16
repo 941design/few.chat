@@ -373,11 +373,13 @@ describe('1: held poll-state sweep at (re)subscription', () => {
     await open();
     await vote(USER, ['A'], 1);
     await closeHeldAfterFailure();
-    failKeys(setFn, (k) => k === CLOSES_KEY, real.set);
-    failKeys(delFn, (k) => k === CLOSES_KEY, real.del);
+    // The queue removal is a read-write transaction (finding
+    // poll-pending-queues-recreated-after-purge): fail its write in-transaction.
+    tx.failPut = (k) => k === CLOSES_KEY;
+    tx.failDelete = (k) => k === CLOSES_KEY;
     await sweeper().sweep(ctx());
-    setFn.mockImplementation(real.set);
-    delFn.mockImplementation(real.del);
+    tx.failPut = null;
+    tx.failDelete = null;
     const closed = await getPoll(GROUP, POLL_ID);
     expect(closed?.closed).toBe(true);
     expect(await loadPendingCloses(GROUP, POLL_ID)).toHaveLength(1);
@@ -716,9 +718,9 @@ describe('5: queuePendingVote reports whether it held the vote', () => {
   });
 
   it('failure injection: a failed queue write rejects (never reported as dropped)', async () => {
-    failKeys(setFn, (k) => k.startsWith('few:poll-pending-votes:'), real.set);
-    await expect(queuePendingVote(early('p0'))).rejects.toThrow('injected');
-    setFn.mockImplementation(real.set);
+    tx.failPut = (k) => k.startsWith('few:poll-pending-votes:');
+    await expect(queuePendingVote(early('p0'))).rejects.toBeTruthy();
+    tx.failPut = null;
     expect(await loadPendingVotes(GROUP, 'p0')).toEqual([]);
   });
 
@@ -868,13 +870,19 @@ describe('R1 HIGH: a disposed or purged sweep writes nothing — no poll or vote
     expect(postFn).not.toHaveBeenCalled();
   });
 
-  it('storage level: a replayed vote (requirePoll) for a poll that is not stored writes nothing; without requirePoll it still writes (live paths unchanged)', async () => {
+  it('storage level: a replayed vote (requirePoll) for a poll that is not stored writes nothing; without requirePoll it still writes (live paths unchanged) — except for a purged group', async () => {
     const v = { id: `${POLL_ID}:${USER}`, groupId: GROUP, pollId: POLL_ID, voterPubkey: USER, responses: ['A'], votedAt: 1, seq: 1, rumorId: 'x', receivedAt: 5 };
     expect(await saveVoteIfNewer(v, { requirePoll: true })).toBe(false);
     expect(await voteRows()).toBeUndefined();
+    expect(await saveVoteIfNewer({ ...v, pollId: 'live-unstored', id: `live-unstored:${USER}` })).toBe(true);
     await open();
     expect(await saveVoteIfNewer(v, { requirePoll: true })).toBe(true);
     await clearPollData(GROUP);
+    // Purged group (finding poll-pending-queues-recreated-after-purge): an
+    // in-flight live write lands nothing.
+    expect(await saveVoteIfNewer({ ...v, seq: 2, rumorId: 'y' })).toBe(false);
+    expect(await voteRows()).toBeUndefined();
+    persistence.releasePollPurgeMark(GROUP);
     expect(await saveVoteIfNewer({ ...v, seq: 2, rumorId: 'y' })).toBe(true);
   });
 
@@ -1186,7 +1194,9 @@ describe('R2 HIGH: clearPollData is ONE readwrite transaction — a racing requi
     let purge: Promise<void> | null = null;
     tx.onTxnStart = () => {
       tx.onTxnStart = null;
-      purge = clearPollData(GROUP); // created while the vote transaction is already open
+      // Called right after the vote transaction's body ran (it is open and
+      // past the purge-mark check), so the purge transaction is created later.
+      queueMicrotask(() => { purge = clearPollData(GROUP); });
     };
     expect(await saveVoteIfNewer(v(9), { requirePoll: true })).toBe(true); // it did write
     await purge;
@@ -1357,5 +1367,313 @@ describe('R2 LOW: a prune that failed at the first close is retried by a later c
     clearLogs();
     await expect(savePoll({ id: 'gone', groupId: GROUP, title: 't', options: [], pollType: 'singlechoice', creatorPubkey: CREATOR, createdAt: 1, closed: true })).resolves.toBeNull();
     expect(tx.reads).toEqual([POLLS_KEY]);
+  });
+});
+
+// ─── Finding poll-pending-queues-recreated-after-purge ───────────────────────
+
+describe('purge vs queue writes: no few:poll-pending* key survives clearPollData', () => {
+  const VOTES_Q = `few:poll-pending-votes:${GROUP}`;
+  const ANN_Q = `few:poll-pending-close-announcements:${GROUP}`;
+  const pendingKeys = async () => (await real.keys()).filter((k) => typeof k === 'string' && k.startsWith('few:poll-pending') && k.endsWith(GROUP));
+  const qVote = (pollId: string, voter = USER, seq = 1, at?: number) =>
+    queuePendingVote({ groupId: GROUP, pollId, voterPubkey: voter, responses: ['A'], votedAt: 1, seq, rumorId: `${pollId}-${voter}-${seq}` }, at);
+  const qClose = (pollId: string, closer = CREATOR, at?: number) => queuePendingClose({ groupId: GROUP, pollId, closerPubkey: closer, closedAt: 1 }, at);
+  const qAnn = (pollId: string, rumorId = `ann-${pollId}`, at?: number) =>
+    queuePendingCloseAnnouncement({ groupId: GROUP, pollId, senderPubkey: CREATOR, rumorId, createdAt: 1 }, at);
+
+  /** Each queue: seed two polls, and a removal of ONE of them (entries remain). */
+  const QUEUES = [
+    {
+      name: 'early votes',
+      key: VOTES_Q,
+      seed: async () => { await qVote('p1'); await qVote('p2'); },
+      removeOne: async () => removePendingVotes(GROUP, await loadPendingVotes(GROUP, 'p1')),
+      removeAll: async () => removePendingVotes(GROUP, [...(await loadPendingVotes(GROUP, 'p1')), ...(await loadPendingVotes(GROUP, 'p2'))]),
+      add: () => qVote('p3'),
+    },
+    {
+      name: 'closes',
+      key: CLOSES_KEY,
+      seed: async () => { await qClose('p1'); await qClose('p2'); },
+      removeOne: () => removePendingCloses(GROUP, 'p1'),
+      removeAll: async () => { await removePendingCloses(GROUP, 'p1'); await removePendingCloses(GROUP, 'p2'); },
+      add: () => qClose('p3'),
+    },
+    {
+      name: 'close announcements',
+      key: ANN_Q,
+      seed: async () => { await qAnn('p1'); await qAnn('p2'); },
+      removeOne: async () => removePendingCloseAnnouncements(GROUP, await loadPendingCloseAnnouncements(GROUP, 'p1')),
+      removeAll: async () => removePendingCloseAnnouncements(GROUP, [
+        ...(await loadPendingCloseAnnouncements(GROUP, 'p1')), ...(await loadPendingCloseAnnouncements(GROUP, 'p2')),
+      ]),
+      add: () => qAnn('p3'),
+    },
+  ] as const;
+
+  describe.each(QUEUES)('$name', (q) => {
+    it('a removal (entries remain) whose transaction opened BEFORE the purge commits first; the purge deletes the key (success signal)', async () => {
+      await q.seed();
+      let purge: Promise<void> | null = null;
+      tx.onTxnStart = () => {
+        tx.onTxnStart = null;
+        queueMicrotask(() => { purge = clearPollData(GROUP); });
+      };
+      await q.removeOne();
+      await purge;
+      expect(await pendingKeys()).toEqual([]);
+    });
+
+    it('a removal started while the purge runs writes nothing', async () => {
+      await q.seed();
+      // Loaded before the purge (the replay's read), removed after it started.
+      clearLogs();
+      const purge = clearPollData(GROUP);
+      await q.removeOne();
+      await purge;
+      expect(await pendingKeys()).toEqual([]);
+      expect(tx.puts).not.toContain(q.key);
+    });
+
+    it('property: removals and adds started at any point around the purge never leave a key', async () => {
+      for (let offset = 0; offset < 10; offset++) {
+        await clearAllPollData();
+        await q.seed();
+        const purge = clearPollData(GROUP);
+        for (let i = 0; i < offset; i++) await Promise.resolve();
+        const ops = [q.removeOne()];
+        await new Promise((r) => setTimeout(r, offset));
+        ops.push(q.add().then(() => undefined), q.removeOne());
+        await purge;
+        await Promise.all(ops);
+        expect(await pendingKeys(), `offset ${offset}`).toEqual([]);
+      }
+    });
+
+    it('an add after the purge (an in-flight handler of the left group) writes nothing; after a re-join it is queued again', async () => {
+      await q.seed();
+      await clearPollData(GROUP);
+      clearLogs();
+      await q.add();
+      expect(tx.puts).toEqual([]);
+      expect(await pendingKeys()).toEqual([]);
+      persistence.releasePollPurgeMark(GROUP);
+      await q.add();
+      expect(await pendingKeys()).toEqual([q.key]);
+    });
+
+    it('a removal matching nothing writes nothing; one that empties the queue deletes the key; on a missing key it deletes nothing', async () => {
+      await q.seed();
+      clearLogs();
+      await q.removeOne();
+      await q.removeOne(); // second time: nothing matches
+      expect(tx.puts).toEqual([q.key]);
+      clearLogs();
+      await q.removeAll();
+      expect(tx.puts).toEqual([]);
+      expect(tx.deletes).toEqual([q.key]);
+      expect(await real.get(q.key)).toBeUndefined();
+      clearLogs();
+      await q.removeOne();
+      expect(tx.puts).toEqual([]);
+      expect(tx.deletes).toEqual([]);
+    });
+
+    it.each(['read', 'write'] as const)('failure injection: the queue %s fails during an add → rejects, stored list unchanged', async (step) => {
+      await q.seed();
+      const before = await real.get(q.key);
+      if (step === 'read') tx.failGet = (k) => k === q.key;
+      else tx.failPut = (k) => k === q.key;
+      await expect(q.add()).rejects.toBeTruthy();
+      tx.failGet = null;
+      tx.failPut = null;
+      expect(await real.get(q.key)).toEqual(before);
+    });
+
+    it.each(['read', 'write', 'delete'] as const)('failure injection: the queue %s fails during a removal → rejects, stored list unchanged', async (step) => {
+      await q.seed();
+      if (step === 'delete') await q.removeOne(); // one entry left: the next removal empties the queue
+      const before = await real.get(q.key);
+      if (step === 'read') tx.failGet = (k) => k === q.key;
+      else if (step === 'write') tx.failPut = (k) => k === q.key;
+      else tx.failDelete = (k) => k === q.key;
+      await expect(step === 'delete' ? q.removeAll() : q.removeOne()).rejects.toBeTruthy();
+      tx.failGet = null;
+      tx.failPut = null;
+      tx.failDelete = null;
+      expect(await real.get(q.key)).toEqual(before);
+    });
+  });
+
+  it('queuePendingVote resolves false for a purged group (nothing held)', async () => {
+    await clearPollData(GROUP);
+    expect(await qVote('p1')).toBe(false);
+    expect(await pendingKeys()).toEqual([]);
+  });
+
+  it('regression: an early vote for a live group with no polls stored is still queued', async () => {
+    expect(await pollRows()).toBeUndefined();
+    expect(await qVote('p1')).toBe(true);
+    expect(await pendingKeys()).toEqual([VOTES_Q]);
+  });
+
+  it('the purge mark is per group: another group\'s queues are still written', async () => {
+    const OTHER_GROUP = 'b2'.repeat(16);
+    await clearPollData(GROUP);
+    expect(await queuePendingVote({ groupId: OTHER_GROUP, pollId: 'p1', voterPubkey: USER, responses: ['A'], votedAt: 1, seq: 1 })).toBe(true);
+    await queuePendingClose({ groupId: OTHER_GROUP, pollId: 'p1', closerPubkey: CREATOR, closedAt: 1 });
+    expect(await loadPendingVotes(OTHER_GROUP, 'p1')).toHaveLength(1);
+    expect(await loadPendingCloses(OTHER_GROUP, 'p1')).toHaveLength(1);
+  });
+
+  it('clearAllPollData releases every purge mark', async () => {
+    await clearPollData(GROUP);
+    await clearAllPollData();
+    expect(await qVote('p1')).toBe(true);
+  });
+
+  it('a purge that fails still keeps the group\'s queues from being written (the mark is set first)', async () => {
+    tx.failAllKeys = true;
+    await expect(clearPollData(GROUP)).rejects.toBeTruthy();
+    tx.failAllKeys = false;
+    expect(await qVote('p1')).toBe(false);
+    expect(await pendingKeys()).toEqual([]);
+  });
+
+  it('cap reject (no change) writes nothing: a voter at the per-voter poll cap, a duplicate close of the same sender and poll', async () => {
+    for (let i = 0; i < MAX_PENDING_VOTES_PER_VOTER; i++) await qVote(`v${i}`);
+    await qClose('p1');
+    clearLogs();
+    expect(await qVote('one-too-many')).toBe(false);
+    await qClose('p1');
+    await qAnn('p1');
+    await qAnn('p1'); // duplicate (poll, sender)
+    expect(tx.puts).toEqual([ANN_Q]);
+  });
+
+  it('a cap reject over a list holding expired entries rewrites it pruned (a real change)', async () => {
+    const t = Date.now();
+    for (let i = 0; i < persistence.MAX_PENDING_CLOSES_PER_SENDER; i++) await qClose(`c${i}`, CREATOR, t);
+    const expired = { groupId: GROUP, pollId: 'old', closerPubkey: OTHER, closedAt: 1, receivedAt: t - PENDING_VOTE_TTL_MS - 10 };
+    await real.set(CLOSES_KEY, [expired, ...((await real.get(CLOSES_KEY)) as unknown[])]);
+    clearLogs();
+    await qClose('over-cap', CREATOR, t);
+    expect(tx.puts).toEqual([CLOSES_KEY]);
+    expect((await real.get(CLOSES_KEY) as unknown[]).length).toBe(persistence.MAX_PENDING_CLOSES_PER_SENDER);
+  });
+
+  it('the per-group bound evicts the oldest: same length, different entries → written', async () => {
+    const t = Date.now();
+    const senders = Array.from({ length: 5 }, (_, i) => String(i + 3).repeat(64));
+    let n = 0;
+    for (const s of senders) for (let p = 0; p < persistence.MAX_PENDING_CLOSES_PER_SENDER; p++) await qClose(`c${n}`, s, t + n++);
+    expect(n).toBe(persistence.MAX_PENDING_CLOSES_PER_GROUP);
+    clearLogs();
+    await qClose('newest', CREATOR, t + n);
+    expect(tx.puts).toEqual([CLOSES_KEY]);
+    const stored = (await real.get(CLOSES_KEY)) as Array<{ pollId: string }>;
+    expect(stored).toHaveLength(persistence.MAX_PENDING_CLOSES_PER_GROUP);
+    expect(stored.map((e) => e.pollId)).not.toContain('c0');
+    expect(stored.map((e) => e.pollId)).toContain('newest');
+  });
+
+  it('the held closes are read only when the kept-votes cap bites (one past MAX_VOTES_KEPT_PER_VOTER)', async () => {
+    const t = Date.now();
+    for (let seq = 1; seq < MAX_VOTES_KEPT_PER_VOTER; seq++) await qVote('p1', USER, seq, t + seq);
+    clearLogs();
+    expect(await qVote('p1', USER, MAX_VOTES_KEPT_PER_VOTER, t + MAX_VOTES_KEPT_PER_VOTER)).toBe(true);
+    expect(tx.reads).toEqual([VOTES_Q]);
+    clearLogs();
+    expect(await qVote('p1', USER, MAX_VOTES_KEPT_PER_VOTER + 1, t + MAX_VOTES_KEPT_PER_VOTER + 1)).toBe(true);
+    expect(tx.reads).toEqual([VOTES_Q, CLOSES_KEY]);
+  });
+
+  it('an early vote replacing a dominated entry (same length, one entry differs) is written', async () => {
+    const t = Date.now();
+    await qVote('p0', OTHER, 1, t);
+    await qVote('p1', USER, 5, t + 10);
+    // Newer AND received earlier (by the passed receipt time): it dominates seq 5.
+    expect(await qVote('p1', USER, 6, t + 5)).toBe(true);
+    expect((await loadPendingVotes(GROUP, 'p1', t + 20)).map((e) => e.seq)).toEqual([6]);
+    expect((await loadPendingVotes(GROUP, 'p0', t + 20)).map((e) => e.seq)).toEqual([1]);
+  });
+
+  it('an early-vote removal issued right after the purge started (before its transaction) writes nothing', async () => {
+    await qVote('p1');
+    await qVote('p2');
+    const applied = await loadPendingVotes(GROUP, 'p1');
+    clearLogs();
+    const purge = clearPollData(GROUP);
+    const removal = removePendingVotes(GROUP, applied);
+    await Promise.all([purge, removal]);
+    expect(tx.puts).not.toContain(VOTES_Q);
+    expect(await pendingKeys()).toEqual([]);
+  });
+
+  it('a dominated early vote (an equal-or-newer one already held) is held without a write', async () => {
+    await qVote('p1', USER, 5);
+    clearLogs();
+    expect(await qVote('p1', USER, 3)).toBe(true);
+    expect(tx.puts).toEqual([]);
+  });
+
+  it('end to end: a left group\'s in-flight early-vote and close handlers write nothing after the leave purge', async () => {
+    await clearPollData(GROUP);
+    await createPollVoteHandler(realDeps() as never).handle(voteRumor(USER, ['A'], 1, 'unseen'), ctx(), sender(USER));
+    await createPollCloseHandler(realDeps() as never).handle(closeRumor('unseen'), ctx(), sender(CREATOR));
+    expect(await pendingKeys()).toEqual([]);
+  });
+});
+
+// ─── Remediation round 1: the purge mark across a leave's outcomes ───────────
+
+describe('purge mark vs the leave outcome (leaveGroupImpl with the real clearPollData)', () => {
+  const VOTES_Q = `few:poll-pending-votes:${GROUP}`;
+  const earlyVote = () => queuePendingVote({ groupId: GROUP, pollId: 'p', voterPubkey: USER, responses: ['A'], votedAt: 1, seq: 1 });
+  const stubDeps = (over: Record<string, unknown> = {}) => {
+    const ok = vi.fn(async () => undefined);
+    return {
+      getGroup: vi.fn(async () => null), getGroupMembers: vi.fn(() => []), sendRumorSafe: ok, buildRumor: vi.fn(),
+      removeGroupFromStorage: vi.fn(async () => undefined), clearMemberProfiles: vi.fn(async () => undefined),
+      clearMessages: vi.fn(async () => undefined), clearPollData,
+      clearGroupMedia: vi.fn(async () => undefined), clearProfileRequestMemos: vi.fn(async () => undefined), clearUnreadGroup: vi.fn(),
+      clearPendingJoinRequestsForGroup: vi.fn(async () => undefined), clearInviteLinksForGroup: vi.fn(async () => undefined),
+      clearInviteExpiries: vi.fn(), clearPendingDirectInvitesForGroup: vi.fn(async () => undefined),
+      clearRumorJournalForGroup: vi.fn(async () => undefined), clearPendingRemovalsForGroup: vi.fn(async () => undefined),
+      putLeftGroupTombstone: vi.fn(async () => undefined), deleteLeftGroupTombstone: vi.fn(async () => undefined),
+      destroyGroupState: vi.fn(async () => undefined), reloadGroups: vi.fn(async () => undefined), markBackupDirty: vi.fn(),
+      ...over,
+    };
+  };
+  const leave = async (deps: ReturnType<typeof stubDeps>) =>
+    (await import('@/src/lib/marmot/leaveGroupImpl')).leaveGroupImpl(deps as never, GROUP, 'cc'.repeat(32));
+
+  it.each(['removeGroupFromStorage', 'clearMemberProfiles', 'clearMessages'] as const)(
+    'a leave that aborts before clearPollData (%s rejects) never sets the mark: the still-joined group\'s queues are written',
+    async (step) => {
+      const deps = stubDeps({ [step]: vi.fn(async () => { throw new Error('idb down'); }) });
+      await expect(leave(deps)).rejects.toThrow('idb down');
+      expect(await earlyVote()).toBe(true);
+      expect(await real.get(VOTES_Q)).toHaveLength(1);
+    },
+  );
+
+  it('clearPollData fails during the leave: the leave completes (group gone), the mark stays (harmless), a re-join releases it', async () => {
+    tx.failAllKeys = true;
+    const deps = stubDeps();
+    await expect(leave(deps)).resolves.toBe(true);
+    tx.failAllKeys = false;
+    expect(deps.removeGroupFromStorage).toHaveBeenCalledWith(GROUP);
+    expect(deps.reloadGroups).toHaveBeenCalled();
+    expect(await earlyVote()).toBe(false);
+    persistence.releasePollPurgeMark(GROUP);
+    expect(await earlyVote()).toBe(true);
+  });
+
+  it('a successful leave keeps the mark: an in-flight early vote of the left group is not held', async () => {
+    await expect(leave(stubDeps())).resolves.toBe(true);
+    expect(await earlyVote()).toBe(false);
+    expect(await real.get(VOTES_Q)).toBeUndefined();
   });
 });

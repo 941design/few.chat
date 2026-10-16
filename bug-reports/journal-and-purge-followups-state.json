@@ -1,0 +1,94 @@
+{
+  "bug_name": "journal-and-purge-followups",
+  "bug_report_file": "bug-reports/journal-and-purge-followups-report.md",
+  "created_at": "2026-10-16T16:50:00Z",
+  "updated_at": "2026-10-16T16:30:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does any use of idb-keyval update() (each import form) under app/src or app/pages fail make test-unit, without false positives on comments or look-alikes?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Under fake-indexeddb with reject/abort/put-throw and per-call faults, does every rumor-journal path settle, leave stored rows unchanged on failure, and keep remembered failed acks hidden from replay until deleted?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "(Revised, remediation 1) Identity-less journal row, live leave captures an identity, the removal persist fails: does the replay skip the removal (no eviction of a possibly re-joined member) and ack it?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "With clearPollData rejecting, does leaveGroupImpl resolve true and run every later purge step, the destroy, the tombstone delete, reloadGroups and markBackupDirty exactly once?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "For each pending poll queue, do removals and adds around clearPollData (before, during, after; property over interleavings) leave no few:poll-pending* key, with no write when unchanged, failure injection on every new txn step, and the mark released by a re-join?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "QUALITY",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on changed lines with survivors killed or justified; behaviour docs updated honestly; full e2e gate before shipping?"
+    },
+    {
+      "id": "VQ-7",
+      "category": "TEST",
+      "question": "Does every successful join path (invite accept, join-request auto-accept without a pre-join id, pull-only invitations, already-joined accept) release the poll purge mark, and does no leave outcome leave the mark set for a still-joined group?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    "bug-reports/journal-and-purge-followups-plan.md"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "68b8dea",
+  "models": {
+    "lead": "opus",
+    "implementer": "opus"
+  },
+  "baseline": {
+    "unit": "5866 passed, 1 skipped (257 files)"
+  },
+  "fix": {
+    "unit": "5967 passed, 1 skipped (260 files)",
+    "tsc": "clean",
+    "mutation": "round 0: 98.20% (3 equivalent); remediation 1: no mutants on changed lines",
+    "e2e": "not run by fixer"
+  },
+  "review_rounds": [],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T16:50:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T16:52:00Z",
+      "trigger": "fixer_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T17:20:00Z",
+      "trigger": "remediation_round_1 (Codex HIGH write-back unsound, MEDIUM release path)"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T16:30:00Z",
+      "trigger": "codex_verify_clean_round1_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-jpf2.log"
+  }
+}
