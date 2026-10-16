@@ -30,7 +30,10 @@ before its poll exists is **held** and applied once the poll arrives (§7). Whic
 member's votes counts does not depend on arrival order at all (§3). Handler failures are
 logged and later messages continue, but already attempted messages are not automatically
 retried: repeating partially completed side effects could duplicate notifications or other
-actions. These limits differ from storage writes overtaking each other.
+actions. The exception is a close and its results summary: one that fails on a storage read
+or write is held the same way and applied by the next message of that poll (§7), because
+a lost close would leave the poll open on that device for good. These limits differ from
+storage writes overtaking each other.
 
 
 ## 2. Creating a poll
@@ -78,6 +81,15 @@ member uses an old and a new app side by side, a later vote from the old app doe
 one from the new app. Once a poll is **closed** (§5), no further votes are accepted — a vote
 arriving after the close is dropped.
 
+A member's own votes on a poll never reuse a sequence number. The number is allocated and
+recorded on the device before the vote is sent, one step at a time across all of the
+member's open tabs of the app, so two votes cast at once — in one tab or two — get different
+numbers, and even a vote that was sent but could not be stored locally — or whose sending
+failed in a way that leaves it unclear whether it went out — is followed by a higher number.
+A failed attempt therefore skips a number; only the order of the numbers matters, so gaps are
+harmless. If the number cannot be recorded, the vote is not sent. (Browsers without the
+cross-tab locking facility serialise within a tab only.)
+
 ---
 
 ## 4. When results become visible
@@ -111,6 +123,20 @@ poll. The creator's close message carries a tally too, but receiving apps ignore
 it would let a creator announce any result they liked. The trade-off is consistency: a member
 who missed some votes (for example, one whose device never received them) sees a result built
 from the votes it did receive, which can differ from what other members see.
+
+What counts is the order in which **this device received** the votes and the close: a vote
+counts if it arrived before the close, whether or not the poll itself had arrived yet (§7).
+The device keeps this arrival order reliably, also across reloads and when its clock is
+set back. One bounded exception: to judge a close that arrived before the poll, the device
+keeps up to twenty of a member's votes per poll. A member who changes their vote more than
+twenty times after such a close, before the poll arrives, loses their earliest votes, and
+then counts with **no** vote in that poll's result on that device. Had the poll arrived
+first, their vote at the close would count.
+The alternative — comparing each vote's send time with the close's — would let members
+agree on a vote that was still in flight at the close, but it trusts the senders' clocks, so
+a member could back-date a vote into a closed poll, and it would require changing a closed
+poll's result after the fact. Closing stays final instead; the price is that a vote still
+in flight when the creator closes can count on some devices and not on others.
 
 Only the creator's close is accepted. The creator is the member who actually sent the poll —
 established from the group's authenticated sender, not from a name the poll message claims —
@@ -153,25 +179,39 @@ member's view consistent:
   been recorded against its poll, and the app retries applying held votes at every later
   vote and close of that poll. So an interruption (a reload, a closed tab) while applying
   them only delays a held vote — it is counted at the latest when the poll closes, never
-  lost and never counted twice. If applying held votes fails at the moment of closing, the
-  close is not recorded on that device (the poll stays open there) rather than recorded with
-  a result that misses them.
+  lost and never counted twice. If applying held votes (or any other read or write the close
+  needs) fails at the moment of closing, the close is not recorded with a result that misses
+  them: the poll stays open on that device and the close is **held**, then applied — with
+  the votes received before it — at the next message of that poll.
   A held vote never overrides a newer vote by the same member: when both exist, the newer one
-  by the order of §3 counts.
+  by the order of §3 is the member's vote. A close held from before the poll arrived is the
+  one exception to "the newest counts": it counts the vote the member had **when the close
+  arrived** (see the next point). To make that possible the device keeps, besides a member's
+  newest vote, their earlier votes that arrived before it — at most twenty per member and
+  poll (see §5 for what happens beyond that).
 - **A close that arrives before the poll it refers to is held, then applied.** When the poll
   arrives, the held close is applied only if it was sent by the member who sent the poll;
-  any other held close is discarded. Held votes are counted first and the result is computed
-  from the stored votes (§5), so the poll appears **already closed, with its results**, the
-  first time this device shows it. The close's results summary in the conversation is held
-  the same way and appears, with that computed result, when the poll arrives — counted as a
-  new unread message at that moment. As with held votes, a held close or summary leaves the
+  any other held close is discarded. The result is computed from the stored votes (§5) —
+  counting, for each member, their newest vote that this device received before the close
+  (held ones included), and nothing that arrived after it, even when a member changed their
+  vote after the close — so the poll appears **already closed, with its results**, the
+  first time this device shows it, with the same result it would have had if the poll had
+  arrived first. The close's results summary in the conversation is held the same way and
+  appears, with the poll's stored result, when the poll arrives — counted as a new unread
+  message at that moment. A summary for a poll already closed on this device always shows
+  the result the poll was closed with. As with held votes, a held close or summary leaves the
   holding area only once applied (or discarded), and applying it is retried at every later
   vote, repeated poll delivery and close of that poll — so an interruption while the poll
   arrives only delays it; the poll is never closed or announced twice. The stored poll is
   authoritative: once a device has recorded the poll as closed, it accepts no further vote
   for it even if tidying up the held entries failed — that clean-up is retried at the next
-  poll message. A failure to *read* what is needed to judge a held summary leaves it held
-  for a retry; only a summary from someone other than the poll's creator is discarded. Held closes survive a reload, are kept per group, and
+  poll message. A results summary is itself a message of its poll: on arrival it first
+  applies a close of that poll still held after a failure, so the creator's summary that
+  normally follows their close also completes a close that failed. A failure to *read* what
+  is needed to judge a summary — held or just received — holds it for a retry at the next
+  message of that poll; only a summary from
+  someone other than the poll's creator is discarded. If even holding it fails, that
+  summary is lost on that device (the poll's own close is unaffected). Held closes survive a reload, are kept per group, and
   are bounded: one per poll and sender, closes for at most 10 not-yet-seen polls per member
   per group, at most 50 per group (the oldest are dropped first), discarded 7 days after
   receipt.
@@ -202,7 +242,20 @@ member leaves the group.
 
 **A close for a poll a member hasn't received yet.** Held, and applied when the poll arrives
 if the poll's creator sent it — the poll then shows as closed with its results on first
-sight (§7). A held close from anyone else is discarded.
+sight (§7). A held close from anyone else is discarded. Votes that arrived after the held
+close are not counted, exactly as if the poll had arrived first.
+
+**A close or results summary hits a storage failure on arrival.** It is held and applied at
+the next message of that poll — a vote, a repeated delivery of the poll, another close, or
+the close's results summary (§7). Until such a message arrives the poll stays open on that device (or the summary stays
+missing); a held entry not applied within 7 days is discarded.
+
+**A member changes their vote, and the close arrives between the two votes before the poll
+does.** The vote they had when the close arrived counts — the same result as if the poll
+had arrived first (§7).
+
+**Storing your own vote fails after it was sent.** Your next vote still gets a higher
+sequence number (§3), so other members never have to break a tie between two of your votes.
 
 **An older vote of a member is delivered after their newer one.** Ignored; the newer vote
 keeps counting on every device (§3).
@@ -265,7 +318,9 @@ shipped implementation, and the automated test suite:
   creation, voting, results, closing, the hidden-until-close decision, and the early-vote
   queue (AC-9, amended 2026-10-15 for the held close and the per-voter sequence number;
   bug report `bug-reports/poll-vote-ordering-and-early-close-report.md` and its design
-  `bug-reports/poll-ordering-design-2026-10-15.md`). Votes are ordered by sequence number,
+  `bug-reports/poll-ordering-design-2026-10-15.md`; receipt-order cut-off of a held close,
+  sequence reservation and close/summary retry:
+  `bug-reports/poll-residual-ordering-and-close-retry-report.md`). Votes are ordered by sequence number,
   then send time, then message identity — not by arrival and not by time alone.
 - `specs/epic-group-message-author-auth-app-layer/` (AC-POLL-1..4 — creator and voter bound
   to the authenticated sender, creator-only close, recomputed tally) and *Groups* §9.

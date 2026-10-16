@@ -1,0 +1,154 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": "(1) pollCast derived the next own seq only from stored/queued own votes, so a vote that went out but was not stored locally (save failure or indeterminate send) left no trace and the next cast reused its seq. (2) settleHeldCloses tallied every stored vote, including early votes that this member received AFTER the held close (the open-time replay stores them first), while the open-first path drops a vote arriving after the close \u2014 the closed tally depended on where the open landed. (3) The dispatcher acks a live rumor in finally whatever its handlers do, so a poll_close announcement (and, same class, a kind-12 close) whose storage read failed was lost; the unknown-poll branch swallowed a failed hold, which the held-announcement replay then treated as completed. Replay clean-up (removePendingVotes) failures also failed the whole open/close/gate.",
+  "fix": "pollPersistence: per-poll own seq reservation (few:poll-vote-seq:{groupId}, lower-cased voter, never lowered; loadVoteSeqReservation/reserveVoteSeq; cleared by clearPollData/clearAllPollData); PollVote.receivedAt stamped by saveVoteIfNewer when absent from receiptNow() (strictly increasing per page; queue defaults use it too). pollCast: seq = max(stored, queued, reservation)+1, reservation awaited BEFORE send (read or write failure -> no send). pollReplay: replayed votes keep their queue receivedAt; removePendingVotes best-effort (logged). pollHandler: settleHeldCloses tallies only votes with receivedAt <= earliest creator held close receivedAt (rows without receivedAt count); handleClose holds the close (pending-close queue, authenticated sender) when getPoll / replay / tally read / closed save fails, then rethrows. chatHandler gate: getPoll or loadVotesWithPending failure holds the announcement in the existing queue then rethrows; unknown-poll hold failure now throws; a closed poll announces its stored results (no vote read). Ordering key decision (local receipt order, not sender created_at) recorded in the report.",
+  "deviations_from_design": [
+    "Finding 1b approach 'votedAt <= closedAt' replaced by local receipt order: sender-clock comparison only converges if closed tallies are amended by late votes (breaks 'closing is final', frozen chat summary) and lets a member back-date a vote into a closed tally. Receipt order is the key the live close already uses.",
+    "Finding 2 'rethrow so the journal does not ack' is not available: applicationRumorDispatcher acks in finally regardless of handler outcome. The held close / held announcement queues (retried by settleHeldCloses at the next poll message) are the retry mechanism; throws are kept so the replayer keeps entries and the dispatcher logs.",
+    "Scope extended (same lost-on-failure class): live kind-12 close held on failure; removePendingVotes made best-effort; gate uses stored results for closed polls (needed so the summary matches the cut-off tally)."
+  ],
+  "files_changed": [
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollCast.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/pollReplay.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "docs/behavior/polls.md",
+    "specs/epic-group-polls/acceptance-criteria.md",
+    "bug-reports/poll-residual-ordering-and-close-retry-report.md",
+    "bug-reports/poll-residual-ordering-and-close-retry-contract.json",
+    "bug-reports/poll-residual-ordering-and-close-retry-result.json",
+    "bug-reports/poll-residual-ordering-and-close-retry-state.json",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts"
+  ],
+  "files_created": [
+    "bug-reports/poll-residual-ordering-and-close-retry-report.md",
+    "bug-reports/poll-residual-ordering-and-close-retry-contract.json",
+    "bug-reports/poll-residual-ordering-and-close-retry-result.json",
+    "bug-reports/poll-residual-ordering-and-close-retry-state.json"
+  ],
+  "files_modified": [
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollCast.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/pollReplay.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "docs/behavior/polls.md",
+    "specs/epic-group-polls/acceptance-criteria.md",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/context",
+    "app/src/lib/marmot",
+    "app/src/lib/marmot/handlers",
+    "app/tests/unit/marmot",
+    "docs/behavior",
+    "specs/epic-group-polls"
+  ],
+  "tests_added": [
+    "pollOrdering.test.ts (+43 tests, 151 -> 193): seq reservation (nextVoteSeq with reservation table; send-ok/save-fail -> seq+1 [success signal]; reservation written before send; reservation write fail / read fail -> nothing sent; lands-then-rejects -> seq skipped; never lowered, per group/poll/voter, case-insensitive; malformed entries; cleared by clearPollData/clearAllPollData); held-close cut-off (open at each of 4 positions -> same tally; close->vote->open == open->close->vote [success signal]; attacker's earlier held close is not the cut-off; earliest of two creator closes; legacy row without receivedAt counts; equal receipt time counts; strictly increasing stamping; held summary = stored tally without vote read; pinned residual: vote changed across held close counts with neither); live summary retry (failing first getPoll shown with correct tally once after next poll message [success signal]; failing tally read on open poll -> shown at the close; non-creator discarded; hold failure -> read error, nothing held; hold lands-then-rejects still retried; failing re-read in replay keeps entry); live kind-12 close fault matrix (getPoll, replay read, replay saveVoteIfNewer, tally read, closed save -> held, next message closes with right tally; lands-then-rejects not re-closed; non-creator held discarded; hold failure; unknown-poll hold failure); replay-internal faults (saveVoteIfNewer at open; removePendingVotes at open, during live close; saveVoteIfNewer in gate replay); gate on closed poll without stored results recomputes.",
+    "pollOrdering.test.ts updated: close,vote,open expectation flipped (vote after close not counted); failed send now consumes its seq; gate getPoll throw now holds; matrix RECOVERING convergence expects the post-close vote not counted; 'gate loadVotes' removed from the closed-path matrix (no vote read for a closed poll).",
+    "chatHandler.test.ts: hold failure now throws; getPoll throw holds the announcement; read+hold double failure throws the read error.",
+    "pollIntegrity.test.ts: removal failure at open no longer fails the open; property comparison ignores receivedAt."
+  ],
+  "counts": {
+    "baseline": {
+      "unit_files": 248,
+      "unit_passed": 5444,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "final": {
+      "unit_files": 248,
+      "unit_passed": 5527,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT"
+    },
+    "pre_fix_repro": "pollOrdering.test.ts run against HEAD source in a scratch worktree (since removed): 35 of the new/updated tests FAILED (seq reuse, close->vote->open counted, held-announcement and held-close retry, removal-failure cases)."
+  },
+  "mutation": {
+    "tool": "stryker, concurrency 1, scratch /tmp/claude-501/mutation/poll-residual/ (own vitest + stryker .mjs configs, own tempDir; app/reports untouched)",
+    "scope": "changed lines: pollCast.ts (whole), pollReplay.ts:80-120, pollPersistence.ts:186-200,380-453,708-752, handlers/pollHandler.ts:60-70,105-125,305-386, handlers/chatHandler.ts:153-220",
+    "before": "round 1: 90.24% (259 killed, 28 survived, 0 no-coverage of 287)",
+    "after": "round 2 (targeted re-run after 2 new tests): reservation voter-match and closed-without-results gate branch killed -> 261/287 = 90.94% overall",
+    "remaining": "No real gaps. Side-effect-only: console.warn blocks/strings for hold/clean-up failures (chatHandler 177-178, pollHandler 323-324, pollReplay 108-109), postStoreChanged string, caster chain-map cleanup (pollCast 95-96, pre-existing). Equivalent: length>0 / length===0 guards before store/remove/delMany (pollHandler 108, pollReplay 92, clear functions 714-747, pre-existing), `?? []` / Array.isArray fallbacks to a junk array that no shape filter or id match accepts (389, 430, 442), shape-guard sub-conditions whose wrong-typed field can never match (414, 416), `>=` vs `>` on an equal reservation (writes the same value)."
+  },
+  "e2e": "Not run by the fixer (lead runs the full gate). No new e2e: MLS reordering and storage faults cannot be forced through the app.",
+  "verification_answers": {
+    "VQ-1": "Yes. 'send succeeds but the local save fails -> the next cast uses seq + 1' (sends [1, 2]); reservation read before send = 1; reservation write/read failure -> send not called; lands-then-rejects -> next cast seq 2.",
+    "VQ-2": "Yes, with local receipt order as the key (decision in report). All 4 open positions give {A:1,B:0}; close->vote->open equals open->close->vote.",
+    "VQ-3": "Yes. Success-signal test: failing first getPoll -> no row; next poll message appends it once with the stored tally; second message appends nothing. Failed hold throws (chatHandler tests) \u2014 no silent completion.",
+    "VQ-4": "Yes. saveVoteIfNewer / removePendingVotes injected at the open, the live close (and its fault matrix), and the chat gate replay; stored state checked; convergence on the next message.",
+    "VQ-5": "Yes. polls.md (\u00a7ordering, \u00a73, \u00a75, \u00a77, \u00a78, Sources) and AC-9 amended; unit 5487 passed / 1 skipped, tsc clean; Stryker survivors justified."
+  },
+  "open_questions": [
+    "Product (follow-up the lead is filing): a held close/summary is retried only by a later message of the same poll (now including its results summary). With none, it stays held until the 7-day expiry; no startup sweep was added.",
+    "Product: votes in flight at the close still count on some members and not others (receipt order). Converging across members needs send-time comparison plus amending closed tallies (trades finality and back-dating resistance); recorded in polls.md section 5.",
+    "Bounds: at most 20 votes per voter and poll are kept for as-of tallies; beyond that a held close received before all kept votes does not count that voter (tested; held-close-aware pruning is a follow-up). Browsers without Web Locks serialise seq allocation within a tab only (multi-tab epic)."
+  ],
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "Both findings prescribed a mechanism that does not hold against the current code: 'votedAt <= closedAt' cannot make the two orders agree without amending closed tallies, and 'rethrow so the journal does not ack' is impossible because the dispatcher acks in finally. Each needed a fresh ordering/retry decision; a Fable design consult up front (as the prior run had) would have settled them before implementation.",
+    "surprised_by": "Date.now()-granularity ties made the receipt cut-off flaky in tests (same-millisecond close and vote); a strictly increasing per-page receipt clock was needed.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Reviewer ACCEPTED; Codex 2 high (vote change across a held close counted with neither vote; seq reuse across tabs) + mediums (unknown-state live close dropped; receipt clock not persistent) + reviewer F2/F4. Decider: lead, RETRY with 5 items.",
+    "fix": [
+      "F1: handleClose holds the close (holdAfterFailure, throws) when recoverHeldCloses returns unknown.",
+      "Item 2 (F5/F4): keptVotes (drop a vote only if another is at least as new by the order AND arrived no later; identical votes collapse; cap MAX_VOTES_KEPT_PER_VOTER=5, earliest-received dropped) for the early-vote queue (several entries per voter+poll; per-voter bound counts distinct polls) and the stored row (PollVote.superseded; the row stays the newest vote). Held-close tally = voteAsOf(row, closeReceipt). F4 handled by the same merge rather than skipping the save: skipping needs a held-close read on every live vote and loses the vote if that held close is a non-creator one.",
+      "Item 3 (F3): allocateVoteSeq(group, poll, voter, floor): atomic read-max-increment-write returning max(last+1, floor), inside the per-key queue and under navigator.locks.request('few:poll-vote-seq:'+groupId) when available; replaces reserveVoteSeq; pollCast allocates before sending.",
+      "Item 4 (F6): receiptNow is async, seeded from the persisted few:poll-receipt-clock mark leased 60 s ahead (max-preserving write, non-finite marks ignored, failures logged and retried).",
+      "Item 5 (F2 partial): the chat gate poll_close branch calls settleHeldCloses (createHeldCloseSettler, late-bound in registerHandlers) without replaying held summaries; unknown holds the summary.",
+      "polls.md sections 3/5/7/8 and the AC-9 amendment updated; the residual is removed."
+    ],
+    "tests_added": "pollOrdering.test.ts +31 (193 -> 224): all 120 arrival orders of {open, close, A seq1, A seq2, B} against the open-first model; F4 settle-failure window; keptVotes table (7 cases) + cap + voteAsOf; saveVoteIfNewer merge (superseded kept, later older no-op, re-delivery no-op, three changes, newer-earlier replaces outright, late replay below row); queue cap per voter+poll; allocator (max(last+1, floor), never re-hands, concurrent callers, two module instances with Web Locks distinct and without colliding, no navigator, read/write failure, lands-then-rejects); receipt clock (reload with clock 1 h back, one lease write per window, max kept, seed/lease failure retry, malformed string/Infinity/NaN); F1 live close with loadPendingCloses + re-read failing; gate settle (applies a failed close, bumps by one, no bump when nothing held, unknown holds, no held-summary replay). registerHandlers.test.ts: settler wiring + chat slice. pollIntegrity per-voter bound test updated.",
+    "counts": {
+      "unit_files": 248,
+      "unit_passed": 5519,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker concurrency 1 on round-1 changed lines (pollCast; pollPersistence keptVotes/voteAsOf/clock/save/allocator/queues; pollHandler settle/settler/handleClose; chatHandler gate; registerHandlers wiring): 89.55% (394/440). After 10 killing tests, a targeted re-run of the ranges with gaps scored 90.51% (229/253) with no real gaps, i.e. about 92.5% (407/440) overall. It also exposed a real bug (a non-finite stored clock mark poisoned the lease write), fixed. Remaining: console.warn blocks/strings; caster chain-map cleanup (pre-existing); equivalent: length guards, junk-array fallbacks, shape-guard sub-conditions, j===i / j<=i / j>=i in keptVotes (identical-vote dedupe keeps one either way), snapshotOf optional-field spreads (undefined vs absent), >= vs > at the lease boundary, the settled !== unknown sub-condition, the isFiniteNumber typeof sub-condition, queuePendingVote own.length===0 under the cap invariant.",
+    "e2e": "not run (the lead runs the gate)"
+  },
+  "remediation_round_2": {
+    "trigger": "Decider (Fable) ACCEPTED round 1 with conditions: cap residual, gate settle fallback, reset wipe of the receipt clock.",
+    "fix": [
+      "MAX_VOTES_KEPT_PER_VOTER 5 -> 20 with the residual documented (doc comment, polls.md section 5, AC-9).",
+      "createHeldCloseSettler calls settleHeldCloses(poll, ctx, deps, false) directly; any throw -> logged -> 'unknown' so the gate holds the summary; no re-read fallback (that stays in recoverHeldCloses for open/close/vote; its unused replay flag removed).",
+      "clearAllPollData deletes few:poll-receipt-clock and resets the lease and seed (lastReceipt kept)."
+    ],
+    "waived": [
+      "Cross-tab receipt clock and the no-Web-Locks seq fallback -> multi-tab epic.",
+      "Seed-read failure after a backward clock step: refusing receipts on an indeterminate read is forbidden.",
+      "Held-close-aware pruning of kept votes -> follow-up."
+    ],
+    "tests_added": "pollOrdering.test.ts +8 (224 -> 232): cap is 20; queue and stored-row paths with A seq1 -> held close -> seq2..seq20 counts A with seq1; cap+1 on both paths does NOT count A (residual pin); failed gate settle holds the summary (rethrown, no row), next poll message closes with the voteAsOf tally and the replayed summary equals the card; settler returns unknown with no fallback; reset wipes the clock mark and the next receipt writes a fresh lease.",
+    "counts": {
+      "unit_files": 248,
+      "unit_passed": 5527,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker concurrency 1 on round-2 lines (cap constant, clearAllPollData tail, recoverHeldCloses, createHeldCloseSettler): 85.71% (20 killed / 24). Survivors: two console.warn strings (side-effect only) and the pre-existing targets.length > 0 guard before delMany (equivalent).",
+    "e2e": "not run (the lead runs the gate)"
+  }
+}

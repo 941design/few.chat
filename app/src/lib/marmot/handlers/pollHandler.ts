@@ -15,6 +15,7 @@
 
 import { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, parsePollOpen, parsePollVote, parsePollClose } from '@/src/lib/marmot/pollSync';
 import type { Poll, PollVote, PendingPollVote, PendingPollClose } from '@/src/lib/marmot/pollPersistence';
+import { voteAsOf } from '@/src/lib/marmot/pollPersistence';
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 import { computeTally } from '../pollTally';
 import { buildSanitizedVote, replayPendingVotes, loadVotesWithPending } from '../pollReplay';
@@ -57,6 +58,12 @@ export interface PollHandlerDeps {
 // Vote sanitisation and the early-vote replay live in ../pollReplay so the
 // chatHandler poll_close gate can share them without importing a handler.
 
+// A held close counts each voter's vote "as of" the close's local receipt
+// (pollPersistence.voteAsOf). The key is local receipt order — the same key a
+// live close applies implicitly (a closed poll drops every vote that arrives
+// after it) — not the senders' created_at: comparing two senders' clocks would
+// let a back-dated vote into a closed tally.
+
 /** Best-effort replay for paths that must not fail on it (see callers). */
 async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<void> {
   try {
@@ -91,13 +98,24 @@ async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<v
  *
  * Returns the poll as now stored (closed if a held close was applied).
  */
-async function settleHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollHandlerDeps): Promise<Poll> {
+async function settleHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollHandlerDeps, replayAnnouncements = true): Promise<Poll> {
   let current = poll;
   const pending = await deps.loadPendingCloses(ctx.groupId, poll.id);
   if (pending.length > 0) {
-    const fromCreator = pending.some((c) => c.closerPubkey.toLowerCase() === poll.creatorPubkey.toLowerCase());
-    if (fromCreator && !poll.closed) {
-      const votes = await loadVotesWithPending(poll, deps);
+    const creatorCloses = pending.filter((c) => c.closerPubkey.toLowerCase() === poll.creatorPubkey.toLowerCase());
+    if (creatorCloses.length > 0 && !poll.closed) {
+      // Count exactly the votes this member received before the close — what
+      // it would have counted had the open arrived first, where a vote after
+      // the close is dropped. Without this, close→vote→open counted the late
+      // vote and open→close→vote did not (bug:
+      // poll-residual-ordering-and-close-retry).
+      // A voter who changed their vote around the close counts with the vote
+      // they had at the close (older votes are kept for this, see
+      // pollPersistence keptVotes) — the same as had the open come first.
+      const closeReceivedAt = Math.min(...creatorCloses.map((c) => c.receivedAt));
+      const votes = (await loadVotesWithPending(poll, deps))
+        .map((v) => voteAsOf(v, closeReceivedAt))
+        .filter((v): v is PollVote => v !== null);
       const { results, totalVoters } = computeTally(poll.options, votes);
       current = { ...poll, closed: true, results, totalVoters };
       await deps.savePoll(current);
@@ -110,7 +128,7 @@ async function settleHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollHa
       console.warn('[pollHandler] removing held closes failed; retried at the next poll message:', err);
     }
   }
-  if (deps.replayHeldCloseAnnouncements) {
+  if (replayAnnouncements && deps.replayHeldCloseAnnouncements) {
     try {
       await deps.replayHeldCloseAnnouncements(current, ctx);
     } catch (err) {
@@ -140,6 +158,37 @@ async function recoverHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollH
       return 'unknown';
     }
   }
+}
+
+/**
+ * For the chatHandler poll_close gate (bug: poll-residual-ordering-and-close-
+ * retry): a results summary of a poll is one more message of that poll, so it
+ * applies a held close of the poll first — e.g. the creator's close that was
+ * held after a storage failure, followed (as usual) by its summary. Held
+ * announcements are NOT replayed from here (the gate is itself evaluating
+ * one; replaying would recurse); the next poll message does that. Returns the
+ * poll as now stored, and bumps the poll UI when it closed the poll.
+ *
+ * Unlike recoverHeldCloses there is no re-read fallback: ANY failure returns
+ * 'unknown'. The chat gate is the only consumer, and it appends the summary
+ * with a tally that can never change afterwards. A failed settle means the
+ * poll may be about to close (at the next poll message) with a different
+ * tally — e.g. the held close's as-of tally excludes a vote the open poll's
+ * recompute would count — so the gate must hold the summary
+ * (holdAfterFailure) rather than judge it against the stored open poll.
+ */
+export function createHeldCloseSettler(deps: PollHandlerDeps) {
+  return async (poll: Poll, ctx: DispatcherContext): Promise<Poll | 'unknown'> => {
+    let settled: Poll;
+    try {
+      settled = await settleHeldCloses(poll, ctx, deps, false);
+    } catch (err) {
+      console.warn('[pollHandler] settling a held close for a results summary failed; the summary is held:', err);
+      return 'unknown';
+    }
+    if (settled.closed && !poll.closed) deps.setPollVersion((v) => v + 1);
+    return settled;
+  };
 }
 
 // ---- POLL_OPEN handler -------------------------------------------------------
@@ -289,17 +338,37 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
   const payload = parsePollClose(rumor.content);
   if (!payload) return;
 
-  const existingPoll = await deps.getPoll(ctx.groupId, payload.pollId);
-  if (!existingPoll) {
-    // AC-9: out-of-order MLS delivery — the close arrived before its
-    // poll-open. Queue it, bound to the authenticated sender; handleOpen
-    // applies it only if that sender turns out to be the poll's creator.
-    await deps.queuePendingClose({
+  // Held closes are bound to the authenticated sender; settleHeldCloses
+  // applies one only if that sender is the poll's creator.
+  const hold = () =>
+    deps.queuePendingClose({
       groupId: ctx.groupId,
       pollId: payload.pollId,
       closerPubkey: sender.pubkey,
       closedAt: rumor.created_at * 1000,
     });
+  // A live close is acked whether or not this handler throws
+  // (applicationRumorDispatcher), so a close that fails on an indeterminate
+  // read or write is held instead of lost: the next message of the poll
+  // applies it (settleHeldCloses). The original error is still thrown.
+  const holdAfterFailure = async (err: unknown): Promise<never> => {
+    await hold().catch((holdErr: unknown) => {
+      console.warn('[pollHandler] holding a failed close for retry failed; it is lost:', holdErr);
+    });
+    throw err;
+  };
+
+  let existingPoll: Poll | null;
+  try {
+    existingPoll = await deps.getPoll(ctx.groupId, payload.pollId);
+  } catch (err) {
+    return holdAfterFailure(err);
+  }
+  if (!existingPoll) {
+    // AC-9: out-of-order MLS delivery — the close arrived before its
+    // poll-open. Queue it; handleOpen applies it only if its sender turns out
+    // to be the poll's creator.
+    await hold();
     return;
   }
 
@@ -307,8 +376,10 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
   // earlier step (AC-9) — the creator binding lives in the held entries, so
   // this is safe whoever sent this close. An already-closed poll is final.
   const settled = await recoverHeldCloses(existingPoll, ctx, deps);
-  // Unconfirmed state (the poll may already be stored closed): no close write.
-  if (settled === 'unknown') return;
+  // Unconfirmed state (the poll may already be stored closed): no close write
+  // now — but held, so the next message of the poll applies it (a live close
+  // is acked even when this throws).
+  if (settled === 'unknown') return holdAfterFailure(new Error('poll state unknown after a failed held-close recovery'));
   if (settled.closed) {
     if (!existingPoll.closed) deps.setPollVersion((v) => v + 1);
     // Closing is final: a repeated close of a closed poll changes nothing.
@@ -328,17 +399,23 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
   // otherwise forge the final counts.
   // Replay stranded early votes first (AC-9). A failure throws, so the close
   // is NOT persisted with a tally that is missing them (fail closed).
-  const votes = await loadVotesWithPending(existingPoll, deps);
-  const { results, totalVoters } = computeTally(existingPoll.options, votes);
+  // A failure here holds the close for retry (above) — never a closed poll
+  // built on partial data.
+  try {
+    const votes = await loadVotesWithPending(existingPoll, deps);
+    const { results, totalVoters } = computeTally(existingPoll.options, votes);
 
-  const updated: Poll = {
-    ...existingPoll,
-    closed: true,
-    results,
-    totalVoters,
-  };
+    const updated: Poll = {
+      ...existingPoll,
+      closed: true,
+      results,
+      totalVoters,
+    };
 
-  await deps.savePoll(updated);
+    await deps.savePoll(updated);
+  } catch (err) {
+    return holdAfterFailure(err);
+  }
   deps.setPollVersion((v) => v + 1);
 }
 

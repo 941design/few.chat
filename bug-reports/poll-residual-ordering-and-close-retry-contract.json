@@ -1,0 +1,55 @@
+{
+  "bug_name": "poll-residual-ordering-and-close-retry",
+  "story_id": "S1",
+  "findings": [
+    "poll-cast-seq-and-close-vote-ordering",
+    "poll-close-announcement-live-gate-retry"
+  ],
+  "design": "bug-reports/poll-ordering-design-2026-10-15.md (context); ordering-key decision in bug-reports/poll-residual-ordering-and-close-retry-report.md",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/pollCast.ts",
+      "app/src/lib/marmot/pollPersistence.ts",
+      "app/src/lib/marmot/pollReplay.ts",
+      "app/src/lib/marmot/handlers/pollHandler.ts",
+      "app/src/lib/marmot/handlers/chatHandler.ts",
+      "app/src/context/PollStoreContext.tsx (caster deps wiring only)",
+      "app/tests/unit/**",
+      "specs/epic-group-polls/acceptance-criteria.md (AC-9 amendment only)",
+      "docs/behavior/polls.md",
+      "app/src/lib/marmot/registerHandlers.ts (held-close settler wiring only)"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "app/tests/e2e/**",
+      "app/src/lib/marmot/applicationRumorDispatcher.ts",
+      "app/src/lib/marmot/rumorJournal.ts"
+    ]
+  },
+  "behaviour": [
+    "C1: castVote reserves seq durably (few:poll-vote-seq:{groupId}, per poll and lower-cased own pubkey, never lowered) BEFORE sending; seq = max(stored own, queued own, reservation) + 1. A failed reservation read or write rejects the cast without sending.",
+    "C2: a send-succeeded/save-failed cast (or an indeterminate send) is followed by seq + 1, never the same seq.",
+    "C3: every stored vote carries receivedAt (local receipt, strictly increasing per page via receiptNow; queued votes keep their queue receipt time). A held creator close tallies only votes with receivedAt <= the earliest creator held close's receivedAt (rows without receivedAt count). close->vote->open and open->close->vote give the same tally.",
+    "C4: the poll_close chat gate announces a closed poll's stored results (no vote read); an open poll's tally is recomputed as before.",
+    "C5: a live poll_close announcement whose getPoll or loadVotesWithPending fails is held in the existing announcement queue, then the read error is thrown; the next message of the poll replays it. A failed hold is logged and the read error thrown. The unknown-poll branch throws when its hold fails (so a replay keeps the entry).",
+    "C6: a live kind-12 close whose getPoll, replay, tally read or closed save fails is held in the pending-close queue (bound to the authenticated sender) and the error rethrown; settleHeldCloses applies it at the next poll message.",
+    "C7: removePendingVotes inside replayPendingVotes is best-effort (logged); a read or vote-save failure still throws.",
+    "C8: docs/behavior/polls.md and AC-9 updated.",
+    "R1-C1: a live close whose held-state recovery is unconfirmed ('unknown') is held and the handler throws.",
+    "R1-C2: per voter and poll, votes that can still decide an as-of-receipt tally are kept (queue entries and PollVote.superseded, cap 5); a held creator close counts each voter's newest vote received no later than the close; every arrival order of open/close/changed votes equals the open-first tally.",
+    "R1-C3: allocateVoteSeq is an atomic read-max-increment-write returning max(last+1, floor), serialised in-tab and across tabs via Web Locks when available.",
+    "R1-C4: receiptNow stays above every receipt handed out before, across reloads and backward clock steps (persisted leased high-water mark).",
+    "R1-C5: the poll_close summary gate applies a held close of its poll first (no held-summary replay from there)."
+  ],
+  "non_goals": [
+    "No change to the dispatcher ack semantics or the rumor journal (a handler throw does not prevent the ack; the held queues are the retry mechanism).",
+    "No amendment of a closed poll's tally by a late vote (closing stays final).",
+    "No new e2e spec (MLS reordering and storage faults cannot be forced through the app).",
+    "No startup sweep of held closes/summaries outside the dispatcher FIFO (lead follow-up)."
+  ],
+  "deviations_from_finding": [
+    "Finding approach 'count only votes with votedAt <= closedAt' replaced by local receipt order (see report: sender-clock comparison neither converges without amending closed tallies nor resists back-dating).",
+    "Finding 2 approach 'rethrow so the journal does not ack' is not available: the dispatcher acks in finally regardless of handler outcome; the held queues are used instead.",
+    "Scope extended to the kind-12 live close (C6) and replay clean-up (C7): same lost-on-failure class; without C6 a retried summary could show results for a poll that stays open."
+  ]
+}

@@ -15,7 +15,9 @@ import type { PollVotePayload } from './pollSync';
  * Lamport rule for our own next vote on a poll: one more than the highest seq
  * seen for any vote of ours on it — the stored vote (possibly cast on another
  * device) and early votes of ours still queued for the poll. Legacy rows rank
- * as 0.
+ * as 0. This is only the floor: allocateVoteSeq also stays above every seq
+ * this origin allocated before (a sent vote whose local save failed is only
+ * recorded there).
  */
 export function nextVoteSeq(voterPubkey: string, stored: PollVote[], pending: PendingPollVote[]): number {
   const me = voterPubkey.toLowerCase();
@@ -31,6 +33,8 @@ export interface VoteCasterDeps {
   loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
   loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   saveVoteIfNewer: (vote: PollVote) => Promise<boolean>;
+  /** pollPersistence.allocateVoteSeq — atomic, durable, cross-tab. */
+  allocateVoteSeq: (groupId: string, pollId: string, voterPubkey: string, floor: number) => Promise<number>;
 }
 
 export interface CastVoteArgs {
@@ -45,7 +49,9 @@ export interface CastVoteArgs {
 /**
  * Returns a cast function that serialises casts per (group, poll): two rapid
  * casts on the same poll cannot read the same stored seq and send the same
- * number. A failed cast does not block the next one.
+ * number. A failed cast does not block the next one; a cast that failed
+ * after its seq was reserved leaves a gap in the numbering, which is harmless
+ * (only the order matters).
  */
 export function createVoteCaster(deps: VoteCasterDeps) {
   const chains = new Map<string, Promise<unknown>>();
@@ -56,7 +62,12 @@ export function createVoteCaster(deps: VoteCasterDeps) {
       deps.loadVotes(groupId, pollId),
       deps.loadPendingVotes(groupId, pollId),
     ]);
-    const seq = nextVoteSeq(voterPubkey, stored, pending);
+    // Allocate the seq durably BEFORE sending (bug:
+    // poll-residual-ordering-and-close-retry): once the vote may be on the
+    // wire, no later cast — in this tab or another — may reuse its seq, even
+    // if the save below fails or the send's outcome is unknown. A failed
+    // allocation rejects here, so nothing is sent (fail closed).
+    const seq = await deps.allocateVoteSeq(groupId, pollId, voterPubkey, nextVoteSeq(voterPubkey, stored, pending));
     const sent = await args.send({ pollId, responses, seq });
     // Stored exactly as every peer stores it on receipt (created_at in ms,
     // rumor id), so the local and remote orders agree.

@@ -6,7 +6,10 @@
  * Early votes (poll not yet received) are queued per group under
  * `few:poll-pending-votes:{groupId}`; early closes and early poll_close chat
  * announcements likewise under `few:poll-pending-closes:{groupId}` and
- * `few:poll-pending-close-announcements:{groupId}`.
+ * `few:poll-pending-close-announcements:{groupId}`. Our own last allocated vote
+ * seq per poll lives under `few:poll-vote-seq:{groupId}` (allocated before the
+ * vote is sent, pollCast); the receipt clock's high-water mark under
+ * `few:poll-receipt-clock`.
  */
 
 import { get, set, del, keys, delMany } from 'idb-keyval';
@@ -63,6 +66,32 @@ export interface PollVote {
   seq?: number;
   /** Id of the vote rumor — last tie-breaker of the order. Absent = ''. */
   rumorId?: string;
+  /**
+   * Local receipt time (ms) of the vote on THIS member — stamped by
+   * saveVoteIfNewer when absent (an early vote keeps its queue receipt time).
+   * Not part of the order: it only decides whether the vote arrived before a
+   * close that was held because it came before the poll-open, so the closed
+   * tally does not depend on where the open landed (bug:
+   * poll-residual-ordering-and-close-retry). Absent on older rows = received
+   * before anything else.
+   */
+  receivedAt?: number;
+  /**
+   * Older votes of the same voter that arrived on this member BEFORE the row's
+   * own vote — kept only while they can still decide a tally "as of" a close
+   * received between them (voteAsOf). The row itself is always the newest
+   * vote by isNewerVote. Absent when empty.
+   */
+  superseded?: VoteSnapshot[];
+}
+
+/** The parts of a vote that a tally and the order need. */
+export interface VoteSnapshot {
+  responses: string[];
+  votedAt: number;
+  seq?: number;
+  rumorId?: string;
+  receivedAt?: number;
 }
 
 /** The fields that order two votes of the same voter for the same poll. */
@@ -92,6 +121,68 @@ export function isNewerVote(a: VoteOrderKey, b: VoteOrderKey): boolean {
   if (a.votedAt !== b.votedAt) return a.votedAt > b.votedAt;
   return (a.rumorId ?? '') > (b.rumorId ?? '');
 }
+
+/**
+ * Upper bound on the votes of one voter for one poll kept for "as of a close"
+ * tallies (stored row + superseded, and the early-vote queue). Known residual:
+ * beyond the cap the earliest-received vote is dropped, so a close held from
+ * before the open whose receipt lies before ALL kept votes of a voter does not
+ * count that voter at all (open-first would have counted their vote at the
+ * close). It needs more than this many vote changes by one voter after the
+ * close and before the open; a held-close-aware pruning is a follow-up.
+ */
+export const MAX_VOTES_KEPT_PER_VOTER = 20;
+
+const receivedRank = (v: { receivedAt?: number }) => v.receivedAt ?? -Infinity;
+
+/**
+ * The votes that can still decide a tally "as of" some receipt time: a vote
+ * is dropped when another one is at least as new by isNewerVote AND arrived
+ * no later (for any cut-off where the dropped one counts, the other counts
+ * and wins). Identical votes (same order key) collapse to the earliest
+ * received. Bounded to MAX_VOTES_KEPT_PER_VOTER; sorted by receipt, which is
+ * then also ascending by the order — the last one is the newest vote.
+ */
+export function keptVotes<T extends VoteOrderKey & { receivedAt?: number }>(votes: T[]): T[] {
+  const kept = votes.filter((e, i) =>
+    !votes.some((f, j) => {
+      if (j === i || receivedRank(f) > receivedRank(e)) return false;
+      if (isNewerVote(f, e)) return true;
+      if (isNewerVote(e, f)) return false;
+      return receivedRank(f) < receivedRank(e) || j < i;
+    }),
+  );
+  kept.sort((a, b) => receivedRank(a) - receivedRank(b));
+  return kept.slice(-MAX_VOTES_KEPT_PER_VOTER);
+}
+
+/**
+ * The vote of a stored row that counts for a close this member received at
+ * `cutoff`: the newest of the row and its superseded votes that arrived no
+ * later than the cut-off, or null when none did. Without a cut-off the row
+ * itself counts.
+ */
+export function voteAsOf(row: PollVote, cutoff: number): PollVote | null {
+  let best: VoteSnapshot | null = null;
+  for (const v of [row, ...(row.superseded ?? [])]) {
+    if (receivedRank(v) > cutoff) continue;
+    if (best === null || isNewerVote(v, best)) best = v;
+  }
+  if (best === null) return null;
+  return best === row ? row : { ...row, ...snapshotOf(best) };
+}
+
+function snapshotOf(v: VoteSnapshot): VoteSnapshot {
+  return {
+    responses: v.responses,
+    votedAt: v.votedAt,
+    ...(v.seq === undefined ? {} : { seq: v.seq }),
+    ...(v.rumorId === undefined ? {} : { rumorId: v.rumorId }),
+    ...(v.receivedAt === undefined ? {} : { receivedAt: v.receivedAt }),
+  };
+}
+
+const canonical = (vs: VoteSnapshot[]) => JSON.stringify(vs.map(snapshotOf));
 
 /**
  * A vote received before its poll-open (AC-9). Responses are kept RAW: they
@@ -153,6 +244,7 @@ const VOTES_PREFIX = 'few:poll-votes:';
 const PENDING_PREFIX = 'few:poll-pending-votes:';
 const PENDING_CLOSES_PREFIX = 'few:poll-pending-closes:';
 const PENDING_ANNOUNCEMENTS_PREFIX = 'few:poll-pending-close-announcements:';
+const SEQ_RESERVATIONS_PREFIX = 'few:poll-vote-seq:';
 
 function pollsKey(groupId: string): string {
   return `${POLLS_PREFIX}${groupId}`;
@@ -169,6 +261,63 @@ function votesKey(groupId: string, pollId: string): string {
 
 function pendingKey(groupId: string): string {
   return `${PENDING_PREFIX}${groupId}`;
+}
+
+// ---- Receipt clock ----
+
+const RECEIPT_CLOCK_KEY = 'few:poll-receipt-clock';
+/** How far ahead the persisted high-water mark is leased (one write per lease). */
+export const RECEIPT_LEASE_MS = 60_000;
+
+let lastReceipt = 0;
+let leasedUntil = 0;
+let clockSeed: Promise<void> | null = null;
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+function seedReceiptClock(): Promise<void> {
+  clockSeed ??= get<unknown>(RECEIPT_CLOCK_KEY).then(
+    (stored) => {
+      if (isFiniteNumber(stored)) lastReceipt = Math.max(lastReceipt, stored);
+    },
+    (err: unknown) => {
+      // Retried on the next call; meanwhile the clock is still monotonic in this page.
+      clockSeed = null;
+      console.warn('[pollPersistence] reading the receipt clock failed:', err);
+    },
+  );
+  return clockSeed;
+}
+
+/**
+ * Local receipt time (ms) for a poll message, strictly increasing: within the
+ * page (two messages in the same millisecond still get distinct, arrival-
+ * ordered times) and across reloads and backward wall-clock steps — a
+ * persisted high-water mark, leased RECEIPT_LEASE_MS ahead so it costs one
+ * write per lease, seeds the clock above every receipt time handed out
+ * before. "Did this vote arrive before that held close" therefore never
+ * depends on clock resolution or clock changes (bug:
+ * poll-residual-ordering-and-close-retry). A failed lease write is logged; the
+ * clock stays monotonic in this page.
+ */
+export async function receiptNow(): Promise<number> {
+  await seedReceiptClock();
+  lastReceipt = Math.max(Date.now(), lastReceipt + 1);
+  const t = lastReceipt;
+  if (t >= leasedUntil) {
+    leasedUntil = t + RECEIPT_LEASE_MS;
+    const lease = leasedUntil;
+    try {
+      await enqueue(RECEIPT_CLOCK_KEY, async () => {
+        const current = await get<unknown>(RECEIPT_CLOCK_KEY);
+        await set(RECEIPT_CLOCK_KEY, Math.max(isFiniteNumber(current) ? current : 0, lease));
+      });
+    } catch (err) {
+      leasedUntil = 0; // retry the lease at the next receipt
+      console.warn('[pollPersistence] persisting the receipt clock failed:', err);
+    }
+  }
+  return t;
 }
 
 // ---- Polls CRUD ----
@@ -342,15 +491,18 @@ export async function loadVotes(groupId: string, pollId: string): Promise<PollVo
 }
 
 /**
- * Store a vote only if it is newer (isNewerVote) than the voter's stored vote
- * for the poll — a compare-and-set inside the per-key write queue, so it is
- * the single serialisation point for every vote write path (live handleVote,
- * the early-vote replay, castVote, and rumor-journal replay through
- * handleVote). Because "max wins", the stored vote is the greatest one seen,
- * whatever order the writes arrive or interleave in. Resolves true when it
- * wrote.
+ * Merge a vote into the voter's stored row for the poll — inside the per-key
+ * write queue, so it is the single serialisation point for every vote write
+ * path (live handleVote, the early-vote replay, castVote, and rumor-journal
+ * replay through handleVote). The row is always the newest vote seen by
+ * isNewerVote ("max wins"), whatever order the writes arrive or interleave
+ * in; older votes that arrived earlier are kept in `superseded` (keptVotes)
+ * so a close held from before the open can still count the vote the voter
+ * had at the close (voteAsOf). Resolves true when it wrote.
  */
 export async function saveVoteIfNewer(vote: PollVote): Promise<boolean> {
+  // Receipt time is taken at the call, before any queue wait.
+  const stamped: PollVote = vote.receivedAt === undefined ? { ...vote, receivedAt: await receiptNow() } : vote;
   // A write lands under the group-scoped key regardless of legacy rows, and
   // the legacy merge lets an existing group-scoped row win — safe to proceed.
   await settleVotesMigration();
@@ -360,16 +512,96 @@ export async function saveVoteIfNewer(vote: PollVote): Promise<boolean> {
     const existing = (await get<PollVote[]>(key)) ?? [];
     const idx = existing.findIndex((v) => v.id === vote.id);
     if (idx >= 0) {
-      if (!isNewerVote(vote, existing[idx])) return;
-      existing[idx] = vote;
+      const { superseded: _old, ...current } = existing[idx];
+      const before = keptVotes<VoteSnapshot>([current, ...(existing[idx].superseded ?? [])]);
+      const after = keptVotes<VoteSnapshot>([...before, stamped]);
+      if (canonical(after) === canonical(before)) return;
+      const newest = after[after.length - 1];
+      const { superseded: _s, ...base } = stamped;
+      const older = after.slice(0, -1).map(snapshotOf);
+      existing[idx] = {
+        ...base,
+        responses: newest.responses,
+        votedAt: newest.votedAt,
+        seq: newest.seq,
+        rumorId: newest.rumorId,
+        receivedAt: newest.receivedAt,
+        ...(older.length > 0 ? { superseded: older } : {}),
+      };
     } else {
-      existing.push(vote);
+      existing.push(stamped);
     }
     await set(key, existing);
     wrote = true;
     postStoreChanged('polls', vote.groupId);
   });
   return wrote;
+}
+
+// ---- Own vote seq reservations ----
+
+interface SeqReservation {
+  pollId: string;
+  /** Lower-cased: own-vote matching is case-insensitive (pollCast.nextVoteSeq). */
+  voterPubkey: string;
+  seq: number;
+}
+
+function isReservationShaped(e: unknown): e is SeqReservation {
+  if (!e || typeof e !== 'object') return false;
+  const o = e as Record<string, unknown>;
+  return typeof o.pollId === 'string' && typeof o.voterPubkey === 'string' && typeof o.seq === 'number';
+}
+
+/** The highest seq allocated for our own votes on a poll (0 if none). */
+export async function loadVoteSeqReservation(groupId: string, pollId: string, voterPubkey: string): Promise<number> {
+  const stored = await get<unknown[]>(`${SEQ_RESERVATIONS_PREFIX}${groupId}`);
+  const me = voterPubkey.toLowerCase();
+  const entry = (Array.isArray(stored) ? stored : []).find(
+    (e): e is SeqReservation => isReservationShaped(e) && e.pollId === pollId && e.voterPubkey === me,
+  );
+  return entry?.seq ?? 0;
+}
+
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+function webLocks(): LockManagerLike | undefined {
+  const nav = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator;
+  return typeof nav?.locks?.request === 'function' ? nav.locks : undefined;
+}
+
+/**
+ * Allocate the seq of our next vote on a poll, durably, BEFORE it is sent
+ * (bug: poll-residual-ordering-and-close-retry): one read–max–increment–write
+ * step returning max(last allocated + 1, floor), where `floor` is what the
+ * stored and queued votes demand (pollCast.nextVoteSeq). The step runs in this
+ * page's per-key write queue and, where the Web Locks API exists, under a
+ * lock shared by every tab of the origin — so two casts, in one tab or two,
+ * never get the same seq, and a vote whose save failed after the send (or
+ * whose send outcome is unknown) never has its seq reused. Rejects when the
+ * allocation cannot be read or written; the caller must then not send.
+ */
+export async function allocateVoteSeq(groupId: string, pollId: string, voterPubkey: string, floor: number): Promise<number> {
+  const key = `${SEQ_RESERVATIONS_PREFIX}${groupId}`;
+  const me = voterPubkey.toLowerCase();
+  let assigned = 0;
+  const step = () =>
+    enqueue(key, async () => {
+      const stored = await get<unknown[]>(key);
+      const entries = (Array.isArray(stored) ? stored : []).filter(isReservationShaped);
+      const idx = entries.findIndex((e) => e.pollId === pollId && e.voterPubkey === me);
+      const seq = Math.max((idx >= 0 ? entries[idx].seq : 0) + 1, floor);
+      const entry = { pollId, voterPubkey: me, seq };
+      if (idx >= 0) entries[idx] = entry;
+      else entries.push(entry);
+      await set(key, entries);
+      assigned = seq;
+    });
+  const locks = webLocks();
+  await (locks ? locks.request(key, step) : step());
+  return assigned;
 }
 
 // ---- Pending (early) votes — AC-9 ----
@@ -416,31 +648,32 @@ async function storePending(key: string, entries: PendingPollVote[]): Promise<vo
   }
 }
 
-/** Queue a vote whose poll is not (yet) known in its group. */
-export function queuePendingVote(
+/**
+ * Queue a vote whose poll is not (yet) known in its group. A voter's queued
+ * votes for one poll are reduced with keptVotes — the newest by the shared
+ * order is always kept (not the latest arrival, exactly as saveVoteIfNewer
+ * decides), plus older ones that arrived earlier, so a close held between two
+ * of them still counts the one the voter had at the close.
+ */
+export async function queuePendingVote(
   vote: Omit<PendingPollVote, 'receivedAt'>,
-  now: number = Date.now(),
+  now?: number,
 ): Promise<void> {
+  const at = now ?? (await receiptNow());
   const key = pendingKey(vote.groupId);
   return enqueue(key, async () => {
-    const entries = await loadLivePending(key, now);
-    const entry: PendingPollVote = { ...vote, receivedAt: now };
-    const idx = entries.findIndex((e) => e.pollId === vote.pollId && e.voterPubkey === vote.voterPubkey);
-    if (idx >= 0) {
-      // Same voter, same poll: the NEWER vote by the shared order is kept
-      // (not the latest arrival), exactly as saveVoteIfNewer decides.
-      if (!isNewerVote(entry, entries[idx])) {
-        await storePending(key, entries);
-        return;
-      }
-      entries.splice(idx, 1);
-    } else if (entries.filter((e) => e.voterPubkey === vote.voterPubkey).length >= MAX_PENDING_VOTES_PER_VOTER) {
+    const entries = await loadLivePending(key, at);
+    const entry: PendingPollVote = { ...vote, receivedAt: at };
+    const mine = (e: PendingPollVote) => e.pollId === vote.pollId && e.voterPubkey === vote.voterPubkey;
+    const own = entries.filter(mine);
+    const otherPolls = new Set(entries.filter((e) => e.voterPubkey === vote.voterPubkey && !mine(e)).map((e) => e.pollId));
+    if (own.length === 0 && otherPolls.size >= MAX_PENDING_VOTES_PER_VOTER) {
       await storePending(key, entries);
       return;
     }
-    entries.push(entry);
-    entries.sort((a, b) => a.receivedAt - b.receivedAt);
-    await storePending(key, entries.slice(-MAX_PENDING_VOTES_PER_GROUP));
+    const next = [...entries.filter((e) => !mine(e)), ...keptVotes([...own, entry])];
+    next.sort((a, b) => a.receivedAt - b.receivedAt);
+    await storePending(key, next.slice(-MAX_PENDING_VOTES_PER_GROUP));
   });
 }
 
@@ -574,11 +807,12 @@ const announcementQueue = boundedQueue<PendingCloseAnnouncement>({
 });
 
 /** Queue a close whose poll is not (yet) known in its group. */
-export function queuePendingClose(
+export async function queuePendingClose(
   close: Omit<PendingPollClose, 'receivedAt'>,
-  now: number = Date.now(),
+  now?: number,
 ): Promise<void> {
-  return closeQueue.queue(close.groupId, { ...close, receivedAt: now }, now);
+  const at = now ?? (await receiptNow());
+  return closeQueue.queue(close.groupId, { ...close, receivedAt: at }, at);
 }
 
 /** Read (without removing) the live queued closes for one poll of one group. */
@@ -596,11 +830,12 @@ export function removePendingCloses(groupId: string, pollId: string, now: number
 }
 
 /** Queue a poll_close chat announcement whose poll is not (yet) known. */
-export function queuePendingCloseAnnouncement(
+export async function queuePendingCloseAnnouncement(
   announcement: Omit<PendingCloseAnnouncement, 'receivedAt'>,
-  now: number = Date.now(),
+  now?: number,
 ): Promise<void> {
-  return announcementQueue.queue(announcement.groupId, { ...announcement, receivedAt: now }, now);
+  const at = now ?? (await receiptNow());
+  return announcementQueue.queue(announcement.groupId, { ...announcement, receivedAt: at }, at);
 }
 
 /** Read (without removing) the live queued announcements for one poll. */
@@ -625,7 +860,7 @@ export function removePendingCloseAnnouncements(
   );
 }
 
-/** Clear all poll data for a group (polls, every vote list and every early-message queue). */
+/** Clear all poll data for a group (polls, every vote list, every early-message queue, seq reservations). */
 export async function clearPollData(groupId: string): Promise<void> {
   // Leaving must not be blocked by a failed migration; legacy rows left
   // behind for this group's polls are dropped by a later run (poll unknown).
@@ -640,6 +875,7 @@ export async function clearPollData(groupId: string): Promise<void> {
   await del(pendingKey(groupId));
   await del(`${PENDING_CLOSES_PREFIX}${groupId}`);
   await del(`${PENDING_ANNOUNCEMENTS_PREFIX}${groupId}`);
+  await del(`${SEQ_RESERVATIONS_PREFIX}${groupId}`);
   await del(pollsKey(groupId));
 }
 
@@ -661,11 +897,17 @@ export async function clearAllPollData(): Promise<void> {
         k.startsWith(VOTES_PREFIX) ||
         k.startsWith(PENDING_PREFIX) ||
         k.startsWith(PENDING_CLOSES_PREFIX) ||
-        k.startsWith(PENDING_ANNOUNCEMENTS_PREFIX)),
+        k.startsWith(PENDING_ANNOUNCEMENTS_PREFIX) ||
+        k.startsWith(SEQ_RESERVATIONS_PREFIX)),
   );
   if (targets.length > 0) {
     await delMany(targets);
   }
+  // The receipt clock's mark goes too; the next receipt writes a fresh lease.
+  // lastReceipt is kept: receipts stay strictly increasing within this page.
+  await del(RECEIPT_CLOCK_KEY);
+  leasedUntil = 0;
+  clockSeed = null;
   // A later restore may bring legacy rows back; let the next read migrate them.
   migration = null;
 }

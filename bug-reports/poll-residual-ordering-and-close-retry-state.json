@@ -1,0 +1,97 @@
+{
+  "bug_name": "poll-residual-ordering-and-close-retry",
+  "bug_report_file": "bug-reports/poll-residual-ordering-and-close-retry-report.md",
+  "created_at": "2026-10-16T00:15:00Z",
+  "updated_at": "2026-10-16T02:20:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does a cast whose send succeeds but whose local save fails cause the next cast to send seq + 1 (reservation written before send; failed reservation read/write sends nothing; lands-then-rejects skips the seq)?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Do close->vote->open and open->close->vote (and every position of the open among vote-before, close, vote-after) give the same closed tally, using local receipt order as the key?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Is a live poll_close announcement with a failing first getPoll (or tally read) held and shown with the correct tally exactly once after the next poll message; does a failed hold throw rather than silently complete?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Are replay-internal saveVoteIfNewer / removePendingVotes failures injected at the open, the live close and the chat gate, with stored state = truth and convergence on the next message?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "SPEC",
+      "question": "Are docs/behavior/polls.md and AC-9 updated, unit suite + tsc green, Stryker (concurrency 1) survivors on changed lines killed or justified?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "consumer_sha": "037d517a90e5d8e60a6fce517d5e823485e21949",
+  "models": {
+    "implementer": "opus"
+  },
+  "remediation_round": 2,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T00:15:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T00:27:56Z",
+      "trigger": "fixer_complete_awaiting_review"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-16T01:10:12Z",
+      "trigger": "lead_retry_round_1"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T01:10:12Z",
+      "trigger": "round_1_fixer_complete"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-16T01:18:59Z",
+      "trigger": "decider_conditions_round_2"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T01:18:59Z",
+      "trigger": "round_2_fixer_complete"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T02:20:00Z",
+      "trigger": "decider_fable_accept_round2_full_gate_green"
+    }
+  ],
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED",
+      "codex": "2 high + mediums",
+      "decider": "lead: RETRY round 1 (5 items)"
+    },
+    {
+      "round": 1,
+      "decider": "Fable: ACCEPT with conditions (cap, gate settle fallback, reset wipe)"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-polls3.log"
+  }
+}

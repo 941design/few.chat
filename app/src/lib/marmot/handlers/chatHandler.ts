@@ -80,6 +80,13 @@ export interface ChatHandlerDeps {
   queuePendingCloseAnnouncement: (announcement: Omit<PendingCloseAnnouncement, 'receivedAt'>) => Promise<void>;
   loadPendingCloseAnnouncements: (groupId: string, pollId: string) => Promise<PendingCloseAnnouncement[]>;
   removePendingCloseAnnouncements: (groupId: string, applied: PendingCloseAnnouncement[]) => Promise<void>;
+  /**
+   * pollHandler createHeldCloseSettler: applies a held close of the poll
+   * before its summary is judged (a summary is one more message of its poll —
+   * bug: poll-residual-ordering-and-close-retry). Returns the stored poll, or
+   * 'unknown' when it could not be confirmed. Optional for tests.
+   */
+  settleHeldCloses?: (poll: Poll, ctx: DispatcherContext) => Promise<Poll | 'unknown'>;
 }
 
 /**
@@ -151,47 +158,81 @@ async function gateAnnouncement(
       return structured.pubkey.toLowerCase() === sender.pubkey.toLowerCase() ? content : null;
     }
     case 'poll_close': {
-      // An indeterminate read THROWS (below and at loadVotesWithPending); null
-      // means only "definitively rejected" (a non-creator actor). On the live
-      // path the two are equivalent: the dispatcher calls markSeen BEFORE
-      // fan-out and catches handler throws per handler
-      // (applicationRumorDispatcher.ts), so either way no row is written and
-      // the rumor id is already in the LRU (retry is cross-session only). They
-      // differ for the held-announcement replay
-      // (createPollCloseAnnouncementReplayer): a rejected entry is discarded, a
-      // throwing one stays held for the next poll message. Never swallow a
-      // failed read into an accept — e.g. loadVotes into `[]` would persist a
-      // fabricated "0 votes, 0 voters" tally under this rumor id (F2,
-      // Stage-2 review); it fails closed by throwing, like
-      // pollHandler.handleClose.
-      const poll = await deps.getPoll(ctx.groupId, structured.pollId);
-      if (!poll) {
-        // AC-9: the announcement arrived before its poll-open (out-of-order
-        // MLS delivery). Not shown now — the creator cannot be checked — but
-        // not dropped irrecoverably either: queued, bound to the
-        // authenticated sender, and re-run through this gate when the open
-        // arrives (createPollCloseAnnouncementReplayer). Best-effort.
-        await deps.queuePendingCloseAnnouncement({
+      // An indeterminate read THROWS; null means only "definitively rejected"
+      // (a non-creator actor). Never swallow a failed read into an accept —
+      // e.g. loadVotes into `[]` would persist a fabricated "0 votes, 0
+      // voters" tally under this rumor id (F2, Stage-2 review).
+      //
+      // The dispatcher acks a live rumor whether or not its handler throws
+      // (markSeen before fan-out, per-handler catch, ack in finally —
+      // applicationRumorDispatcher.ts), so a throw alone would lose the
+      // announcement. Before throwing, it is therefore HELD — the same queue
+      // as an announcement for a not-yet-known poll — and the next message of
+      // the poll re-runs it through this gate (pollHandler settleHeldCloses →
+      // createPollCloseAnnouncementReplayer; bug:
+      // poll-residual-ordering-and-close-retry). In that replay a throw keeps
+      // the entry held, a null discards it.
+      const hold = () =>
+        deps.queuePendingCloseAnnouncement({
           groupId: ctx.groupId,
           pollId: structured.pollId,
           senderPubkey: sender.pubkey,
           rumorId: rumor.id,
           createdAt: rumor.created_at,
-        }).catch((err: unknown) => {
-          console.warn('[dispatcher.9] queueing early poll_close announcement failed:', err);
         });
+      const holdAfterFailure = async (err: unknown): Promise<never> => {
+        await hold().catch((holdErr: unknown) => {
+          console.warn('[dispatcher.9] holding poll_close announcement for retry failed:', holdErr);
+        });
+        throw err;
+      };
+
+      let poll: Poll | null;
+      try {
+        poll = await deps.getPoll(ctx.groupId, structured.pollId);
+      } catch (err) {
+        return holdAfterFailure(err);
+      }
+      if (!poll) {
+        // AC-9: the announcement arrived before its poll-open (out-of-order
+        // MLS delivery). Not shown now — the creator cannot be checked — but
+        // held, bound to the authenticated sender, and re-run through this
+        // gate when the open arrives. A failed hold throws (not a rejection):
+        // in the replay the entry then stays held.
+        await hold();
         return null;
+      }
+      // Apply a close of this poll held after an earlier failure — on the
+      // dispatcher FIFO, before this summary is judged — so the summary of a
+      // close that hit a storage failure finishes that close. Unconfirmed
+      // state holds the summary for the next poll message.
+      if (deps.settleHeldCloses) {
+        const settled = await deps.settleHeldCloses(poll, ctx);
+        if (settled === 'unknown') return holdAfterFailure(new Error('poll state unknown after a failed held-close recovery'));
+        poll = settled;
       }
       // Fail closed: a non-creator actor rejects — F1 (S5 Stage-2 review).
       // Case-insensitive, matching every other identity comparison in this gate.
       if (poll.creatorPubkey.toLowerCase() !== sender.pubkey.toLowerCase()) return null;
-      // Throws on a failed read (see above) — never a tally from partial data.
-      const votes: PollVote[] = await loadVotesWithPending(poll, deps);
-      const { results, totalVoters } = computeTally(poll.options, votes);
       // title comes from the stored poll, not the closer's payload — we
       // deliberately distrust structured.title the same way we distrust its
       // results/totalVoters (F1).
-      return JSON.stringify({ type: 'poll_close', pollId: structured.pollId, title: poll.title, results, totalVoters });
+      const announce = (results: unknown, totalVoters: unknown) =>
+        JSON.stringify({ type: 'poll_close', pollId: structured.pollId, title: poll.title, results, totalVoters });
+      // An already-closed poll announces the tally it was stored with, so the
+      // chat row always matches the poll card — votes that arrived after a
+      // held close are kept as rows but are not in its tally.
+      if (poll.closed && Array.isArray(poll.results)) {
+        return announce(poll.results, poll.totalVoters ?? 0);
+      }
+      let votes: PollVote[];
+      try {
+        votes = await loadVotesWithPending(poll, deps);
+      } catch (err) {
+        return holdAfterFailure(err);
+      }
+      const { results, totalVoters } = computeTally(poll.options, votes);
+      return announce(results, totalVoters);
     }
     default:
       return content;

@@ -37,6 +37,7 @@ const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, re
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, POLL_LIMITS, POLL_ID_LIMITS, parsePollOpen, parsePollVote, parsePollClose } = await import('@/src/lib/marmot/pollSync');
 
 type Poll = import('@/src/lib/marmot/pollPersistence').Poll;
+type PollVoteRow = import('@/src/lib/marmot/pollPersistence').PollVote;
 
 const CREATOR = 'aa'.repeat(32);
 const ATTACKER = 'ee'.repeat(32);
@@ -270,8 +271,10 @@ describe('VQ-3: early votes are queued and applied on poll-open (AC-9)', () => {
       await open(GROUP_B, CREATOR, payload);
       const queued = await loadVotes(GROUP_B, `prop-${i}`);
 
-      // rumorId identifies the (distinct) vote rumor of each run — not part of what is compared.
-      expect(queued.map(({ groupId: _g, rumorId: _r, ...rest }) => rest)).toEqual(live.map(({ groupId: _g, rumorId: _r, ...rest }) => rest));
+      // rumorId identifies the (distinct) vote rumor of each run and receivedAt
+      // its local arrival — neither is part of what is compared.
+      const strip = ({ groupId: _g, rumorId: _r, receivedAt: _t, ...rest }: PollVoteRow) => rest;
+      expect(queued.map(strip)).toEqual(live.map(strip));
     }
   });
 
@@ -334,10 +337,12 @@ describe('VQ-3: early votes are queued and applied on poll-open (AC-9)', () => {
       Array.from({ length: MAX_PENDING_VOTES_PER_VOTER }, (_, i) => `spam-${i}`),
     );
     expect(stored.some((e) => e.voterPubkey === VOTER_A && e.pollId === 'legit')).toBe(true);
-    // A replacement for an already-queued poll is still accepted at the cap.
-    await vote(GROUP_A, ATTACKER, ['B'], 'spam-0');
+    // A changed vote for an already-queued poll is still accepted at the cap
+    // (kept next to the earlier one, which arrived first), without a new poll.
+    await vote(GROUP_A, ATTACKER, ['B'], 'spam-0', 1_700_000_100);
     const after = idbStore.get(`few:poll-pending-votes:${GROUP_A}`) as Array<{ voterPubkey: string; pollId: string; responses: string[] }>;
-    expect(after.find((e) => e.pollId === 'spam-0')?.responses).toEqual(['B']);
+    expect(after.filter((e) => e.pollId === 'spam-0').map((e) => e.responses)).toEqual([['A'], ['B']]);
+    expect(new Set(after.filter((e) => e.voterPubkey === ATTACKER).map((e) => e.pollId)).size).toBe(MAX_PENDING_VOTES_PER_VOTER);
   });
 
   it('per-group bound: the queue never exceeds MAX_PENDING_VOTES_PER_GROUP; the oldest-received entries are evicted', async () => {
@@ -522,9 +527,12 @@ describe('early-vote replay is crash-safe (read → save → remove)', () => {
     await vote(GROUP_A, VOTER_A, ['A']);
     await vote(GROUP_A, VOTER_B, ['B']);
     const failing = { ...realDeps(), removePendingVotes: vi.fn(async () => { throw new Error('unload'); }) };
+    // The removal is clean-up only (the votes are stored), so it no longer
+    // fails the open (bug: poll-residual-ordering-and-close-retry).
     await expect(
       createPollOpenHandler(failing).handle(rumor(POLL_OPEN_KIND, CREATOR, openPayload()), ctx(GROUP_A), sender(CREATOR)),
-    ).rejects.toThrow('unload');
+    ).resolves.toBeUndefined();
+    expect(failing.removePendingVotes).toHaveBeenCalledOnce();
     expect(await loadVotes(GROUP_A, POLL_ID)).toHaveLength(2);
     expect((idbStore.get(`few:poll-pending-votes:${GROUP_A}`) as unknown[])).toHaveLength(2);
 

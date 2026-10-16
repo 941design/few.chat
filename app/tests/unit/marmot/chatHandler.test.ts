@@ -749,14 +749,16 @@ describe('chatHandler', () => {
       });
     });
 
-    it('a failing early-announcement queue write still rejects the row (no side effect)', async () => {
+    it('a failing early-announcement queue write THROWS (not a silent reject) and has no side effect', async () => {
+      // bug: poll-residual-ordering-and-close-retry — a swallowed hold failure
+      // made the held-announcement replay treat the entry as completed.
       const deps = makeDeps();
       deps.queuePendingCloseAnnouncement.mockRejectedValueOnce(new Error('quota'));
       const rumor = makeRumor({
         pubkey: PEER_PUBKEY,
         content: JSON.stringify({ type: 'poll_close', pollId: 'unknown-poll', title: 'X', results: [], totalVoters: 0 }),
       });
-      await createChatHandler(deps).handle(rumor, makeCtx(), makeSender(PEER_PUBKEY));
+      await expect(createChatHandler(deps).handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).rejects.toThrow('quota');
       assertFullyRejected(deps);
     });
 
@@ -793,11 +795,30 @@ describe('chatHandler', () => {
         content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'X', results: [], totalVoters: 0 }),
       });
 
-      // Indeterminate ≠ rejected: the read failure THROWS (the dispatcher catches it per handler; no row either way).
+      // Indeterminate ≠ rejected: the read failure THROWS and no row is written now…
       await expect(handler.handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).rejects.toThrow('poll store unavailable');
       assertFullyRejected(deps);
-      // An indeterminate lookup is not "unknown poll": nothing is queued.
-      expect(deps.queuePendingCloseAnnouncement).not.toHaveBeenCalled();
+      // …but the announcement is HELD for the next poll message (the dispatcher
+      // acks a live rumor even when its handler throws — bug:
+      // poll-residual-ordering-and-close-retry).
+      expect(deps.queuePendingCloseAnnouncement).toHaveBeenCalledWith({
+        groupId: makeCtx().groupId,
+        pollId: 'poll-1',
+        senderPubkey: PEER_PUBKEY,
+        rumorId: rumor.id,
+        createdAt: rumor.created_at,
+      });
+    });
+
+    it('a throwing getPoll whose hold ALSO fails still throws the read error (no row)', async () => {
+      const deps = makeDeps();
+      deps.getPoll.mockRejectedValue(new Error('poll store unavailable'));
+      deps.queuePendingCloseAnnouncement.mockRejectedValueOnce(new Error('quota'));
+      const rumor = makeRumor({
+        content: JSON.stringify({ type: 'poll_close', pollId: 'poll-1', title: 'X', results: [], totalVoters: 0 }),
+      });
+      await expect(createChatHandler(deps).handle(rumor, makeCtx(), makeSender(PEER_PUBKEY))).rejects.toThrow('poll store unavailable');
+      assertFullyRejected(deps);
     });
 
     it('VQ-S6-014/F2 (Stage-2 review): a throwing loadVotes lookup fails CLOSED — MUST NOT swallow into an empty-votes accept with a fabricated "0 votes, 0 voters" tally', async () => {

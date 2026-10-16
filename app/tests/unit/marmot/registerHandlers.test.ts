@@ -45,6 +45,7 @@ const KIND = {
 } as const;
 
 const announcementReplayer = vi.fn(async () => {});
+const heldCloseSettler = vi.fn(async (poll: unknown) => poll);
 vi.mock('@/src/lib/marmot/handlers/chatHandler', () => ({
   createChatHandler: vi.fn((_deps) => ({ kind: KIND.chat, handle: vi.fn() })),
   createPollCloseAnnouncementReplayer: vi.fn((_deps) => announcementReplayer),
@@ -65,6 +66,7 @@ vi.mock('@/src/lib/marmot/handlers/pollHandler', () => ({
   createPollOpenHandler: vi.fn((_deps) => ({ kind: KIND.pollOpen, handle: vi.fn() })),
   createPollVoteHandler: vi.fn((_deps) => ({ kind: KIND.pollVote, handle: vi.fn() })),
   createPollCloseHandler: vi.fn((_deps) => ({ kind: KIND.pollClose, handle: vi.fn() })),
+  createHeldCloseSettler: vi.fn((_deps) => heldCloseSettler),
 }));
 vi.mock('@/src/lib/marmot/handlers/leaveHandler', () => ({
   createLeaveIntentHandler: vi.fn((_deps) => ({ kind: KIND.leave, handle: vi.fn() })),
@@ -202,7 +204,24 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
       queuePendingCloseAnnouncement: persistence.queuePendingCloseAnnouncement,
       loadPendingCloseAnnouncements: persistence.loadPendingCloseAnnouncements,
       removePendingCloseAnnouncements: persistence.removePendingCloseAnnouncements,
+      settleHeldCloses: expect.any(Function),
     });
+  });
+
+  it('the chat gate\'s held-close settle is the settler built from the poll deps bag (bug: poll-residual-ordering-and-close-retry)', async () => {
+    const deps = makeDeps();
+    buildDispatcher(deps);
+    const { createHeldCloseSettler } = await import('@/src/lib/marmot/handlers/pollHandler');
+    const pollArg = (createPollOpenHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0];
+    expect(createHeldCloseSettler).toHaveBeenCalledWith(pollArg);
+    const chatSlice = (createChatHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+      settleHeldCloses: (poll: unknown, ctx: unknown) => Promise<unknown>;
+    };
+    const poll = { id: 'p' };
+    const ctx = { groupId: 'g' };
+    heldCloseSettler.mockClear();
+    await expect(chatSlice.settleHeldCloses(poll, ctx)).resolves.toBe(poll);
+    expect(heldCloseSettler).toHaveBeenCalledWith(poll, ctx);
   });
 
   it('builds the early-announcement replayer from the SAME chat deps slice and hands it to the poll handlers', () => {

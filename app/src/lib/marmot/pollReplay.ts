@@ -37,6 +37,7 @@ export function buildSanitizedVote(
   votedAt: number,
   seq: number = 0,
   rumorId: string = '',
+  receivedAt?: number,
 ): PollVote | null {
   const validOptionIds = new Set(poll.options.map((option) => option.id));
   let sanitizedResponses = responses.filter((response) => validOptionIds.has(response));
@@ -53,6 +54,7 @@ export function buildSanitizedVote(
     votedAt,
     seq,
     rumorId,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   };
 }
 
@@ -75,17 +77,37 @@ export function buildSanitizedVote(
  *
  * Order is read → save → remove: an interruption before the removal leaves
  * the entries queued, and replaying them again is idempotent (the
- * compare-and-set never stores a vote that is not newer).
+ * compare-and-set never stores a vote that is not newer). A read or save
+ * failure throws (a tally must not be built on it); the removal is clean-up
+ * only — the votes are already stored — so its failure is logged, not thrown,
+ * and a later replay removes the entries (bug:
+ * poll-residual-ordering-and-close-retry: a thrown clean-up used to fail a
+ * live close).
+ *
+ * Each replayed vote keeps its queue receipt time, so a close held from
+ * before the open counts only the early votes that arrived before it.
  */
 export async function replayPendingVotes(poll: Poll, deps: PollReplayDeps): Promise<void> {
   const pending = await deps.loadPendingVotes(poll.groupId, poll.id);
   if (pending.length === 0) return;
   for (const early of pending) {
-    const vote = buildSanitizedVote(poll, early.voterPubkey, early.responses, early.votedAt, early.seq ?? 0, early.rumorId ?? '');
+    const vote = buildSanitizedVote(
+      poll,
+      early.voterPubkey,
+      early.responses,
+      early.votedAt,
+      early.seq ?? 0,
+      early.rumorId ?? '',
+      early.receivedAt,
+    );
     if (!vote) continue;
     await deps.saveVoteIfNewer(vote);
   }
-  await deps.removePendingVotes(poll.groupId, pending);
+  try {
+    await deps.removePendingVotes(poll.groupId, pending);
+  } catch (err) {
+    console.warn('[pollReplay] removing replayed early votes failed; removed by a later replay:', err);
+  }
 }
 
 /**

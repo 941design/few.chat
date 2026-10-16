@@ -1,7 +1,7 @@
 import { createDispatcher, type Dispatcher, type DispatcherOptions, type RumorHandler } from './applicationRumorDispatcher';
 import type { ChatMessage } from './chatPersistence';
 import type { ReactionThreadKey } from '@/src/lib/reactions/types';
-import type { ApplicationRumor, AuthenticatedSender } from './applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext } from './applicationRumorDispatcher';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
 import type { Poll, PollVote, PendingPollVote } from '@/src/lib/marmot/pollPersistence';
 import {
@@ -21,7 +21,7 @@ import { createChatHandler, createPollCloseAnnouncementReplayer } from './handle
 import { createReactionHandler } from './handlers/reactionHandler';
 import { createProfileHandler } from './handlers/profileHandler';
 import { createProfileRequestHandler } from './handlers/profileRequestHandler';
-import { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } from './handlers/pollHandler';
+import { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, createHeldCloseSettler } from './handlers/pollHandler';
 import { createLeaveIntentHandler } from './handlers/leaveHandler';
 import { createDeleteEditHandler } from './handlers/deleteEditHandler';
 
@@ -116,6 +116,9 @@ export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = 
     queuePendingCloseAnnouncement,
     loadPendingCloseAnnouncements,
     removePendingCloseAnnouncements,
+    // A poll_close summary first applies a held close of its poll
+    // (late-bound: the settler is built from the poll deps below).
+    settleHeldCloses: (poll: Poll, ctx: DispatcherContext) => settleHeldClosesForGate(poll, ctx),
   };
 
   const pollDeps = {
@@ -134,6 +137,7 @@ export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = 
     replayHeldCloseAnnouncements: createPollCloseAnnouncementReplayer(chatDeps),
     setPollVersion: deps.setPollVersion,
   };
+  const settleHeldClosesForGate = createHeldCloseSettler(pollDeps);
 
   const handlers: RumorHandler[] = [
     createChatHandler(chatDeps),

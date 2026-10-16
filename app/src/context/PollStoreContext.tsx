@@ -20,6 +20,7 @@ import {
   loadPendingVotes,
   saveVoteIfNewer,
   isNewerVote,
+  allocateVoteSeq,
 } from '@/src/lib/marmot/pollPersistence';
 import { createVoteCaster } from '@/src/lib/marmot/pollCast';
 import {
@@ -40,7 +41,12 @@ type MarmotGroupType = import('@internet-privacy/marmot-ts').MarmotGroup;
  * provider remounts: the seq of a cast is derived from the stored own vote,
  * which the previous cast must have written first.
  */
-const castPollVote = createVoteCaster({ loadVotes, loadPendingVotes, saveVoteIfNewer });
+const castPollVote = createVoteCaster({
+  loadVotes,
+  loadPendingVotes,
+  saveVoteIfNewer,
+  allocateVoteSeq,
+});
 
 interface PollStoreContextValue {
   polls: Poll[];
