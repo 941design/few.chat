@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T07:00:43Z",
+  "updated_at": "2026-10-16T09:03:02Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -421,62 +421,6 @@
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
     },
     {
-      "slug": "journal-ack-before-durable-side-effects",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/applicationRumorDispatcher.ts"
-      },
-      "text": "The dispatcher acks a journal entry even when the handler's durable side effects failed (e.g. a pending member removal whose IndexedDB write failed), so a reload in the commit window loses it",
-      "created_at": "2026-10-15",
-      "motivation": "Decider-waived Codex HIGH (not a regression) on run robustness-journal-removals-avatars, 2026-10-15: before the durable removal store every reload in the 5 s window lost the removal; now only a failed storage write plus a reload does.",
-      "behavior": "Dispatcher acks in a finally block (at-most-once); persistPendingRemoval swallows write failures so the leave handler resolves.",
-      "approach": "Ack-on-success: handlers report durable completion; the dispatcher only acks entries whose handlers succeeded (keep at-most-once semantics for handler logic by idempotency).",
-      "success_signal": "Unit: a failing pending-removal write leaves the journal entry, and the removal is applied after reload"
-    },
-    {
-      "slug": "journal-ack-failure-replays-applied-rows",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/rumorJournal.ts"
-      },
-      "text": "If a journal ack fails, the already-applied rumor stays in the journal and is replayed every startup for up to 30 days (the removed count cap used to bound this)",
-      "created_at": "2026-10-15",
-      "motivation": "Decider-filed low follow-up from run robustness-journal-removals-avatars (2026-10-15). Handlers are idempotent, so the effect is repeated work, not corruption; the replay dedup-window widening is bounded per dispatcher lifetime.",
-      "behavior": "ack failures are warned and ignored; age-only eviction keeps the row for 30 days.",
-      "approach": "Retry the ack once after the next successful replay, or mark applied entries in memory for the session and delete them later.",
-      "success_signal": "Unit: an ack failure is retried and the row is gone after the next startup"
-    },
-    {
-      "slug": "journal-replayed-leave-evicts-rejoined-member",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/leaveHandler.ts"
-      },
-      "text": "Journal replay of an unacked leave_intent after the member has re-joined can evict the re-joined member, because the handler captures the member's current leaf at replay time",
-      "created_at": "2026-10-15",
-      "motivation": "Decider-filed low (pre-existing from d74ea00), 2026-10-15: needs an unload in a millisecond window plus a long offline gap during which the member left and re-joined; rare, but destructive.",
-      "behavior": "Replayed leave_intent entries carry no epoch; the leaf-identity guard captures the current leaf at replay, so it cannot detect a re-join.",
-      "approach": "Store the MLS epoch of the message in the journal entry (if marmot-ts exposes it) and drop a leave_intent older than the member's current leaf's join epoch.",
-      "success_signal": "Unit: replaying an old leave_intent after the member re-joined at a later epoch does not remove them"
-    },
-    {
-      "slug": "pending-removal-compare-delete-single-txn",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pendingRemovalStorage.ts",
-        "range": [
-          143,
-          163
-        ]
-      },
-      "text": "pendingRemovalStorage deleteRowsStillMatching compares via idb-keyval entries() (readonly txn) and deletes via delMany (separate readwrite txn); another tab's put to the same key can land in between and be deleted",
-      "created_at": "2026-10-16",
-      "motivation": "Decider-waived Codex HIGH (rated low, fail-safe) on run robustness-journal-removals-avatars round 3, 2026-10-16: per-tab serialised() does not cover cross-tab writes; reachable only with two concurrent admin tabs and a divergent rumor set inside a sub-ms–ms window; worst case a departed member stays until the next leave or a manual remove. Subsumed by multi-tab-mls-cache-coherence if S1 ships.",
-      "behavior": "Compare (readonly entries()) and delete (delMany) run in two IndexedDB transactions; the settle path (deleteMatchingPendingRemovals) has had the same gap since round 1.",
-      "approach": "Do compare+delete in ONE readwrite transaction via the store callback (removalStore()('readwrite', s => cursor over the group's keys, compare in-txn, s.delete only still-matching rows)) and add a unit test with two independent createStore connections where tab B's put between A's read and delete survives.",
-      "success_signal": "Two-connection unit test passes: a row rewritten by another connection between compare and delete is never deleted"
-    },
-    {
       "slug": "poll-kept-votes-held-close-aware-pruning",
       "scope": "any",
       "anchor": {
@@ -566,6 +510,72 @@
       "behavior": "clearAllReactions deletes reaction keys without posting; cache-first loadReactions in another tab keeps serving deleted badges.",
       "approach": "Post an account-changed cross-tab event on switch/wipe; receivers reload or show the takeover screen per the multi-tab design.",
       "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
+    },
+    {
+      "slug": "reaction-edit-handlers-ack-on-storage-failure",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/handlers/reactionHandler.ts",
+        "line": 40
+      },
+      "text": "Group reaction and edit/delete handlers swallow storage failures and are acked, so a failed write (or a failed loadMessages in the reaction handler) silently loses the reaction/edit",
+      "created_at": "2026-10-16",
+      "motivation": "Review follow-up from bug run journal-and-removal-robustness (2026-10-16): the dispatcher now acks only on handler success, but these handlers never throw, so they do not benefit from journal replay.",
+      "behavior": "reactionHandler turns a failed loadMessages into an empty list and discards the reaction; applyInboundRumor / applyDeleteEditSignal failures are logged and the rumor is acked.",
+      "approach": "First confirm applyInboundRumor and applyDeleteEditSignal are replay-safe (rumor-id unique, pending-signal sweep idempotent); then let storage failures propagate so the journal keeps the entry; inject failures at each storage step.",
+      "success_signal": "Unit: reaction/edit whose storage write fails once is applied after the next subscription replay"
+    },
+    {
+      "slug": "leave-fallback-identity-writeback",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pendingRemovalStorage.ts"
+      },
+      "text": "A live leave whose identity capture failed falls back to the current leaf but does not write it onto the journal row, so a replay after a failed removal persist skips the removal",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). Triple-failure window (capture fails, persist fails, reload).",
+      "behavior": "Replayed leaves without a journaled identity are skipped by design; the live fallback identity is only used in memory.",
+      "approach": "On a live fallback capture, best-effort write the captured identity onto the journal row before acking.",
+      "success_signal": "Unit: live capture fails, fallback used, persist fails, reload → replay still removes the member"
+    },
+    {
+      "slug": "pending-vote-cap-drop-observable",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts"
+      },
+      "text": "queuePendingVote silently stores nothing when the voter's per-voter pending cap is reached, so handleVote's save-failure fallback cannot tell the vote was dropped",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). Observability gap behind accepted residual W1/W2.",
+      "behavior": "queuePendingVote resolves without storing at MAX_PENDING_VOTES_PER_VOTER.",
+      "approach": "Return whether it stored; warn in handleVote's fallback when the cap dropped it.",
+      "success_signal": "Unit: capped fallback logs a warning and returns false"
+    },
+    {
+      "slug": "idb-keyval-update-lint-ban",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/rumorJournal.ts"
+      },
+      "text": "idb-keyval update() (6.2.2) is not transaction-bound and can hang forever on a read error/abort; nothing prevents reintroducing it",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). Round 1 introduced exactly this hang in putRumor.",
+      "behavior": "update() wires only get.onsuccess; errors/aborts before success leave the promise unsettled.",
+      "approach": "Add a no-restricted-imports rule (or a grep check in make test) banning update from idb-keyval.",
+      "success_signal": "Importing update from idb-keyval fails the build/test"
+    },
+    {
+      "slug": "rumor-journal-real-idb-suite",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/unit/marmot/rumorJournal.test.ts"
+      },
+      "text": "rumorJournal.test.ts runs on a Map mock that cannot exercise custom-store transaction callbacks (recordRumorFailure, putRumor)",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). The hang in round 1 slipped past the Map-mocked suite.",
+      "behavior": "Transactional journal paths are only partially covered under real IndexedDB semantics.",
+      "approach": "Add a fake-indexeddb companion suite for the journal's transactional paths, with abort/error injection.",
+      "success_signal": "Journal transactional paths have fake-indexeddb tests incl. abort/error"
     }
   ],
   "archive": [
