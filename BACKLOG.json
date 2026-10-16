@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T00:13:32Z",
+  "updated_at": "2026-10-16T02:09:04Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -467,36 +467,6 @@
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
     },
     {
-      "slug": "poll-cast-seq-and-close-vote-ordering",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollCast.ts",
-        "range": [
-          60,
-          73
-        ]
-      },
-      "text": "Two residual poll ordering edges: a cast whose send succeeds but local save fails reuses the same seq on the next cast; and a vote arriving after a close but before the open is counted on some members and not others",
-      "created_at": "2026-10-15",
-      "motivation": "Non-blocking review notes on bug run poll-vote-ordering-and-early-close (2026-10-15, Codex medium + reviewer). Both need a storage failure or a specific three-way reordering, but either can make members disagree on a voter's choice or a closed tally.",
-      "behavior": "nextVoteSeq derives from stored/queued own votes, so a failed local save after a successful send lets the next cast reuse the seq (tie broken by created_at then rumor id, possibly differently from what the sender shows). Close→vote→open counts the late vote; open→close→vote drops it.",
-      "approach": "Persist the seq reservation before sending (e.g. a per-poll last-sent-seq record); count only votes with votedAt <= closedAt when tallying a close regardless of arrival order.",
-      "success_signal": "Unit: failed-save-then-recast yields seq+1; close→vote→open and open→close→vote produce the same tally"
-    },
-    {
-      "slug": "poll-close-announcement-live-gate-retry",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/chatHandler.ts"
-      },
-      "text": "A live poll_close announcement whose gate read fails (getPoll / loadVotesWithPending) is lost at-most-once, though a held-queue retry now exists; poll test coverage lacks fault injection for replay-internal vote writes and queue removals",
-      "created_at": "2026-10-15",
-      "motivation": "Decider-deferred non-blocking items from bug run poll-vote-ordering-and-early-close round 2 (2026-10-15): the live path marks the rumor seen before fan-out, so a transient read failure drops the results announcement for good; the unknown-poll branch swallows a failed enqueue the same way.",
-      "behavior": "gateAnnouncement throws on read failure; the dispatcher catches per handler and the journal acks after handlers, so the announcement is not retried. Replay-internal saveVoteIfNewer / removePendingVotes failures are not separately injected in tests.",
-      "approach": "On a gate read failure (and a failed enqueue), enqueue the announcement to the held close-announcement queue so the next poll message retries it; add fault injection for replay-internal writes/removals.",
-      "success_signal": "Unit: a live poll_close with a failing first getPoll is shown with the correct tally after the next poll message"
-    },
-    {
       "slug": "cross-tab-reactions-refresh",
       "scope": "any",
       "anchor": {
@@ -564,6 +534,71 @@
       "behavior": "Compare (readonly entries()) and delete (delMany) run in two IndexedDB transactions; the settle path (deleteMatchingPendingRemovals) has had the same gap since round 1.",
       "approach": "Do compare+delete in ONE readwrite transaction via the store callback (removalStore()('readwrite', s => cursor over the group's keys, compare in-txn, s.delete only still-matching rows)) and add a unit test with two independent createStore connections where tab B's put between A's read and delete survives.",
       "success_signal": "Two-connection unit test passes: a row rewritten by another connection between compare and delete is never deleted"
+    },
+    {
+      "slug": "poll-kept-votes-held-close-aware-pruning",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts"
+      },
+      "text": "Kept per-voter vote snapshots are pruned without regard to held closes; beyond the 20-snapshot cap a voter can drop out of a held close's tally",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Exact pruning needs held-close receipt times at write time.",
+      "behavior": "When a voter's kept votes exceed MAX_VOTES_KEPT_PER_VOTER the earliest-received is dropped, so a held close whose receipt precedes all kept snapshots does not count that voter (pinned by a cap+1 unit test).",
+      "approach": "Read pending closes inside the vote write; keep voteAsOf per held-close cut-off plus the newest; fall back to the current rule when that read fails.",
+      "success_signal": "The cap+1 'not counted' unit test flips to counted"
+    },
+    {
+      "slug": "poll-receipt-clock-and-seq-cross-tab",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts"
+      },
+      "text": "Poll receipt clock is not ordered across concurrently active tabs, and vote-seq uniqueness without Web Locks is in-tab only",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Belongs to the multi-tab-mls-cache-coherence design.",
+      "behavior": "Per-tab in-memory receipt counters are not ordered across tabs and the lease get-max-set is serialised only in-tab (a tab can regress the persisted mark); allocateVoteSeq is cross-tab unique only where navigator.locks exists.",
+      "approach": "Resolve under multi-tab-mls-cache-coherence: shared lock around the lease write, or a single-writer tab.",
+      "success_signal": "Two-instance unit test with shared IDB orders receipts and seqs across instances without Web Locks"
+    },
+    {
+      "slug": "poll-receipt-clock-seed-failure-backward-step",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts"
+      },
+      "text": "A failed receipt-clock seed read after a backward wall-clock step can stamp a receipt below one persisted before the reload",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Refusing receipts on a failed read would block ingestion on an indeterminate read, which the storage-failure rule forbids.",
+      "behavior": "receiptNow falls back to Date.now when the few:poll-receipt-clock read fails; after a backward clock step a vote can sort before an older held close.",
+      "approach": "Retry the seed read with short backoff before the first receipt, or mark receipts as unordered until seeded.",
+      "success_signal": "Unit: seed read fails once + clock set back; next receipt still above the pre-reload mark"
+    },
+    {
+      "slug": "poll-superseded-prune-at-close",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pollPersistence.ts"
+      },
+      "text": "Superseded vote snapshots are kept after a poll is stored closed, where no held close can use them",
+      "created_at": "2026-10-16",
+      "motivation": "Decider (Fable) waiver/follow-up from bug run poll-residual-ordering-and-close-retry (2026-10-16). Low: storage dead weight only.",
+      "behavior": "The superseded snapshot list on stored vote rows survives the closed-poll write.",
+      "approach": "Drop superseded snapshots in the closed-poll write.",
+      "success_signal": "Unit: after close, stored vote rows carry no superseded snapshots"
+    },
+    {
+      "slug": "poll-held-close-startup-sweep",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx"
+      },
+      "text": "Held poll closes and close announcements are only retried by a later message of the same poll; a closed poll can stay open on a device until expiry",
+      "created_at": "2026-10-16",
+      "motivation": "Reviewer F2 on bug run poll-residual-ordering-and-close-retry (2026-10-16): the creator's close is usually the poll's last message, so the retry trigger may never come.",
+      "behavior": "A close or summary held after a storage failure waits for the next poll message (or its poll_close summary); without one it persists until the 7-day expiry.",
+      "approach": "After journal replay in MarmotContext (~1835), enqueue a maintenance task through the dispatcher FIFO (e.g. enqueueMaintenance) that settles held closes and replays held announcements; must not run outside the FIFO (settle is read-then-save).",
+      "success_signal": "Unit/e2e: close held after a failure applies on next app start with no further poll message"
     }
   ],
   "archive": [
