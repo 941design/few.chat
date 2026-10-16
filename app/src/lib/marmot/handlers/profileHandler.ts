@@ -90,10 +90,13 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // Consume-before-merge is required to close the double-apply race (two
   // concurrent deliveries of the same inner id must not both apply) — the
   // tradeoff is that a mid-handle throw below (e.g. from mergeMemberProfile)
-  // leaves this inner id permanently consumed with no retry; that specific
-  // signed profile becomes a no-op on redelivery, recovered only by a later
-  // profile update with a newer updatedAt and a distinct inner id (LWW).
-  // Intentionally not wrapped in try/catch — see S7-F3.
+  // leaves this inner id consumed for the rest of this subscription; a
+  // redelivery under a distinct outer id is a no-op. The throw keeps THIS
+  // rumor journaled, and the next subscription (fresh gate) re-handles it:
+  // the merge is last-writer-wins and the accepted marker is an atomic
+  // compare-and-clear, so that replay is idempotent (bug:
+  // journal-ack-before-durable-side-effects). Intentionally not wrapped in
+  // try/catch — see S7-F3.
 
   // sig verified by parseProfilePayload. For relay-on-behalf the MLS sender is
   // the relayer, not the author — signedEvent.pubkey is authoritative.
@@ -166,8 +169,17 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
     }
   }
 
+  // Best-effort (remediation round 1): it only stops this device's own
+  // profile-request runner from re-asking for a profile it already has. A
+  // failure costs at most one redundant request, which a peer answers — not
+  // worth keeping the rumor journaled, and a replay could not complete it
+  // anyway (the merge then reports no change).
   if (merged) {
-    await deps.recordRequestAnswered(ctx.groupId, authorPubkey, Date.now());
+    try {
+      await deps.recordRequestAnswered(ctx.groupId, authorPubkey, Date.now());
+    } catch (err) {
+      console.warn(`[Marmot] recordRequestAnswered failed for ${ctx.groupId}:${authorPubkey}; the profile may be re-requested:`, err);
+    }
   }
 
   // AC-036: cancel any pending relay timer for this profile's author.

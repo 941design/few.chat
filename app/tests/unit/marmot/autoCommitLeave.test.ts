@@ -12,6 +12,7 @@
  *   AC-EDGE-3    — burst of N enqueues within window → single commit absorbs all pubkeys
  */
 
+import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // MarmotContext.tsx has React imports. We mock the React module so the
@@ -132,20 +133,26 @@ vi.mock('@/src/context/LanguageContext', () => ({
   useCopy: vi.fn(() => ({ contacts: { pairingAdmissionDigest: (n: number) => `${n} people paired with your code` } })),
 }));
 
-// Per-store Map-backed idb-keyval (bug: pending-member-removals-not-persisted
-// reload scenario below uses the REAL pendingRemovalStorage module).
-const { idbStores } = vi.hoisted(() => ({ idbStores: new Map<string, Map<string, unknown>>() }));
-vi.mock('idb-keyval', () => {
-  const pick = (s?: Map<string, unknown>) => s ?? new Map<string, unknown>();
+// idb-keyval: Map-backed for every store EXCEPT the pending-removal store,
+// which runs on the real idb-keyval over fake-indexeddb (bug:
+// pending-member-removals-not-persisted reload scenario below uses the REAL
+// pendingRemovalStorage module, whose conditional delete is one readwrite
+// transaction — bug: pending-removal-compare-delete-single-txn).
+vi.mock('idb-keyval', async (importOriginal) => {
+  const real = await importOriginal<typeof import('idb-keyval')>();
+  type S = Map<string, unknown> | import('idb-keyval').UseStore | undefined;
+  const isReal = (s: S): s is import('idb-keyval').UseStore => typeof s === 'function';
+  const pick = (s?: S) => (s instanceof Map ? s : new Map<string, unknown>());
   return {
-    createStore: vi.fn((db: string) => { const m = new Map<string, unknown>(); idbStores.set(db, m); return m; }),
-    get: vi.fn(async (k: string, s?: Map<string, unknown>) => pick(s).get(k)),
-    set: vi.fn(async (k: string, v: unknown, s?: Map<string, unknown>) => { pick(s).set(k, v); }),
-    del: vi.fn(async (k: string, s?: Map<string, unknown>) => { pick(s).delete(k); }),
-    delMany: vi.fn(async (ks: string[], s?: Map<string, unknown>) => { ks.forEach((k) => pick(s).delete(k)); }),
-    keys: vi.fn(async (s?: Map<string, unknown>) => [...pick(s).keys()]),
-    entries: vi.fn(async (s?: Map<string, unknown>) => [...pick(s).entries()]),
-    clear: vi.fn(async (s?: Map<string, unknown>) => { pick(s).clear(); }),
+    createStore: vi.fn((db: string, name: string) => (db === 'few-pending-removals' ? real.createStore(db, name) : new Map<string, unknown>())),
+    get: vi.fn(async (k: string, s?: S) => (isReal(s) ? real.get(k, s) : pick(s).get(k))),
+    set: vi.fn(async (k: string, v: unknown, s?: S) => { if (isReal(s)) await real.set(k, v, s); else pick(s).set(k, v); }),
+    del: vi.fn(async (k: string, s?: S) => { if (isReal(s)) await real.del(k, s); else pick(s).delete(k); }),
+    delMany: vi.fn(async (ks: string[], s?: S) => { if (isReal(s)) await real.delMany(ks, s); else ks.forEach((k) => pick(s).delete(k)); }),
+    keys: vi.fn(async (s?: S) => (isReal(s) ? real.keys(s) : [...pick(s).keys()])),
+    entries: vi.fn(async (s?: S) => (isReal(s) ? real.entries(s) : [...pick(s).entries()])),
+    clear: vi.fn(async (s?: S) => { if (isReal(s)) await real.clear(s); else pick(s).clear(); }),
+    promisifyRequest: real.promisifyRequest,
   };
 });
 
@@ -437,9 +444,9 @@ describe('pending removal survives a reload inside the debounce (bug: pending-me
     return storage;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    idbStores.get('few-pending-removals')?.clear();
+    await (await import('@/src/lib/marmot/pendingRemovalStorage')).clearAllPendingRemovals();
   });
 
   it('a reload within the debounce still commits the departed member\'s removal (same leaf), then forgets it', async () => {
@@ -506,6 +513,39 @@ describe('pending removal survives a reload inside the debounce (bug: pending-me
     expect(commit2.mock.calls[0][0].extraProposals[0]).toEqual({ proposalType: PROPOSAL_TYPE_REMOVE, remove: { removed: 3 } });
     expect(queue.has('g1')).toBe(false);
     expect(await storage.listPendingRemovals('g1')).toEqual([]);
+  });
+
+  it('a leave_intent replayed from the journal after the member re-joined at a later epoch does not remove them (bug: journal-replayed-leave-evicts-rejoined-member)', async () => {
+    const storage = await import('@/src/lib/marmot/pendingRemovalStorage');
+    // Session 1 received the leave (journaled with the sender's leaf identity
+    // at the message epoch) but unloaded before handling it. Meanwhile the
+    // member re-joined: their CURRENT leaf is REJOINED.
+    const journaled = storage.leafIdentityOf(ORIGINAL);
+    const replayEnqueue = async (journal: () => Promise<{ journaled: boolean; identity?: string }>, replayed: boolean) => {
+      const queue = new Map<string, import('@/src/lib/marmot/pendingRemovalStorage').PendingRemovalRecord[]>();
+      // MarmotContext.enqueueLeave.
+      await storage.recordLeaveIntent({
+        queue, groupId: 'g1', pubkey: DEPARTED, replayed, now: Date.now(),
+        readJournal: journal, captureCurrent: async () => storage.leafIdentityOf(REJOINED), arm: vi.fn(),
+      });
+      return queue;
+    };
+    const queue = await replayEnqueue(async () => ({ journaled: true, identity: journaled }), true);
+    const commit = await fire(queue, REJOINED);
+    expect(commit).not.toHaveBeenCalled();
+    expect(queue.has('g1')).toBe(false);
+    expect(await storage.listPendingRemovals('g1')).toEqual([]);
+
+    // A replayed leave journaled WITHOUT an identity is skipped: never checked
+    // against the current (re-joined) leaf, so nothing is queued or committed.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const legacy = await replayEnqueue(async () => ({ journaled: true }), true);
+    warn.mockRestore();
+    expect(legacy.size).toBe(0);
+    expect(await fire(legacy, REJOINED)).not.toHaveBeenCalled();
+    // The same leave delivered LIVE (no identity journaled) does use the current leaf.
+    const live = await replayEnqueue(async () => ({ journaled: false }), false);
+    expect(await fire(live, REJOINED)).toHaveBeenCalledTimes(1);
   });
 
   it('(a) an identity-mismatch drop of stale A never settles a replacement B enqueued before the fire settled', async () => {

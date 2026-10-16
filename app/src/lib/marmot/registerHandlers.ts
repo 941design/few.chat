@@ -95,7 +95,7 @@ export interface HandlerDeps {
   removePendingVotes?: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
   setPollVersion: (updater: (v: number) => number) => void;
   // Leave handler deps
-  enqueueLeave: (groupId: string, pubkey: string) => void | Promise<void>;
+  enqueueLeave: (groupId: string, pubkey: string, rumorId: string, meta: import('./applicationRumorDispatcher').DispatchMeta) => void | Promise<void>;
 }
 
 export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = {}): Dispatcher {

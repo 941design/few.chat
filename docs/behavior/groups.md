@@ -26,19 +26,33 @@ transitions still require integration verification.
 Decrypting a group message moves the group's keys forward, and the advanced keys are
 saved before the message itself has been stored — once that happens the message can
 never be decrypted again. So each decrypted message is first kept on the device, and
-only then may the advanced keys be saved. A kept message is discarded once it has been
-processed; one whose processing was cut short is processed the next time the group is
-opened, before any newly arriving message, and is not processed twice if it is also
-re-received. Processing remains at most once: a message whose processing had started
-but did not finish is not run again.
+only then may the advanced keys be saved. A kept message is discarded only once its
+processing **completed** — everything it had to store on the device was stored. One whose
+processing was cut short, or failed to store what it needed (for example a storage error
+while saving a chat message or a pending member removal), stays kept and is processed
+again the next time the group is opened, before any newly arriving message. Processing a
+message again is safe by design: chat messages, profiles and poll votes are stored at most
+once, a departure is queued once per membership, and nothing is counted or announced twice.
+Within one opening of a group a message is processed once; a re-received copy is ignored
+and does not discard a kept message whose processing failed.
 
-- **What this guarantees:** a message that was decrypted is processed once it has been
-  kept, even if the page goes away before it was stored.
+- **What this guarantees:** a message that was decrypted and kept is processed again
+  until its processing completes, even if the page goes away, or storage fails, before
+  it is stored — up to five failed attempts. A message that fails on every one of them
+  (for example one that can never be stored) is then discarded and the failure is
+  logged, so it does not keep being retried for 30 days. If discarding a completed
+  message itself fails, it is not processed again while the app stays open, and the
+  discard is retried; after a reload it may be processed once more, without visible
+  effect.
 - **What it does not:** if keeping the message fails (for example, the device's storage
   is full) the message is processed as before, and a reload at that moment can still
-  lose it. A kept message that is not processed within 30 days is discarded; there is no
-  limit on how many are kept for one group, so a long catch-up cut short is resumed in
-  full.
+  lose it. A failure the app treats as recoverable by other means is not retried this
+  way: anything about a profile request (recording it, or answering it — the requester
+  asks again), noting that a requested profile has arrived (at worst it is requested
+  once more), and reactions and edits or deletions whose storage fails (these are
+  logged, not retried). A kept message that is not processed within 30 days is discarded; there is
+  no limit on how many are kept for one group, so a long catch-up cut short is resumed
+  in full.
 - Kept messages stay on this device only: they are not part of the relay backup, are
   never sent anywhere, and are removed when you leave the group or the account's
   local data is cleared.
@@ -390,12 +404,32 @@ they have left and the roster actually *dropping* them.
   of the group (any other device discards it) — and finalised only if that same
   membership is still present. If the person has since re-joined with a new
   membership, the kept removal is discarded instead: a stale removal never evicts a
-  member. Removals not finalised within 30 days are discarded. These pending removals
-  stay on the device only and are discarded when you leave the group or the account's
-  local data is cleared.
-- **What it does not guarantee:** a leave intent whose durable mirror fails to write
-  (storage error) is kept in memory only; a reload within the 5 s commit window then
-  loses the removal.
+  member. The membership recorded is the one that **sent** the departure, as it stood
+  when the departure was written — so a departure that is only processed after a reload
+  (see *Receiving messages after reopening*), after the person has already re-joined,
+  is discarded too. Removals not finalised within 30 days are discarded. These pending
+  removals stay on the device only and are discarded when you leave the group or the
+  account's local data is cleared.
+- **A storage error does not lose a removal.** If the pending removal cannot be stored,
+  the app still finalises it while it stays open, and the departure itself stays kept on
+  the device until a later attempt has stored it — a repeated departure of the same
+  membership stores it too. If the recorded membership of a kept departure cannot be
+  read, the departure is not acted on then; it stays kept and is processed again later,
+  never against the current membership. Two admin tabs open on the same device never
+  discard each other's pending removals.
+- **What it does not guarantee:** a removal is lost when keeping the departure message
+  and storing the pending removal both fail, followed by a reload before it is
+  finalised, or when storing the removal fails on all five attempts (see *Receiving
+  messages after reopening*). A kept departure that carries no recorded membership (it
+  could not be determined when the departure arrived, or it was kept before the
+  membership was recorded with it) is **not acted on** when it is processed after a
+  reopening: it is discarded rather than checked against the current membership, so the
+  person stays on the roster until they leave again or an admin removes them. (A
+  departure processed as it arrives without a recorded membership uses the membership
+  present at that moment.) A person who re-joins with exactly the same membership keys as
+  before (possible only when re-using the same reusable invitation key without any
+  change in between) cannot be told apart from the departed membership; a stale removal
+  can then remove them.
 - **Only an admin can finalise a removal.** If only regular members are online, it
   waits, and an admin completes it next time one is online — as long as the departure
   signal was published and a relay still carries it.
@@ -629,7 +663,11 @@ the shipped implementation, and the automated test suite:
 - `app/src/lib/marmot/rumorJournal.ts`, `tests/unit/marmot/epochResolver.journalOrdering.test.ts`
   and the end-to-end `groups-rumor-reload-atomic.spec.ts` — the message kept on the
   device before the advanced group keys are saved (receiving after reopening).
-- `app/src/lib/marmot/pendingRemovalStorage.ts`, `tests/unit/marmot/pendingRemovalStorage.test.ts`
-  and `tests/unit/marmot/autoCommitLeave.test.ts` — a pending removal kept across a reload (§8).
+- `app/src/lib/marmot/applicationRumorDispatcher.ts`, `tests/unit/marmot/applicationRumorDispatcher.journal.test.ts`
+  — a kept message is discarded only after its processing completed (receiving after reopening).
+- `app/src/lib/marmot/pendingRemovalStorage.ts`, `tests/unit/marmot/pendingRemovalStorage.test.ts`,
+  `tests/unit/marmot/autoCommitLeave.test.ts`, `tests/unit/marmot/leaveJournalReplay.test.ts` and
+  `tests/unit/marmot/senderLeafIdentity.test.ts` — a pending removal kept across a reload and
+  checked against the membership that sent the departure (§8).
 - The group-* end-to-end specs and the unit tests for the pure implementations. A few
   behaviours are verified by manual validation rather than automated tests.

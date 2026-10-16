@@ -1,0 +1,193 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": {
+    "journal-ack-before-durable-side-effects": "The dispatcher acked every rumor in a finally block after a per-handler catch (at-most-once), and persistPendingRemoval swallowed a failed IndexedDB write so the leave handler resolved. A durable side effect that failed was therefore indistinguishable from success and its only replay source (the journal entry) was deleted.",
+    "journal-ack-failure-replays-applied-rows": "A failed ack was only warned. The row then replayed at every later subscription in the session (re-subscribe re-lists the journal) and once per startup while the delete kept failing. Narrower than filed: a working delete at the next startup already removed it, so '30 days' only applies to a persistently failing delete.",
+    "journal-replayed-leave-evicts-rejoined-member": "enqueueLeave captured the member's leaf identity from the CURRENT tree at handler time. On a journal replay after a re-join that is the re-joined leaf, which then matches at fire time and is removed.",
+    "pending-removal-compare-delete-single-txn": "deleteRowsStillMatching re-read with entries() (readonly transaction) and deleted with delMany (a second readwrite transaction). The per-tab chain does not cover another tab, whose put to the same key could land between the two and be deleted."
+  },
+  "fix": {
+    "dispatcher": "Ack-on-success. The seen-LRU now stores per rumor whether its handlers completed (Map<id, boolean>, same eviction). The entry is acked only when every matching handler completed without throwing; a throw or a fan-out cut short by disposal leaves it journaled, and the next subscription replays it. Dedup is unchanged: a rumor is attempted once per dispatcher; a duplicate of a completed rumor acks, a duplicate of a failed one neither re-runs nor acks. RumorHandler documents the contract: throw iff a needed local side effect did not durably land; failures another mechanism retries are caught in the handler.",
+    "handlers": "persistPendingRemoval/recordPendingRemoval reject on a failed write (warned; the in-memory removal stays queued and still commits) and the leave handler propagates it. profileRequestHandler catches a failed self-profile reply send (the requester re-asks, AC-SEND-10) so a replay never answers a stale request. pollHandler's vote path now throws when the held-close recovery leaves the poll state unknown (the vote was silently dropped and acked before). Comments in chat/poll/profile handlers that relied on 'acked even when it throws' were corrected.",
+    "ack_retry": "rumorJournal.ackRumor records a failed delete in a session-level set and rethrows. A later successful ack and every listPendingRumors retry the recorded deletes best-effort, and listPendingRumors never returns a recorded (already applied) entry; it filters before retrying. Across a reload the set is gone: the row replays once more (idempotent) and is acked then.",
+    "replayed_leave": "marmot-ts exposes the message's epoch (privateMessage.epoch) and the post-decrypt ClientState, but neither marmot-ts nor ts-mls records a per-leaf join epoch, so the epoch alone cannot date a membership. EpochResolver therefore journals, with each application message, the sender pubkey's leaf identity in the ratchet tree of the epoch the message was encrypted in (current tree, or historicalReceiverData's tree for a past-epoch message). enqueueLeave(groupId, pubkey, rumorId) uses that journaled identity (resolveLeaveLeafIdentity) and falls back to the current leaf only when the journal has none (legacy row, failed put) or is unreadable. A replay after a re-join carries the departed identity, mismatches at fire time and is settled, never proposed.",
+    "single_txn_delete": "deleteRowsStillMatching runs one readwrite transaction through the idb-keyval store callback: a cursor over the group's key range compares each row in-transaction (stillMatches) and cursor.delete()s only rows that still match. IndexedDB serialises readwrite transactions on a store across connections, so another tab's put lands before the compare (kept) or after the commit (re-created). Used by both the settle path and resume. An aborted transaction deletes nothing and rejects."
+  },
+  "handler_replay_audit": {
+    "chat (kind 9)": "Replay-safe: appendMessage is insert-if-absent by rumor id; version bump and unread only on insert; resolvePendingSignalsForSlot idempotent; announcement gates re-evaluated (documented F5 cross-session behaviour). poll_close summary: hold (one per poll+sender) plus journal retention converge on one row. An appendMessage failure now stays journaled (it was lost before).",
+    "reaction (kind 7)": "Replay-safe but NOT retried: applyInboundRumor failures are caught and the rumor is acked (unchanged). Reported as a follow-up.",
+    "delete/edit (kind 5)": "Replay-safe but NOT retried: applyDeleteEditSignal failures are caught and acked (unchanged). Reported as a follow-up.",
+    "profile": "Replay-safe: mergeMemberProfile last-writer-wins; the accepted announcement uses the atomic consumePendingDirectInviteMarker, so a replay never re-posts; the one-shot gate is per dispatcher, so the next subscription retries a failed merge. recordRequestAnswered is best-effort (round 1).",
+    "profile request": "Never throws (round 1): recording and answering are best-effort; the requester's retry machinery re-asks (AC-SEND-10).",
+    "poll open/vote/close": "Replay-safe: first-open-wins with recovery on a duplicate open; votes via compare-and-set saveVoteIfNewer; close held once per (poll, sender), earliest receipt kept, applied only to an open poll. Hold-and-rethrow paths now ALSO stay journaled: the in-session retry (next poll message) and the next-subscription replay converge on one close (tested: replayed vote after an unknown-state failure finds the held close applied and drops the late vote). Round 1: a vote whose save fails is queued as an early vote before the rethrow, so a close before the replay counts it.",
+    "leave_intent": "Replay-safe: queue dedup per (pubkey, identity), identity now from first receipt, stale-leaf guard, identity-scoped settle. Round 1: a duplicate re-puts the queued entry; a failed journal identity read throws (no current-leaf fallback)."
+  },
+  "files_changed": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/pendingRemovalStorage.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.journal.test.ts",
+    "app/tests/unit/marmot/autoCommitLeave.test.ts",
+    "app/tests/unit/marmot/epochResolver.journalOrdering.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/pendingRemovalStorage.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/rumorJournal.test.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/polls.md",
+    "app/tests/unit/marmot/leaveJournalReplay.test.ts",
+    "app/tests/unit/marmot/senderLeafIdentity.test.ts",
+    "bug-reports/journal-and-removal-robustness-report.md",
+    "bug-reports/journal-and-removal-robustness-contract.json",
+    "bug-reports/journal-and-removal-robustness-result.json",
+    "bug-reports/journal-and-removal-robustness-state.json",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "app/tests/unit/marmot/rumorJournal.integration.test.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/order-sensitive-ingest.property.test.ts",
+    "app/tests/unit/marmot/rumorJournal.putRumor.test.ts",
+    "app/tests/unit/helpers/callableMapStore.ts"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/leaveJournalReplay.test.ts",
+    "app/tests/unit/marmot/senderLeafIdentity.test.ts",
+    "bug-reports/journal-and-removal-robustness-report.md",
+    "bug-reports/journal-and-removal-robustness-contract.json",
+    "bug-reports/journal-and-removal-robustness-result.json",
+    "bug-reports/journal-and-removal-robustness-state.json",
+    "app/tests/unit/marmot/rumorJournal.putRumor.test.ts",
+    "app/tests/unit/helpers/callableMapStore.ts"
+  ],
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/pendingRemovalStorage.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.journal.test.ts",
+    "app/tests/unit/marmot/autoCommitLeave.test.ts",
+    "app/tests/unit/marmot/epochResolver.journalOrdering.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/pendingRemovalStorage.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/profileRequestHandler.test.ts",
+    "app/tests/unit/marmot/rumorJournal.test.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/polls.md",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "app/tests/unit/marmot/rumorJournal.integration.test.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/order-sensitive-ingest.property.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/pendingRemovalStorage.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/rumorJournal.ts"
+  ],
+  "tests_added": [
+    "pendingRemovalStorage.test.ts: suite moved to fake-indexeddb + real idb-keyval with pass-through spies and a fault-injecting store handle (reject before start / abort mid-flight). New: two-connection tests \u2014 settle path swept over 12 scheduling offsets with tab B rewriting the row (offset 0 failed pre-fix); resume path with tab B writing after every read (4 variants, failed pre-fix); in-transaction compare keeps a row tab B wrote first; key-range scoping incl. prefix collisions; aborted transaction deletes nothing on settle and resume; a failed write rejects. resolveLeaveLeafIdentity (journal first, fallback, both failure injections).",
+    "applicationRumorDispatcher.journal.test.ts: a throwing (async or sync) handler is not acked; duplicates of a failed rumor neither re-run nor ack (inner and outer dedup paths); a failed rumor replayed by the next subscription is acked once it completes; disposal mid-fan-out not acked, disposal during the last handler acked; disposal before start not acked for a handler-less kind.",
+    "leaveJournalReplay.test.ts (new, real dispatcher/leave handler/journal/storage on fake-indexeddb): a failing pending-removal write leaves the journal entry; the next session stores the removal with the journaled identity, acks it, and resume re-arms it; legacy identity-less row falls back to the current leaf.",
+    "rumorJournal.test.ts: failed ack rejects, entry withheld from replay and deleted by the next listing (filtered before retry); a later successful ack retries it; a failed retry is warned and retried later; senderLeafIdentity stored/read, malformed values ignored, unreadable entry rejects.",
+    "senderLeafIdentity.test.ts (new, real marmot-ts getPubkeyLeafNodes over hand-built ts-mls trees): current-epoch tree; past-epoch retained tree when the member re-joined since; missing tree / no private epoch / no sender leaf / non-bigint epoch yield undefined.",
+    "epochResolver.journalOrdering.test.ts: the journaled message carries the sender leaf identity; a throwing lookup is warned and the message is still journaled before the generator resumes.",
+    "autoCommitLeave.test.ts: pending-removal store on fake-indexeddb; a leave replayed after a re-join is settled, not proposed (contrast: current-leaf capture evicts).",
+    "leaveHandler.test.ts: rumor id passed through; a rejected durable write propagates. pollOrdering.test.ts: unknown-state vote rejects (stays journaled) and its replay converges. profileRequestHandler.test.ts: failed self-reply swallowed; failed request record rejects."
+  ],
+  "counts": {
+    "unit_baseline": "5595 passed, 1 skipped (251 files)",
+    "unit_final": "5701 passed, 1 skipped (254 files)",
+    "tsc": "clean",
+    "flake_note": "1 of 5 full runs had 1 unidentified failure (summary only captured); 4 further full runs green, changed test files 8/8 green in a loop."
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch /tmp/claude-501/mutation/jarr/ (stryker.r1.mjs, stryker.r2.mjs, vitest.jarr.config.mjs)",
+    "mutate": "changed lines: pendingRemovalStorage.ts 120-138,170-222,282-292; applicationRumorDispatcher.ts 110-145,168-170,180-189,217-250; rumorJournal.ts 103-155,184-200,239-246; epochResolver.ts 129-145,318-331; leaveHandler.ts 56; pollHandler.ts 306; profileRequestHandler.ts 48-57",
+    "before": "94.19% (162 killed, 10 survived)",
+    "after": "98.27% (170 killed, 3 survived, all equivalent)",
+    "survivors_justified": [
+      "applicationRumorDispatcher.ts:143 `set.size > cap` -> true / >= (2): pre-existing eviction guard inside the range; evicting size-cap <= 0 entries is a no-op (same as recorded in the prior run).",
+      "pendingRemovalStorage.ts:209 key-range prefix -> '' : the range only narrows the cursor scan; stillMatches independently requires value.groupId === groupId for valid rows and explicit listing for malformed keys, so a full-store scan deletes the same rows."
+    ],
+    "gaps_closed": "A rumor of a handler-less kind skipped by disposal must not ack (test added). An empty stored senderLeafIdentity must read as undefined (test added). Equivalent forms simplified: non-null assertions where the seen-map always exists (isCompleted, completion mark); the redundant bigint guard in senderLeafIdentityAtMessageEpoch; the stillInvalidKeys default parameter.",
+    "recorded": "add-audit.sh, 6 changed_lines module records"
+  },
+  "e2e": "not run (fixer brief: lead runs the gate)",
+  "open_questions": [
+    "Reaction (kind 7) and delete/edit (kind 5) handlers still swallow storage failures and ack; making them throw would extend the retry to them. Not changed here (behaviour change outside the four findings).",
+    "Residual for the replayed-leave fix: a re-join from the same reusable last-resort key package with no intervening commit by that member reproduces identical leaf keys (documented in code and groups.md). A true fix needs a per-leaf join epoch from upstream.",
+    "W1\u2013W4 accepted by the Decider (see report, Remediation round 2)."
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The finding's suggested approach (store the epoch, compare with the member's leaf join epoch) assumed data ts-mls/marmot-ts do not record; I had to read the installed ingest and processPrivateMessage code to find usable evidence (the sender's leaf in the message-epoch tree). Switching the pending-removal suite to the store-callback transaction also forced migrating it and autoCommitLeave's harness from Map mocks to fake-indexeddb.",
+    "surprised_by": "The ack-failure finding was overstated: a working delete at the next startup already cleared the row; the real cost was in-session re-dispatch on re-subscribe. Also the poll vote path silently dropped and acked a vote on unknown state despite a comment claiming a journal replay would re-deliver it.",
+    "scope": "project_specific",
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Reviewer REJECTED (sev-6 duplicate-leave ack without a write) + Codex HIGH (journal lookup failure fell back to the current leaf) + 2 Codex mediums + reviewer sev-4/3/3/2 + Codex low.",
+    "fix": [
+      "1 (Codex HIGH): getJournaledSenderLeafIdentity returns {journaled, identity?}; resolveLeaveLeafIdentity rejects on a failed read (handler throws, entry kept, replay retries). Current leaf only with no journal row (live first receipt whose journal write failed) or a legacy identity-less row.",
+      "2 (sev-6/Codex medium): recordPendingRemoval re-puts the QUEUED entry (unchanged receivedAt) on a duplicate; identity-less duplicates stay memory-only.",
+      "3 (Codex medium): handleVote queues a vote whose save failed as an early vote (receipt-stamped) before rethrowing; a failed queue rethrows.",
+      "4 (sev-4): poison guard \u2014 recordRumorFailure (read-increment-put, one txn) counted once per failed attempt; at RUMOR_JOURNAL_MAX_FAILED_ATTEMPTS (5) the dispatcher acks with a warning carrying groupId, kind, rumorId, attempts. A failed count write is warned and keeps the entry; disposal cut-short is not counted.",
+      "5 (sev-3): profileRequestHandler catches recordRequestEmitted and handleIncomingProfileRequest failures too (never throws).",
+      "6 (sev-3): profileHandler recordRequestAnswered caught + warned as best-effort (it only suppresses a redundant re-request; a replay could not complete it since the merge reports no change).",
+      "7 (sev-2): putRumor uses idb-keyval update() (get+put in one readwrite txn), keeping an existing senderLeafIdentity and the attempt count when the new value has none.",
+      "8 (Codex low): appliedUnacked pruned on age eviction (list + sweep), group/account clears, capped at 1000 (oldest forgotten); header comment rewrapped."
+    ],
+    "tests_added": "pendingRemovalStorage: duplicate after a failed put writes (rejects again if that put fails); identity-less duplicate stays memory-only; resolver: journaled identity, no-row and legacy fallbacks, failed read rejects without consulting the current leaf. leaveJournalReplay: same-queue re-subscribe replay keeps the entry until the row lands; unreadable identity keeps the entry and queues nothing; poison drop after 5 subscriptions with kind/id warning; recordRumorFailure counts and survives a re-journal. Dispatcher: counted once per attempt (two failing handlers), limit/default 5, failed count write warned and non-blocking, disposal not counted, no recordFailure \u2192 kept. rumorJournal: lookup shape, merge keeps identity+attempts, malformed carried values dropped, failed write rejects, pruning on expiry/sweep/clears, cap. pollOrdering: failed save \u2192 queued (fields asserted) \u2192 close counts it, replay changes nothing; after-close vote not counted; open-poll replay converges; queue failure rejects. profileRequestHandler: each step's failure swallowed, malformed returns before any step. profileHandler: failing recordRequestAnswered best-effort. Map idb-keyval mocks in 4 suites gained update().",
+    "unit": "5680 passed, 1 skipped (253 files); tsc clean",
+    "mutation": "Stryker (concurrency 1) on round-1 changed lines (stryker.rem1.mjs): first pass 97.66% (4 survived: dispatcher recordFailure guard, vote votedAt/seq fields, malformed profile-request early return); tests added; final 100% (171 killed). Audits recorded (6 records).",
+    "docs": "groups.md: retry up to five failed attempts then discard with a logged warning; profile-request/answered-note failures not retried; \u00a78 storage-error and unreadable-membership behaviour, poison limit, legacy-row check. polls.md \u00a71: a failed vote write is held as an early vote.",
+    "e2e": "not run (per brief)"
+  },
+  "remediation_round_2": {
+    "trigger": "Decider (Fable) RETRY: putRumor hang via idb-keyval update(); replay-aware leave identity; poll closed-before-replay residual to document.",
+    "fix": [
+      "putRumor: read-merge-put via journalStore('readwrite', os => \u2026; return promisifyRequest(os.transaction)); merge+put in try/catch \u2192 os.transaction.abort(); update import removed with a do-not-reintroduce comment; merge semantics unchanged.",
+      "Dispatcher passes DispatchMeta { replayed } (true only from replay()); leaveHandler forwards it; enqueueLeave = recordLeaveIntent: read rejects \u2192 reject; identity \u2192 use; no identity live \u2192 current leaf (failed capture \u2192 pubkey-only memory entry); no identity replayed (incl. legacy rows) \u2192 skip, warn with group+pubkey, resolve (acked). Prose fixed in pendingRemovalStorage.ts, MarmotContext.tsx, leaveHandler.ts, epochResolver.ts, groups.md \u00a78.",
+      "polls.md \u00a75 states the closed-before-replay residual; handleVote's closed-poll branch names it and its trigger (save fails AND fallback enqueue fails or is capped)."
+    ],
+    "tests_added": "rumorJournal.putRumor.test.ts (new): hand-rolled event-driven store \u2014 (a) get error + abort settles and rejects, (b) abort before get success rejects, (c) throwing put \u2192 rejects, abort called, store unchanged, (d) throwing merge \u2192 same, ported start-failure test; fake-indexeddb merge test (identity + attempts survive a re-put without identity; a new identity wins). pendingRemovalStorage: recordLeaveIntent full table for live and replayed (read reject, identity, no row, row without identity, capture throws / finds nothing, failed durable write). Dispatcher: replay() marks replayed:true, live false; a live redelivery of a failed replayed id neither re-runs nor acks. leaveHandler: flag forwarded. leaveJournalReplay: identity-less journaled leave + re-join + replay \u2192 not removed and acked; live counterpart with failed capture \u2192 pubkey-only removal queued and acked; live with identity uses it. autoCommitLeave: replay with journaled identity not removed; identity-less replay skipped; live delivery uses the current leaf. Map-mock suites switched to tests/unit/helpers/callableMapStore.ts (update() mocks removed); exact-arity handler-call assertions in two suites gained the meta argument.",
+    "unit": "5701 passed, 1 skipped (254 files); tsc clean",
+    "mutation": "Stryker (concurrency 1) on round-2 changed lines (stryker.rem3.mjs): 100% (46 killed, 0 survived). Audits recorded (4 records).",
+    "waivers": {
+      "W1": "poll double-failure residual",
+      "W2": "pending-vote cap drop",
+      "W3": "no write-back of the live fallback identity",
+      "W4": "same-key re-join"
+    },
+    "e2e": "not run (per brief)"
+  }
+}

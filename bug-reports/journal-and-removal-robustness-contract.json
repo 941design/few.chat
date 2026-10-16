@@ -1,0 +1,38 @@
+{
+  "bug_name": "journal-and-removal-robustness",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/applicationRumorDispatcher.ts",
+      "app/src/lib/marmot/rumorJournal.ts",
+      "app/src/lib/marmot/epochResolver.ts",
+      "app/src/lib/marmot/pendingRemovalStorage.ts",
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/lib/marmot/handlers/*.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/**",
+      "docs/behavior/**"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "D1: The dispatcher acks a journal entry only when every matching handler completed without throwing. A throwing handler, or a fan-out cut short by disposal, leaves the entry journaled; the next subscription (re-subscribe or startup) replays it. Within one dispatcher a rumor id is attempted once (dedup unchanged); a duplicate of a failed rumor is neither re-handled nor acks the kept entry; a duplicate of a completed rumor acks as before.",
+    "D2: RumorHandler contract: throw iff a local side effect the rumor needs did not durably land; failures another mechanism retries (network sends) are caught inside the handler. Every registered handler is idempotent under replay (audit in result.json).",
+    "D3: persistPendingRemoval / recordPendingRemoval reject on a failed durable write (warned; the in-memory removal stays queued and still commits); the leave handler propagates it.",
+    "D4: profileRequestHandler catches a failed self-profile reply send (requester retries, AC-SEND-10); pollHandler's vote path throws when the held-close recovery leaves the poll state unknown (vote not applied → stays journaled).",
+    "A1: rumorJournal.ackRumor remembers a failed delete for the session (module-level set) and rethrows; a later successful ack and every listPendingRumors retry the remembered deletes best-effort; listPendingRumors never returns a remembered (already applied) entry, filtered before the retry.",
+    "L1: EpochResolver journals, with each application message, the sender pubkey's leaf identity (leafIdentityOf) in the ratchet tree of the message's epoch (current tree for a current-epoch message, historicalReceiverData tree for a past-epoch one); a failed lookup is warned and the message is journaled without it.",
+    "L2: enqueueLeave records a removal with the journaled identity (resolveLeaveLeafIdentity), falling back to the member's current leaf only when the journal has none or is unreadable; a replayed leave after a re-join therefore mismatches at fire time and is settled, never proposed.",
+    "T1: pendingRemovalStorage's conditional delete (settle and resume paths) compares and deletes in ONE readwrite IDB transaction (cursor over the group's key range); a row written by any connection before the transaction is compared in-transaction, one written after re-creates the row — never deleted. An aborted transaction deletes nothing and rejects.",
+    "P1: Privacy invariant untouched: local storage only, no new publishes."
+  ],
+  "non_goals": [
+    "Retrying reaction and edit/delete storage failures (those handlers still swallow and ack; reported as a follow-up).",
+    "A per-leaf join epoch (not recorded by ts-mls/marmot-ts; would need upstream support).",
+    "Cross-tab MLS cache coherence (multi-tab-mls-cache-coherence)."
+  ]
+}

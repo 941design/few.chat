@@ -241,6 +241,18 @@ describe('profileHandler', () => {
     expect(entry.nickname).toBe('Alice');
   });
 
+  it('failure injection: a failing recordRequestAnswered is best-effort — warned, the rest still runs, the handler resolves (no replay)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps(true);
+    deps.recordRequestAnswered.mockRejectedValueOnce(new Error('idb'));
+    const handler = createProfileHandler(deps);
+    const rumor = makeProfileRumor();
+    await expect(handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    expect(deps.writeContactEntry).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('recordRequestAnswered failed'), expect.any(Error));
+    warn.mockRestore();
+  });
+
   it('not-newer (merged=false): setProfileVersion still called, recordRequestAnswered NOT called', async () => {
     const deps = makeDeps(false);
     const handler = createProfileHandler(deps);

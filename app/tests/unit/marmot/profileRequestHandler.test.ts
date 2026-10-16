@@ -237,6 +237,8 @@ function makeSender(pubkey: string = PEER_PUBKEY): { pubkey: string; authenticit
   return { pubkey, authenticity: 'claimed' };
 }
 
+const OTHER_FOR_RELAY = '9f'.repeat(32);
+
 function makeDeps() {
   return {
     recordRequestEmitted: vi.fn(async () => {}),
@@ -315,6 +317,46 @@ describe('profileRequestHandler', () => {
     expect(deps.sendSelfProfile).toHaveBeenCalledOnce();
     expect(deps.sendSelfProfile.mock.calls[0][0]).toBe(GROUP_ID);
     expect(deps.handleIncomingProfileRequest).not.toHaveBeenCalled();
+  });
+
+  it('a failed self-profile reply is warned and swallowed (not a durable failure: the requester re-asks), so the rumor is acked rather than replayed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps();
+    deps.sendSelfProfile.mockRejectedValueOnce(new Error('no relay acked'));
+    const handler = createProfileRequestHandler(deps);
+    const content = JSON.stringify({ type: 'profile_request', targetPubkey: SELF_PUBKEY, nonce: 'n1' });
+    const rumor = makeProfileRequestRumor({ content });
+    await expect(handler.handle(rumor, makeCtx(SELF_PUBKEY), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('answering the request failed'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it.each([
+    ['recordRequestEmitted', SELF_PUBKEY],
+    ['recordRequestEmitted', OTHER_FOR_RELAY],
+    ['handleIncomingProfileRequest', OTHER_FOR_RELAY],
+  ] as const)('a failing %s is warned and swallowed (target %s): the requester retries, so the rumor is never kept for replay', async (step, target) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps();
+    deps[step].mockRejectedValueOnce(new Error('idb'));
+    const handler = createProfileRequestHandler(deps);
+    const rumor = makeProfileRequestRumor({ content: JSON.stringify({ type: 'profile_request', targetPubkey: target, nonce: 'n2' }) });
+    await expect(handler.handle(rumor, makeCtx(SELF_PUBKEY), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    // A failed record never skips the answer.
+    if (step === 'recordRequestEmitted') {
+      expect(target === SELF_PUBKEY ? deps.sendSelfProfile : deps.handleIncomingProfileRequest).toHaveBeenCalledOnce();
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[dispatcher.profileRequest]'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('malformed payload: returns before any step (nothing recorded, nothing warned)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps();
+    const rumor = makeProfileRequestRumor({ content: '{ not valid request }' });
+    await createProfileRequestHandler(deps).handle(rumor, makeCtx(), makeSender(rumor.pubkey));
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('malformed payload: does not throw, no side effects fired', async () => {

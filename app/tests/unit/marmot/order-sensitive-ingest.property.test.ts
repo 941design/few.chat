@@ -397,6 +397,7 @@ describe('AC-ORDER-1 (dispatcher layer): a sender-mismatched rumor never poisons
         expect.objectContaining({ id: sharedId, pubkey: legitPubkey }),
         ctx,
         { pubkey: legitPubkey, authenticity: 'mls' },
+        { replayed: false },
       );
     },
   );
@@ -456,6 +457,7 @@ describe('AC-ORDER-1 (welcomeSubscription + dispatcher, combined real producers)
         expect.objectContaining({ id: rumorId, pubkey: legitPubkey }),
         expect.anything(),
         { pubkey: legitPubkey, authenticity: 'mls' },
+        { replayed: false },
       );
 
       unsubscribe();

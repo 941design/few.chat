@@ -36,22 +36,37 @@ export interface ProfileRequestHandlerDeps {
   }) => Promise<void>;
 }
 
+/**
+ * Every step here is best-effort and never throws (remediation round 1): a
+ * profile request is retried by its sender (profileRequestRunner's sweep keeps
+ * re-asking until an answer lands — AC-SEND-10), so a failure is not worth
+ * keeping the rumor journaled. A replay would also only answer a stale
+ * request or skew the observed-request timestamp.
+ */
 async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileRequestHandlerDeps): Promise<void> {
   const reqPayload = parseProfileRequestPayload(rumor.content);
   if (!reqPayload) return;
 
   // AC-032: record every observed request for deduplication across the group.
-  await deps.recordRequestEmitted(ctx.groupId, reqPayload.targetPubkey, Date.now());
+  try {
+    await deps.recordRequestEmitted(ctx.groupId, reqPayload.targetPubkey, Date.now());
+  } catch (err) {
+    console.warn('[dispatcher.profileRequest] recording the observed request failed:', err);
+  }
 
-  if (reqPayload.targetPubkey === ctx.selfPubkeyHex) {
-    // AC-030: we are the target — reply immediately with our current profile.
-    await deps.sendSelfProfile(ctx.groupId);
-  } else {
-    // AC-031: not our target — delegate to relay handler (AC-033/034).
-    await deps.handleIncomingProfileRequest({
-      groupId: ctx.groupId,
-      payload: reqPayload,
-    });
+  try {
+    if (reqPayload.targetPubkey === ctx.selfPubkeyHex) {
+      // AC-030: we are the target — reply immediately with our current profile.
+      await deps.sendSelfProfile(ctx.groupId);
+    } else {
+      // AC-031: not our target — delegate to relay handler (AC-033/034).
+      await deps.handleIncomingProfileRequest({
+        groupId: ctx.groupId,
+        payload: reqPayload,
+      });
+    }
+  } catch (err) {
+    console.warn('[dispatcher.profileRequest] answering the request failed; the requester retries:', err);
   }
 }
 

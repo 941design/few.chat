@@ -40,9 +40,27 @@ export interface AuthenticatedSender {
   authenticity: 'claimed' | 'mls';
 }
 
+/**
+ * Contract (bug: journal-ack-before-durable-side-effects): `handle` throws (or
+ * rejects) when a local side effect the rumor needs did not durably land —
+ * the dispatcher then keeps the rumor's journal entry and it is handled again
+ * at the next subscription (re-subscribe or next startup). Handlers must
+ * therefore be idempotent under such a replay. Failures that a replay should
+ * NOT retry (a network send another mechanism retries, a best-effort UI
+ * refresh) are caught inside the handler.
+ */
 export interface RumorHandler<TKind extends number = number> {
   kind: TKind;
-  handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender): Promise<void> | void;
+  handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, meta?: DispatchMeta): Promise<void> | void;
+}
+
+/** How a rumor reached its handlers. */
+export interface DispatchMeta {
+  /**
+   * True when it came from replay() (the write-ahead journal: an earlier
+   * session or subscription received it), false for a live/history delivery.
+   */
+  replayed: boolean;
 }
 
 export interface DispatcherSubscription {
@@ -63,12 +81,27 @@ export interface DispatcherSubscription {
 
 /** Write-ahead journal hook (rumorJournal.ts). */
 export interface DispatcherJournal {
-  /** Delete the journal entry once its handlers ran. Failures are warned, never thrown. */
+  /**
+   * Delete the journal entry once every matching handler completed without
+   * throwing. Failures are warned, never thrown out of the dispatcher.
+   */
   ack(groupId: string, rumorId: string): Promise<void>;
+  /**
+   * Count one failed attempt (a handler threw) on the entry and return the
+   * new count (rumorJournal.recordRumorFailure). Optional; a rejection is
+   * warned and the entry is simply kept.
+   */
+  recordFailure?(groupId: string, rumorId: string): Promise<number>;
 }
 
 export interface DispatcherOptions {
   journal?: DispatcherJournal;
+  /**
+   * Failed attempts after which a journaled rumor is dropped as poison (acked
+   * with a warning naming kind and id). Default 5
+   * (rumorJournal.RUMOR_JOURNAL_MAX_FAILED_ATTEMPTS).
+   */
+  maxFailedAttempts?: number;
 }
 
 export interface Dispatcher {
@@ -92,12 +125,16 @@ interface MarmotGroupLike {
 
 /** Maximum number of seen IDs stored per group. */
 const LRU_CAP = 1000;
+const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 
 export function createDispatcher(handlers: RumorHandler[], options: DispatcherOptions = {}): Dispatcher {
   const journal = options.journal;
-  // Per-group LRU: Map<groupId, Set<rumorId>>
-  // Set preserves insertion order; we evict from the front when size > LRU_CAP.
-  const seenByGroup = new Map<string, Set<string>>();
+  const maxFailedAttempts = options.maxFailedAttempts ?? DEFAULT_MAX_FAILED_ATTEMPTS;
+  // Per-group LRU: Map<groupId, Map<rumorId, completed>>. `completed` is false
+  // while the rumor's handlers run and stays false when one failed (its journal
+  // entry is kept), so a duplicate never acks a failed rumor's entry.
+  // Map preserves insertion order; we evict from the front when size > LRU_CAP.
+  const seenByGroup = new Map<string, Map<string, boolean>>();
   // Per-group capacity, raised by replay() (bug: rumor-journal-cap-evicts-unapplied):
   // the journal is bounded by age only, so one replay batch can exceed LRU_CAP.
   // Widening this group's window by the batch size keeps every replayed id (and
@@ -109,18 +146,26 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
     return seenByGroup.get(groupId)?.has(rumorId) ?? false;
   }
 
+  /**
+   * True once the rumor's handlers all completed (false: running, failed, or
+   * evicted). Only asked after isSeen, so the group's map exists.
+   */
+  function isCompleted(groupId: string, rumorId: string): boolean {
+    return seenByGroup.get(groupId)!.get(rumorId) === true;
+  }
+
   function markSeen(groupId: string, rumorId: string): void {
     let set = seenByGroup.get(groupId);
     if (!set) {
-      set = new Set<string>();
+      set = new Map<string, boolean>();
       seenByGroup.set(groupId, set);
     }
-    set.add(rumorId);
+    set.set(rumorId, false);
     // Evict oldest entries if the cap is exceeded.
     const cap = capByGroup.get(groupId) ?? LRU_CAP;
     if (set.size > cap) {
       const toEvict = set.size - cap;
-      const iter = set.values();
+      const iter = set.keys();
       for (let i = 0; i < toEvict; i++) {
         const entry = iter.next();
         if (!entry.done) {
@@ -143,7 +188,31 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
           console.warn('[dispatcher.journalAck]', err);
         }
       };
-      const listener = ({ message, senderPubkey }: AuthenticatedApplicationMessage): Promise<void> => {
+      // Count the failed attempt; at maxFailedAttempts drop (ack) the rumor.
+      const giveUpIfPoison = async (rumor: ApplicationRumor): Promise<void> => {
+        if (!journal?.recordFailure) return;
+        let attempts: number;
+        try {
+          attempts = await journal.recordFailure(ctx.groupId, rumor.id);
+        } catch (err) {
+          console.warn('[dispatcher.journalAttempt]', err);
+          return;
+        }
+        if (attempts < maxFailedAttempts) return;
+        console.warn('[dispatcher.poisonRumor] dropping a rumor that failed every attempt', {
+          groupId: ctx.groupId,
+          kind: rumor.kind,
+          rumorId: rumor.id,
+          attempts,
+        });
+        seenByGroup.get(ctx.groupId)!.set(rumor.id, true);
+        await ack(rumor.id);
+      };
+      const ackIfCompleted = (rumorId: string): Promise<void> =>
+        isCompleted(ctx.groupId, rumorId) ? ack(rumorId) : Promise.resolve();
+      // `replayed` is set only by replay(); the group's event emitter passes the
+      // message alone, so live deliveries are never marked.
+      const listener = ({ message, senderPubkey }: AuthenticatedApplicationMessage, replayed = false): Promise<void> => {
         if (disposed) return Promise.resolve();
         let rumor: ApplicationRumor;
         try {
@@ -155,11 +224,12 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
 
         if (isSeen(ctx.groupId, rumor.id)) {
           // Duplicate of a rumor already accepted (e.g. a live redelivery of a
-          // replayed journal entry, which re-journals it). Ack on the queue —
-          // never before the original's handlers finished, since both share
-          // the same journal key.
+          // replayed journal entry, which re-journals it). Not handled again.
+          // Acked on the queue — never before the original's handlers
+          // finished, since both share the same journal key — and only when
+          // they completed: a failed original's entry is kept for replay.
           const id = rumor.id;
-          tail = tail.then(() => ack(id));
+          tail = tail.then(() => ackIfCompleted(id));
           return tail;
         }
 
@@ -190,33 +260,47 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
         // open/create finishes persisting before its dependent vote/edit runs.
         // Check dedup again inside the queue for overlapping history/live events.
         tail = tail.then(async () => {
-          // Not yet started when disposed: NOT acked — replays next session.
-          // Once fan-out has started it is acked in `finally` (at-most-once)
-          // even if disposal cuts it short.
+          // Not yet started when disposed: NOT acked — replays next subscription.
           if (disposed) return;
           if (isSeen(ctx.groupId, rumor.id)) {
-            await ack(rumor.id);
+            await ackIfCompleted(rumor.id);
             return;
           }
-          // At-most-once attempts: do not replay partial side effects when one
-          // handler fails. Failures are isolated; later messages still run.
+          // Each rumor is attempted once per dispatcher (dedup); failures are
+          // isolated and later messages still run.
           markSeen(ctx.groupId, rumor.id);
-          try {
-            const matching = handlers.filter((h) => h.kind === rumor.kind);
-            for (const handler of matching) {
-              if (disposed) return;
-              try {
-                await handler.handle(rumor, ctx, sender);
-              } catch (err) {
-                console.warn(`[dispatcher.${rumor.kind}]`, err);
-              }
+          let cutShort = false;
+          let failed = false;
+          const matching = handlers.filter((h) => h.kind === rumor.kind);
+          for (const handler of matching) {
+            if (disposed) {
+              cutShort = true;
+              break;
             }
-          } finally {
-            // Write-ahead journal: the rumor has been handed to its handlers
-            // (at-most-once, even if one threw or disposal cut the fan-out
-            // short) — drop the entry so it is not replayed.
-            await ack(rumor.id);
+            try {
+              await handler.handle(rumor, ctx, sender, { replayed });
+            } catch (err) {
+              failed = true;
+              console.warn(`[dispatcher.${rumor.kind}]`, err);
+            }
           }
+          // Write-ahead journal, ack-on-success (bug:
+          // journal-ack-before-durable-side-effects): the entry is dropped only
+          // when every matching handler completed. A handler that threw (its
+          // durable side effect failed) or a fan-out cut short by disposal
+          // leaves the entry journaled; the next subscription replays it and
+          // the idempotent handlers converge.
+          // Poison guard: a failed attempt is counted once on the journal row
+          // (not per handler); at maxFailedAttempts the rumor is dropped so a
+          // deterministic failure does not replay for 30 days. A failed count
+          // write never blocks handling — the entry is just kept.
+          if (failed) {
+            await giveUpIfPoison(rumor);
+            return;
+          }
+          if (cutShort) return;
+          seenByGroup.get(ctx.groupId)!.set(rumor.id, true); // markSeen created it
+          await ack(rumor.id);
         });
         return tail;
       };
@@ -250,7 +334,7 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
         // listener() itself is a no-op once disposed.
         capByGroup.set(ctx.groupId, Math.max(capByGroup.get(ctx.groupId) ?? LRU_CAP, LRU_CAP + entries.length));
         for (const entry of entries) {
-          void listener({ message: entry.data, senderPubkey: entry.senderPubkey } as AuthenticatedApplicationMessage);
+          void listener({ message: entry.data, senderPubkey: entry.senderPubkey } as AuthenticatedApplicationMessage, true);
         }
         return tail;
       };

@@ -76,9 +76,10 @@ async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<v
 /**
  * AC-9: apply what arrived before the poll did, beyond votes — a held close and
  * held poll_close announcements. Idempotent and re-entrant: called at the open
- * and again at every later vote, duplicate open and close of the poll, because
- * the dispatcher acks a failed handler, so a step interrupted after the open's
- * savePoll is only ever retried by a LATER message of the poll.
+ * and again at every later vote, duplicate open and close of the poll, so a
+ * step interrupted after the open's savePoll is retried by a LATER message of
+ * the poll within the session (the failed rumor itself stays journaled and is
+ * re-handled at the next subscription — applicationRumorDispatcher).
  *
  * The stored poll is the truth; queue cleanup is best-effort.
  * - A held close is applied only if the poll is still open and the close's
@@ -143,9 +144,8 @@ async function settleHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollHa
  * it returns the STORED poll (re-read), never the caller's copy: a step may
  * have failed after the closed poll was already saved; without a confirmed
  * read we must not write. If the re-read fails (or finds no poll) it returns
- * 'unknown', and every caller then returns without any write or UI bump — a
- * live rumor dropped that way mirrors the dispatcher's per-handler catch (it
- * is already markSeen'd), and a journal replay re-delivers it.
+ * 'unknown', and every caller then returns without any write or UI bump; the
+ * stranded step stays held and a later message of the poll retries it.
  */
 async function recoverHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollHandlerDeps): Promise<Poll | 'unknown'> {
   try {
@@ -208,9 +208,9 @@ async function handleOpen(rumor: ApplicationRumor, ctx: DispatcherContext, sende
   const existing = await deps.getPoll(ctx.groupId, payload.id);
   if (existing) {
     // Guard semantics unchanged (nothing from THIS message is persisted), but
-    // a re-delivered open is a chance to recover early votes, a held close and
-    // held announcements stranded by an interrupted earlier step (AC-9).
-    // Best-effort.
+    // a re-delivered (or journal-replayed) open is a chance to recover early
+    // votes, a held close and held announcements stranded by an interrupted
+    // earlier step (AC-9). Best-effort.
     if (!existing.closed) await recoverPendingVotes(existing, deps);
     const settled = await recoverHeldCloses(existing, ctx, deps);
     if (settled === 'unknown') return; // unconfirmed state: no further writes
@@ -285,6 +285,11 @@ async function handleVote(rumor: ApplicationRumor, ctx: DispatcherContext, sende
   // Ignore votes for closed polls — but still give held announcements of the
   // poll a retry (a closed poll is never re-closed: settleHeldCloses only
   // closes an open one).
+  // Accepted residual (remediation round 2, waiver W1/W2): a vote whose save
+  // failed AND whose fallback early-vote enqueue failed too (or was dropped by
+  // the pending-vote caps) stays journaled; if the poll closes before its
+  // replay, the replay lands here and the vote is not counted on this device.
+  // Closing stays final (docs/behavior/polls.md §5).
   if (existingPoll.closed) {
     await recoverHeldCloses(existingPoll, ctx, deps);
     return;
@@ -299,8 +304,11 @@ async function handleVote(rumor: ApplicationRumor, ctx: DispatcherContext, sende
   // A held close stranded by an interrupted earlier step closes the poll now —
   // and then this vote arrived after the close and is dropped like any other.
   const settled = await recoverHeldCloses(existingPoll, ctx, deps);
-  // Unconfirmed state (the poll may already be stored closed): no write, no bump.
-  if (settled === 'unknown') return;
+  // Unconfirmed state (the poll may already be stored closed): no write, no
+  // bump — and the vote is not applied, so the handler throws: the vote stays
+  // journaled and is re-handled at the next subscription (compare-and-set
+  // below makes that idempotent; bug: journal-ack-before-durable-side-effects).
+  if (settled === 'unknown') throw new Error('poll state unknown after a failed held-close recovery; vote kept for replay');
   if (settled.closed) {
     deps.setPollVersion((v) => v + 1);
     return;
@@ -318,7 +326,26 @@ async function handleVote(rumor: ApplicationRumor, ctx: DispatcherContext, sende
 
   // Max wins: an older vote (by seq, created_at, rumor id) delivered after a
   // newer one — reordering, a journal replay after a failed ack — is ignored.
-  await deps.saveVoteIfNewer(vote);
+  try {
+    await deps.saveVoteIfNewer(vote);
+  } catch (err) {
+    // The vote did not land. Queue it as an early vote, stamped with its
+    // receipt time, before rethrowing (remediation round 1): a close that
+    // lands before the journal replay then counts it by receipt order
+    // (loadVotesWithPending / voteAsOf), instead of the replay finding the
+    // poll closed and dropping it. If queueing fails too, the rethrow keeps
+    // the rumor journaled and the replay retries.
+    await deps.queuePendingVote({
+      groupId: ctx.groupId,
+      pollId: payload.pollId,
+      voterPubkey: sender.pubkey,
+      responses: payload.responses,
+      votedAt: rumor.created_at * 1000,
+      seq: payload.seq ?? 0,
+      rumorId: rumor.id,
+    });
+    throw err;
+  }
   deps.setPollVersion((v) => v + 1);
 }
 
@@ -347,10 +374,12 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
       closerPubkey: sender.pubkey,
       closedAt: rumor.created_at * 1000,
     });
-  // A live close is acked whether or not this handler throws
-  // (applicationRumorDispatcher), so a close that fails on an indeterminate
-  // read or write is held instead of lost: the next message of the poll
-  // applies it (settleHeldCloses). The original error is still thrown.
+  // A close that fails on an indeterminate read or write is held, so the next
+  // message of the poll applies it within the session (settleHeldCloses). The
+  // original error is still thrown: the rumor stays journaled and is
+  // re-handled at the next subscription, where the held close (one per poll
+  // and sender, earliest receipt kept) is applied first and the replay then
+  // finds the poll closed — the two retries converge on one close.
   const holdAfterFailure = async (err: unknown): Promise<never> => {
     await hold().catch((holdErr: unknown) => {
       console.warn('[pollHandler] holding a failed close for retry failed; it is lost:', holdErr);
@@ -377,8 +406,7 @@ async function handleClose(rumor: ApplicationRumor, ctx: DispatcherContext, send
   // this is safe whoever sent this close. An already-closed poll is final.
   const settled = await recoverHeldCloses(existingPoll, ctx, deps);
   // Unconfirmed state (the poll may already be stored closed): no close write
-  // now — but held, so the next message of the poll applies it (a live close
-  // is acked even when this throws).
+  // now — but held, so the next message of the poll applies it.
   if (settled === 'unknown') return holdAfterFailure(new Error('poll state unknown after a failed held-close recovery'));
   if (settled.closed) {
     if (!existingPoll.closed) deps.setPollVersion((v) => v + 1);

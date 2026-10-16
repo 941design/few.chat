@@ -15,6 +15,7 @@ import {
   getGroupMembers,
 } from '@internet-privacy/marmot-ts';
 import type { IngestResult } from '@internet-privacy/marmot-ts';
+import { leafIdentityOf, type LeafKeys } from './pendingRemovalStorage';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,6 +61,8 @@ type ResolvedApplicationMessage = {
   data: Uint8Array;
   /** MLS-authenticated sender (hex) from the ingest result. */
   senderPubkey: string;
+  /** Sender leaf identity at the message's epoch (senderLeafIdentityAtMessageEpoch). */
+  senderLeafIdentity?: string;
 };
 
 type EpochResolverCallbacks = {
@@ -109,6 +112,35 @@ export function commitIsLower(
 ): boolean {
   if (a.created_at !== b.created_at) return a.created_at < b.created_at;
   return a.id < b.id;
+}
+
+/**
+ * The sender's leaf identity (pendingRemovalStorage.leafIdentityOf over the
+ * sender pubkey's leaves) in the ratchet tree of the epoch an application
+ * message was encrypted in — evidence of WHICH membership sent it (bug:
+ * journal-replayed-leave-evicts-rejoined-member). ts-mls exposes the message
+ * epoch (`privateMessage.epoch`) but records no per-leaf join epoch, so the
+ * epoch alone cannot date a membership; the leaf keys can (a re-join uses a
+ * fresh key package). A current-epoch message uses the current tree, a
+ * past-epoch one the retained tree of its epoch (ts-mls
+ * historicalReceiverData, the tree it was decrypted against). Undefined when
+ * the epoch or its tree is unavailable or the sender has no leaf there.
+ */
+export function senderLeafIdentityAtMessageEpoch(
+  processed: {
+    message: unknown;
+    result: { newState: Pick<import('ts-mls').ClientState, 'groupContext' | 'ratchetTree' | 'historicalReceiverData'> };
+    senderPubkey: string;
+  },
+  getPubkeyLeafNodes: (state: { ratchetTree: unknown }, pubkey: string) => LeafKeys[],
+): string | undefined {
+  // A missing or non-bigint epoch matches neither the current epoch nor a
+  // retained one (ts-mls keys them by bigint), so it yields undefined.
+  const epoch = (processed.message as { privateMessage?: { epoch?: bigint } } | null)?.privateMessage?.epoch;
+  const state = processed.result.newState;
+  const tree = epoch === state.groupContext.epoch ? state.ratchetTree : state.historicalReceiverData.get(epoch as bigint)?.ratchetTree;
+  if (!tree) return undefined;
+  return leafIdentityOf(getPubkeyLeafNodes({ ratchetTree: tree }, processed.senderPubkey));
 }
 
 // ---------------------------------------------------------------------------
@@ -285,9 +317,18 @@ export class EpochResolver {
     try {
       const processed = result as Extract<IngestResult, { kind: 'processed'; senderPubkey: string }>;
       const data = processed.result.message;
-      const { deserializeApplicationData } = await import('@internet-privacy/marmot-ts');
-      const rumor = deserializeApplicationData(data) as ApplicationRumorShape;
-      await onApplicationMessage({ rumor, data, senderPubkey: processed.senderPubkey });
+      const marmot = await import('@internet-privacy/marmot-ts');
+      const rumor = marmot.deserializeApplicationData(data) as ApplicationRumorShape;
+      // Best-effort: without it the message is still journaled; a live leave
+      // then uses the member's current leaf, and a REPLAYED leave without it
+      // is skipped (pendingRemovalStorage.recordLeaveIntent).
+      let senderLeafIdentity: string | undefined;
+      try {
+        senderLeafIdentity = senderLeafIdentityAtMessageEpoch(processed, marmot.getPubkeyLeafNodes as never);
+      } catch (err) {
+        console.warn('[epochResolver] sender leaf identity unavailable:', err);
+      }
+      await onApplicationMessage({ rumor, data, senderPubkey: processed.senderPubkey, senderLeafIdentity });
     } catch (err) {
       console.warn('[epochResolver] onApplicationMessage failed; continuing so the MLS state still saves:', err);
     }

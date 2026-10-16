@@ -11,29 +11,34 @@
  *
  * Contract:
  *   - The leave handler awaits `persistPendingRemoval` BEFORE the dispatcher
- *     acks the journal entry, so from then on either the journal (replay) or
- *     this store carries the removal across an unload.
+ *     acks the journal entry, and a failed write rejects so the entry is not
+ *     acked: from then on either the journal (replay) or this store carries
+ *     the removal across an unload.
  *   - Every subscription (startup and re-subscribe) resumes the group's stored
  *     removals through the same enqueue path (`resumePendingRemovals`).
  *   - Idempotent: keyed `${groupId}:${pubkey}`; a re-put is a no-op in effect,
  *     a resumed entry whose member is already gone is dropped by
  *     fireAutoCommit's stale-leaf guard and then deleted here.
  *   - The in-memory queue stays the session's truth. A failed persist is
- *     warned and never undoes the in-memory removal; a failed delete after a
- *     commit only leaves a stale row that the next resume drops (idempotent).
+ *     warned, never undoes the in-memory removal, and keeps the leave rumor
+ *     journaled; a failed delete after a commit only leaves a stale row that
+ *     the next resume drops (idempotent).
  *
  * Fail-safe toward NOT evicting (remediation round 1): a stored row outlives
  * the session that saw the leave, and a pubkey alone cannot tell a departed
  * member from the same person re-joined later. So:
  *   - Each record carries `leafIdentity`, captured at first receipt: the
- *     member's current leaf node(s) as hex `signaturePublicKey:hpkePublicKey`
- *     (marmot-ts `getPubkeyLeafNodes` → ts-mls `LeafNodeData`). Never the leaf
- *     index — MLS reuses freed indexes. A re-join uses a fresh key package
+ *     member's leaf node(s) as hex `signaturePublicKey:hpkePublicKey`
+ *     (marmot-ts `getPubkeyLeafNodes` → ts-mls `LeafNodeData`) in the tree of
+ *     the epoch the leave was sent in, as journaled with the rumor
+ *     (recordLeaveIntent). A journal replay never captures the current leaf:
+ *     a replayed leave without a journaled identity is skipped. Never the
+ *     leaf index — MLS reuses freed indexes. A re-join uses a fresh key package
  *     (new keys), so its identity differs; fireAutoCommit settles (forgets) an
  *     entry whose identity no longer matches instead of proposing a Remove.
  *     Residual: a re-join from the SAME reusable last-resort key package with
  *     no intervening commit by that member reproduces the identical leaf.
- *   - Without a captured identity a removal is kept in memory only.
+ *   - Without a captured identity a live removal is kept in memory only.
  *   - Resume re-arms stored records as-is (never re-captured), only on a device
  *     that is an admin of the group (only admins can commit the removal);
  *     a non-admin device forgets them; unknown admin status keeps them untouched.
@@ -47,7 +52,7 @@
  * cross-tab store-changed event is posted.
  */
 
-import { createStore, set, delMany, entries, keys, clear } from 'idb-keyval';
+import { createStore, set, delMany, entries, keys, clear, promisifyRequest } from 'idb-keyval';
 
 export const PENDING_REMOVALS_DB_NAME = 'few-pending-removals';
 
@@ -56,10 +61,10 @@ export const PENDING_REMOVALS_DB_NAME = 'few-pending-removals';
 let store: ReturnType<typeof createStore> | undefined;
 const removalStore = (): ReturnType<typeof createStore> => (store ??= createStore(PENDING_REMOVALS_DB_NAME, 'removals'));
 
-// Writes and identity-checked deletes run one at a time (per tab): a
-// conditional delete reads the row, then deletes its key — a re-write of the
-// same key (a re-joined member's new removal) must never land in between and
-// be deleted with it.
+// Writes and identity-checked deletes run one at a time per tab, in issue
+// order. Safety against a re-write of the same key (a re-joined member's new
+// removal) landing between a compare and its delete — in this tab or another —
+// comes from deleteRowsStillMatching's single readwrite transaction.
 let opChain: Promise<unknown> = Promise.resolve();
 function serialised<T>(op: () => Promise<T>): Promise<T> {
   const run = opChain.then(op, op);
@@ -102,6 +107,69 @@ export function leafIdentityOf(leaves: readonly LeafKeys[]): string | undefined 
     .join('|');
 }
 
+/** What the rumor journal holds for one rumor (rumorJournal.getJournaledSenderLeafIdentity). */
+export interface JournaledLeafIdentity {
+  /** A journal row exists for the rumor. */
+  journaled: boolean;
+  /** The sender leaf identity recorded with it at first receipt, if any. */
+  identity?: string;
+}
+
+/**
+ * The enqueue for a leave intent (MarmotContext.enqueueLeave; bugs:
+ * journal-replayed-leave-evicts-rejoined-member, remediation rounds 1–2).
+ * Which leaf identity the removal is checked against:
+ *
+ *   journal read rejects                 → reject (the leave stays journaled
+ *                                          and is retried; it may be a replay)
+ *   identity journaled at first receipt  → use it (live or replayed)
+ *   no identity (no row, or a row without
+ *   one), LIVE delivery                  → capture the member's CURRENT leaf
+ *                                          (a failed capture → pubkey-only,
+ *                                          memory-only entry)
+ *   no identity, REPLAYED from the journal → SKIP: nothing is enqueued, not
+ *                                          even in memory; warned and resolved
+ *                                          (so the entry is acked)
+ *
+ * The journaled identity comes from the tree of the epoch the leave was sent
+ * in, so a leave replayed after the member re-joined still carries the
+ * departed membership and fireAutoCommit settles it instead of evicting the
+ * new one. A replay has no such evidence otherwise — the current leaf may be
+ * a re-joined membership — so it is never captured then (this includes rows
+ * journaled before the identity was recorded). Otherwise as
+ * recordPendingRemoval (rejects when the durable write failed); the debounce
+ * timer is armed whenever something was enqueued.
+ */
+export async function recordLeaveIntent(args: {
+  queue: Map<string, PendingRemovalRecord[]>;
+  groupId: string;
+  pubkey: string;
+  replayed: boolean;
+  now: number;
+  readJournal: () => Promise<JournaledLeafIdentity>;
+  captureCurrent: () => Promise<string | undefined>;
+  arm: (groupId: string) => void;
+  put?: (r: PendingRemovalRecord) => Promise<void>;
+}): Promise<void> {
+  const { queue, groupId, pubkey, replayed, now, readJournal, captureCurrent, arm, put } = args;
+  const recorded = await readJournal();
+  let leafIdentity = recorded.identity;
+  if (leafIdentity === undefined) {
+    if (replayed) {
+      console.warn(`[Marmot] replayed leave of ${pubkey} in group ${groupId} has no journaled leaf identity; skipped (never checked against the current leaf)`);
+      return;
+    }
+    try {
+      leafIdentity = await captureCurrent();
+    } catch (err) {
+      console.warn('[Marmot] leaf identity capture for a pending removal failed:', err);
+    }
+  }
+  const persisted = recordPendingRemoval(queue, groupId, pubkey, now, leafIdentity, put);
+  arm(groupId);
+  return persisted;
+}
+
 function removalKey(groupId: string, pubkey: string): string {
   return `${groupId}:${pubkey}`;
 }
@@ -133,35 +201,59 @@ export interface SettledRemoval {
   receivedAt?: number;
 }
 
+/** Whether a stored row (`key` → `value`) is one `deleteRowsStillMatching` must delete. */
+function stillMatches(
+  groupId: string,
+  key: IDBValidKey,
+  value: unknown,
+  matchers: readonly SettledRemoval[],
+  stillInvalidKeys: readonly IDBValidKey[] | undefined,
+): boolean {
+  if (!isStoredRecord(key, value)) return stillInvalidKeys?.includes(key) === true;
+  return (
+    value.groupId === groupId &&
+    matchers.some(
+      (x) =>
+        x.pubkey === value.pubkey &&
+        x.leafIdentity === value.leafIdentity &&
+        (x.receivedAt === undefined || x.receivedAt === value.receivedAt),
+    )
+  );
+}
+
 /**
- * Unserialised core (callers hold the chain): re-read the group's rows and
- * delete only those that still match — a valid row whose pubkey AND leaf
- * identity (AND receivedAt, when given) equal a matcher, or a key listed in
- * `stillInvalidKeys` that is still malformed. The chain serialises this tab
- * only: the re-read and the delete are separate IDB transactions, so another
- * tab re-writing a row between them can still lose it
- * (backlog: pending-removal-compare-delete-single-txn).
+ * Unserialised core (callers hold the chain): delete only the group's rows
+ * that still match — a valid row whose pubkey AND leaf identity (AND
+ * receivedAt, when given) equal a matcher, or a key listed in
+ * `stillInvalidKeys` that is still malformed.
+ *
+ * Compare and delete run in ONE readwrite IndexedDB transaction (a cursor over
+ * the group's key range; backlog: pending-removal-compare-delete-single-txn).
+ * IndexedDB serialises readwrite transactions on a store across connections,
+ * so a put by another tab lands either before the cursor reads the row (the
+ * row then no longer matches and is kept) or after the transaction committed
+ * (it re-creates the row). A row rewritten by any tab between an earlier read
+ * (resume's classification) and this delete is never deleted. Rejects when
+ * the transaction fails; an aborted transaction deletes nothing.
  */
-async function deleteRowsStillMatching(
+function deleteRowsStillMatching(
   groupId: string,
   matchers: readonly SettledRemoval[],
   stillInvalidKeys?: readonly IDBValidKey[],
 ): Promise<void> {
-  const { valid, invalidKeys } = await readPendingRemovalRows(groupId);
-  const doomed = [
-    ...valid
-      .filter((r) =>
-        matchers.some(
-          (x) =>
-            x.pubkey === r.pubkey &&
-            x.leafIdentity === r.leafIdentity &&
-            (x.receivedAt === undefined || x.receivedAt === r.receivedAt),
-        ),
-      )
-      .map((r) => removalKey(groupId, r.pubkey)),
-    ...invalidKeys.filter((k) => stillInvalidKeys?.includes(k)),
-  ];
-  if (doomed.length > 0) await delMany(doomed, removalStore());
+  const prefix = `${groupId}:`;
+  return removalStore()('readwrite', (os) => {
+    // Only IDB request callbacks inside: any other await would let the
+    // transaction auto-commit between the compare and the delete.
+    const cursorRequest = os.openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (!cursor) return;
+      if (stillMatches(groupId, cursor.key, cursor.value, matchers, stillInvalidKeys)) cursor.delete();
+      cursor.continue();
+    };
+    return promisifyRequest(os.transaction);
+  });
 }
 
 /**
@@ -215,9 +307,12 @@ export async function clearAllPendingRemovals(): Promise<void> {
 // ── Queue glue used by MarmotContext (pure; injected storage) ───────────────
 
 /**
- * Persist a just-enqueued removal, best-effort: a failed write is warned and
- * swallowed so the in-memory removal (the session's truth) still commits.
- * Never rejects.
+ * Persist a just-enqueued removal. A failed write is warned and REJECTS (bug:
+ * journal-ack-before-durable-side-effects): the leave handler propagates it,
+ * so the dispatcher does not ack the leave rumor's journal entry and the next
+ * subscription replays it (idempotent: the queue de-duplicates and the
+ * stale-leaf guard drops a member already gone). The in-memory removal — the
+ * session's truth — is already queued and still commits.
  */
 export async function persistPendingRemoval(
   record: PendingRemovalRecord,
@@ -226,7 +321,8 @@ export async function persistPendingRemoval(
   try {
     await put(record);
   } catch (err) {
-    console.warn('[Marmot] pending removal persist failed (kept in memory only):', err);
+    console.warn('[Marmot] pending removal persist failed (kept in memory; the leave stays journaled for replay):', err);
+    throw err;
   }
 }
 
@@ -336,10 +432,14 @@ export function addToRemovalQueue(
 
 /**
  * The enqueue half of MarmotContext's `enqueueLeave` (the debounce timer is
- * armed by the caller): add to the in-memory queue, then mirror the entry
- * durably — only when it is new and its leaf identity was captured (an
- * unverifiable removal is never persisted). Resolves once the durable write
- * settled; never rejects.
+ * armed by the caller): add to the in-memory queue, then mirror the queued
+ * entry durably — only when its leaf identity was captured (an unverifiable
+ * removal is never persisted). A duplicate (same member and identity already
+ * queued) re-puts the QUEUED entry, unchanged (remediation round 1): an
+ * earlier put of it may have failed, and resolving without a write would let
+ * the dispatcher ack this leave with nothing stored. The put is idempotent
+ * (same key, same value). Resolves once the durable write landed; rejects
+ * when it failed (the in-memory entry stays queued).
  */
 export function recordPendingRemoval(
   queue: Map<string, PendingRemovalRecord[]>,
@@ -350,12 +450,14 @@ export function recordPendingRemoval(
   put?: (r: PendingRemovalRecord) => Promise<void>,
 ): Promise<void> {
   const record: PendingRemovalRecord = { groupId, pubkey, receivedAt: now, ...(leafIdentity ? { leafIdentity } : {}) };
-  if (!addToRemovalQueue(queue, record)) return Promise.resolve();
-  if (!leafIdentity) {
+  addToRemovalQueue(queue, record);
+  // The queued entry for this member: `record`, or the duplicate it matched.
+  const queued = queue.get(groupId)!.find((e) => e.pubkey === pubkey)!;
+  if (!queued.leafIdentity) {
     console.warn('[Marmot] pending removal has no leaf identity; kept in memory only');
     return Promise.resolve();
   }
-  return persistPendingRemoval(record, put);
+  return persistPendingRemoval(queued, put);
 }
 
 /**

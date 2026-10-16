@@ -27,9 +27,13 @@ const { createdStores, defaultStore } = vi.hoisted(() => ({
 
 const backing = (store?: Map<string, unknown>) => store ?? defaultStore;
 
-vi.mock('idb-keyval', () => ({
+vi.mock('idb-keyval', async (importOriginal) => {
+  const { callableMapStore } = await import('../helpers/callableMapStore');
+  return {
+  promisifyRequest: (await importOriginal<typeof import('idb-keyval')>()).promisifyRequest,
+  // Map-backed, and callable as a store callback (rumorJournal.putRumor).
   createStore: vi.fn(() => {
-    const m = new Map<string, unknown>();
+    const m = callableMapStore(new Map<string, unknown>());
     createdStores.push(m);
     return m;
   }),
@@ -40,7 +44,8 @@ vi.mock('idb-keyval', () => ({
   delMany: vi.fn(async (ks: string[], store?: Map<string, unknown>) => { ks.forEach((k) => backing(store).delete(k)); }),
   entries: vi.fn(async (store?: Map<string, unknown>) => [...backing(store).entries()]),
   clear: vi.fn(async (store?: Map<string, unknown>) => { backing(store).clear(); }),
-}));
+};
+});
 
 const { clearAllGroupData } = await import('@/src/lib/marmot/groupStorage');
 const { putRumor, listPendingRumors } = await import('@/src/lib/marmot/rumorJournal');

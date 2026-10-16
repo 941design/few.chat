@@ -28,12 +28,16 @@ recent-message history. Different groups can process messages independently.
 A vote — or a close, or the close's results summary in the conversation — that arrives
 before its poll exists is **held** and applied once the poll arrives (§7). Which of a
 member's votes counts does not depend on arrival order at all (§3). Handler failures are
-logged and later messages continue, but already attempted messages are not automatically
-retried: repeating partially completed side effects could duplicate notifications or other
-actions. The exception is a close and its results summary: one that fails on a storage read
-or write is held the same way and applied by the next message of that poll (§7), because
-a lost close would leave the poll open on that device for good. These limits differ from
-storage writes overtaking each other.
+logged and later messages continue. A poll message whose storage read or write fails is not
+retried while the group stays open, but it is processed again the next time the group is
+opened (see the groups specification, *Receiving messages after reopening*); repeating it
+is harmless — a poll is created once, a vote is recorded only if it is newer, a close is
+applied only to an open poll, and a results summary is shown once. A close and its results
+summary are additionally held when they fail on a storage read or write, and applied by the
+next message of that poll (§7), so the poll does not stay open on that device until the
+next opening. A vote whose storage write fails is likewise held as an early vote before the
+failure is reported, so a close that arrives before the vote is processed again counts it —
+it was received before the close (§3). These limits differ from storage writes overtaking each other.
 
 
 ## 2. Creating a poll
@@ -132,6 +136,9 @@ keeps up to twenty of a member's votes per poll. A member who changes their vote
 twenty times after such a close, before the poll arrives, loses their earliest votes, and
 then counts with **no** vote in that poll's result on that device. Had the poll arrived
 first, their vote at the close would count.
+If the device cannot store a vote at all when it arrives (its storage fails twice in a row),
+the vote is retried later; if the poll was closed in the meantime, it is not counted on this
+device — closing stays final.
 The alternative — comparing each vote's send time with the close's — would let members
 agree on a vote that was still in flight at the close, but it trusts the senders' clocks, so
 a member could back-date a vote into a closed poll, and it would require changing a closed

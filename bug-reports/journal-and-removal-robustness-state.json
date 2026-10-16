@@ -1,0 +1,102 @@
+{
+  "bug_name": "journal-and-removal-robustness",
+  "bug_report_file": "bug-reports/journal-and-removal-robustness-report.md",
+  "created_at": "2026-10-16T07:05:00Z",
+  "updated_at": "2026-10-16T09:00:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does the pending-removal conditional delete compare and delete in one readwrite IndexedDB transaction on both the settle and resume paths, with a two-connection unit test (failing before the fix) in which another connection's write between compare and delete survives?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does the dispatcher ack a journal entry only when every handler for that rumor completed, keep a failed one for replay, preserve dedup within a dispatcher, and does a unit test show a failing pending-removal write leaves the journal entry and the removal is stored after a reload? Is every registered handler replay-safe (audit), including the poll hold-and-rethrow paths?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Is a failed ack retried within the session and the applied entry never re-dispatched in that session, with failure injection on the retry?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Is the receipt-time ordering evidence marmot-ts exposes stored with the journal entry and used so that replaying an old leave_intent after the member re-joined does not remove them (failing before the fix), with the limits of that evidence stated?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "QUALITY",
+      "question": "Every touched storage step failure-injected; unit suite + tsc green; Stryker (concurrency 1) on changed lines with survivors killed or justified; groups.md (and other affected behaviour docs) updated?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "e4ab785c6e27b3d063fdf4a9af8ab0c8f84e3f11",
+  "models": {
+    "lead": "opus",
+    "implementer": "opus"
+  },
+  "baseline": {
+    "unit": "5595 passed, 1 skipped (251 files)"
+  },
+  "fix": {
+    "unit": "5701 passed, 1 skipped (254 files)",
+    "tsc": "clean",
+    "mutation": "round 2 changed lines 100% (46 killed)",
+    "e2e": "not run by fixer"
+  },
+  "review_rounds": [],
+  "remediation_round": 2,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T07:05:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T07:08:00Z",
+      "trigger": "fixer_spawned"
+    },
+    {
+      "phase": "FIX_COMPLETE",
+      "timestamp": "2026-10-16T07:45:00Z",
+      "trigger": "fixer_done"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-16T08:10:00Z",
+      "trigger": "review_rejected_round_1"
+    },
+    {
+      "phase": "FIX_COMPLETE",
+      "timestamp": "2026-10-16T09:00:00Z",
+      "trigger": "remediation_round_1_done"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-16T09:40:00Z",
+      "trigger": "decider_retry_round_2"
+    },
+    {
+      "phase": "FIX_COMPLETE",
+      "timestamp": "2026-10-16T10:30:00Z",
+      "trigger": "remediation_round_2_done"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T09:00:00Z",
+      "trigger": "decider_fable_round2_conditions_met_codex_verify_clean_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-jarr3.log"
+  }
+}

@@ -109,7 +109,7 @@ beforeEach(() => {
 // ---- LEAVE_INTENT ------------------------------------------------------------
 
 describe('leaveHandler / LEAVE_INTENT', () => {
-  it('happy-path: well-formed kind-13 rumor calls enqueueLeave once with (groupId, pubkey)', async () => {
+  it('happy-path: well-formed kind-13 rumor calls enqueueLeave once with (groupId, pubkey, rumorId)', async () => {
     const deps = makeDeps();
     const handler = createLeaveIntentHandler(deps);
     const rumor = makeLeaveRumor();
@@ -118,7 +118,7 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.enqueueLeave).toHaveBeenCalledOnce();
-    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
+    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY, rumor.id, { replayed: false });
   });
 
   it('returns enqueueLeave\'s promise so the dispatcher acks the journal entry only after the durable write settled (bug: pending-member-removals-not-persisted)', async () => {
@@ -131,6 +131,23 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     expect(result).toBe(persisted);
     release();
     await result;
+  });
+
+  it('passes the dispatcher\'s replayed flag through to enqueueLeave (only an explicit true counts)', async () => {
+    const deps = makeDeps();
+    const handler = createLeaveIntentHandler(deps);
+    const rumor = makeLeaveRumor();
+    await handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey), { replayed: true });
+    await handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey), { replayed: false });
+    await handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey));
+    expect(deps.enqueueLeave.mock.calls.map((c) => c[3])).toEqual([{ replayed: true }, { replayed: false }, { replayed: false }]);
+  });
+
+  it('propagates a rejected durable write, so the dispatcher keeps the journal entry (bug: journal-ack-before-durable-side-effects)', async () => {
+    const deps = { enqueueLeave: vi.fn(() => Promise.reject(new Error('QuotaExceeded'))) };
+    const handler = createLeaveIntentHandler(deps);
+    const rumor = makeLeaveRumor();
+    await expect(handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey))).rejects.toThrow('QuotaExceeded');
   });
 
   it('malformed payload (missing pubkey): does NOT call enqueueLeave', () => {
@@ -191,7 +208,7 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     await handler.handle(rumor, ctx, sender);
 
     expect(deps.enqueueLeave).toHaveBeenCalledOnce();
-    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
+    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY, rumor.id, { replayed: false });
   });
 
   it('AC-FORCE-3 edge: payload.pubkey and sender.pubkey match only after case normalization still enqueues', async () => {
@@ -210,7 +227,7 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     await handler.handle(rumor, ctx, sender);
 
     expect(deps.enqueueLeave).toHaveBeenCalledOnce();
-    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
+    expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY, rumor.id, { replayed: false });
   });
 
   it('duplicate-id: dispatcher LRU prevents second enqueueLeave call', async () => {

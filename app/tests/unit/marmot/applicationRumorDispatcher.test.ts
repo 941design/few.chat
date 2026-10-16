@@ -127,7 +127,7 @@ describe('applicationRumorDispatcher', () => {
     expect(handleSpy).toHaveBeenCalledWith(mockRumor, ctx, {
       pubkey: mockRumor.pubkey,
       authenticity: 'mls',
-    });
+    }, { replayed: false });
   });
 
   it('AC-SEAM-1/AC-XCUT-1: sender-mismatched rumor is dropped, not handed to handlers, and does not poison the dedup LRU — a later sender-matched redelivery of the same id still dispatches', async () => {
@@ -246,7 +246,7 @@ describe('applicationRumorDispatcher', () => {
     await flushPromises();
 
     expect(handleSpy).toHaveBeenCalledOnce();
-    expect(handleSpy).toHaveBeenCalledWith(mockRumor, ctx, { pubkey: eventSenderPubkey, authenticity: 'mls' });
+    expect(handleSpy).toHaveBeenCalledWith(mockRumor, ctx, { pubkey: eventSenderPubkey, authenticity: 'mls' }, { replayed: false });
   });
 
   it('AC-SEAM-2: exactly one group.on(...) is registered for the message-carrying event across a subscribe() call, and it is never the retired "applicationMessage" event name', () => {

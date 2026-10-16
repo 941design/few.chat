@@ -217,8 +217,13 @@ describe('collectBackupPayload', () => {
   // relay backup.
   it('never includes the write-ahead rumor journal', async () => {
     await saveGroup({ id: 'g1', name: 'Test', createdAt: 1700000000000, memberPubkeys: [], relays: [] });
-    const { putRumor, listPendingRumors } = await import('@/src/lib/marmot/rumorJournal');
-    await putRumor({ groupId: 'g1', rumorId: 'journal-marker-rumor', senderPubkey: 'journal-marker-sender', data: new Uint8Array([7, 7, 7]) });
+    const { listPendingRumors } = await import('@/src/lib/marmot/rumorJournal');
+    // A journal row written straight into the journal's (mocked) store.
+    const { set } = await import('idb-keyval');
+    await set('g1:journal-marker-rumor', {
+      groupId: 'g1', rumorId: 'journal-marker-rumor', senderPubkey: 'journal-marker-sender',
+      data: new Uint8Array([7, 7, 7]), receivedAt: Date.now(),
+    }, 'few-rumor-journal:rumors' as never);
     expect(await listPendingRumors('g1')).toHaveLength(1);
 
     const payload = await collectBackupPayload();

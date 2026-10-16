@@ -3,7 +3,9 @@
  * (bug: mls-message-lost-on-unload-after-ingest, VQ-3).
  *
  *  - journal.ack(groupId, rumorId) runs at the END of the queued block, after
- *    every matching handler, even when a handler throws.
+ *    every matching handler — and only when every one of them completed
+ *    (bug: journal-ack-before-durable-side-effects): a handler that throws, or
+ *    a fan-out cut short by disposal, leaves the entry journaled for replay.
  *  - replay(entries) feeds journaled rumors through the IDENTICAL listener
  *    (sender choke point, LRU dedup, handlers), ahead of later live rumors, and
  *    a replayed id suppresses its live duplicate.
@@ -68,10 +70,10 @@ describe('dispatcher journal.ack', () => {
     expect(log).toEqual(['h1:m1', 'h2:m1', 'ack:G1:m1']);
   });
 
-  it('acks even when a handler throws, and the queue keeps going', async () => {
+  it('does NOT ack when a handler throws (its durable side effect failed); the other handlers still run and the queue keeps going', async () => {
     const log: string[] = [];
     const journal = makeJournal(log);
-    const boom = { kind: 9, handle: vi.fn(async () => { throw new Error('boom'); }) };
+    const boom = { kind: 9, handle: vi.fn(async (r: { id: string }) => { if (r.id === 'm1') throw new Error('boom'); }) };
     const ok = { kind: 9, handle: vi.fn((r: { id: string }) => { log.push(`ok:${r.id}`); }) };
     const group = makeFakeGroup();
     const sub = createDispatcher([boom, ok], { journal }).subscribe(group, ctx);
@@ -80,8 +82,54 @@ describe('dispatcher journal.ack', () => {
     group.emit('m2');
     await sub.drain();
 
-    expect(log).toEqual(['ok:m1', 'ack:G1:m1', 'ok:m2', 'ack:G1:m2']);
-    expect(warn).toHaveBeenCalled();
+    expect(log).toEqual(['ok:m1', 'ok:m2', 'ack:G1:m2']);
+    expect(warn).toHaveBeenCalledWith('[dispatcher.9]', expect.any(Error));
+  });
+
+  it('a synchronously throwing handler is a failure too (not acked)', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const boom = { kind: 9, handle: vi.fn(() => { throw new Error('sync'); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    await sub.drain();
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('a duplicate of a FAILED rumor is neither handled again nor acks the kept entry (outer and inner dedup paths)', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    const boom = { kind: 9, handle: vi.fn(async () => { throw new Error('boom'); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    group.emit('m1'); // queued before the original ran (inner isSeen path)
+    await sub.drain();
+    group.emit('m1'); // after it failed (outer isSeen path)
+    await sub.drain();
+    expect(boom.handle).toHaveBeenCalledTimes(1);
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('a failed rumor is replayed by the next subscription and acked once its handlers complete (idempotent retry)', async () => {
+    const entries = new Map<string, { data: Uint8Array; senderPubkey: string }>();
+    const journal = { ack: vi.fn(async (g: string, id: string) => { entries.delete(`${g}:${id}`); }) };
+    let fail = true;
+    const applied: string[] = [];
+    const handler = { kind: 9, handle: vi.fn(async (r: { id: string }) => { if (fail) throw new Error('idb write failed'); applied.push(r.id); }) };
+
+    const first = createDispatcher([handler], { journal }).subscribe(makeFakeGroup(), ctx);
+    entries.set('G1:m1', { data: rumorBytes('m1'), senderPubkey: A });
+    await first.replay([...entries.values()]);
+    expect(entries.has('G1:m1')).toBe(true);
+    first();
+
+    fail = false;
+    const next = createDispatcher([handler], { journal }).subscribe(makeFakeGroup(), ctx);
+    await next.replay([...entries.values()]);
+    expect(applied).toEqual(['m1']);
+    expect(entries.size).toBe(0);
   });
 
   it('acks a rumor whose kind has no handler', async () => {
@@ -134,7 +182,7 @@ describe('dispatcher journal.ack', () => {
     expect(log).toEqual(['h:m1', 'ack:G1:m1', 'ack:G1:m1']);
   });
 
-  it('disposal mid-fan-out stops the remaining handlers but still acks (at-most-once)', async () => {
+  it('disposal mid-fan-out stops the remaining handlers and does NOT ack (the entry replays; handlers are idempotent)', async () => {
     const log: string[] = [];
     const journal = makeJournal(log);
     let sub: ReturnType<ReturnType<typeof createDispatcher>['subscribe']>;
@@ -142,6 +190,18 @@ describe('dispatcher journal.ack', () => {
     const second = { kind: 9, handle: vi.fn(() => { log.push('h2'); }) };
     const group = makeFakeGroup();
     sub = createDispatcher([first, second], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    await sub.drain();
+    expect(log).toEqual(['h1']);
+  });
+
+  it('disposal while the LAST handler runs: the fan-out completed, so it is acked', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    let sub: ReturnType<ReturnType<typeof createDispatcher>['subscribe']>;
+    const only = { kind: 9, handle: vi.fn(() => { log.push('h1'); sub(); }) };
+    const group = makeFakeGroup();
+    sub = createDispatcher([only], { journal }).subscribe(group, ctx);
     group.emit('m1');
     await sub.drain();
     expect(log).toEqual(['h1', 'ack:G1:m1']);
@@ -171,6 +231,17 @@ describe('dispatcher journal.ack', () => {
     await sub.drain();
     await settle();
     expect(h.handle).not.toHaveBeenCalled();
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('work of a kind WITHOUT handlers skipped because of disposal is not acked either (not started ≠ completed)', async () => {
+    const journal = makeJournal([]);
+    const group = makeFakeGroup();
+    const sub = createDispatcher([], { journal }).subscribe(group, ctx);
+    group.emit('m1', A, 4242);
+    sub();
+    await sub.drain();
+    await settle();
     expect(journal.ack).not.toHaveBeenCalled();
   });
 
@@ -326,5 +397,113 @@ describe('re-subscribe after disposal (MarmotContext awaits the old drain before
     expect(handled.filter((id) => id === 'm1')).toHaveLength(1);
     expect(handled.filter((id) => id === 'm2')).toHaveLength(1);
     expect(entries.size).toBe(0);
+  });
+});
+
+describe('poison rumors (remediation round 1)', () => {
+  const boom = (kind = 9) => ({ kind, handle: vi.fn(async () => { throw new Error('boom'); }) });
+
+  it('a failed attempt is counted ONCE per dispatcher attempt, not per handler; below the limit the entry is kept', async () => {
+    const journal = { ack: vi.fn(async () => {}), recordFailure: vi.fn(async () => 4) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom(), boom()], { journal, maxFailedAttempts: 5 }).subscribe(group, ctx);
+    group.emit('m1');
+    await sub.drain();
+    expect(journal.recordFailure).toHaveBeenCalledTimes(1);
+    expect(journal.recordFailure).toHaveBeenCalledWith('G1', 'm1');
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('at the limit the rumor is acked (dropped) with a warning naming kind and id; a later duplicate acks too', async () => {
+    const journal = { ack: vi.fn(async () => {}), recordFailure: vi.fn(async () => 5) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom(11)], { journal, maxFailedAttempts: 5 }).subscribe(group, ctx);
+    group.emit('m1', A, 11);
+    await sub.drain();
+    expect(journal.ack).toHaveBeenCalledWith('G1', 'm1');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('poisonRumor'), expect.objectContaining({ kind: 11, rumorId: 'm1', attempts: 5, groupId: 'G1' }));
+    group.emit('m1', A, 11);
+    await sub.drain();
+    expect(journal.ack).toHaveBeenCalledTimes(2);
+  });
+
+  it('the default limit is 5', async () => {
+    let n = 0;
+    const journal = { ack: vi.fn(async () => {}), recordFailure: vi.fn(async () => ++n) };
+    const h = boom();
+    for (let i = 0; i < 5; i++) {
+      const sub = createDispatcher([h], { journal }).subscribe(makeFakeGroup(), ctx);
+      await sub.replay([{ data: rumorBytes('m1'), senderPubkey: A }]);
+      expect(journal.ack).toHaveBeenCalledTimes(i === 4 ? 1 : 0);
+    }
+  });
+
+  it('failure injection: a failed attempt-count write is warned, keeps the entry and never blocks the queue', async () => {
+    const journal = { ack: vi.fn(async () => {}), recordFailure: vi.fn(async () => { throw new Error('idb'); }) };
+    const ok = { kind: 7, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom(), ok], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    group.emit('m2', A, 7);
+    await sub.drain();
+    expect(warn).toHaveBeenCalledWith('[dispatcher.journalAttempt]', expect.any(Error));
+    expect(journal.ack).toHaveBeenCalledTimes(1);
+    expect(journal.ack).toHaveBeenCalledWith('G1', 'm2');
+  });
+
+  it('a fan-out cut short by disposal is not a failed attempt (not counted)', async () => {
+    const journal = { ack: vi.fn(async () => {}), recordFailure: vi.fn(async () => 99) };
+    let sub: ReturnType<ReturnType<typeof createDispatcher>['subscribe']>;
+    const first = { kind: 9, handle: vi.fn(() => { sub(); }) };
+    const second = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    sub = createDispatcher([first, second], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    await sub.drain();
+    expect(journal.recordFailure).not.toHaveBeenCalled();
+    expect(journal.ack).not.toHaveBeenCalled();
+  });
+
+  it('without recordFailure a failed rumor is simply kept', async () => {
+    const journal = { ack: vi.fn(async () => {}) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([boom()], { journal }).subscribe(group, ctx);
+    group.emit('m1');
+    await sub.drain();
+    expect(journal.ack).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalledWith('[dispatcher.journalAttempt]', expect.anything());
+  });
+});
+
+describe('replay marking (remediation round 2)', () => {
+  it('handlers see replayed: true for replay() dispatches and replayed: false for live ones', async () => {
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    await sub.replay([{ data: rumorBytes('r1'), senderPubkey: A }]);
+    group.emit('live1');
+    await sub.drain();
+    expect(h.handle.mock.calls.map(([r, , , meta]) => [(r as { id: string }).id, meta])).toEqual([
+      ['r1', { replayed: true }],
+      ['live1', { replayed: false }],
+    ]);
+  });
+
+  it('a live redelivery of a replayed id is not re-handled and acks only when the replayed handling completed', async () => {
+    const log: string[] = [];
+    const journal = makeJournal(log);
+    let fail = true;
+    const h = { kind: 9, handle: vi.fn(async () => { if (fail) throw new Error('idb'); }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h], { journal }).subscribe(group, ctx);
+    await sub.replay([{ data: rumorBytes('x'), senderPubkey: A }]);
+    group.emit('x');
+    await sub.drain();
+    expect(h.handle).toHaveBeenCalledTimes(1);
+    expect(journal.ack).not.toHaveBeenCalled();
+    fail = false;
+    const next = createDispatcher([h], { journal }).subscribe(makeFakeGroup(), ctx);
+    await next.replay([{ data: rumorBytes('x'), senderPubkey: A }]);
+    expect(journal.ack).toHaveBeenCalledTimes(1);
   });
 });

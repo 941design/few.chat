@@ -1047,13 +1047,25 @@ describe('held close / announcement recovery under a rejection at every storage 
     m.saveVoteSpy.mockClear();
     m.deps.setPollVersion.mockClear();
     const saves = vi.spyOn(m.deps, 'savePoll');
-    await expect(userVote(m)).resolves.toBeUndefined();
+    // The vote is not applied: the handler rejects so the dispatcher keeps the
+    // rumor journaled for replay (bug: journal-ack-before-durable-side-effects).
+    await expect(userVote(m)).rejects.toThrow('poll state unknown');
     expect(m.saveVoteSpy).not.toHaveBeenCalled();
     expect(saves).not.toHaveBeenCalled();
     expect(m.deps.setPollVersion).not.toHaveBeenCalled();
     expect((await getPoll(GROUP, POLL_ID))?.closed).toBe(false);
     expect(await loadPendingCloses(GROUP, POLL_ID)).toHaveLength(1);
     expect(await loadPendingCloseAnnouncements(GROUP, POLL_ID)).toHaveLength(1);
+
+    // Journal replay of the same vote once storage reads work again: the held
+    // close is applied first, so the vote (received after it) is dropped like
+    // any late vote — the replay converges, nothing is applied twice.
+    m.failing.clear();
+    m.deps.getPoll = realGet;
+    await expect(userVote(m)).resolves.toBeUndefined();
+    expect((await getPoll(GROUP, POLL_ID))?.closed).toBe(true);
+    expect(m.saveVoteSpy).not.toHaveBeenCalled();
+    expect(await loadPendingCloses(GROUP, POLL_ID)).toHaveLength(0);
   });
 
   for (const reread of ['rejects', 'finds no poll'] as const) {
@@ -1077,7 +1089,7 @@ describe('held close / announcement recovery under a rejection at every storage 
         m.saveVoteSpy.mockClear();
         m.deps.setPollVersion.mockClear();
         const saves = vi.spyOn(m.deps, 'savePoll');
-        if (entry === 'vote') await userVote(m);
+        if (entry === 'vote') await expect(userVote(m)).rejects.toThrow('poll state unknown');
         else {
           // The live close is held for the next poll message, and the handler
           // throws (Remediation 1, F1) — never silently dropped.
@@ -2188,5 +2200,53 @@ describe('R2: a full reset also wipes the receipt clock mark', () => {
     const t2 = await persistence.receiptNow();
     expect(t2).toBeGreaterThan(t1);
     expect(idbStore.get('few:poll-receipt-clock')).toBe(t2 + persistence.RECEIPT_LEASE_MS);
+  });
+});
+
+describe('remediation round 1: a vote whose save fails is queued by receipt before the rethrow', () => {
+  const failingSave = () => ({ ...realDeps(), saveVoteIfNewer: vi.fn(async () => { throw new Error('idb write'); }) });
+
+  it('vote save fails → close → the closed tally counts it (received before the close); its journal replay then changes nothing', async () => {
+    await open();
+    await deliverVote(voteRumor(OTHER, ['B'], 10, 1));
+    const userVote = voteRumor(USER, ['A'], 20, 1, 'user-vote');
+    await expect(createPollVoteHandler(failingSave() as never).handle(userVote, ctx(), sender(USER))).rejects.toThrow('idb write');
+    expect(await loadPendingVotes(GROUP, POLL_ID)).toEqual([
+      expect.objectContaining({ voterPubkey: USER, responses: ['A'], votedAt: 20_000, seq: 1, rumorId: 'user-vote', receivedAt: expect.any(Number) }),
+    ]);
+    await close();
+    const closed = await getPoll(GROUP, POLL_ID);
+    expect(counts(closed)).toEqual({ A: 1, B: 1 });
+    // The replay finds the poll closed and returns (acked) — nothing was lost.
+    await deliverVote(userVote);
+    expect(counts(await getPoll(GROUP, POLL_ID))).toEqual({ A: 1, B: 1 });
+    expect(await loadPendingVotes(GROUP, POLL_ID)).toEqual([]);
+  });
+
+  it('a vote received AFTER the close is not counted (the iff)', async () => {
+    await open();
+    await deliverVote(voteRumor(OTHER, ['B'], 10, 1));
+    await close();
+    await deliverVote(voteRumor(USER, ['A'], 20, 1));
+    expect(counts(await getPoll(GROUP, POLL_ID))).toEqual({ A: 0, B: 1 });
+  });
+
+  it('vote save fails while the poll is still open → the journal replay applies it once (queue + live save converge)', async () => {
+    await open();
+    const userVote = voteRumor(USER, ['A'], 20, 1, 'user-vote');
+    await expect(createPollVoteHandler(failingSave() as never).handle(userVote, ctx(), sender(USER))).rejects.toThrow();
+    await deliverVote(userVote);
+    expect(await storedChoice()).toEqual(['A']);
+    expect(await loadPendingVotes(GROUP, POLL_ID)).toEqual([]);
+    await close();
+    expect(counts(await getPoll(GROUP, POLL_ID))).toEqual({ A: 1, B: 0 });
+  });
+
+  it('failure injection: when queueing fails too, the handler rejects (the journal keeps the vote) and nothing is stored', async () => {
+    await open();
+    const deps = { ...failingSave(), queuePendingVote: vi.fn(async () => { throw new Error('queue full'); }) };
+    await expect(createPollVoteHandler(deps as never).handle(voteRumor(USER, ['A'], 20, 1), ctx(), sender(USER))).rejects.toThrow('queue full');
+    expect(await loadPendingVotes(GROUP, POLL_ID)).toEqual([]);
+    expect(await storedChoice()).toBeUndefined();
   });
 });

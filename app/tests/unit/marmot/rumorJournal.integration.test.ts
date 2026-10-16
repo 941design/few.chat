@@ -22,9 +22,19 @@ const { stores, writeLog } = vi.hoisted(() => ({
 }));
 const later = () => new Promise((r) => setTimeout(r, 3));
 
-vi.mock('idb-keyval', () => ({
+vi.mock('idb-keyval', async (importOriginal) => {
+  const { callableMapStore } = await import('../helpers/callableMapStore');
+  return {
+  promisifyRequest: (await importOriginal<typeof import('idb-keyval')>()).promisifyRequest,
   createStore: vi.fn((db: string) => {
-    const m = new Map<string, unknown>();
+    // Map for the mocked ops; as a store callback (putRumor's one-transaction
+    // read-merge-put) its commit is logged like a slow set().
+    const m = callableMapStore(new Map<string, unknown>(), {
+      onCommit: async (keys) => {
+        await later();
+        for (const k of keys) writeLog.push(`${db}:${k}`);
+      },
+    });
     stores.set(db, m);
     return m;
   }),
@@ -40,7 +50,8 @@ vi.mock('idb-keyval', () => ({
   keys: vi.fn(async (s: Map<string, unknown>) => [...s.keys()]),
   entries: vi.fn(async (s: Map<string, unknown>) => [...s.entries()]),
   clear: vi.fn(async (s: Map<string, unknown>) => { s.clear(); }),
-}));
+};
+});
 
 vi.mock('@internet-privacy/marmot-ts', () => ({
   serializeClientState: vi.fn(() => new Uint8Array(4)),
@@ -48,6 +59,7 @@ vi.mock('@internet-privacy/marmot-ts', () => ({
   getEpoch: vi.fn(() => 1),
   getGroupMembers: vi.fn(() => []),
   deserializeApplicationData: vi.fn((d: Uint8Array) => JSON.parse(new TextDecoder().decode(d))),
+  getPubkeyLeafNodes: vi.fn(() => []),
 }));
 
 const { createStore, set } = await import('idb-keyval');

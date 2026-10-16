@@ -163,15 +163,16 @@ async function gateAnnouncement(
       // e.g. loadVotes into `[]` would persist a fabricated "0 votes, 0
       // voters" tally under this rumor id (F2, Stage-2 review).
       //
-      // The dispatcher acks a live rumor whether or not its handler throws
-      // (markSeen before fan-out, per-handler catch, ack in finally —
-      // applicationRumorDispatcher.ts), so a throw alone would lose the
-      // announcement. Before throwing, it is therefore HELD — the same queue
-      // as an announcement for a not-yet-known poll — and the next message of
-      // the poll re-runs it through this gate (pollHandler settleHeldCloses →
+      // A throw keeps the rumor journaled (the dispatcher acks only a
+      // completed rumor) and it is handled again at the next subscription.
+      // Before throwing, it is also HELD — the same queue as an announcement
+      // for a not-yet-known poll — so the next message of the poll re-runs it
+      // through this gate within the session (pollHandler settleHeldCloses →
       // createPollCloseAnnouncementReplayer; bug:
       // poll-residual-ordering-and-close-retry). In that replay a throw keeps
-      // the entry held, a null discards it.
+      // the entry held, a null discards it. Both retries converge: the row is
+      // insert-if-absent by rumor id, unread is counted only for an inserted
+      // row, and a hold is kept once per (poll, sender).
       const hold = () =>
         deps.queuePendingCloseAnnouncement({
           groupId: ctx.groupId,

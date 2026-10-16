@@ -34,6 +34,8 @@ vi.mock('@internet-privacy/marmot-ts', () => ({
   getEpoch: vi.fn((state: { _epoch?: number }) => state._epoch ?? 0),
   getGroupMembers: vi.fn(() => ['member-a']),
   deserializeApplicationData: vi.fn((msg: Uint8Array) => JSON.parse(new TextDecoder().decode(msg))),
+  getPubkeyLeafNodes: vi.fn((state: { ratchetTree: Array<{ pk: string; sig: number }> }, pk: string) =>
+    state.ratchetTree.filter((n) => n.pk === pk).map((n) => ({ signaturePublicKey: new Uint8Array([n.sig]), hpkePublicKey: new Uint8Array([n.sig]) }))),
 }));
 
 const SENDER = 'ab'.repeat(32);
@@ -141,6 +143,45 @@ describe('EpochResolver awaits onApplicationMessage before resuming the ingest g
     expect(arg.rumor.id).toBe('r-bytes');
     expect(arg.data).toBe((item.result as { message: Uint8Array }).message);
     expect(arg.senderPubkey).toBe(SENDER);
+    resolver.dispose();
+  });
+
+  it('passes the sender\'s leaf identity at the message epoch (bug: journal-replayed-leave-evicts-rejoined-member)', async () => {
+    const log: string[] = [];
+    const item = {
+      ...appMsg('r-leaf'),
+      message: { privateMessage: { epoch: 3n } },
+      result: {
+        ...appMsg('r-leaf').result,
+        newState: { groupContext: { epoch: 3n }, ratchetTree: [{ pk: SENDER, sig: 0x2a }], historicalReceiverData: new Map() },
+      },
+    };
+    const group = makeStubGroup([[item]], log);
+    const put = slowPut(log);
+    const resolver = new EpochResolver(group as never, { onApplicationMessage: put });
+    await resolver.ingestEvent(ev('evt-r-leaf'));
+    expect((put.mock.calls[0][0] as { senderLeafIdentity?: string }).senderLeafIdentity).toBe('2a:2a');
+    resolver.dispose();
+  });
+
+  it('failure injection: an identity lookup that throws is warned; the rumor is still journaled (without it) before the generator resumes', async () => {
+    const log: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const marmot = await import('@internet-privacy/marmot-ts');
+    vi.mocked(marmot.getPubkeyLeafNodes).mockImplementationOnce(() => { throw new Error('tree'); });
+    const item = {
+      ...appMsg('r-noleaf'),
+      message: { privateMessage: { epoch: 3n } },
+      result: { ...appMsg('r-noleaf').result, newState: { groupContext: { epoch: 3n }, ratchetTree: [], historicalReceiverData: new Map() } },
+    };
+    const group = makeStubGroup([[item]], log);
+    const put = slowPut(log);
+    const resolver = new EpochResolver(group as never, { onApplicationMessage: put });
+    await resolver.ingestEvent(ev('evt-r-noleaf'));
+    expect(put).toHaveBeenCalledTimes(1);
+    expect((put.mock.calls[0][0] as { senderLeafIdentity?: string }).senderLeafIdentity).toBeUndefined();
+    before(log, 'put-done:r-noleaf', 'state-save');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('sender leaf identity unavailable'), expect.any(Error));
     resolver.dispose();
   });
 

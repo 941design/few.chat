@@ -52,7 +52,7 @@ import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdmin
 import { savePoll, saveVoteIfNewer, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
-import { recordPendingRemoval, settlePendingRemovals, resumePendingRemovals, clearPendingRemovalsForGroup, leafIdentityOf, selfAdminStatus } from '@/src/lib/marmot/pendingRemovalStorage';
+import { recordLeaveIntent, settlePendingRemovals, resumePendingRemovals, clearPendingRemovalsForGroup, leafIdentityOf, selfAdminStatus } from '@/src/lib/marmot/pendingRemovalStorage';
 import type { PendingRemovalRecord, LeafKeys, SettledRemoval } from '@/src/lib/marmot/pendingRemovalStorage';
 import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
@@ -959,28 +959,31 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     debounceTimersRef.current.set(groupId, timer);
   }, []); // Refs are stable — no reactive dependencies needed.
 
-  const enqueueLeave = useCallback(async (groupId: string, pubkey: string): Promise<void> => {
-    // Bug pending-member-removals-not-persisted (remediation round 1): capture
-    // the departing member's leaf identity NOW, at first receipt, so a removal
-    // replayed after a reload can never evict the same pubkey re-joined with a
-    // new leaf. A failed capture keeps the removal in memory only.
-    let leafIdentity: string | undefined;
-    try {
-      const group = await clientRef.current?.groups.get(groupId);
-      if (group) {
+  const enqueueLeave = useCallback(async (groupId: string, pubkey: string, rumorId: string, meta: { replayed: boolean }): Promise<void> => {
+    // Bugs pending-member-removals-not-persisted and
+    // journal-replayed-leave-evicts-rejoined-member: the removal is checked
+    // against the departing member's leaf identity journaled with the rumor at
+    // first receipt (the tree of the epoch it was sent in). The current leaf
+    // is captured only for a LIVE delivery whose journal holds no identity; a
+    // replayed leave without one is skipped (never checked against a possibly
+    // re-joined membership); a failed journal read rejects — the leave stays
+    // journaled and is retried. See recordLeaveIntent. The returned promise is
+    // the durable write: the dispatcher acks the leave only once it landed.
+    return recordLeaveIntent({
+      queue: pendingRemovalsRef.current,
+      groupId,
+      pubkey,
+      replayed: meta.replayed,
+      now: Date.now(),
+      readJournal: async () => (await import('@/src/lib/marmot/rumorJournal')).getJournaledSenderLeafIdentity(groupId, rumorId),
+      captureCurrent: async () => {
+        const group = await clientRef.current?.groups.get(groupId);
+        if (!group) return undefined;
         const { getPubkeyLeafNodes } = await import('@internet-privacy/marmot-ts');
-        leafIdentity = leafIdentityOf(getPubkeyLeafNodes(group.state, pubkey));
-      }
-    } catch (err) {
-      console.warn('[Marmot] leaf identity capture for a pending removal failed:', err);
-    }
-    // Append to the pending queue (a member already queued is not added twice)
-    // and mirror it durably. The leave handler returns this promise, so the
-    // dispatcher acks the leave rumor's journal entry only after the write
-    // settled. Best-effort: a failed write never undoes the in-memory removal.
-    const persisted = recordPendingRemoval(pendingRemovalsRef.current, groupId, pubkey, Date.now(), leafIdentity);
-    armRemovalTimer(groupId);
-    return persisted;
+        return leafIdentityOf(getPubkeyLeafNodes(group.state, pubkey));
+      },
+      arm: armRemovalTimer,
+    });
   }, [armRemovalTimer]);
 
   // Dev-only: expose parseProfilePayload so E2E tests can verify forged-sig rejection (AC-045 scenario 6)
@@ -1813,7 +1816,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             setPollVersion,
             // S4 (AC-QUEUE-4): real enqueueLeave closure — replaces MOCK-S2-001 stub from S2.
             enqueueLeave,
-          }, { journal: { ack: rumorJournal.ackRumor } }).subscribe(mlsGroup, dispatcherCtx);
+          }, {
+            journal: { ack: rumorJournal.ackRumor, recordFailure: rumorJournal.recordRumorFailure },
+            maxFailedAttempts: rumorJournal.RUMOR_JOURNAL_MAX_FAILED_ATTEMPTS,
+          }).subscribe(mlsGroup, dispatcherCtx);
           setupController.signal.addEventListener('abort', unsubDispatcher, { once: true });
           // Captured before this subscription replaces it (see dispatcherDrainsRef).
           const previousDrain = dispatcherDrainsRef.current.get(group.id);
