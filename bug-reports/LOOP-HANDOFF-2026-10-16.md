@@ -25,3 +25,8 @@ Blocked on multi-tab S1 product decisions: poll-receipt-clock-and-seq-cross-tab,
 reinvite-after-eviction-fails-already-exists (removed-member view; history on re-invite) and
 multi-tab-mls-cache-coherence S1 (non-active tab UI, activation trigger, en/de copy), and whether to
 authenticate all display-only announcements.
+
+## Paused by owner request — 2026-10-16 ~18:30
+Last commits: 14bdb5d reaction/edit storage failures · e60e5d4 journal/purge follow-ups (+ backlog commits).
+Working tree clean. Remaining technical: poll-savepoll-not-purge-marked (new); multi-tab-blocked:
+poll-receipt-clock-and-seq-cross-tab, cross-tab-account-switch-notice. Everything else is a product decision.
