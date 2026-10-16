@@ -132,6 +132,23 @@ vi.mock('@/src/context/LanguageContext', () => ({
   useCopy: vi.fn(() => ({ contacts: { pairingAdmissionDigest: (n: number) => `${n} people paired with your code` } })),
 }));
 
+// Per-store Map-backed idb-keyval (bug: pending-member-removals-not-persisted
+// reload scenario below uses the REAL pendingRemovalStorage module).
+const { idbStores } = vi.hoisted(() => ({ idbStores: new Map<string, Map<string, unknown>>() }));
+vi.mock('idb-keyval', () => {
+  const pick = (s?: Map<string, unknown>) => s ?? new Map<string, unknown>();
+  return {
+    createStore: vi.fn((db: string) => { const m = new Map<string, unknown>(); idbStores.set(db, m); return m; }),
+    get: vi.fn(async (k: string, s?: Map<string, unknown>) => pick(s).get(k)),
+    set: vi.fn(async (k: string, v: unknown, s?: Map<string, unknown>) => { pick(s).set(k, v); }),
+    del: vi.fn(async (k: string, s?: Map<string, unknown>) => { pick(s).delete(k); }),
+    delMany: vi.fn(async (ks: string[], s?: Map<string, unknown>) => { ks.forEach((k) => pick(s).delete(k)); }),
+    keys: vi.fn(async (s?: Map<string, unknown>) => [...pick(s).keys()]),
+    entries: vi.fn(async (s?: Map<string, unknown>) => [...pick(s).entries()]),
+    clear: vi.fn(async (s?: Map<string, unknown>) => { pick(s).clear(); }),
+  };
+});
+
 // Now import the exported fireAutoCommit function.
 const { fireAutoCommit } = await import('@/src/context/MarmotContext');
 
@@ -222,7 +239,7 @@ describe('fireAutoCommit', () => {
     expect(metadataArg.adminPubkeys).toContain(SELF);
 
     // onCommitted called with the committed pubkey (AC-COMMIT-6).
-    expect(deps.onCommitted).toHaveBeenCalledWith([PUBKEY]);
+    expect(deps.onCommitted).toHaveBeenCalledWith([PUBKEY], [{ pubkey: PUBKEY }]);
   });
 
   // AC-COMMIT-8b: getPubkeyLeafNodeIndexes returns [] → commit not called, entry dropped
@@ -238,7 +255,7 @@ describe('fireAutoCommit', () => {
     expect(deps.commitFn).not.toHaveBeenCalled();
 
     // The stale entry must be dropped from the live queue (AC-COMMIT-2).
-    expect(deps.onCommitted).toHaveBeenCalledWith([PUBKEY]);
+    expect(deps.onCommitted).toHaveBeenCalledWith([PUBKEY], [{ pubkey: PUBKEY }]);
   });
 
   // AC-COMMIT-8c: two simultaneous pubkeys → one commit with two Remove proposals + correct remainingAdmins
@@ -371,5 +388,193 @@ describe('fireAutoCommit', () => {
     expect(deps.onCommitted.mock.calls[0][0]).toContain(STALE);
     // Second call: committed.
     expect(deps.onCommitted.mock.calls[1][0]).toContain(VALID);
+  });
+});
+
+// ─── bug: pending-member-removals-not-persisted ─────────────────────────────
+// A leave_intent enqueues a removal; the page unloads inside the 5 s debounce
+// (the timer never fires). The next session must still remove the member —
+// but only the leaf that announced the departure (remediation round 1: a
+// stored removal is fail-safe toward NOT evicting a member who re-joined).
+// Uses the real pendingRemovalStorage glue MarmotContext wires: enqueueLeave =
+// recordPendingRemoval (+ captured leaf identity) + timer, onCommitted =
+// settlePendingRemovals, subscription start = resumePendingRemovals.
+describe('pending removal survives a reload inside the debounce (bug: pending-member-removals-not-persisted)', () => {
+  const DEPARTED = 'dd'.repeat(32);
+  const SELF = 'ee'.repeat(32);
+  const DAY = 24 * 60 * 60 * 1000;
+  const leaf = (sig: number, hpke: number) => ({ signaturePublicKey: new Uint8Array([sig]), hpkePublicKey: new Uint8Array([hpke]) });
+  const ORIGINAL = [leaf(1, 2)];
+  const REJOINED = [leaf(7, 8)];
+
+  async function nextSession(isAdmin: boolean | undefined = true) {
+    const storage = await import('@/src/lib/marmot/pendingRemovalStorage');
+    const queue = new Map<string, import('@/src/lib/marmot/pendingRemovalStorage').PendingRemovalRecord[]>();
+    const arm = vi.fn();
+    await storage.resumePendingRemovals({ groupId: 'g1', isAdmin, now: Date.now(), maxAgeMs: 30 * DAY, queue, arm });
+    return { storage, queue, arm };
+  }
+
+  async function fire(queue: Map<string, any[]>, currentLeaves: Array<ReturnType<typeof leaf>>, commit = vi.fn().mockResolvedValue(undefined)) {
+    const storage = await import('@/src/lib/marmot/pendingRemovalStorage');
+    const settled: Promise<void>[] = [];
+    await fireAutoCommit({
+      mlsGroup: { state: {}, groupData: { adminPubkeys: [SELF, DEPARTED] }, commit },
+      getPubkeyLeafNodeIndexes: (_s: unknown, pk: string) => (pk === DEPARTED && currentLeaves.length ? [3] : []),
+      getPubkeyLeafNodes: (_s: unknown, pk: string) => (pk === DEPARTED ? currentLeaves : []),
+      proposeUpdateMetadata: (a: { adminPubkeys: string[] }) => ({ type: 'meta', ...a }),
+      pendingQueue: queue.get('g1') ?? [],
+      onCommitted: (_pks, recs) => { settled.push(storage.settlePendingRemovals(queue, 'g1', recs)); },
+    });
+    await Promise.all(settled);
+    return commit;
+  }
+
+  async function session1() {
+    const storage = await import('@/src/lib/marmot/pendingRemovalStorage');
+    // Handler ran with the departing member's leaf captured; unload before the timer fires.
+    await storage.recordPendingRemoval(new Map(), 'g1', DEPARTED, Date.now(), storage.leafIdentityOf(ORIGINAL));
+    return storage;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idbStores.get('few-pending-removals')?.clear();
+  });
+
+  it('a reload within the debounce still commits the departed member\'s removal (same leaf), then forgets it', async () => {
+    await session1();
+    const { queue, arm } = await nextSession();
+    expect(queue.get('g1')?.map((e) => e.pubkey)).toEqual([DEPARTED]);
+    expect(arm).toHaveBeenCalledWith('g1');
+    const commit = await fire(queue, ORIGINAL);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0][0].extraProposals[0]).toEqual({ proposalType: PROPOSAL_TYPE_REMOVE, remove: { removed: 3 } });
+    expect(commit.mock.calls[0][0].extraProposals[1]).toEqual({ type: 'meta', adminPubkeys: [SELF] });
+    const third = await nextSession();
+    expect(third.queue.size).toBe(0);
+  });
+
+  it('identity mismatch: the member re-joined with a new leaf — the stored removal is settled (forgotten), never proposed', async () => {
+    await session1();
+    const { queue, storage } = await nextSession();
+    const commit = await fire(queue, REJOINED);
+    expect(commit).not.toHaveBeenCalled();
+    expect(queue.has('g1')).toBe(false);
+    expect(await storage.listPendingRemovals('g1')).toEqual([]);
+  });
+
+  it('non-admin device: the stored removal is forgotten at resume, nothing is armed or committed', async () => {
+    await session1();
+    const { queue, arm, storage } = await nextSession(false);
+    expect(queue.size).toBe(0);
+    expect(arm).not.toHaveBeenCalled();
+    expect(await storage.listPendingRemovals('g1')).toEqual([]);
+  });
+
+  it('a failed commit keeps the durable entry for the next session (AC-COMMIT-7); a member already gone is dropped and forgotten', async () => {
+    await session1();
+    const s2 = await nextSession();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await fire(s2.queue, ORIGINAL, vi.fn().mockRejectedValue(new Error('epoch conflict')));
+    warn.mockRestore();
+    expect((await s2.storage.listPendingRemovals('g1')).map((r) => r.pubkey)).toEqual([DEPARTED]);
+    expect(s2.queue.get('g1')?.map((e) => e.pubkey)).toEqual([DEPARTED]);
+
+    const s3 = await nextSession();
+    const commit = await fire(s3.queue, []);
+    expect(commit).not.toHaveBeenCalled();
+    expect(await s3.storage.listPendingRemovals('g1')).toEqual([]);
+  });
+  it('(a) a re-joined member\'s new leave (new identity) arriving during the stale removal\'s commit window survives the stale settle and is removed next', async () => {
+    const storage = await session1();
+    const { queue } = await nextSession();
+    const NEW_ID = storage.leafIdentityOf(REJOINED)!;
+    // The stale entry A (ORIGINAL) is checked and committed; while the commit
+    // is in flight the member (re-joined as REJOINED) leaves again.
+    const commit = vi.fn(async () => {
+      await storage.recordPendingRemoval(queue, 'g1', DEPARTED, Date.now(), NEW_ID);
+    });
+    await fire(queue, ORIGINAL, commit);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(queue.get('g1')).toEqual([expect.objectContaining({ pubkey: DEPARTED, leafIdentity: NEW_ID })]);
+    expect(await storage.listPendingRemovals('g1')).toEqual([expect.objectContaining({ pubkey: DEPARTED, leafIdentity: NEW_ID })]);
+
+    // Next fire: the re-joined leaf is the current one → B is proposed for Remove, then forgotten.
+    const commit2 = await fire(queue, REJOINED);
+    expect(commit2).toHaveBeenCalledTimes(1);
+    expect(commit2.mock.calls[0][0].extraProposals[0]).toEqual({ proposalType: PROPOSAL_TYPE_REMOVE, remove: { removed: 3 } });
+    expect(queue.has('g1')).toBe(false);
+    expect(await storage.listPendingRemovals('g1')).toEqual([]);
+  });
+
+  it('(a) an identity-mismatch drop of stale A never settles a replacement B enqueued before the fire settled', async () => {
+    const storage = await session1();
+    const { queue } = await nextSession();
+    const NEW_ID = storage.leafIdentityOf(REJOINED)!;
+    const pendingQueue = [...(queue.get('g1') ?? [])]; // fire-time snapshot: A only
+    await storage.recordPendingRemoval(queue, 'g1', DEPARTED, Date.now(), NEW_ID);
+    const settled: Promise<void>[] = [];
+    const commit = vi.fn();
+    await fireAutoCommit({
+      mlsGroup: { state: {}, groupData: { adminPubkeys: [SELF] }, commit },
+      getPubkeyLeafNodeIndexes: () => [3],
+      getPubkeyLeafNodes: () => REJOINED,
+      proposeUpdateMetadata: (a: { adminPubkeys: string[] }) => a,
+      pendingQueue,
+      onCommitted: (_pks, recs) => { settled.push(storage.settlePendingRemovals(queue, 'g1', recs)); },
+    });
+    await Promise.all(settled);
+    expect(commit).not.toHaveBeenCalled();
+    expect(queue.get('g1')).toEqual([expect.objectContaining({ leafIdentity: NEW_ID })]);
+    expect(await storage.listPendingRemovals('g1')).toEqual([expect.objectContaining({ leafIdentity: NEW_ID })]);
+  });
+});
+
+describe('fireAutoCommit — leaf identity guard (remediation round 1)', () => {
+  const P = 'aa'.repeat(32);
+  const Q = 'bb'.repeat(32);
+  const leaf = (sig: number) => ({ signaturePublicKey: new Uint8Array([sig]), hpkePublicKey: new Uint8Array([sig]) });
+
+  it('commits only entries whose captured identity matches the current leaf; mismatches are settled; identity-less in-session entries keep pubkey-only behaviour', async () => {
+    const { leafIdentityOf } = await import('@/src/lib/marmot/pendingRemovalStorage');
+    const R = 'cc'.repeat(32);
+    const commit = vi.fn().mockResolvedValue(undefined);
+    const onCommitted = vi.fn();
+    await fireAutoCommit({
+      mlsGroup: { state: {}, groupData: { adminPubkeys: [] }, commit },
+      getPubkeyLeafNodeIndexes: (_s: unknown, pk: string) => ({ [P]: [1], [Q]: [2], [R]: [4] } as Record<string, number[]>)[pk] ?? [],
+      getPubkeyLeafNodes: (_s: unknown, pk: string) => ({ [P]: [leaf(1)], [Q]: [leaf(9)], [R]: [leaf(4)] } as Record<string, ReturnType<typeof leaf>[]>)[pk] ?? [],
+      proposeUpdateMetadata: (a: { adminPubkeys: string[] }) => a,
+      pendingQueue: [
+        { groupId: 'g1', pubkey: P, receivedAt: 1, leafIdentity: leafIdentityOf([leaf(1)]) },
+        { groupId: 'g1', pubkey: Q, receivedAt: 2, leafIdentity: leafIdentityOf([leaf(2)]) },
+        { groupId: 'g1', pubkey: R, receivedAt: 3 },
+      ],
+      onCommitted,
+    });
+    expect(onCommitted.mock.calls[0][0]).toEqual([Q]);
+    expect(onCommitted.mock.calls[0][1]).toEqual([{ pubkey: Q, leafIdentity: leafIdentityOf([leaf(2)]) }]);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0][0].extraProposals.slice(0, 2)).toEqual([
+      { proposalType: PROPOSAL_TYPE_REMOVE, remove: { removed: 1 } },
+      { proposalType: PROPOSAL_TYPE_REMOVE, remove: { removed: 4 } },
+    ]);
+    expect(onCommitted.mock.calls[1][0]).toEqual([P, R]);
+    expect(onCommitted.mock.calls[1][1]).toEqual([{ pubkey: P, leafIdentity: leafIdentityOf([leaf(1)]) }, { pubkey: R }]);
+  });
+
+  it('an entry with a captured identity but no leaf reader is settled, never proposed (fail-safe)', async () => {
+    const commit = vi.fn();
+    const onCommitted = vi.fn();
+    await fireAutoCommit({
+      mlsGroup: { state: {}, groupData: { adminPubkeys: [] }, commit },
+      getPubkeyLeafNodeIndexes: () => [1],
+      proposeUpdateMetadata: (a: { adminPubkeys: string[] }) => a,
+      pendingQueue: [{ groupId: 'g1', pubkey: P, receivedAt: 1, leafIdentity: 'x' }],
+      onCommitted,
+    });
+    expect(commit).not.toHaveBeenCalled();
+    expect(onCommitted).toHaveBeenCalledWith([P], [{ pubkey: P, leafIdentity: 'x' }]);
   });
 });

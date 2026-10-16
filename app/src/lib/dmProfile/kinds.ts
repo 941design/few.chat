@@ -235,6 +235,17 @@ export function isAllowedAvatarImageUrl(value: unknown): value is string {
   return avatarImageUrlProblem(value) === null;
 }
 
+/**
+ * Re-validate a STORED avatar on read (bug: stored-group-avatars-not-resanitized):
+ * rows persisted before the avatar-URL check (member profiles, contact cache)
+ * may still carry an unsafe URL. Returns `{ imageUrl }` when it passes the same
+ * rules as the wire paths, otherwise `null` (no avatar). Never throws.
+ */
+export function sanitizeStoredAvatar(value: unknown): { imageUrl: string } | null {
+  const imageUrl = (value as { imageUrl?: unknown } | null | undefined)?.imageUrl;
+  return isAllowedAvatarImageUrl(imageUrl) ? { imageUrl } : null;
+}
+
 // ── profile-request wire shape (AC-STRUCT-1 seam contract) ─────────────────
 
 /**

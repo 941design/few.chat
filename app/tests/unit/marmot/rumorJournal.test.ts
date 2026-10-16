@@ -41,7 +41,6 @@ const {
   createApplicationMessageJournaler,
   RUMOR_JOURNAL_DB_NAME,
   RUMOR_JOURNAL_MAX_AGE_MS,
-  RUMOR_JOURNAL_MAX_PER_GROUP,
 } = journal;
 
 const store = () => stores.get(RUMOR_JOURNAL_DB_NAME)!;
@@ -142,30 +141,52 @@ describe('rumorJournal store', () => {
     expect((await listPendingRumors('g1', { now })).map((e) => e.rumorId)).toEqual(['b', 'c', 'a']);
   });
 
-  it('sweep enforces age and the per-group cap (keeps the newest), across all groups', async () => {
+  it('sweep evicts by age only — 1500 never-applied entries of one group survive and all replay, oldest first (bug: rumor-journal-cap-evicts-unapplied)', async () => {
     const now = 10_000_000_000;
+    const N = 1500;
     // Inserted newest-first so key/insertion order disagrees with age.
-    for (let i = RUMOR_JOURNAL_MAX_PER_GROUP + 2; i >= 0; i--) {
-      store().set(`g1:r${i}`, { groupId: 'g1', rumorId: `r${i}`, senderPubkey: SENDER, data: bytes('x'), receivedAt: now - 1000 + i });
+    for (let i = N - 1; i >= 0; i--) {
+      store().set(`g1:r${i}`, { groupId: 'g1', rumorId: `r${i}`, senderPubkey: SENDER, data: bytes('x'), receivedAt: now - 10_000 + i });
     }
     store().set('g2:keep', { groupId: 'g2', rumorId: 'keep', senderPubkey: SENDER, data: bytes('k'), receivedAt: now - 5 });
     store().set('g2:stale', { groupId: 'g2', rumorId: 'stale', senderPubkey: SENDER, data: bytes('s'), receivedAt: now - RUMOR_JOURNAL_MAX_AGE_MS });
+    store().set('g2:edge', { groupId: 'g2', rumorId: 'edge', senderPubkey: SENDER, data: bytes('e'), receivedAt: now - RUMOR_JOURNAL_MAX_AGE_MS + 1 });
     const removed = await sweepRumorJournal({ now });
-    expect(removed).toBe(4);
-    expect(store().has('g1:r0')).toBe(false);
-    expect(store().has('g1:r2')).toBe(false);
-    expect(store().has('g1:r3')).toBe(true);
-    expect(store().has('g2:keep')).toBe(true);
+    expect(removed).toBe(1);
     expect(store().has('g2:stale')).toBe(false);
+    expect(store().has('g2:edge')).toBe(true);
     const g1 = await listPendingRumors('g1', { now });
-    expect(g1).toHaveLength(RUMOR_JOURNAL_MAX_PER_GROUP);
-    expect(g1[0].rumorId).toBe('r3');
+    expect(g1).toHaveLength(N);
+    expect(g1.map((e) => e.rumorId)).toEqual(Array.from({ length: N }, (_, i) => `r${i}`));
+    expect(store().size).toBe(N + 2);
   });
 
-  it('bounds are sane: cap is within the dispatcher dedup LRU, age is days not minutes', () => {
-    expect(RUMOR_JOURNAL_MAX_PER_GROUP).toBeGreaterThan(0);
-    expect(RUMOR_JOURNAL_MAX_PER_GROUP).toBeLessThanOrEqual(1000);
+  it('bounds are sane: age is days not minutes, and no count cap exists', () => {
     expect(RUMOR_JOURNAL_MAX_AGE_MS).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+    expect(RUMOR_JOURNAL_MAX_AGE_MS).toBeLessThanOrEqual(90 * 24 * 60 * 60 * 1000);
+    expect('RUMOR_JOURNAL_MAX_PER_GROUP' in journal).toBe(false);
+  });
+
+  it('failure injection: a failed expiry cleanup still returns every pending entry, and nothing is lost from the store', async () => {
+    const now = 10_000_000_000;
+    store().set('g1:old', { groupId: 'g1', rumorId: 'old', senderPubkey: SENDER, data: bytes('o'), receivedAt: now - RUMOR_JOURNAL_MAX_AGE_MS });
+    store().set('g1:a', { groupId: 'g1', rumorId: 'a', senderPubkey: SENDER, data: bytes('a'), receivedAt: now - 1 });
+    const idb = await import('idb-keyval');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(idb.delMany).mockRejectedValueOnce(new Error('QuotaExceeded'));
+    const pending = await listPendingRumors('g1', { now });
+    expect(pending.map((e) => e.rumorId)).toEqual(['a']);
+    expect(store().has('g1:a')).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('expiry cleanup failed'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('failure injection: a failed journal read rejects (caller logs) and deletes nothing', async () => {
+    store().set('g1:a', { groupId: 'g1', rumorId: 'a', senderPubkey: SENDER, data: bytes('a'), receivedAt: Date.now() });
+    const idb = await import('idb-keyval');
+    vi.mocked(idb.entries).mockRejectedValueOnce(new Error('read failed'));
+    await expect(listPendingRumors('g1')).rejects.toThrow('read failed');
+    expect(store().has('g1:a')).toBe(true);
   });
 
   it('clearRumorJournalForGroup removes only that group; clearAll removes everything', async () => {

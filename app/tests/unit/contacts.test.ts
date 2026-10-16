@@ -96,6 +96,16 @@ describe('contacts', () => {
     expect(contact.updatedAt).toBe('2026-05-02T10:00:00.000Z');
   });
 
+  it('drops an unsafe cached avatar on read and keeps the cached nickname (bug: stored-group-avatars-not-resanitized)', () => {
+    rememberContact('alice', '2026-05-01T10:00:00.000Z');
+    localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify({
+      alice: { nickname: 'Alice', avatar: { imageUrl: 'http://tracker.example/p.png' }, updatedAt: '2026-05-02T10:00:00.000Z' },
+    }));
+    const [contact] = listContacts(null);
+    expect(contact.nickname).toBe('Alice');
+    expect(contact.avatar).toBeNull();
+  });
+
   it('keeps contacts available even when no current groups are passed later', () => {
     rememberContactsFromGroups([
       {

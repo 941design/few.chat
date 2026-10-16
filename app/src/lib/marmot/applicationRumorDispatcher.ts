@@ -98,6 +98,12 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
   // Per-group LRU: Map<groupId, Set<rumorId>>
   // Set preserves insertion order; we evict from the front when size > LRU_CAP.
   const seenByGroup = new Map<string, Set<string>>();
+  // Per-group capacity, raised by replay() (bug: rumor-journal-cap-evicts-unapplied):
+  // the journal is bounded by age only, so one replay batch can exceed LRU_CAP.
+  // Widening this group's window by the batch size keeps every replayed id (and
+  // the LRU_CAP most recent ids before it) deduped against live redeliveries for
+  // the rest of the session. Bounded: grows only by what the journal held.
+  const capByGroup = new Map<string, number>();
 
   function isSeen(groupId: string, rumorId: string): boolean {
     return seenByGroup.get(groupId)?.has(rumorId) ?? false;
@@ -111,8 +117,9 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
     }
     set.add(rumorId);
     // Evict oldest entries if the cap is exceeded.
-    if (set.size > LRU_CAP) {
-      const toEvict = set.size - LRU_CAP;
+    const cap = capByGroup.get(groupId) ?? LRU_CAP;
+    if (set.size > cap) {
+      const toEvict = set.size - cap;
       const iter = set.values();
       for (let i = 0; i < toEvict; i++) {
         const entry = iter.next();
@@ -241,6 +248,7 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
       unsubscribe.drain = () => tail;
       unsubscribe.replay = (entries) => {
         // listener() itself is a no-op once disposed.
+        capByGroup.set(ctx.groupId, Math.max(capByGroup.get(ctx.groupId) ?? LRU_CAP, LRU_CAP + entries.length));
         for (const entry of entries) {
           void listener({ message: entry.data, senderPubkey: entry.senderPubkey } as AuthenticatedApplicationMessage);
         }

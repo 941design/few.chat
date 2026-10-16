@@ -117,7 +117,7 @@ describe('deleteMemberProfile — AC-PURGE-1 per-member purge', () => {
 
   it('removes only the target pubkey, leaving other members\' entries byte-for-byte unchanged', async () => {
     const target = makeProfile('2026-01-01T00:00:00.000Z', { pubkeyHex: AUTHOR_PUBKEY, nickname: 'Alice' });
-    const other = makeProfile('2026-02-01T00:00:00.000Z', { pubkeyHex: OTHER_PUBKEY, nickname: 'Bob', avatar: 'bob.png' });
+    const other = makeProfile('2026-02-01T00:00:00.000Z', { pubkeyHex: OTHER_PUBKEY, nickname: 'Bob', avatar: { imageUrl: 'https://cdn.example/bob.png' } });
     const third = makeProfile('2026-03-01T00:00:00.000Z', { pubkeyHex: THIRD_PUBKEY, nickname: 'Carol', provisional: true } as Partial<MemberProfile>);
 
     await saveMemberProfiles(GROUP_ID, [target, other, third]);
@@ -174,5 +174,58 @@ describe('clearAllGroupData — AC-MARKER-9 account-reset marker clear', () => {
     // new: S1's account-wide marker full-clear
     expect(clearAllPendingDirectInvitesSpy).toHaveBeenCalledTimes(1);
     expect(clearAllPendingDirectInvitesSpy).toHaveBeenCalledWith();
+  });
+});
+
+// bug: stored-group-avatars-not-resanitized — rows stored before the
+// 2026-10-15 avatar-URL check are re-validated on read with the shared
+// validator: an unsafe avatar is dropped, the rest of the profile is kept.
+describe('loadMemberProfiles — re-validates stored avatars', () => {
+  const OTHER = 'cd'.repeat(32);
+  beforeEach(() => idbStore.clear());
+
+  it.each([
+    ['http tracker', 'http://tracker.example/p.png'],
+    ['javascript:', 'javascript:alert(1)'],
+    ['data:', 'data:image/svg+xml,<svg/>'],
+    ['whitespace', 'https://x.example/a b.png'],
+    ['too long', 'https://x.example/' + 'a'.repeat(600)],
+    ['empty', ''],
+    ['non-string', 42],
+  ])('drops an unsafe stored avatar (%s) and keeps the profile', async (_l, imageUrl) => {
+    await saveMemberProfiles(GROUP_ID, [
+      makeProfile('2026-01-01T00:00:00.000Z', { avatar: { imageUrl } as never, signedEvent: { id: 'e' } as never }),
+      makeProfile('2026-01-02T00:00:00.000Z', { pubkeyHex: OTHER, nickname: 'Bob', avatar: { imageUrl: 'https://ok.example/b.png' } }),
+    ]);
+    const loaded = await loadMemberProfiles(GROUP_ID);
+    expect(loaded).toEqual([
+      { pubkeyHex: AUTHOR_PUBKEY, nickname: 'Alice', avatar: null, updatedAt: '2026-01-01T00:00:00.000Z', signedEvent: { id: 'e' } },
+      { pubkeyHex: OTHER, nickname: 'Bob', avatar: { imageUrl: 'https://ok.example/b.png' }, updatedAt: '2026-01-02T00:00:00.000Z' },
+    ]);
+  });
+
+  it('keeps a safe protocol-relative avatar and a null avatar; tolerates a malformed avatar object and a malformed row', async () => {
+    idbStore.set(`group:${GROUP_ID}`, [
+      makeProfile('2026-01-01T00:00:00.000Z', { avatar: { imageUrl: '//cdn.example/a.png' } }),
+      makeProfile('2026-01-01T00:00:00.000Z', { pubkeyHex: OTHER, avatar: 'https://x.example/a.png' as never }),
+      null,
+    ]);
+    const loaded = await loadMemberProfiles(GROUP_ID);
+    expect(loaded[0].avatar).toEqual({ imageUrl: '//cdn.example/a.png' });
+    expect(loaded[1].avatar).toBeNull();
+    expect(loaded[1].nickname).toBe('Alice');
+    expect(loaded[2]).toBeNull();
+  });
+
+  it('a non-array stored value reads as no profiles', async () => {
+    idbStore.set(`group:${GROUP_ID}`, { not: 'an array' });
+    expect(await loadMemberProfiles(GROUP_ID)).toEqual([]);
+  });
+
+  it('a later merge persists the sanitized row (the unsafe URL does not survive a write)', async () => {
+    await saveMemberProfiles(GROUP_ID, [makeProfile('2026-01-01T00:00:00.000Z', { avatar: { imageUrl: 'http://t.example/p.png' } })]);
+    await mergeMemberProfile(GROUP_ID, makeProfile('2026-01-02T00:00:00.000Z', { pubkeyHex: OTHER }));
+    const raw = idbStore.get(`group:${GROUP_ID}`) as MemberProfile[];
+    expect(raw.find((p) => p.pubkeyHex === AUTHOR_PUBKEY)?.avatar).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import type { WhitelistArgs } from '@/src/lib/walledGarden';
 import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
 import { rememberKnownPeers } from '@/src/lib/knownPeers';
 import { postStoreChanged } from '@/src/lib/crossTab';
+import { sanitizeStoredAvatar } from '@/src/lib/dmProfile/kinds';
 
 export type StoredContact = {
   pubkeyHex: string;
@@ -41,7 +42,14 @@ function readContactCacheSnapshot(): ContactCacheMap {
   if (!isStorageAvailable()) return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.contactCache);
-    return raw ? (JSON.parse(raw) as ContactCacheMap) : {};
+    const parsed = raw ? (JSON.parse(raw) as ContactCacheMap) : {};
+    // Bug stored-group-avatars-not-resanitized: same on-read avatar rule as
+    // contactCache.ts#readContactCache — unsafe avatar → null, entry kept.
+    // (Read-only snapshot, looked up by pubkey: a JSON `null` throws into the
+    // catch below; other malformed shapes simply yield no match.)
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, entry]) => [key, entry && { ...entry, avatar: sanitizeStoredAvatar(entry.avatar) }]),
+    );
   } catch {
     return {};
   }

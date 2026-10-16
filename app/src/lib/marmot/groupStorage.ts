@@ -14,7 +14,9 @@ import { clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage
 import { clearAllPendingDirectInvites } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { clearAllRumorJournal } from '@/src/lib/marmot/rumorJournal';
 import { clearAllLeftGroupTombstones } from '@/src/lib/marmot/leftGroupTombstones';
+import { clearAllPendingRemovals } from '@/src/lib/marmot/pendingRemovalStorage';
 import { postStoreChanged } from '@/src/lib/crossTab';
+import { sanitizeStoredAvatar } from '@/src/lib/dmProfile/kinds';
 // KeyValueStoreBackend is an internal utility type — import directly from subpath
 type KeyValueStoreBackend<T> = {
   getItem(key: string): Promise<T | null>;
@@ -71,7 +73,15 @@ export async function clearAllGroupMeta(): Promise<void> {
 const memberProfileKey = (groupId: string) => `group:${groupId}`;
 
 export async function loadMemberProfiles(groupId: string): Promise<MemberProfile[]> {
-  return (await get<MemberProfile[]>(memberProfileKey(groupId), memberProfileStore)) ?? [];
+  const stored = await get<unknown>(memberProfileKey(groupId), memberProfileStore);
+  if (!Array.isArray(stored)) return [];
+  // Bug stored-group-avatars-not-resanitized: rows stored before the avatar-URL
+  // check are re-validated on every read (drop an unsafe avatar, keep the rest
+  // of the profile). The next write through mergeMemberProfile persists the
+  // sanitized row.
+  return stored.map((p) =>
+    p && typeof p === 'object' ? { ...(p as MemberProfile), avatar: sanitizeStoredAvatar((p as MemberProfile).avatar) } : p,
+  ) as MemberProfile[];
 }
 
 export async function saveMemberProfiles(groupId: string, profiles: MemberProfile[]): Promise<void> {
@@ -145,6 +155,9 @@ export async function clearAllGroupData(): Promise<void> {
   // Left-group tombstones (leftGroupTombstones.ts) belong to the previous
   // identity's groups; its MLS state was cleared above.
   await clearAllLeftGroupTombstones();
+  // Durable pending member removals (pendingRemovalStorage.ts) name members of
+  // the previous identity's groups.
+  await clearAllPendingRemovals();
 }
 
 // ---------------------------------------------------------------------------

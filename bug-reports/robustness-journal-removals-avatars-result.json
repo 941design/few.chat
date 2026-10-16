@@ -1,0 +1,172 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 3,
+  "root_cause": {
+    "rumor-journal-cap-evicts-unapplied": "partition() kept only the newest 1000 entries per group. Every journal row is unapplied by construction (an ack deletes it), so the cap threw away messages that can never be decrypted again whenever an interrupted catch-up held more than 1000. The cap existed only so that one replay batch could not push its own ids out of the dispatcher's 1000-entry dedup LRU.",
+    "pending-member-removals-not-persisted": "enqueueLeave held the removal only in pendingRemovalsRef plus a 5 s timer. The leave-intent rumor was acked from the journal as soon as the handler returned, so an unload inside the debounce lost the removal for good. The MLS state never re-decrypts that rumor. A re-subscribe also cleared the timer without re-arming it.",
+    "stored-group-avatars-not-resanitized": "Avatar URLs were validated only on receipt (payloadToMemberProfile). loadMemberProfiles and the contact-cache readers (contactCache.readContactCache, contacts.readContactCacheSnapshot) returned stored avatars unchecked."
+  },
+  "fix": {
+    "journal": "Eviction is by age only (30 days). RUMOR_JOURNAL_MAX_PER_GROUP is removed. Why: every row is unapplied, so a count cap that respects the age bound can never evict anything; storage stays bounded by 30 days of delivered traffic, the same order as the permanent chat store. dispatcher.replay() now widens that group's dedup window to max(current, 1000 + batch), so replayed ids stay deduped (bounded; covered by a test). listPendingRumors cleanup is best-effort.",
+    "removals": "New pendingRemovalStorage.ts: IDB store few-pending-removals, created lazily. enqueueLeave = recordPendingRemoval (in-memory add, de-duplicated per member, then a best-effort durable put); it returns the put promise, and leaveHandler returns that promise, so the journal ack follows the durable write. onCommitted = settlePendingRemovals (in-memory filter, then a best-effort delete). Every group subscription start calls resumePendingRemovals (stored plus in-memory, each member once). Idempotency comes from the stale-leaf guard. The store is cleared on leave (best-effort dep in leaveGroupImpl) and by clearAllGroupData.",
+    "avatars": "New sanitizeStoredAvatar in dmProfile/kinds.ts applies the shared isAllowedAvatarImageUrl. loadMemberProfiles, readContactCache and readContactCacheSnapshot apply it on every read: an unsafe avatar becomes null and the rest of the profile is kept. The next merge or write persists the clean row."
+  },
+  "files_changed": [
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/pendingRemovalStorage.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/contactCache.ts",
+    "app/src/lib/contacts.ts",
+    "app/src/lib/dmProfile/kinds.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/rumorJournal.test.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.journal.test.ts",
+    "app/tests/unit/marmot/pendingRemovalStorage.test.ts",
+    "app/tests/unit/marmot/autoCommitLeave.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/marmot/groupStorage.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/unit/contactCache.test.ts",
+    "app/tests/unit/contacts.test.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/profiles-and-identity.md",
+    "bug-reports/robustness-journal-removals-avatars-contract.json",
+    "bug-reports/robustness-journal-removals-avatars-result.json",
+    "app/tests/unit/directMessages/sealAndWrap.test.ts"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/pendingRemovalStorage.ts",
+    "app/tests/unit/marmot/pendingRemovalStorage.test.ts",
+    "bug-reports/robustness-journal-removals-avatars-contract.json",
+    "bug-reports/robustness-journal-removals-avatars-result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/contactCache.ts",
+    "app/src/lib/contacts.ts",
+    "app/src/lib/dmProfile/kinds.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/rumorJournal.test.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.journal.test.ts",
+    "app/tests/unit/marmot/autoCommitLeave.test.ts",
+    "app/tests/unit/marmot/leaveHandler.test.ts",
+    "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+    "app/tests/unit/marmot/groupStorage.test.ts",
+    "app/tests/unit/marmot/groupStorage.clearAllGroupData.test.ts",
+    "app/tests/unit/contactCache.test.ts",
+    "app/tests/unit/contacts.test.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/profiles-and-identity.md",
+    "app/tests/unit/directMessages/sealAndWrap.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot/rumorJournal.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/pendingRemovalStorage.ts",
+    "app/src/lib/marmot/handlers/leaveHandler.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/groupStorage.ts",
+    "app/src/lib/contactCache.ts",
+    "app/src/lib/contacts.ts",
+    "app/src/lib/dmProfile/kinds.ts",
+    "app/src/context/MarmotContext.tsx"
+  ],
+  "tests_added": [
+    "rumorJournal: 1500 unapplied entries survive a sweep and all list oldest-first (replaces the cap test); no count cap exists; failure injection: a failed cleanup still returns the entries, a failed read deletes nothing",
+    "dispatcher replay: a 1500-entry replay keeps the first id deduped against a live duplicate (failed pre-fix); the widened window stays bounded",
+    "pendingRemovalStorage.test.ts (21): store semantics, malformed rows, glue helpers, failure injection on put, delete and read",
+    "autoCommitLeave: a reload inside the debounce still commits the departed member's Remove via the real fireAutoCommit and then forgets the row; a failed commit keeps the row; a member already gone is dropped and forgotten",
+    "leaveHandler: returns enqueueLeave's promise (ack after the durable write; failed pre-fix)",
+    "leaveGroupImpl: pending removals cleared on every path before reload; a rejecting clear does not skip purge, destroy or reload",
+    "clearAllGroupData: drops pending removals",
+    "groupStorage/contactCache/contacts: unsafe stored avatars (http, javascript:, data:, whitespace, too long, empty, non-string) dropped on read with name, updatedAt and signedEvent kept; malformed shapes tolerated; a merge persists the clean row (failed pre-fix)"
+  ],
+  "counts": {
+    "unit_baseline": "5352 passed, 1 skipped (247 files)",
+    "unit_final": "5401 passed, 1 skipped (248 files)",
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch /tmp/claude-501/mutation/robust/ (stryker.r1.mjs, stryker.r2.mjs, vitest.robust.config.mjs)",
+    "mutate": "touched ranges: rumorJournal.ts:101-146; applicationRumorDispatcher.ts:101-106,120-122,251; pendingRemovalStorage.ts (module); groupStorage.ts:76-84,158-160; leaveGroupImpl.ts:232-236; leaveHandler.ts:51; contactCache.ts:28-52; contacts.ts:45-52; kinds.ts:238-248",
+    "before": "89.20% (157 killed, 17 survived, 2 no coverage)",
+    "after": "98.74% (157 killed, 2 survived, both equivalent: the dispatcher's `size > cap` \u2192 `>=`/true, where eviction of size-cap <= 0 is a no-op)",
+    "gaps_closed": "Real gaps: a non-object or non-JSON contact cache and a non-object entry (contactCache); settling a group with nothing queued; the store name 'removals'; the cleanup warn text. Guards whose mutants were equivalent were simplified: the redundant typeof groupId check in isRecord, and the readContactCacheSnapshot shape guard (its catch already covers JSON null).",
+    "recorded": "add-audit.sh, 8 module records (slug quizzl)"
+  },
+  "e2e": {
+    "relevant": "groups-leave-intent, groups-rumor-reload-atomic, groups-profile-*, groups-member-profiles on a wiped relay under the flock: 34 passed, 3 skipped (pre-existing skips), 0 failed",
+    "full_gate": "make test-e2e-all under the flock: non-relay 72 passed; groups/relay 349 passed, 19 skipped, 0 failed; exit 0"
+  },
+  "verification_answers": {
+    "VQ-1": "Yes. Eviction is by age only. rumorJournal.test: 1500 never-applied entries of one group survive sweepRumorJournal and all come back from listPendingRumors oldest-first, and only the expired row is dropped. This failed pre-fix (the cap kept 1000). Storage is still bounded by the 30-day age bound (tested at the boundary). The dispatcher's widened dedup window keeps a >1000 replay safe against live duplicates (test failed pre-fix) and stays bounded.",
+    "VQ-2": "Yes. Removals persist in IDB (few-pending-removals) before the leave rumor's journal ack, and resume on every subscription start. Replay is idempotent: per-member key, an in-memory dedup, and the stale-leaf guard drops and forgets a member who is already gone. autoCommitLeave.test: after a reload inside the debounce, the next session commits the Remove for the departed member's leaf and forgets the row; a third session resumes nothing. Remediation round 1: stored removals carry the departing leaf's identity (signature+HPKE keys) and are resumed only on admin devices, as-is. A mismatching identity (member re-joined) is settled and never removed. Rows older than 30 days, identity-less rows and malformed rows are deleted at resume. Round 2: queue de-duplication and settle are identity-scoped (pubkey plus leafIdentity), so a re-joined member's new removal replaces the stale one and is never deleted by it.",
+    "VQ-3": "Yes. sanitizeStoredAvatar (shared isAllowedAvatarImageUrl) runs on every read in loadMemberProfiles, readContactCache and readContactCacheSnapshot. An unsafe stored URL becomes null and the nickname, updatedAt and signedEvent are kept. ChatBox, the member list and the contact list therefore never receive it. The next write persists the clean row.",
+    "VQ-4": "Yes. Changes are confined to the three mechanisms, and every touched storage step has a failure-injection test. A failed put keeps the in-memory removal and the commit still runs. A failed delete settles memory, and the stale row resumes and settles idempotently. A failed resume read still re-arms the in-memory entries. A failed leave-purge clear does not skip the purge or destroy. A failed journal cleanup still returns the entries, and a failed read deletes nothing. Sanitising cannot drop a profile: it never throws and malformed rows pass through. The intended behaviour is restored with no new user-visible choice. groups.md (journal bound, pending removal kept across a reload) and profiles-and-identity.md (re-validation on read) were updated. Round 1: resume deletes only confirmed-invalid, expired or non-admin rows. Unknown admin status or a failed read deletes nothing. A failed delete is warned.",
+    "VQ-5": "Yes. Unit 5401 passed / 1 skipped; tsc clean. Stryker (concurrency 1) on the touched ranges: 89.20% \u2192 98.74%; the 2 survivors are equivalent. Relevant e2e: 34/34. Full gate make test-e2e-all: 72 + 349 passed, 19 skipped, 0 failed."
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The brief asked for 'a much larger safety cap that never evicts unapplied entries younger than the age bound'. That is contradictory: every journal row is unapplied by construction, so such a cap can never evict anything. I resolved it as age-only eviction and recorded the reasoning. A first static import of the new IDB module into MarmotContext broke an unrelated suite whose idb-keyval mock has no createStore, so the module now creates its store on first use.",
+    "surprised_by": "The journal's 1000 cap was coupled to the dispatcher's dedup LRU. Removing the cap needed a dispatcher change (replay widens the dedup window), which the finding's approach did not mention.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Decider (Fable) RETRY on C2: a stored removal matched on pubkey alone can evict a member who re-joined, and the durable store turned that in-session hazard into 're-armed on every startup'.",
+    "fix": [
+      "PendingRemovalRecord.leafIdentity is captured at first receipt in enqueueLeave: sorted hex signaturePublicKey:hpkePublicKey of the member's current leaf nodes (marmot-ts getPubkeyLeafNodes, which returns ts-mls LeafNode; verified in the installed dist). It is never the leaf index. Without a captured identity the removal stays in memory only.",
+      "resumePendingRemovals re-arms stored records as-is through addToRemovalQueue plus a new armRemovalTimer; it never goes back through recordPendingRemoval, so nothing is re-captured.",
+      "fireAutoCommit: an entry whose stored identity differs from the member's current leaf (or cannot be read) goes to droppedPubkeys and is settled, never proposed. AC-COMMIT-7 (retain on a commit throw) is kept.",
+      "At resume, rows at or over RUMOR_JOURNAL_MAX_AGE_MS are dropped and forgotten.",
+      "Resume only on an admin device (selfAdminStatus, case-insensitive). A non-admin device forgets the stored rows. Unknown admin status keeps them untouched. The in-memory path is unchanged.",
+      "Rows without an identity, or otherwise malformed (including a key/value mismatch), are deleted at resume. A well-formed row of another group whose id extends the prefix is never deleted; a test covers this, a gap Stryker surfaced.",
+      "groups.md \u00a78 now states the resume semantics and the storage-error caveat verbatim."
+    ],
+    "residual": "A re-join from the same reusable last-resort key package, with no commit by that member in between, reproduces the identical leaf (same keys). The guard cannot tell it apart. This is documented in pendingRemovalStorage.ts.",
+    "tests_added": "pendingRemovalStorage.test.ts (now 39 tests): leafIdentityOf; identity-less, empty and mismatched rows treated as malformed; admin re-arm as-is without a re-write; in-memory entry wins; age bound; non-admin forgets; unknown admin status keeps rows; malformed rows deleted for every admin state; failure injection on resume read and delete; cross-group prefix safety; selfAdminStatus. autoCommitLeave.test.ts: reload with the same leaf commits; identity mismatch is settled and not removed; non-admin resume forgets; failed commit retained; leaf-identity guard with mixed entries; a missing leaf reader is fail-safe. The existing idempotency tests stay green.",
+    "unit": "5423 passed, 1 skipped (248 files); tsc clean. Boy-scout: fixed a pre-existing 1/256 flake in sealAndWrap.test.ts (a fixed 'ff' tamper left a signature already starting with ff unchanged).",
+    "mutation": "Stryker (concurrency 1): pendingRemovalStorage.ts module plus MarmotContext.tsx:196-232 (fireAutoCommit). Round 1: 97.84% (4 survived). Final: 100% (206 killed). Equivalent guards were removed and a real cross-group deletion gap was fixed. Audits recorded.",
+    "e2e": {
+      "targeted": "groups-leave-intent, groups-remove-member, groups-lifecycle on a wiped relay: 19 passed, exit 0",
+      "full_gate": "make test-e2e-all on a wiped relay under the flock: non-relay 72 passed; groups/relay 348 passed, 1 failed, 19 skipped (exit 2). The failure was dm-pairing-pending-confirmation.spec.ts:104 (unread badge 1 instead of 2 within 15 s). That spec covers the DM pairing path, which this round did not touch. Re-run in isolation as 3 separate runs, each on a freshly wiped relay: 5/5, 5/5, 5/5. A --repeat-each=5 run on a single relay failed 4 of 25; that matches the known fixed-identity relay-pollution trap and is not a product signal. Verdict: one load flake, consistent with the documented residual gate flake. The previous full-gate run of this bug (before round 1) was fully green."
+    }
+  },
+  "remediation_round_2": {
+    "trigger": "Round-1 re-review was rejected on a confirmed Codex HIGH. addToRemovalQueue de-duplicated by pubkey only, and settle/forget deleted by pubkey. A resumed stale row A therefore swallowed a re-joined member's new leave B, and A's settle then deleted B's row.",
+    "fix": [
+      "addToRemovalQueue: same pubkey with the same leafIdentity is a duplicate (returns false). Same pubkey with a different identity, or an identity-less queued entry, is replaced in place (returns true), so recordPendingRemoval overwrites the stored row. The queue keeps one entry per pubkey.",
+      "Resume never replaces an in-memory entry; a stored row is added only when no entry for that pubkey is queued.",
+      "Settle is identity-scoped. Before any await, fireAutoCommit copies the records it checked (pubkey and leafIdentity) and passes them as the second onCommitted argument. settlePendingRemovals drops a queue entry, and deleteMatchingPendingRemovals (which replaces deletePendingRemovals) deletes a stored row, only when both pubkey and leafIdentity match. An identity-less settled record never deletes a stored row.",
+      "Puts and the read-then-delete step of the identity-checked delete run serialised (one per-module promise chain), so a re-write of the same key cannot land between the read and the delete. A failed operation does not block the chain.",
+      "The leaf-identity comment in fireAutoCommit now also states that re-armed rows carry their first-receipt identity and are never re-captured. The other 7 round-1 items are untouched."
+    ],
+    "tests_added": "pendingRemovalStorage.test.ts (now 49 tests): (a) resume A, then enqueue B with a new identity; settling A leaves B's queue entry and stored row intact, and settling B clears both. (b) A same-identity re-receipt de-duplicates with no second write. (c) An identity-less memory-only entry replaced by one with an identity is persisted. Also: replace-in-place and de-duplication rules; multi-record settle; an identity-less settle never deletes a stored row; identity-matched delete only; the write/delete race keeps the replacement; the chain survives a failed op; an in-memory entry wins over a stored row with a different identity. autoCommitLeave.test.ts: (a) B arrives during A's commit window, survives A's settle, and is proposed for Remove on the next fire; an identity-mismatch drop of A never settles B; the onCommitted records argument is asserted.",
+    "unit": "5434 passed, 1 skipped (248 files); tsc clean",
+    "mutation": "Stryker (concurrency 1): pendingRemovalStorage.ts as a whole module, plus MarmotContext.tsx lines 208-248 and 285 (fireAutoCommit's checked-records and settle path). First pass 97.51% (pre-existing lines included). Final 100% (245 killed, 0 survived): equivalent forms were simplified and a test was added for settling several records at once. Audits recorded.",
+    "e2e": "groups-leave-intent and groups-remove-member on a wiped relay under the flock: 14 passed, exit 0. Full gate not run, per the lead (the lead runs it)."
+  },
+  "remediation_round_3": {
+    "trigger": "Round-2 re-review rejected on a Codex HIGH (also found independently). resumePendingRemovals read the stored rows, then deleted expired, malformed or non-admin rows by key alone, outside the serialised chain and without an identity check. The un-awaited journal replay can persist a leave B to the same key between that read and the delete, so B's row (whose journal entry was already acked) was deleted.",
+    "fix": "Resume now runs read, classify and delete as one serialised() operation on the same chain as puts and the identity-checked delete. A shared unserialised core, deleteRowsStillMatching (also behind deleteMatchingPendingRemovals), re-reads before deleting. It deletes a valid row only when pubkey, leafIdentity and receivedAt still match what resume read, and a malformed key only while it is still malformed. A settle-path delete never touches malformed rows, and resume skips the delete when there is nothing to delete. Nothing else changed.",
+    "tests_added": "pendingRemovalStorage.test.ts (now 58 tests). Expired A (admin), A on a non-admin device and malformed A, each racing a put of B to the same key: B survives. The same three variants, plus same identity with a different receivedAt, with B written between the read and the delete outside the chain (simulating another tab): B survives. Rows that still match are deleted; a settle never deletes an unrelated malformed row; with nothing to delete, resume reads once and does not delete. Existing resume tests stay green.",
+    "unit": "5444 passed, 1 skipped (248 files); tsc clean",
+    "mutation": "Stryker (concurrency 1) on pendingRemovalStorage.ts lines 130-175 and 273-312. First pass 95.12% (4 survived, all on the delete-core / early-return paths); final 100% (82 killed) after two tests and dropping a default parameter. Audit recorded.",
+    "e2e": "groups-leave-intent and groups-remove-member on a wiped relay under the flock: 14 passed, exit 0. Full gate not run, per the lead."
+  }
+}

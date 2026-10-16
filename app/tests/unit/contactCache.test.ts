@@ -171,3 +171,44 @@ describe('writeContactEntryNeutralized — WriteContactEntryResult semantics (VQ
     expect(result).toEqual({ landed: false, lwwWon: false, avatarNonNull: false });
   });
 });
+
+// bug: stored-group-avatars-not-resanitized — cache entries written before the
+// 2026-10-15 avatar-URL check are re-validated on read: unsafe avatar dropped,
+// nickname/updatedAt kept.
+describe('readContactCache — re-validates stored avatars', () => {
+  beforeEach(() => localStorageMock.clear());
+
+  it.each([
+    ['http tracker', 'http://tracker.example/p.png'],
+    ['javascript:', 'javascript:alert(1)'],
+    ['data:', 'data:image/png;base64,AAAA'],
+  ])('drops an unsafe avatar (%s), keeps the entry', (_l, imageUrl) => {
+    localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify({
+      abc: { nickname: 'Eve', avatar: { imageUrl }, updatedAt: '2026-01-01T00:00:00.000Z' },
+      def: { nickname: 'Dan', avatar: { imageUrl: 'https://ok.example/d.png' }, updatedAt: '2026-01-02T00:00:00.000Z' },
+    }));
+    expect(readContactCache()).toEqual({
+      abc: { nickname: 'Eve', avatar: null, updatedAt: '2026-01-01T00:00:00.000Z' },
+      def: { nickname: 'Dan', avatar: { imageUrl: 'https://ok.example/d.png' }, updatedAt: '2026-01-02T00:00:00.000Z' },
+    });
+    expect(readContactEntry('ABC')?.avatar).toBeNull();
+  });
+
+  it('tolerates a malformed entry and a non-object cache', () => {
+    localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify({ abc: null, def: { nickname: 'Dan', avatar: null, updatedAt: 'x' } }));
+    expect(readContactCache()).toEqual({ abc: null, def: { nickname: 'Dan', avatar: null, updatedAt: 'x' } });
+    localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify([1, 2]));
+    expect(readContactCache()).toEqual({});
+    localStorage.setItem(STORAGE_KEYS.contactCache, 'null');
+    expect(readContactCache()).toEqual({});
+    localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify('abc'));
+    expect(readContactCache()).toEqual({});
+    localStorage.setItem(STORAGE_KEYS.contactCache, '{not json');
+    expect(readContactCache()).toEqual({});
+  });
+
+  it('passes a non-object entry through untouched (never spreads it into an object)', () => {
+    localStorage.setItem(STORAGE_KEYS.contactCache, JSON.stringify({ abc: 'junk', def: 7 }));
+    expect(readContactCache()).toEqual({ abc: 'junk', def: 7 });
+  });
+});

@@ -52,6 +52,8 @@ import { applyDeleteEditSignal, resolvePendingSignalsForSlot, registerGroupAdmin
 import { savePoll, saveVoteIfNewer, getPoll, loadVotes, clearPollData } from '@/src/lib/marmot/pollPersistence';
 import { clearGroupMedia } from '@/src/lib/marmot/mediaPersistence';
 import { membersChanged } from '@/src/lib/marmot/memberGuard';
+import { recordPendingRemoval, settlePendingRemovals, resumePendingRemovals, clearPendingRemovalsForGroup, leafIdentityOf, selfAdminStatus } from '@/src/lib/marmot/pendingRemovalStorage';
+import type { PendingRemovalRecord, LeafKeys, SettledRemoval } from '@/src/lib/marmot/pendingRemovalStorage';
 import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import { useProfile } from '@/src/context/ProfileContext';
@@ -159,16 +161,22 @@ export interface FireAutoCommitDeps {
   };
   /** Returns leaf node indexes for the pubkey in the current ratchet tree. */
   getPubkeyLeafNodeIndexes: (state: any, pubkey: string) => number[];
+  /**
+   * Returns the pubkey's current leaf nodes (marmot-ts getPubkeyLeafNodes), for
+   * the leaf-identity guard. When absent, an entry carrying a captured
+   * identity cannot be verified and is settled, never proposed (fail-safe).
+   */
+  getPubkeyLeafNodes?: (state: any, pubkey: string) => LeafKeys[];
   /** Builds a metadata-update proposal. Passed in to avoid repeating the dynamic import. */
   proposeUpdateMetadata: (args: { adminPubkeys: string[] }) => unknown;
   /** Snapshot of pending removals for this group at timer-fire time. */
-  pendingQueue: Array<{ groupId: string; pubkey: string; receivedAt: number }>;
+  pendingQueue: PendingRemovalRecord[];
   /**
    * Called on successful commit with the list of pubkeys that were committed.
    * The callback must filter them out of the live queue without clearing entries
    * that arrived during the commit window.
    */
-  onCommitted: (committedPubkeys: string[]) => void;
+  onCommitted: (committedPubkeys: string[], settled: SettledRemoval[]) => void;
 }
 
 /**
@@ -186,11 +194,21 @@ export interface FireAutoCommitDeps {
  *   - On commit failure onCommitted is NOT called — entries stay for next cycle (AC-COMMIT-7).
  */
 export async function fireAutoCommit(deps: FireAutoCommitDeps): Promise<void> {
-  const { mlsGroup, getPubkeyLeafNodeIndexes, proposeUpdateMetadata, pendingQueue, onCommitted } =
+  const { mlsGroup, getPubkeyLeafNodeIndexes, getPubkeyLeafNodes, proposeUpdateMetadata, pendingQueue, onCommitted } =
     deps;
 
   // Deduplicate: collect unique pubkeys from the snapshot.
   const uniquePubkeys = [...new Set(pendingQueue.map((e) => e.pubkey))];
+  // The records actually checked, copied BEFORE any await: the live queue may
+  // replace an entry in place during the commit window (a re-joined member's
+  // new leave), and settling must be scoped to what was checked here so an
+  // older entry can never settle its replacement (remediation round 2).
+  // One entry per pubkey (addToRemovalQueue replaces in place); the last
+  // entry for a pubkey wins should a caller pass duplicates.
+  const checked = new Map<string, SettledRemoval>(
+    pendingQueue.map((e) => [e.pubkey, { pubkey: e.pubkey, leafIdentity: e.leafIdentity }]),
+  );
+  const settledOf = (pubkeys: string[]): SettledRemoval[] => pubkeys.map((pk) => checked.get(pk) as SettledRemoval);
 
   // Build Remove proposals — one per leaf index per pubkey.
   // Stale-leaf guard (AC-COMMIT-2 / AC-EDGE-1): if getPubkeyLeafNodeIndexes returns []
@@ -205,12 +223,28 @@ export async function fireAutoCommit(deps: FireAutoCommitDeps): Promise<void> {
       droppedPubkeys.push(pubkey);
       continue;
     }
+    // Leaf-identity guard (bug pending-member-removals-not-persisted, remediation
+    // round 1): an entry captured with the departing member's leaf identity is
+    // committed only while that same leaf is still in the tree. A different
+    // identity means the member re-joined (or the leaf changed) — settle the
+    // entry, never evict. Entries without a captured identity keep the
+    // pubkey-only behaviour (in-session only; they are never persisted).
+    // Rows re-armed at resume carry the identity captured at first receipt —
+    // resume never re-captures it, so this check is against the original leaf.
+    const expected = checked.get(pubkey)!.leafIdentity;
+    if (expected !== undefined) {
+      const current = getPubkeyLeafNodes ? leafIdentityOf(getPubkeyLeafNodes(mlsGroup.state, pubkey)) : undefined;
+      if (current !== expected) {
+        droppedPubkeys.push(pubkey);
+        continue;
+      }
+    }
     validEntries.push({ pubkey, leafIndexes });
   }
 
   // Drop stale entries from the live queue immediately even if nothing is left to commit.
   if (droppedPubkeys.length > 0) {
-    onCommitted(droppedPubkeys);
+    onCommitted(droppedPubkeys, settledOf(droppedPubkeys));
   }
 
   // Nothing valid to commit — exit without calling mlsGroup.commit().
@@ -246,9 +280,9 @@ export async function fireAutoCommit(deps: FireAutoCommitDeps): Promise<void> {
   }
 
   // Success: remove committed pubkeys from the live queue (AC-COMMIT-6).
-  // Entries enqueued during the commit window survive because onCommitted
-  // filters by pubkey, not by clearing the whole array.
-  onCommitted(departingPubkeys);
+  // Entries enqueued during the commit window survive because settling is
+  // scoped to the checked records (pubkey + leaf identity), not the array.
+  onCommitted(departingPubkeys, settledOf(departingPubkeys));
 }
 
 /**
@@ -633,11 +667,7 @@ export function resolveAndApplyPairingAdmissionDigest(
 }
 
 /** Shape of a queued out-of-band leave event pending the 5-second debounce commit (S4). */
-interface PendingRemoval {
-  groupId: string;
-  pubkey: string;
-  receivedAt: number;
-}
+type PendingRemoval = PendingRemovalRecord;
 
 /**
  * Epic invite-link-lifecycle, story S2 (AC-USAGE-1/2/3) — the full body of
@@ -869,12 +899,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
    *
    * S5: timer-fire handler replaces this no-op with auto-commit.
    */
-  const enqueueLeave = useCallback((groupId: string, pubkey: string) => {
-    // Append to the pending queue (create the array if absent).
-    const existing = pendingRemovalsRef.current.get(groupId) ?? [];
-    existing.push({ groupId, pubkey, receivedAt: Date.now() });
-    pendingRemovalsRef.current.set(groupId, existing);
-
+  // Arms (or extends) the per-group 5 s debounce timer whose body auto-commits
+  // the queued removals. Shared by enqueueLeave and the subscription-start
+  // resume (which re-arms stored records as-is, without re-capturing them).
+  const armRemovalTimer = useCallback((groupId: string) => {
     // Arm or extend the debounce timer for this group.
     const prior = debounceTimersRef.current.get(groupId);
     if (prior !== undefined) {
@@ -907,22 +935,19 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         }
 
         try {
-          const { getPubkeyLeafNodeIndexes, Proposals } = await import(
+          const { getPubkeyLeafNodeIndexes, getPubkeyLeafNodes, Proposals } = await import(
             '@internet-privacy/marmot-ts'
           );
           await fireAutoCommit({
             mlsGroup,
             getPubkeyLeafNodeIndexes,
+            getPubkeyLeafNodes,
             proposeUpdateMetadata: Proposals.proposeUpdateMetadata,
             pendingQueue,
-            onCommitted: (committedPubkeys) => {
-              const current = pendingRemovalsRef.current.get(groupId) ?? [];
-              const filtered = current.filter((e) => !committedPubkeys.includes(e.pubkey));
-              if (filtered.length === 0) {
-                pendingRemovalsRef.current.delete(groupId);
-              } else {
-                pendingRemovalsRef.current.set(groupId, filtered);
-              }
+            // Settled (committed or already gone): drop from the live queue,
+            // then the durable copy (best-effort).
+            onCommitted: (_committedPubkeys, settled) => {
+              void settlePendingRemovals(pendingRemovalsRef.current, groupId, settled);
             },
           });
         } catch (err) {
@@ -933,6 +958,30 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     }, 5000);
     debounceTimersRef.current.set(groupId, timer);
   }, []); // Refs are stable — no reactive dependencies needed.
+
+  const enqueueLeave = useCallback(async (groupId: string, pubkey: string): Promise<void> => {
+    // Bug pending-member-removals-not-persisted (remediation round 1): capture
+    // the departing member's leaf identity NOW, at first receipt, so a removal
+    // replayed after a reload can never evict the same pubkey re-joined with a
+    // new leaf. A failed capture keeps the removal in memory only.
+    let leafIdentity: string | undefined;
+    try {
+      const group = await clientRef.current?.groups.get(groupId);
+      if (group) {
+        const { getPubkeyLeafNodes } = await import('@internet-privacy/marmot-ts');
+        leafIdentity = leafIdentityOf(getPubkeyLeafNodes(group.state, pubkey));
+      }
+    } catch (err) {
+      console.warn('[Marmot] leaf identity capture for a pending removal failed:', err);
+    }
+    // Append to the pending queue (a member already queued is not added twice)
+    // and mirror it durably. The leave handler returns this promise, so the
+    // dispatcher acks the leave rumor's journal entry only after the write
+    // settled. Best-effort: a failed write never undoes the in-memory removal.
+    const persisted = recordPendingRemoval(pendingRemovalsRef.current, groupId, pubkey, Date.now(), leafIdentity);
+    armRemovalTimer(groupId);
+    return persisted;
+  }, [armRemovalTimer]);
 
   // Dev-only: expose parseProfilePayload so E2E tests can verify forged-sig rejection (AC-045 scenario 6)
   useEffect(() => {
@@ -1578,7 +1627,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       const { getNdk } = await import('@/src/lib/ndkClient');
       const ndk = getNdk();
       if (!ndk || !isCurrent()) return;
-      // Bound the write-ahead rumor journal (age / per-group cap) once per run,
+      // Bound the write-ahead rumor journal (age only) once per run,
       // incl. entries of groups this device no longer subscribes to.
       await rumorJournal.sweepRumorJournal().catch((err: unknown) => {
         console.warn('[Marmot] rumor journal sweep failed:', err);
@@ -1795,6 +1844,28 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           } catch (err) {
             console.warn(`[Marmot] rumor journal replay for ${group.id} failed:`, err);
           }
+
+          // Bug pending-member-removals-not-persisted: re-arm the debounced
+          // auto-commit for removals that were pending when the previous
+          // session (or subscription) ended. Never rejects.
+          // Fail-safe toward NOT evicting: stored rows are re-armed as-is only on
+          // an admin device (only an admin can commit the removal); a non-admin
+          // device forgets them; unreadable admin status leaves them untouched.
+          let admins: unknown;
+          try {
+            admins = mlsGroup.groupData?.adminPubkeys;
+          } catch {
+            admins = undefined;
+          }
+          await resumePendingRemovals({
+            groupId: group.id,
+            isAdmin: selfAdminStatus(admins, pubkeyHex),
+            now: Date.now(),
+            maxAgeMs: rumorJournal.RUMOR_JOURNAL_MAX_AGE_MS,
+            queue: pendingRemovalsRef.current,
+            arm: armRemovalTimer,
+          });
+          if (!isCurrent()) return;
 
 
           const unsub = await subscribeToGroupMessages(
@@ -2147,6 +2218,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         clearInviteExpiries,
         clearPendingDirectInvitesForGroup,
         clearRumorJournalForGroup,
+        clearPendingRemovalsForGroup,
         putLeftGroupTombstone: (id) => putLeftGroupTombstone(id),
         deleteLeftGroupTombstone,
         // Local-only MLS-state destroy under the per-group join lock. With no

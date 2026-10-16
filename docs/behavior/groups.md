@@ -36,8 +36,9 @@ but did not finish is not run again.
   kept, even if the page goes away before it was stored.
 - **What it does not:** if keeping the message fails (for example, the device's storage
   is full) the message is processed as before, and a reload at that moment can still
-  lose it. A kept message that is not processed within 30 days, or beyond the newest
-  1,000 kept for one group, is discarded.
+  lose it. A kept message that is not processed within 30 days is discarded; there is no
+  limit on how many are kept for one group, so a long catch-up cut short is resumed in
+  full.
 - Kept messages stay on this device only: they are not part of the relay backup, are
   never sent anywhere, and are removed when you leave the group or the account's
   local data is cleared.
@@ -382,6 +383,19 @@ they have left and the roster actually *dropping* them.
 - After a member leaves, a remaining admin's app **automatically finalises the removal**
   a few seconds later — dropping them from the roster and refreshing the group's keys in
   one step. Several departures close together are handled together.
+- **A reload does not drop a pending removal.** A departure the app has received but
+  not yet finalised is kept on the device together with an identity of the departing
+  member's group membership as it was when the departure arrived. When the group is
+  opened again, the kept removal is resumed — only on a device whose user is an admin
+  of the group (any other device discards it) — and finalised only if that same
+  membership is still present. If the person has since re-joined with a new
+  membership, the kept removal is discarded instead: a stale removal never evicts a
+  member. Removals not finalised within 30 days are discarded. These pending removals
+  stay on the device only and are discarded when you leave the group or the account's
+  local data is cleared.
+- **What it does not guarantee:** a leave intent whose durable mirror fails to write
+  (storage error) is kept in memory only; a reload within the 5 s commit window then
+  loses the removal.
 - **Only an admin can finalise a removal.** If only regular members are online, it
   waits, and an admin completes it next time one is online — as long as the departure
   signal was published and a relay still carries it.
@@ -615,5 +629,7 @@ the shipped implementation, and the automated test suite:
 - `app/src/lib/marmot/rumorJournal.ts`, `tests/unit/marmot/epochResolver.journalOrdering.test.ts`
   and the end-to-end `groups-rumor-reload-atomic.spec.ts` — the message kept on the
   device before the advanced group keys are saved (receiving after reopening).
+- `app/src/lib/marmot/pendingRemovalStorage.ts`, `tests/unit/marmot/pendingRemovalStorage.test.ts`
+  and `tests/unit/marmot/autoCommitLeave.test.ts` — a pending removal kept across a reload (§8).
 - The group-* end-to-end specs and the unit tests for the pure implementations. A few
   behaviours are verified by manual validation rather than automated tests.

@@ -1,0 +1,45 @@
+{
+  "bug_name": "robustness-journal-removals-avatars",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/rumorJournal.ts",
+      "app/src/lib/marmot/applicationRumorDispatcher.ts",
+      "app/src/lib/marmot/pendingRemovalStorage.ts",
+      "app/src/lib/marmot/handlers/leaveHandler.ts",
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/lib/marmot/leaveGroupImpl.ts",
+      "app/src/lib/marmot/groupStorage.ts",
+      "app/src/lib/contactCache.ts",
+      "app/src/lib/contacts.ts",
+      "app/src/lib/dmProfile/kinds.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/**",
+      "docs/behavior/**"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "app/src/lib/backup/relayBackup.ts",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "J1: The rumor journal is bounded by age only (RUMOR_JOURNAL_MAX_AGE_MS, 30 days). No count cap: every row is by construction unapplied (ack deletes), so a count cap younger than the age bound would destroy undecryptable messages. 1500 pending entries of one group survive a sweep and are all listed for replay, oldest first.",
+    "J2: Expiry cleanup in listPendingRumors is best-effort: a failed delete still returns every pending entry; a failed read rejects (caller logs) and deletes nothing.",
+    "J3: dispatcher.replay(entries) widens that group's dedup LRU window to max(current, 1000 + entries.length) so every replayed id stays deduped against live redeliveries; the window stays bounded (ordinary traffic still evicts the oldest ids).",
+    "R1: pendingRemovalStorage.ts: idb-keyval store few-pending-removals (created lazily), key `${groupId}:${pubkey}`, value {groupId, pubkey, receivedAt}; put idempotent; list per group oldest first, malformed rows ignored; per-group and account-wide clear.",
+    "R2: enqueueLeave = recordPendingRemoval (in-memory add, de-duplicated per member, then durable put) + debounce timer; it returns the put promise and the leave handler returns it, so the dispatcher acks the leave rumor's journal entry only after the durable write settled. A failed put is warned and the in-memory removal still commits.",
+    "R3: fireAutoCommit's onCommitted = settlePendingRemovals: in-memory filter (later arrivals survive), then best-effort durable delete; a failed delete leaves a stale row that the next resume drops idempotently via the stale-leaf guard.",
+    "R4: Every group subscription start resumes stored + in-memory pending removals through enqueueLeave (each member once); a failed read still re-arms the in-memory ones. A reload inside the 5 s debounce still removes the departed member; a failed commit keeps the row for the next session.",
+    "R5: The store is cleared per group in the leave purge (best-effort: failure warned, purge/destroy/reload continue) and by clearAllGroupData; never in the relay backup; no network traffic; no other tab renders it (no store-changed event).",
+    "A1: sanitizeStoredAvatar (dmProfile/kinds.ts) applies isAllowedAvatarImageUrl to a stored avatar → {imageUrl} or null; never throws.",
+    "A2: loadMemberProfiles, contactCache.readContactCache and contacts.readContactCacheSnapshot re-validate every stored avatar on read: unsafe avatar → null, rest of the profile/entry kept; non-array/non-object stored values read as empty; malformed rows are passed through untouched. A later write persists the sanitized row.",
+    "P1: Privacy invariant untouched: all changes are local-only storage/reads; no new publishes."
+  ],
+  "non_goals": [
+    "Chunked replay (replay already enqueues synchronously; the LRU widening covers dedup).",
+    "Coordinating auto-commit across tabs or between several admins (pre-existing).",
+    "A one-time startup sanitise pass (on-read validation chosen instead)."
+  ]
+}

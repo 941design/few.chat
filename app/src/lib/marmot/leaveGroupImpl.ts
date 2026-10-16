@@ -83,6 +83,13 @@ type Deps = {
    */
   clearRumorJournalForGroup: (groupId: string) => Promise<void>;
   /**
+   * Drops the group's durable pending member removals
+   * (pendingRemovalStorage.ts, bug: pending-member-removals-not-persisted).
+   * Best-effort: a failure is warned and never skips the rest of the purge —
+   * a left group is never resubscribed, so a stale row is never acted on.
+   */
+  clearPendingRemovalsForGroup: (groupId: string) => Promise<void>;
+  /**
    * Left-group tombstone (leftGroupTombstones.ts, bug:
    * left-groups-keep-mls-state-forever). Written BEFORE the overlay delete and
    * deleted only after the MLS state is destroyed, so an interrupted leave is
@@ -222,6 +229,11 @@ export async function leaveGroupImpl(
   // see the Deps field doc comment above.
   deps.clearInviteExpiries(groupId);
   await deps.clearRumorJournalForGroup(groupId);
+  try {
+    await deps.clearPendingRemovalsForGroup(groupId);
+  } catch (err) {
+    console.warn('[Marmot] leaveGroup: pending-removal cleanup failed, proceeding with purge:', err);
+  }
 
   // Destroy the MLS state (keys, history) — local-only. With a departure
   // announcement in flight, only after it settles (or the timeout): the send

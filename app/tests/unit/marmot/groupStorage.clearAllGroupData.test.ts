@@ -102,3 +102,19 @@ describe('clearAllGroupData — left-group tombstones', () => {
     expect(await listLeftGroupTombstones()).toEqual([]);
   });
 });
+
+// bug: pending-member-removals-not-persisted — durable pending removals name
+// members of the previous identity's groups and must not survive an account clear.
+describe('clearAllGroupData — pending member removals', () => {
+  it('drops every pending removal of every group', async () => {
+    const { putPendingRemoval, listPendingRemovals } = await import('@/src/lib/marmot/pendingRemovalStorage');
+    await putPendingRemoval({ groupId: GROUP_A, pubkey: PUBKEY_1, receivedAt: 1, leafIdentity: 'l1' });
+    await putPendingRemoval({ groupId: GROUP_B, pubkey: PUBKEY_2, receivedAt: 2, leafIdentity: 'l2' });
+    expect(await listPendingRemovals(GROUP_A)).toHaveLength(1);
+
+    await clearAllGroupData();
+
+    expect(await listPendingRemovals(GROUP_A)).toEqual([]);
+    expect(await listPendingRemovals(GROUP_B)).toEqual([]);
+  });
+});

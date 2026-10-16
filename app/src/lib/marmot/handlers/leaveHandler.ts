@@ -15,12 +15,17 @@ import { LEAVE_INTENT_KIND, parseLeaveIntent } from '@/src/lib/marmot/leaveSync'
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
 
 export interface LeaveHandlerDeps {
-  enqueueLeave: (groupId: string, pubkey: string) => void;
+  /**
+   * May return a promise (MarmotContext: the durable write of the pending
+   * removal). The handler returns it so the dispatcher acks the leave rumor's
+   * journal entry only after it settled (bug: pending-member-removals-not-persisted).
+   */
+  enqueueLeave: (groupId: string, pubkey: string) => void | Promise<void>;
 }
 
 // ---- LEAVE_INTENT handler ---------------------------------------------------
 
-function handleLeaveIntent(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: LeaveHandlerDeps): void {
+function handleLeaveIntent(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: LeaveHandlerDeps): void | Promise<void> {
   const payload = parseLeaveIntent(rumor.content);
   if (!payload) return;
 
@@ -43,7 +48,7 @@ function handleLeaveIntent(rumor: ApplicationRumor, ctx: DispatcherContext, send
   // dropped here with no departure side effect.
   if (payload.pubkey !== sender.pubkey.toLowerCase()) return;
 
-  deps.enqueueLeave(ctx.groupId, payload.pubkey);
+  return deps.enqueueLeave(ctx.groupId, payload.pubkey);
 }
 
 export function createLeaveIntentHandler(deps: LeaveHandlerDeps): RumorHandler {

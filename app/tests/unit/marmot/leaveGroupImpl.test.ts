@@ -59,6 +59,7 @@ function makeDeps(
     clearInviteExpiries: vi.fn(),
     clearPendingDirectInvitesForGroup: vi.fn().mockResolvedValue(undefined),
     clearRumorJournalForGroup: vi.fn().mockResolvedValue(undefined),
+    clearPendingRemovalsForGroup: vi.fn().mockResolvedValue(undefined),
     putLeftGroupTombstone: vi.fn().mockResolvedValue(undefined),
     deleteLeftGroupTombstone: vi.fn().mockResolvedValue(undefined),
     destroyGroupState: vi.fn().mockResolvedValue(undefined),
@@ -399,6 +400,36 @@ describe('leaveGroupImpl — AC-MARKER-9 real-storage scoping (VQ-S3-007)', () =
     expect(deps.clearRumorJournalForGroup.mock.invocationCallOrder[0]).toBeLessThan(
       deps.reloadGroups.mock.invocationCallOrder[0],
     );
+  });
+});
+
+// bug: pending-member-removals-not-persisted — the group's durable pending
+// removals go with the leave purge; a failing clear never skips the rest.
+describe('leaveGroupImpl — durable pending removals', () => {
+  it.each([
+    ['solo/abandon', { members: [SELF] }],
+    ['multi-member', { members: [SELF, OTHER] }],
+    ['no mlsGroup', { mlsGroup: null }],
+  ] as const)('%s path clears the group\'s pending removals before reloading groups', async (_l, opts) => {
+    const deps = makeDeps(opts as never);
+    await leaveGroupImpl(deps, GROUP_ID, SELF);
+    expect(deps.clearPendingRemovalsForGroup).toHaveBeenCalledTimes(1);
+    expect(deps.clearPendingRemovalsForGroup).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.clearPendingRemovalsForGroup.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.reloadGroups.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('failure injection: a rejecting pending-removal clear is warned and the purge, destroy and reload still run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const deps = makeDeps({ members: [SELF] } as never);
+    deps.clearPendingRemovalsForGroup.mockRejectedValueOnce(new Error('idb down'));
+    await expect(leaveGroupImpl(deps, GROUP_ID, SELF)).resolves.toBe(true);
+    expect(deps.destroyGroupState).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.deleteLeftGroupTombstone).toHaveBeenCalledWith(GROUP_ID);
+    expect(deps.reloadGroups).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('pending-removal cleanup failed'), expect.any(Error));
+    warn.mockRestore();
   });
 });
 

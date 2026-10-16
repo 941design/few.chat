@@ -11,6 +11,7 @@ import { STORAGE_KEYS } from '@/src/types';
 import { isStorageAvailable } from '@/src/lib/storage';
 import { rememberContact } from '@/src/lib/contacts';
 import { postStoreChanged } from '@/src/lib/crossTab';
+import { sanitizeStoredAvatar } from '@/src/lib/dmProfile/kinds';
 
 export type CachedContact = {
   nickname: string;
@@ -24,10 +25,29 @@ export function readContactCache(): ContactCacheMap {
   if (!isStorageAvailable()) return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.contactCache);
-    return raw ? (JSON.parse(raw) as ContactCacheMap) : {};
+    return sanitizeContactCacheAvatars(raw ? JSON.parse(raw) : null) as ContactCacheMap;
   } catch {
     return {};
   }
+}
+
+/**
+ * Bug stored-group-avatars-not-resanitized: entries cached before the
+ * avatar-URL check are re-validated on every read with the shared validator —
+ * an unsafe avatar becomes `null`, nickname/updatedAt are kept. A non-object
+ * cache reads as empty. contacts.ts#readContactCacheSnapshot applies the same
+ * rule (it cannot import this module: contactCache imports contacts).
+ */
+function sanitizeContactCacheAvatars(parsed: unknown): Record<string, unknown> {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  return Object.fromEntries(
+    Object.entries(parsed as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      entry && typeof entry === 'object'
+        ? { ...(entry as CachedContact), avatar: sanitizeStoredAvatar((entry as CachedContact).avatar) }
+        : entry,
+    ]),
+  );
 }
 
 /** Upsert a contact using LWW by updatedAt. */

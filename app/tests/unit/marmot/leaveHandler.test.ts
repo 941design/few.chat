@@ -121,6 +121,18 @@ describe('leaveHandler / LEAVE_INTENT', () => {
     expect(deps.enqueueLeave).toHaveBeenCalledWith(GROUP_ID, MEMBER_PUBKEY);
   });
 
+  it('returns enqueueLeave\'s promise so the dispatcher acks the journal entry only after the durable write settled (bug: pending-member-removals-not-persisted)', async () => {
+    let release!: () => void;
+    const persisted = new Promise<void>((r) => { release = r; });
+    const deps = { enqueueLeave: vi.fn(() => persisted) };
+    const handler = createLeaveIntentHandler(deps);
+    const rumor = makeLeaveRumor();
+    const result = handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey));
+    expect(result).toBe(persisted);
+    release();
+    await result;
+  });
+
   it('malformed payload (missing pubkey): does NOT call enqueueLeave', () => {
     const deps = makeDeps();
     const handler = createLeaveIntentHandler(deps);

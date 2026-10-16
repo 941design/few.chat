@@ -239,6 +239,35 @@ describe('dispatcher replay', () => {
     expect(log.slice(1)).toEqual(['ack:G1:x', 'ack:G1:x']);
   });
 
+  it('a replay larger than the dedup LRU keeps every replayed id deduped: a live duplicate of the FIRST replayed rumor is not handled again (bug: rumor-journal-cap-evicts-unapplied)', async () => {
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    const N = 1500;
+    void sub.replay(Array.from({ length: N }, (_, i) => ({ data: rumorBytes(`r${i}`), senderPubkey: A })));
+    group.emit('r0'); // live redelivery of the oldest replayed rumor
+    group.emit('live1');
+    await sub.drain();
+    expect(h.handle).toHaveBeenCalledTimes(N + 1);
+    expect(h.handle.mock.calls.filter(([r]) => (r as { id: string }).id === 'r0')).toHaveLength(1);
+  });
+
+  it('the widened dedup window stays bounded: after a large replay, ordinary live traffic still evicts the oldest ids', async () => {
+    const h = { kind: 9, handle: vi.fn() };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([h]).subscribe(group, ctx);
+    void sub.replay(Array.from({ length: 1200 }, (_, i) => ({ data: rumorBytes(`r${i}`), senderPubkey: A })));
+    await sub.drain();
+    // 1000 (base cap) + 1200 (replay) = 2200 retained ids; push 2200 more live ids.
+    for (let i = 0; i < 2200; i++) group.emit(`l${i}`);
+    await sub.drain();
+    h.handle.mockClear();
+    group.emit('r0'); // evicted long ago → handled again (bounded memory)
+    group.emit('l2199'); // still in the window → deduped
+    await sub.drain();
+    expect(h.handle.mock.calls.map(([r]) => (r as { id: string }).id)).toEqual(['r0']);
+  });
+
   it('replay is a no-op after disposal; malformed entries are skipped', async () => {
     const h = { kind: 9, handle: vi.fn() };
     const group = makeFakeGroup();

@@ -25,19 +25,26 @@
  *
  * Bounds: entries normally live for milliseconds. Pending entries accumulate
  * only when a session dies mid-dispatch (or for a group whose dispatcher is
- * never subscribed again). Two bounds keep the store small:
+ * never subscribed again). They are bounded by AGE ONLY:
  *   - RUMOR_JOURNAL_MAX_AGE_MS (30 days): an entry not replayed within a month
  *     belongs to a group this device no longer opens; dropping it is safe.
- *   - RUMOR_JOURNAL_MAX_PER_GROUP (1000): newest kept. Equal to the dispatcher's
- *     per-group dedup LRU cap, so one replay batch can never evict its own ids
- *     from the LRU and re-admit a live duplicate.
+ * There is deliberately no count cap (bug: rumor-journal-cap-evicts-unapplied).
+ * Every row in this store is by construction NOT yet applied (the dispatcher's
+ * ack deletes it), so any count-based eviction younger than the age bound
+ * destroys messages that can never be decrypted again — exactly what this
+ * journal exists to prevent (an interrupted catch-up of >1000 rumors lost the
+ * overflow under the former 1000-per-group cap). Storage stays bounded: the
+ * journal can hold at most what the relays delivered to this device in 30
+ * days, the same order of data the chat store keeps permanently. The former
+ * reason for the cap — a replay batch must not evict its own ids from the
+ * dispatcher's dedup LRU — is now handled by the dispatcher itself: replay()
+ * widens that group's dedup window by the batch size.
  */
 
 import { createStore, set, del, delMany, entries, keys, clear } from 'idb-keyval';
 
 export const RUMOR_JOURNAL_DB_NAME = 'few-rumor-journal';
 export const RUMOR_JOURNAL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-export const RUMOR_JOURNAL_MAX_PER_GROUP = 1000;
 
 const journalStore = createStore(RUMOR_JOURNAL_DB_NAME, 'rumors');
 
@@ -95,8 +102,7 @@ export async function ackRumor(groupId: string, rumorId: string): Promise<void> 
 /**
  * Partition rows into the ones to keep (grouped by group, oldest first — IDB
  * returns rows in KEY order, not insertion order) and the keys to delete:
- * malformed rows, rows at/over max age, and per-group overflow (oldest beyond
- * the cap).
+ * malformed rows and rows at/over max age. Never evicts by count (see Bounds).
  */
 function partition(
   rows: Array<[IDBValidKey, unknown]>,
@@ -113,29 +119,29 @@ function partition(
     list.push(value);
     keep.set(value.groupId, list);
   }
-  for (const [groupId, list] of keep) {
-    list.sort((a, b) => a.receivedAt - b.receivedAt);
-    const overflow = list.splice(0, Math.max(0, list.length - RUMOR_JOURNAL_MAX_PER_GROUP));
-    for (const e of overflow) drop.push(journalKey(groupId, e.rumorId));
-  }
+  for (const list of keep.values()) list.sort((a, b) => a.receivedAt - b.receivedAt);
   return { keep, drop };
 }
 
 /**
- * Pending (un-acked) entries for one group, oldest first. Applies the age/cap
- * bounds (store-wide — the read covers every row anyway) and deletes what it
- * drops.
+ * Pending (un-acked) entries for one group, oldest first. Applies the age
+ * bound (store-wide — the read covers every row anyway) and deletes what it
+ * drops, best-effort.
  */
 export async function listPendingRumors(
   groupId: string,
   opts: { now?: number } = {},
 ): Promise<RumorJournalEntry[]> {
   const { keep, drop } = partition(await entries(journalStore), opts.now ?? Date.now());
-  await delMany(drop, journalStore);
+  // Cleanup is best-effort: a failed delete of expired/malformed rows must not
+  // withhold the pending entries from replay (they stay stored either way).
+  await delMany(drop, journalStore).catch((err: unknown) => {
+    console.warn('[rumorJournal] expiry cleanup failed:', err);
+  });
   return keep.get(groupId) ?? [];
 }
 
-/** Apply the age/cap bounds across every group. Returns the number removed. */
+/** Apply the age bound across every group. Returns the number removed. */
 export async function sweepRumorJournal(opts: { now?: number } = {}): Promise<number> {
   const { drop } = partition(await entries(journalStore), opts.now ?? Date.now());
   await delMany(drop, journalStore);

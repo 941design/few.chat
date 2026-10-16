@@ -244,8 +244,9 @@ describe('unwrapAndOpen — forgery rejection (round-3 security)', () => {
       ),
     );
     const seal = JSON.parse(sealJson) as import('nostr-tools').NostrEvent;
-    // Corrupt the seal signature (flip first two chars).
-    const tamperedSig = 'ff' + seal.sig.slice(2);
+    // Corrupt the seal signature (replace the first byte with a DIFFERENT one —
+    // a fixed 'ff' left ~1/256 signatures untouched and flaked the test).
+    const tamperedSig = (seal.sig.startsWith('ff') ? '00' : 'ff') + seal.sig.slice(2);
     const tamperedSeal = { ...seal, sig: tamperedSig };
 
     // Re-encrypt the tampered seal into a new gift wrap using an ephemeral key.

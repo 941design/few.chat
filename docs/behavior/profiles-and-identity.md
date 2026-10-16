@@ -171,8 +171,10 @@ currently have.)
 **A malformed or unsafe avatar reference.** Both channels apply the same rule: an avatar
 reference is accepted only if it is a secure (`https://`) or scheme-relative (`//`) web
 address of bounded length with no whitespace; anything else — an insecure address, an
-embedded or script reference, an oversized value — is rejected on receipt. (An avatar
-reference stored before this check existed stays until that member sends a newer profile.)
+embedded or script reference, an oversized value — is rejected on receipt. The same rule
+is applied again whenever a stored group-member profile or cached contact is read, so an
+unsafe reference saved before this check existed is never shown either; only the avatar is
+dropped, the name is kept.
 On the 1:1 channel the whole profile message
 carrying it is rejected; *inside a group* only the avatar is dropped and the rest of the
 profile (the name) is still accepted, so the member shows by name without a picture.

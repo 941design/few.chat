@@ -1,0 +1,93 @@
+{
+  "bug_name": "robustness-journal-removals-avatars",
+  "bug_report_file": "bug-reports/robustness-journal-removals-avatars-report.md",
+  "created_at": "2026-10-15T20:13:29Z",
+  "updated_at": "2026-10-16T00:20:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does the rumor journal no longer evict never-applied entries after an interrupted catch-up of more than 1000 rumors (age-only bound or equivalent), with storage still bounded \u2014 failing test before the fix?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Is the debounced pending member-removal set durable across an unload (persisted and resumed at startup, or flushed on pagehide), idempotent on replay, and does a unit test show a reload inside the debounce still removes the departed member?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SECURITY",
+      "question": "Are stored group member avatars (and contact-cache avatars) re-validated with the shared avatar validator on read or by a one-time sanitise, so an unsafe stored URL is never rendered, with the rest of the profile kept?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "QUALITY",
+      "question": "Each change minimal, failure-injected at every storage step it touches (a failed persist must not lose the removal; a failed sanitise must not drop the profile), no new user-visible behaviour, docs updated where behaviour statements change?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on the touched code has no real-gap survivors; full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "b331e1bd25e66e98787542d449c979cc3d758ac1",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED; Codex HIGH C1 downgraded",
+      "examiner": "VQ-1,3 YES; VQ-2,4 PARTIAL; C2 stale removal rows can evict a re-joined member",
+      "decider": "RETRY C2 only (leaf identity, admin-only resume, age bound); C1 waived + docs caveat; C3 + replayed-leave filed"
+    },
+    {
+      "round": 1,
+      "reviewer": "REJECTED: Codex HIGH stale-A row swallows re-joined member B leave (pubkey-only dedup/settle); all 7 items verified",
+      "decider": "RETRY round 2 (Fable): identity-aware dedup/replace + identity-scoped settle"
+    }
+  ],
+  "remediation_round": 3,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-15T20:13:29Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T21:52:03Z",
+      "trigger": "decider_retry"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T23:06:22Z",
+      "trigger": "decider_retry_round_2"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-15T23:40:00Z",
+      "trigger": "decider_retry_round_3"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T00:20:00Z",
+      "trigger": "round3_review_accepted_fable_waiver_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-robust3.log"
+  }
+}
