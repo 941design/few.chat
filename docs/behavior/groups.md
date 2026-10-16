@@ -29,10 +29,12 @@ never be decrypted again. So each decrypted message is first kept on the device,
 only then may the advanced keys be saved. A kept message is discarded only once its
 processing **completed** — everything it had to store on the device was stored. One whose
 processing was cut short, or failed to store what it needed (for example a storage error
-while saving a chat message or a pending member removal), stays kept and is processed
+while saving a chat message, a reaction, an edit or deletion, or a pending member
+removal), stays kept and is processed
 again the next time the group is opened, before any newly arriving message. Processing a
-message again is safe by design: chat messages, profiles and poll votes are stored at most
-once, a departure is queued once per membership, and nothing is counted or announced twice.
+message again is safe by design: chat messages, profiles, poll votes and reactions are
+stored at most once, an edit or deletion re-applied gives the same result, a departure is
+queued once per membership, and nothing is counted or announced twice.
 Within one opening of a group a message is processed once; a re-received copy is ignored
 and does not discard a kept message whose processing failed.
 
@@ -49,8 +51,7 @@ and does not discard a kept message whose processing failed.
   lose it. A failure the app treats as recoverable by other means is not retried this
   way: anything about a profile request (recording it, or answering it — the requester
   asks again), noting that a requested profile has arrived (at worst it is requested
-  once more), and reactions and edits or deletions whose storage fails (these are
-  logged, not retried). A kept message that is not processed within 30 days is discarded; there is
+  once more). A kept message that is not processed within 30 days is discarded; there is
   no limit on how many are kept for one group, so a long catch-up cut short is resumed
   in full.
 - Kept messages stay on this device only: they are not part of the relay backup, are

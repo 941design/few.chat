@@ -127,8 +127,19 @@ function getListeners(key: string): Set<() => void> {
   return set;
 }
 
+/**
+ * Notifies the thread's listeners. Each listener is isolated: one that throws
+ * is warned and the rest still run, so a broken UI listener can neither skip
+ * the others nor turn into (or replace) a storage write's outcome.
+ */
 function emit(key: string): void {
-  getListeners(key).forEach((listener) => listener());
+  getListeners(key).forEach((listener) => {
+    try {
+      listener();
+    } catch (err) {
+      console.warn('[reactions] listener threw', err);
+    }
+  });
 }
 
 // ─── Write queue helper ───────────────────────────────────────────────────────
@@ -143,10 +154,40 @@ function webLocks(): LockManagerLike | undefined {
 }
 
 /**
+ * After a rejected write (bug: reaction-storage-failures). The cache already
+ * holds the rows that write tried to store (set first on purpose: the
+ * badge-revival guard, c64fe0f), but a rejected IndexedDB write is
+ * indeterminate — it may or may not have landed. Re-read what is actually
+ * stored and cache that, then notify this tab's listeners, so the writing tab
+ * shows the same rows as every other tab.
+ *
+ * Runs inside the failed write's own queue slot (and its cross-tab lock), so
+ * no later write of this tab can interleave and no stale read can revive a
+ * badge. If the re-read fails too, the stored state is unknown: the cache
+ * entry is dropped so the next loadReactions reads storage. Never throws (a
+ * failed re-read is warned; listeners are isolated by emit), so the caller
+ * always rethrows the write's own error.
+ */
+async function reconcileAfterRejectedWrite(
+  key: string,
+  get: <T>(key: string) => Promise<T | undefined>,
+): Promise<void> {
+  try {
+    cache.set(key, (await get<Reaction[]>(key)) ?? []);
+  } catch (err) {
+    cache.delete(key);
+    console.warn('[reactions] re-read after a rejected write failed', err);
+  }
+  emit(key);
+}
+
+/**
  * Enqueues a write operation onto the per-thread serialised queue.
  * The task receives the current rows array and must return the next rows
  * array (or null to skip the idb write). After the idb write resolves,
- * listeners are notified.
+ * listeners are notified. When it rejects, the cache is reconciled with what
+ * is stored (reconcileAfterRejectedWrite), listeners are notified, and the
+ * returned promise rejects with the write's error.
  *
  * Cross-tab: where the Web Locks API exists, each read-modify-write runs
  * under a per-thread lock shared by every tab of the origin, so two tabs
@@ -172,6 +213,9 @@ function enqueue(
       cache.set(key, nextRows);
       try {
         await set(key, nextRows);
+      } catch (err) {
+        await reconcileAfterRejectedWrite(key, get);
+        throw err;
       } finally {
         announce(key);
       }

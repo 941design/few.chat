@@ -1,0 +1,33 @@
+{
+  "bug_name": "reaction-storage-failures",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/handlers/reactionHandler.ts",
+      "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+      "app/src/lib/marmot/handlers/chatHandler.ts",
+      "app/src/lib/messageEdits/api.ts",
+      "app/src/lib/reactions/api.ts",
+      "app/tests/unit/**",
+      "docs/behavior/reactions-and-emoji.md",
+      "docs/behavior/groups.md",
+      "docs/behavior/message-editing-and-deletion.md"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "F1 (reaction-edit-handlers-ack-on-storage-failure): the group reaction handler (kind 7), the delete handler (kind 5) and the chat handler's edit-marked kind-9 branch let storage failures propagate (reject), so the dispatcher keeps the rumor journaled and the next subscription replays it. A failed loadMessages in the reaction handler is a failure, never 'target unknown'. Invalid input (no e-tag, unknown reaction target, a rumor the store discards, an unauthorized or malformed delete/edit) completes and is acked as before. Replay converges: for every storage step of the handling, failing it once (reject, or commit-then-reject for writes) and replaying yields the same stored state as a clean run.",
+    "F1: setChatVersion in the delete/edit paths is bumped for every outcome, also when applyDeleteEditSignal fails part way (the sweep may have landed other slots' writes).",
+    "F2 (reactions-rejected-write-cache-reconcile): when a reaction write rejects, enqueue re-reads the key from storage inside the same queue slot (and Web Lock), caches what is stored, notifies this tab's listeners, posts the cross-tab notice, and rejects with the write's error. Indeterminate (committed then rejected) converges on the committed rows. If the re-read fails too, the cache entry is dropped (next loadReactions reads storage) and a warning is logged. The cache-first badge-revival guard (c64fe0f) is unchanged: cache.set still precedes the write.",
+    "P1: Privacy invariant untouched: local storage only, no new publishes."
+  ],
+  "non_goals": [
+    "Retrying the post-append resolvePendingSignalsForSlot in chatHandler (still swallowed; self-heals via the per-thread sweep on the next message or signal of the thread).",
+    "Retrying DM reactions/edits (no journal on the DM path).",
+    "Closing the documented edit-vs-edit slot-meta residual in messageEdits/api.ts."
+  ]
+}

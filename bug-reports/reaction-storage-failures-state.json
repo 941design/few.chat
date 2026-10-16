@@ -1,0 +1,82 @@
+{
+  "bug_name": "reaction-storage-failures",
+  "bug_report_file": "bug-reports/reaction-storage-failures-report.md",
+  "created_at": "2026-10-16T14:45:00Z",
+  "updated_at": "2026-10-16T14:55:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "For every storage step of handling a group reaction, reaction removal, delete (known/unknown target, with sweep materialization) and edit (known/unknown target), does failing that step once (reject; commit-then-reject for writes) keep the rumor journaled, and does the next subscription's replay converge on the clean run's stored state and ack it?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Is invalid input (no e-tag, unknown reaction target, unauthorized delete, edit-marked kind-5 companion) still acked on the first attempt with nothing stored?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "After a rejected reaction write (each writer; no-commit and commit-then-reject; failing re-read), does the writing tab's cache equal stored state, are listeners notified, does the write error propagate, and do the badge-revival and Web Locks cross-tab tests stay green with the re-read inside the lock?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "QUALITY",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on changed lines with survivors killed or justified; behaviour docs updated honestly?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "cd81fb6",
+  "models": {
+    "lead": "opus",
+    "implementer": "opus"
+  },
+  "baseline": {
+    "unit": "5810 passed, 1 skipped (255 files)"
+  },
+  "fix": {
+    "unit": "5866 passed, 1 skipped (257 files)",
+    "tsc": "clean",
+    "mutation": "round 0: 100% (59/59); remediation 1: 98.44% (63/64, 1 equivalent) on round-1 lines; remediation 2: 96.55% (1 equivalent, 1 unreachable) on round-2 lines",
+    "e2e": "not run by fixer"
+  },
+  "review_rounds": [],
+  "remediation_round": 2,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T14:45:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T14:46:00Z",
+      "trigger": "fixer_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T15:10:00Z",
+      "trigger": "remediation_round_1 (Codex 1 MEDIUM + 2 LOW)"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T15:45:00Z",
+      "trigger": "remediation_round_2 (Codex MEDIUM: cross-tab pin atomicity)"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T14:55:00Z",
+      "trigger": "codex_verify_clean_round2_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-reactsf3.log"
+  }
+}

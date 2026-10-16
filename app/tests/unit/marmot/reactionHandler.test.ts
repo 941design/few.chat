@@ -237,3 +237,68 @@ describe('reactionHandler', () => {
     expect(deps.applyInboundRumor).toHaveBeenCalledTimes(2);
   });
 });
+
+// bug: reaction-storage-failures — storage failures propagate (the dispatcher
+// keeps the rumor journaled for replay); invalid input still completes.
+describe('reactionHandler storage failures', () => {
+  it('a successful apply bumps reactionsVersion by one', async () => {
+    const deps = makeDeps(true);
+    const rumor = makeReactionRumor();
+    await createReactionHandler(deps).handle(rumor, makeCtx(), makeSender(rumor.pubkey));
+    expect(deps.setReactionsVersion.mock.calls[0][0](7)).toBe(8);
+  });
+
+  it('a target absent among OTHER known messages is discarded; a rumor without tags too', async () => {
+    const deps = makeDeps(false);
+    deps.loadMessages.mockResolvedValue({
+      messages: [{ id: 'other-msg', content: 'x', senderPubkey: 'ff'.repeat(32), groupId: GROUP_ID, createdAt: 1 }],
+      refetchIds: [],
+    });
+    const rumor = makeReactionRumor();
+    await expect(createReactionHandler(deps).handle(rumor, makeCtx(), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    const tagless = { ...makeReactionRumor(), tags: undefined as unknown as string[][] };
+    await expect(createReactionHandler(deps).handle(tagless, makeCtx(), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    expect(deps.applyInboundRumor).not.toHaveBeenCalled();
+  });
+
+  it('a failed loadMessages rejects handle() — never treated as "target unknown"', async () => {
+    const deps = makeDeps(true);
+    deps.loadMessages.mockRejectedValueOnce(new Error('IDB read failed'));
+    const rumor = makeReactionRumor();
+
+    await expect(createReactionHandler(deps).handle(rumor, makeCtx(), makeSender(rumor.pubkey))).rejects.toThrow('IDB read failed');
+    expect(deps.applyInboundRumor).not.toHaveBeenCalled();
+    expect(deps.setReactionsVersion).not.toHaveBeenCalled();
+  });
+
+  it('a failed applyInboundRumor rejects handle() without a version bump', async () => {
+    const deps = makeDeps(true);
+    deps.applyInboundRumor.mockRejectedValueOnce(new Error('IDB write failed'));
+    const rumor = makeReactionRumor();
+
+    await expect(createReactionHandler(deps).handle(rumor, makeCtx(), makeSender(rumor.pubkey))).rejects.toThrow('IDB write failed');
+    expect(deps.setReactionsVersion).not.toHaveBeenCalled();
+  });
+
+  it('a rumor the store discards (null) completes without a version bump', async () => {
+    const deps = makeDeps(true);
+    deps.applyInboundRumor.mockResolvedValueOnce(null);
+    const rumor = makeReactionRumor();
+
+    await expect(createReactionHandler(deps).handle(rumor, makeCtx(), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    expect(deps.setReactionsVersion).not.toHaveBeenCalled();
+  });
+
+  it('an unknown target and a missing e-tag complete (acked, not retried) without touching the store', async () => {
+    const unknown = makeDeps(false);
+    const rumor = makeReactionRumor();
+    await expect(createReactionHandler(unknown).handle(rumor, makeCtx(), makeSender(rumor.pubkey))).resolves.toBeUndefined();
+    expect(unknown.applyInboundRumor).not.toHaveBeenCalled();
+
+    const noTag = makeDeps(true);
+    const bare = makeReactionRumor({ tags: [['k', '9']] });
+    await expect(createReactionHandler(noTag).handle(bare, makeCtx(), makeSender(bare.pubkey))).resolves.toBeUndefined();
+    expect(noTag.loadMessages).not.toHaveBeenCalled();
+    expect(noTag.applyInboundRumor).not.toHaveBeenCalled();
+  });
+});

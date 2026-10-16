@@ -37,7 +37,15 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // Gate: only apply the reaction if the target message is known locally.
   // This prevents reactions for unknown messages from polluting the store
   // (silent discard per spec §2.4 / AC-39).
-  const { messages: existingMessages } = await deps.loadMessages(ctx.groupId).catch(() => ({ messages: [] as ChatMessage[] }));
+  //
+  // Storage failures propagate (bug: reaction-storage-failures): a failed
+  // loadMessages or applyInboundRumor throws, so the dispatcher keeps the
+  // rumor journaled and it is handled again at the next subscription. That
+  // replay is idempotent — applyInboundRumor dedups by rumor id against
+  // stored rows, so a write that landed before reporting failure is a no-op.
+  // Invalid input (no e-tag above, an unknown target, a rumor the store
+  // discards) is NOT a failure: it completes and is acked, as before.
+  const { messages: existingMessages } = await deps.loadMessages(ctx.groupId);
   const messageIsKnown = existingMessages.some((m: ChatMessage) => m.id === targetMessageId);
   if (!messageIsKnown) return; // silent discard
 
@@ -45,10 +53,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
     { kind: 'group', groupId: ctx.groupId },
     rumor,
     sender,
-  ).catch((err: unknown) => {
-    console.warn('[dispatcher.7] applyInboundRumor failed:', err);
-    return null;
-  });
+  );
 
   if (result !== null) {
     deps.setReactionsVersion((v) => v + 1);

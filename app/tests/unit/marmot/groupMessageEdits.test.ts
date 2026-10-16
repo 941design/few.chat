@@ -11,8 +11,9 @@
  *   UNCONDITIONALLY — no pre-gate (unlike reactionHandler.ts's known-target
  *   discard gate); an unknown-target signal is retained (pending), not
  *   discarded.
- * - setChatVersion is bumped only for 'delete'/'edit' outcomes, never for
- *   'pending'/'discarded'/'noop'.
+ * - setChatVersion is bumped for every outcome (S5 finding 5), also when
+ *   applyDeleteEditSignal fails — and that failure propagates (the rumor
+ *   stays journaled for replay; bug: reaction-storage-failures).
  * - Single-dispatch: the existing applicationRumorDispatcher LRU dedup
  *   prevents a duplicate wire delivery of the same rumor id from invoking
  *   handle() twice.
@@ -219,7 +220,7 @@ describe('createDeleteEditHandler (S5): routes every kind-5 unconditionally, no 
     expect(messages.find((m) => m.id === 'known-3')?.tombstoned).toBe(true);
   });
 
-  it('applyDeleteEditSignal throwing is swallowed (logged), never propagates out of handle()', async () => {
+  it('applyDeleteEditSignal throwing (storage failure) propagates out of handle() so the rumor stays journaled; setChatVersion still bumps (bug: reaction-storage-failures)', async () => {
     const deps = {
       applyDeleteEditSignal: vi.fn(async () => {
         throw new Error('boom');
@@ -229,8 +230,10 @@ describe('createDeleteEditHandler (S5): routes every kind-5 unconditionally, no 
     const handler = createDeleteEditHandler(deps);
     const rumor = buildDeleteRumor('x', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
 
-    await expect(handler.handle(rumor as any, makeCtx())).resolves.not.toThrow();
-    expect(deps.setChatVersion).not.toHaveBeenCalled();
+    await expect(handler.handle(rumor as any, makeCtx())).rejects.toThrow('boom');
+    expect(deps.applyDeleteEditSignal).toHaveBeenCalledWith({ kind: 'group', groupId: GROUP_ID }, rumor, undefined);
+    expect(deps.setChatVersion).toHaveBeenCalledOnce();
+    expect(deps.setChatVersion.mock.calls[0][0](4)).toBe(5); // an increment
   });
 });
 

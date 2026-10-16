@@ -250,16 +250,17 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // `content` is the NEW message text, not something chatHandler should ever
   // append as an independent row.
   if (hasEditMarkerTag(rumor.tags)) {
-    const result = await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender).catch((err: unknown) => {
-      console.warn('[dispatcher.9] applyDeleteEditSignal (edit-marked replacement) failed:', err);
-      return null;
-    });
-    // S5 gate-remediation (finding 5): bump unconditionally for ANY non-null
-    // ChangeResult — mirrors deleteEditHandler.ts's identical fix. The sweep
-    // inside applyDeleteEditSignal can self-heal/materialize OTHER slots'
-    // storage regardless of THIS rumor's own outcome; a spurious bump for a
-    // 'pending'/'discarded'/'noop' result is a cheap, idempotent re-read.
-    if (result) {
+    // A storage failure propagates so the rumor stays journaled and is
+    // handled again at the next subscription (replay-safe — see
+    // deleteEditHandler.ts; bug: reaction-storage-failures).
+    try {
+      await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender);
+    } finally {
+      // S5 gate-remediation (finding 5): bump unconditionally — mirrors
+      // deleteEditHandler.ts's identical fix. The sweep inside
+      // applyDeleteEditSignal can self-heal/materialize OTHER slots' storage
+      // regardless of THIS rumor's own outcome (also when it failed part
+      // way); a spurious bump is a cheap, idempotent re-read.
       deps.setChatVersion((v) => v + 1);
     }
     return;

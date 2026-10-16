@@ -154,6 +154,18 @@ the message (§5).
 
 **The same edit or delete is delivered twice.** Applied once; the repeat is a no-op.
 
+**A group edit or delete that cannot be stored.** If the device fails to store a group edit
+or delete it received, it is not dropped: the group keeps it and applies it again the next
+time the group is opened, like any other group message whose processing failed (see the
+Groups document, up to five attempts). Applying it again gives the same result as applying
+it once — even for an edit or delete stamped far in the future, whose capped revision is
+remembered from the first time it was processed, so a later retry can never let it override
+an edit that had already superseded it. A malformed one is discarded at once and never
+retried, whatever the state of storage. Whether the sender may edit or delete the message
+needs the stored message, so while storage cannot be read that check is retried, and the
+edit or delete is never applied unchecked. Direct-message edits and deletes are not retried
+this way.
+
 **Reactions on an edited message.** Survive, because the message keeps its identity (§2).
 
 **Editing or deleting a conversation's most recent message.** The conversation's preview
@@ -204,3 +216,7 @@ shipped implementation, and the automated test suite:
 - The `groups-message-edit-delete` and `dm-message-edit-delete` end-to-end specs and the
   unit tests for the ordering, clamp, delete-wins, and clobber-guard rules — including the
   assertion that edit/delete signals are never published to a public relay.
+- Storage failures (bug `reaction-storage-failures`): the group delete and edit paths
+  (`app/src/lib/marmot/handlers/deleteEditHandler.ts`, the edit branch of `chatHandler.ts`)
+  let a storage failure propagate so the group keeps the signal for replay; tested in
+  `app/tests/unit/marmot/reactionEditStorageFailureReplay.test.ts`.

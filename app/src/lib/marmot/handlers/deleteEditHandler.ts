@@ -13,7 +13,7 @@
  *   - Zero imports from app/src/context/
  *   - All IDB and state-setter deps received via injection
  *
- * ─── Deliberately NO pre-gate (unlike reactionHandler.ts:36-41) ────────────
+ * ─── Deliberately NO pre-gate (unlike reactionHandler.ts's known-target gate) ─
  *
  * reactionHandler.ts silently discards a kind-7 reaction whose target message
  * is not yet known locally (a known-target gate BEFORE calling into the
@@ -77,23 +77,27 @@ export interface DeleteEditHandlerDeps {
 async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: DeleteEditHandlerDeps): Promise<void> {
   const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
 
-  const result = await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender).catch((err: unknown) => {
-    console.warn('[dispatcher.5] applyDeleteEditSignal failed:', err);
-    return null;
-  });
-
-  if (result === null) return;
-
-  // S5 gate-remediation (finding 5): bump unconditionally for ANY non-null
-  // ChangeResult, not only 'delete'/'edit'. applyDeleteEditSignal's sweep
-  // (sweepExpiredForThreadKeyLocked, run at the top of every call) can
-  // self-heal/materialize OTHER slots' storage as a side effect of
-  // processing THIS rumor — mutations that are otherwise invisible to
-  // ChatStoreContext until some later, unrelated chatVersion bump happens to
-  // trigger its reconcile re-read. A spurious bump for a 'pending' /
-  // 'discarded' / 'noop' outcome is a cheap, idempotent re-read
-  // (reconcileMessagesWithStorage is a no-op when nothing actually changed).
-  deps.setChatVersion((v) => v + 1);
+  // Storage failures propagate (bug: reaction-storage-failures): the
+  // dispatcher then keeps the rumor journaled and handles it again at the
+  // next subscription. applyDeleteEditSignal is replay-safe — a re-buffered
+  // signal dedups by rumor id, a re-applied one no-ops on the slot's
+  // recorded rumor id or re-writes the same tombstone/content at the same
+  // rev. Invalid input never throws: it resolves 'discarded' / 'pending'.
+  try {
+    await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender);
+  } finally {
+    // S5 gate-remediation (finding 5): bump unconditionally for ANY
+    // outcome, not only 'delete'/'edit'. applyDeleteEditSignal's sweep
+    // (sweepExpiredForThreadKeyLocked, run at the top of every call) can
+    // self-heal/materialize OTHER slots' storage as a side effect of
+    // processing THIS rumor — mutations that are otherwise invisible to
+    // ChatStoreContext until some later, unrelated chatVersion bump happens to
+    // trigger its reconcile re-read. That includes a call that failed part
+    // way, after some of those writes landed. A spurious bump is a cheap,
+    // idempotent re-read (reconcileMessagesWithStorage is a no-op when
+    // nothing actually changed).
+    deps.setChatVersion((v) => v + 1);
+  }
 }
 
 export function createDeleteEditHandler(deps: DeleteEditHandlerDeps): RumorHandler<5> {

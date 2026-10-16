@@ -337,7 +337,7 @@ describe('chatHandler', () => {
     expect(deps.setChatVersion).toHaveBeenCalledOnce();
   });
 
-  it('S5 gate-remediation (finding 5): applyDeleteEditSignal throwing (null result) still does NOT bump setChatVersion — only a genuinely non-null ChangeResult bumps', async () => {
+  it('bug reaction-storage-failures: applyDeleteEditSignal failing (storage) propagates so the rumor stays journaled; setChatVersion still bumps (the sweep may have landed writes before the failure)', async () => {
     const deps = makeDeps();
     deps.applyDeleteEditSignal.mockRejectedValueOnce(new Error('boom'));
     const handler = createChatHandler(deps);
@@ -346,9 +346,11 @@ describe('chatHandler', () => {
       tags: [['e', 'orig-1', '', 'edit'], ['rev', '1']],
     });
 
-    await expect(handler.handle(replacement, makeCtx(), makeSender(replacement.pubkey))).resolves.not.toThrow();
+    await expect(handler.handle(replacement, makeCtx(), makeSender(replacement.pubkey))).rejects.toThrow('boom');
 
-    expect(deps.setChatVersion).not.toHaveBeenCalled();
+    expect(deps.setChatVersion).toHaveBeenCalledOnce();
+    expect(deps.setChatVersion.mock.calls[0][0](4)).toBe(5); // an increment
+    expect(deps.appendMessage).not.toHaveBeenCalled();
   });
 
   it('S5: a PLAIN kind-9 (no edit marker) still takes the normal append path, not applyDeleteEditSignal', async () => {

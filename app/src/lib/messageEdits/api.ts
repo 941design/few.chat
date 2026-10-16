@@ -114,7 +114,7 @@
  * resolve call above.
  */
 
-import { get, set } from 'idb-keyval';
+import { createStore, get, promisifyRequest, set, type UseStore } from 'idb-keyval';
 import {
   appendMessage,
   loadMessages,
@@ -215,6 +215,32 @@ export const MAX_REV_SKEW_SECONDS = 6 * 60 * 60;
 const PENDING_SIGNALS_KEY = 'few:messageEditsPendingSignals:v1';
 const DELETE_MARKERS_KEY = 'few:messageEditsDeleteMarkers:v1';
 const SLOT_META_KEY = 'few:messageEditsSlotMeta:v1';
+const PINNED_REVS_KEY = 'few:messageEditsPinnedRevs:v1';
+
+/**
+ * A rev the ingest cap (MAX_REV_SKEW_SECONDS) lowered, pinned per rumor id at
+ * first processing (bug: reaction-storage-failures, remediation round 1).
+ *
+ * The cap depends on the wall clock at processing time, so the SAME rumor
+ * processed again later (a journal replay after a failed write, or after a
+ * failed ack) would otherwise get a HIGHER rev — and could then overwrite an
+ * edit that legitimately beat its first application. Pinning makes the rev a
+ * function of the rumor alone: every later processing reads the pinned value.
+ * An uncapped rev needs no pin — it is the signal's own rev, and stays
+ * uncapped as the clock moves forward.
+ *
+ * Written BEFORE any effect of the rumor is persisted, so no effect can exist
+ * without its pin. Cap-bounded like its sibling stores (PENDING_SIGNAL_CAP,
+ * oldest evicted): only far-future (broken or hostile clock) signals are ever
+ * pinned, so eviction needs more than PENDING_SIGNAL_CAP of them — the
+ * accepted poisoned-clock residual (spec AC-ORDER-3).
+ */
+interface PinnedRev {
+  threadKey: string;
+  rumorId: string;
+  rev: number;
+  receivedAt: number;
+}
 
 interface PendingSignalBase {
   threadKey: string;
@@ -271,7 +297,12 @@ interface DeleteMarker {
  * SEPARATE idb write performed AFTER `updateMessageInPlace`. A crash between
  * the two writes leaves `row.rev` updated but `meta.lastRumorId` stale, so a
  * later equal-rev edit can incorrectly win (or lose) the D15 tie against the
- * one that crashed mid-write. This is a content-only divergence limited to
+ * one that crashed mid-write. The same holds when the slot-meta write fails
+ * and the rumor journal replays the signal: the replay recomputes the SAME
+ * rev (an uncapped rev is the signal's own; a capped one is pinned, see
+ * PinnedRev), so it re-applies identical content at an identical rev, or
+ * no-ops against a later winner — it never raises the rev. This is a
+ * content-only divergence limited to
  * an exact same-second two-device edit collision landing on a crash window —
  * milder than the delete/tombstone case, which storage truth already
  * protects, and accepted as-is rather than extending S1's frozen
@@ -493,6 +524,82 @@ async function writeSlotMeta(
   }
 }
 
+// ── Pinned-rev helpers ────────────────────────────────────────────────────
+
+/**
+ * The pin store is ONE array under one key shared by every tab of the origin,
+ * so a read-modify-write of it must be atomic ACROSS tabs: two tabs pinning at
+ * once would otherwise both read the same array and the later write would drop
+ * the other's pin (and that rumor's replay would recompute a higher rev). This
+ * module's in-tab `serialize` queue does not cover other tabs, so every pin
+ * read-modify-write runs as ONE readwrite IndexedDB transaction on idb-keyval's
+ * default database/object store (the same key `get`/`set` use) — IndexedDB
+ * serializes overlapping readwrite transactions, in every tab, with no lock
+ * fallback needed. Never idb-keyval `update()` (not transaction-bound; see
+ * rumorJournal.ts). Created lazily: nothing touches IndexedDB at module init.
+ */
+let pinStore: UseStore | null = null;
+function pinTxnStore(): UseStore {
+  if (!pinStore) pinStore = createStore('keyval-store', 'keyval');
+  return pinStore;
+}
+
+/**
+ * Read-modify-write of the pin array in one readwrite transaction. `modify`
+ * returns the next array, or null to write nothing. Resolves with `modify`'s
+ * second result once the transaction COMPLETED; rejects when it aborted or
+ * failed (a throw in `modify` aborts it, so nothing is written).
+ */
+function modifyPinsAtomically<R>(modify: (all: PinnedRev[]) => { next: PinnedRev[] | null; result: R }): Promise<R> {
+  let result: R;
+  return pinTxnStore()('readwrite', (os) => {
+    const read = os.get(PINNED_REVS_KEY);
+    read.onsuccess = () => {
+      try {
+        const stored = read.result as PinnedRev[] | undefined;
+        const out = modify(Array.isArray(stored) ? stored : []);
+        result = out.result;
+        if (out.next !== null) os.put(out.next, PINNED_REVS_KEY);
+      } catch {
+        os.transaction.abort();
+      }
+    };
+    // Settles on complete, abort or error (a failed get aborts the txn too).
+    return promisifyRequest(os.transaction);
+  }).then(() => result);
+}
+
+/**
+ * The rev this rumor is processed at: the pinned one when an earlier
+ * processing pinned it, else `rev` — pinned now when the cap lowered it
+ * (`capped`). The common case (no pin, not capped) is one plain read; the
+ * insert re-reads and writes inside one transaction, so a pin another tab
+ * added meanwhile is kept, and one it added for THIS rumor wins. A failed
+ * read or write rejects (nothing applied yet; the caller's journal replays
+ * the rumor).
+ */
+async function resolvePinnedRev(threadKey: string, rumorId: string, rev: number, capped: boolean): Promise<number> {
+  const find = (all: PinnedRev[]) => all.find((p) => p.threadKey === threadKey && p.rumorId === rumorId);
+  const pinned = find(await readArray<PinnedRev>(PINNED_REVS_KEY));
+  if (pinned) return pinned.rev;
+  if (!capped) return rev;
+  return modifyPinsAtomically((all) => {
+    const existing = find(all);
+    if (existing) return { next: null, result: existing.rev };
+    return { next: evictOldestIfOverCap([...all, { threadKey, rumorId, rev, receivedAt: Date.now() }]), result: rev };
+  });
+}
+
+/** Drops every pin of one thread, atomically against concurrent pin inserts (any tab). */
+async function removePinsForThread(threadKey: string): Promise<void> {
+  const all = await readArray<PinnedRev>(PINNED_REVS_KEY);
+  if (!all.some((p) => p.threadKey === threadKey)) return; // nothing to drop: no transaction
+  await modifyPinsAtomically((current) => {
+    const next = current.filter((p) => p.threadKey !== threadKey);
+    return { next: next.length !== current.length ? next : null, result: undefined };
+  });
+}
+
 // ─── Comparison / tie-break (AC-ORDER-3, D15) ────────────────────────────
 
 /**
@@ -658,8 +765,8 @@ function dedupePreserveOrder(ids: string[]): string[] {
 
 type Classification =
   | { type: 'discard' }
-  | { type: 'delete'; targetIds: string[]; rev: number }
-  | { type: 'edit'; targetId: string; rev: number; content: string; createdAtSeconds: number };
+  | { type: 'delete'; targetIds: string[]; rev: number; capped: boolean }
+  | { type: 'edit'; targetId: string; rev: number; capped: boolean; content: string; createdAtSeconds: number };
 
 /**
  * Classifies an inbound rumor. MARKER-FIRST: the presence of ANY e-tag
@@ -691,7 +798,7 @@ function classifySignal(rumor: InboundDeleteEditRumor, nowSeconds: number): Clas
     if (targetIds.length === 0) return { type: 'discard' };
     const rev = sanitizeIncomingRev(rumor.created_at, nowSeconds);
     if (rev === null) return { type: 'discard' };
-    return { type: 'delete', targetIds, rev };
+    return { type: 'delete', targetIds, rev, capped: rev < rumor.created_at };
   }
 
   if (rumor.kind === 9 || rumor.kind === 14) {
@@ -704,7 +811,7 @@ function classifySignal(rumor: InboundDeleteEditRumor, nowSeconds: number): Clas
     if (typeof rumor.content !== 'string' || rumor.content.length === 0) return { type: 'discard' };
     const createdAtSeconds =
       Number.isInteger(rumor.created_at) && rumor.created_at >= 0 ? rumor.created_at : 0;
-    return { type: 'edit', targetId, rev, content: rumor.content, createdAtSeconds };
+    return { type: 'edit', targetId, rev, capped: rev < rawRev, content: rumor.content, createdAtSeconds };
   }
 
   return { type: 'discard' };
@@ -1325,15 +1432,35 @@ export function applyDeleteEditSignal(
   return serialize(async () => {
     const senderPubkey = sender?.pubkey ?? rumor.pubkey;
     const threadKey = groupIdFor(thread);
-    await sweepExpiredForThreadKeyLocked(threadKey);
 
+    // Classification is pure and runs FIRST (bug: reaction-storage-failures,
+    // remediation round 1): a malformed signal, an edit-marked kind-5
+    // companion, a malformed rev, … is decided without storage. For such a
+    // signal the self-heal sweep (any thread activity runs it) is
+    // best-effort: its failure is warned, never thrown, so a storage outage
+    // cannot make a permanently-invalid signal fail and be retried instead
+    // of being dropped. The sweep is crash-safe (persist-then-remove) and
+    // runs again on the thread's next activity.
     const nowSeconds = Math.floor(Date.now() / 1000);
     const classification = classifySignal(rumor, nowSeconds);
 
     if (classification.type === 'discard') {
+      await sweepExpiredForThreadKeyLocked(threadKey).catch((err: unknown) => {
+        console.warn('[messageEdits] self-heal sweep failed (discarded signal)', err);
+      });
       return { thread, slotId: null, kind: 'discarded' as const };
     }
 
+    // A valid signal: a failed sweep rejects, so the signal is retried.
+    await sweepExpiredForThreadKeyLocked(threadKey);
+
+    // Replay-deterministic rev (see PinnedRev): a capped rev is pinned at
+    // first processing and reused by every later one.
+    classification.rev = await resolvePinnedRev(threadKey, rumor.id, classification.rev, classification.capped);
+
+    // Authorization needs the target row, i.e. storage: a failed read here
+    // rejects (the signal is retried, never applied unauthorized) — the one
+    // validity check that cannot be made without storage.
     const { messages } = await loadMessages(threadKey);
 
     if (classification.type === 'delete') {
@@ -1499,7 +1626,8 @@ export function resolvePendingSignalsForSlot(
 }
 
 /**
- * Clears all three IDB namespaces this module owns. Wired into
+ * Clears all four IDB namespaces this module owns (pending, markers,
+ * slot meta, pinned revs). Wired into
  * storage.ts's clearAccountScopedIdbData so a pending signal, delete
  * marker, or slot-meta entry from a previous identity never leaks into a
  * newly-switched-to identity's session (mirrors clearAllReactions /
@@ -1510,11 +1638,12 @@ export async function clearAllMessageEditsState(): Promise<void> {
     set(PENDING_SIGNALS_KEY, []),
     set(DELETE_MARKERS_KEY, []),
     set(SLOT_META_KEY, []),
+    set(PINNED_REVS_KEY, []),
   ]);
 }
 
 /**
- * Clears this module's three IDB namespaces for a SINGLE thread (round-2
+ * Clears this module's IDB namespaces (all four) for a SINGLE thread (round-2
  * remediation finding 5), as opposed to `clearAllMessageEditsState`'s
  * cross-thread account-switch sweep. Wired into chatPersistence.ts's
  * `clearMessages` (group leave) and `purgeStrangerDmThreads` (stranger
@@ -1546,6 +1675,7 @@ export async function clearMessageEditsStateForThread(threadKey: string): Promis
     if (nextPending.length !== pending.length) writes.push(writePendingAll(nextPending));
     if (nextMarkers.length !== markers.length) writes.push(writeMarkersAll(nextMarkers));
     if (nextSlotMeta.length !== slotMeta.length) writes.push(set(SLOT_META_KEY, nextSlotMeta));
+    writes.push(removePinsForThread(threadKey));
     await Promise.all(writes);
   });
 }

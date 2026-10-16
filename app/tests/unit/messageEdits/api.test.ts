@@ -25,8 +25,13 @@ if (!globalThis.crypto?.subtle) {
 // ── idb-keyval mock (Map-backed) ──────────────────────────────────────────
 
 const idbStore = new Map<string, unknown>();
+const { callableMapStore } = await import('../helpers/callableMapStore');
 
-vi.mock('idb-keyval', () => ({
+// createStore/promisifyRequest: the pinned-rev store's readwrite transaction
+// (messageEdits/api.ts modifyPinsAtomically) runs over the SAME Map.
+vi.mock('idb-keyval', async () => ({
+  createStore: vi.fn(() => (callableMapStore as typeof import('../helpers/callableMapStore').callableMapStore)(idbStore)),
+  promisifyRequest: (await vi.importActual<typeof import('idb-keyval')>('idb-keyval')).promisifyRequest,
   get: vi.fn(async (key: string) => idbStore.get(key) ?? undefined),
   set: vi.fn(async (key: string, value: unknown) => {
     idbStore.set(key, value);
@@ -165,7 +170,9 @@ function sweepTrigger() {
 beforeEach(() => {
   idbStore.clear();
   vi.clearAllMocks();
-  vi.useFakeTimers();
+  // Only Date is faked: the pinned-rev transaction (callableMapStore) runs on
+  // real macrotasks. advanceTimersByTime still moves the fake clock.
+  vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(BASE_TIME_MS);
   registerGroupAdminsProvider(null); // fail-closed default unless a test opts in via registerAdmins()
 });

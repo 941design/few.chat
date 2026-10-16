@@ -762,3 +762,219 @@ describe('Web Locks detection', () => {
     }
   });
 });
+
+/**
+ * bug: reaction-storage-failures — after a rejected write the writing tab's
+ * cache is reconciled with what is actually stored (re-read inside the same
+ * queue slot / lock), its listeners are notified, and the write's own error
+ * still rejects. Stored state is the truth every assertion compares against.
+ */
+describe('writing tab reconciles its cache after a rejected write', () => {
+  type Writer = { name: string; seed: Reaction[]; write: (api: Api) => Promise<unknown>; landed: string[] };
+  const WRITERS: Writer[] = [
+    {
+      name: 'applyOptimistic',
+      seed: [],
+      write: (api) => api.applyOptimistic(G1, row({ id: 'new', emoji: '🔥' })),
+      landed: ['aa:🔥'],
+    },
+    {
+      name: 'applyOptimisticRemoval',
+      seed: [row({ id: 'mine' })],
+      write: (api) => api.applyOptimisticRemoval(G1, 'm1', SELF, '👍'),
+      landed: [],
+    },
+    {
+      name: 'rollbackOptimistic',
+      seed: [row({ id: 'mine' })],
+      write: (api) => api.rollbackOptimistic(G1, 'mine'),
+      landed: [],
+    },
+    {
+      name: 'applyInboundRumor',
+      seed: [],
+      write: (api) => api.applyInboundRumor(G1, rumor()),
+      landed: ['bb:❤️'],
+    },
+  ];
+
+  it.each(WRITERS)('$name: write rejects without committing → cache equals stored state, listener fires, error propagates', async (w) => {
+    shared.idb.set(G1_KEY, w.seed);
+    const before = live(await tabA.api.loadReactions(G1));
+    const onA = vi.fn();
+    tabA.api.subscribeReactions(G1, onA);
+
+    shared.setFailure = 'reject';
+    await expect(w.write(tabA.api)).rejects.toThrow('IDB write failed');
+
+    expect(live(shared.idb.get(G1_KEY) as Reaction[])).toEqual(before); // nothing landed
+    expect(live(await tabA.api.loadReactions(G1))).toEqual(before); // optimistic rows gone
+    expect(onA).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(WRITERS)('$name: write commits then rejects (indeterminate) → cache converges on the committed rows', async (w) => {
+    shared.idb.set(G1_KEY, w.seed);
+    await tabA.api.loadReactions(G1);
+    const onA = vi.fn();
+    tabA.api.subscribeReactions(G1, onA);
+
+    shared.setFailure = 'commit-then-reject';
+    await expect(w.write(tabA.api)).rejects.toThrow('aborted after commit');
+
+    expect(live(shared.idb.get(G1_KEY) as Reaction[])).toEqual(w.landed);
+    expect(live(await tabA.api.loadReactions(G1))).toEqual(w.landed);
+    expect(onA).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejected first write to a never-stored thread reconciles to an empty thread', async () => {
+    await tabA.api.loadReactions(G1); // cached [] — nothing stored under the key
+    shared.setFailure = 'reject';
+    await expect(tabA.api.applyOptimistic(G1, row({ id: 'new' }))).rejects.toThrow('IDB write failed');
+    expect(shared.idb.has(G1_KEY)).toBe(false);
+    expect(await tabA.api.loadReactions(G1)).toEqual([]);
+  });
+
+  it('a throwing listener never replaces the write error, and the other listeners still run (rejected write)', async () => {
+    await tabA.api.loadReactions(G1);
+    const after = vi.fn();
+    tabA.api.subscribeReactions(G1, () => {
+      throw new Error('listener bug');
+    });
+    tabA.api.subscribeReactions(G1, after);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    shared.setFailure = 'reject';
+    await expect(tabA.api.applyOptimistic(G1, row({ id: 'new' }))).rejects.toThrow('IDB write failed');
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('[reactions] listener threw', expect.objectContaining({ message: 'listener bug' }));
+    expect(await tabA.api.loadReactions(G1)).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it('a throwing listener never fails a successful write or a refresh, and the others still run', async () => {
+    await tabA.api.loadReactions(G1);
+    const after = vi.fn();
+    tabA.api.subscribeReactions(G1, () => {
+      throw new Error('listener bug');
+    });
+    tabA.api.subscribeReactions(G1, after);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(tabA.api.applyOptimistic(G1, row({ id: 'new' }))).resolves.toEqual([row({ id: 'new' })]);
+    expect(after).toHaveBeenCalledTimes(1);
+    await tabA.api.refreshReactionsFromStorage(G1_KEY);
+    expect(after).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it('the re-read failing too drops the cache entry (stored state unknown); the next load reads storage; the WRITE error propagates', async () => {
+    shared.idb.set(G1_KEY, [row({ id: 'mine' })]);
+    await tabA.api.loadReactions(G1);
+    const onA = vi.fn();
+    tabA.api.subscribeReactions(G1, onA);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    shared.setFailure = 'reject';
+    shared.beforeSet = async () => {
+      shared.getFails = true; // every read from here on fails: the re-read too
+    };
+    await expect(tabA.api.applyOptimisticRemoval(G1, 'm1', SELF, '👍')).rejects.toThrow('IDB write failed');
+    expect(warn).toHaveBeenCalledWith('[reactions] re-read after a rejected write failed', expect.any(Error));
+    expect(onA).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+
+    shared.getFails = false;
+    shared.beforeSet = null;
+    shared.setFailure = null;
+    shared.getCalls = [];
+    expect(live(await tabA.api.loadReactions(G1))).toEqual(['aa:👍']); // stored truth: the removal never landed
+    expect(shared.getCalls).toEqual([G1_KEY]); // a cold read, not the stale optimistic cache
+  });
+
+  it('the re-read runs in the failed write\'s queue slot: a write queued behind it starts from stored state', async () => {
+    shared.idb.set(G1_KEY, [row({ id: 'mine' })]);
+    await tabA.api.loadReactions(G1);
+    const gate = deferred();
+    shared.beforeSet = () => gate.promise;
+    shared.setFailure = 'reject';
+    const removal = tabA.api.applyOptimisticRemoval(G1, 'm1', SELF, '👍');
+    await settle();
+    expect(live(await tabA.api.loadReactions(G1))).toEqual([]); // optimistic, write held
+
+    // Queued behind the failing removal; must not see its optimistic rows.
+    const add = tabA.api.applyOptimistic(G1, row({ id: 'fire', emoji: '🔥' }));
+    shared.beforeSet = null;
+    gate.resolve();
+    await expect(removal).rejects.toThrow('IDB write failed');
+    shared.setFailure = null;
+    await add;
+    expect(live(shared.idb.get(G1_KEY) as Reaction[])).toEqual(['aa:👍', 'aa:🔥']);
+    expect(live(await tabA.api.loadReactions(G1))).toEqual(['aa:👍', 'aa:🔥']);
+  });
+
+  it('badge-revival guard holds: a refresh queued while a removal is in flight never shows the badge before the removal settles', async () => {
+    shared.idb.set(G1_KEY, [row({ id: 'mine' })]);
+    await tabA.api.loadReactions(G1);
+    const gate = deferred();
+    shared.beforeSet = () => gate.promise;
+    const removal = tabA.api.applyOptimisticRemoval(G1, 'm1', SELF, '👍');
+    await settle();
+    const refresh = tabA.api.refreshReactionsFromStorage(G1_KEY);
+    await settle();
+    expect(live(await tabA.api.loadReactions(G1))).toEqual([]); // still the optimistic removal
+    shared.beforeSet = null;
+    gate.resolve();
+    await removal; // succeeds: no reconcile involved
+    await refresh;
+    expect(live(await tabA.api.loadReactions(G1))).toEqual([]);
+  });
+
+  it('with Web Locks the re-read happens under the failed write\'s lock: another tab\'s write cannot slip in between', async () => {
+    const order: string[] = [];
+    const locks = fakeLocks();
+    setLocks({
+      request<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        return locks.request(name, () =>
+          cb().finally(() => {
+            order.push('release');
+          }),
+        );
+      },
+    });
+    shared.idb.set(G1_KEY, [row({ id: 'mine' })]);
+    await tabA.api.loadReactions(G1);
+    await tabB.api.loadReactions(G1);
+
+    const gate = deferred();
+    let first = true;
+    shared.beforeSet = async () => {
+      if (first) {
+        first = false;
+        await gate.promise;
+        throw new Error('IDB write failed'); // tab A's removal is rejected
+      }
+      order.push('B set');
+    };
+    shared.afterGet = async () => {
+      order.push('get');
+    };
+    const removal = tabA.api.applyOptimisticRemoval(G1, 'm1', SELF, '👍');
+    await settle();
+    const ingest = tabB.api.applyInboundRumor(G1, rumor({ id: 'heart' }));
+    await settle();
+    order.length = 0;
+    gate.resolve();
+    await expect(removal).rejects.toThrow('IDB write failed');
+    await ingest;
+    await settle();
+
+    // A's re-read happens BEFORE A releases the lock; only then does B read
+    // and write. (Later reads are the cross-tab refreshes.)
+    expect(order.slice(0, 5)).toEqual(['get', 'release', 'get', 'B set', 'release']);
+    const stored = live(shared.idb.get(G1_KEY) as Reaction[]);
+    expect(stored).toEqual(['aa:👍', 'bb:❤️']);
+    expect(live(await tabA.api.loadReactions(G1))).toEqual(stored); // via B's cross-tab notice
+    expect(live(await tabB.api.loadReactions(G1))).toEqual(stored);
+  });
+});

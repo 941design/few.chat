@@ -1,0 +1,117 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": {
+    "reaction-edit-handlers-ack-on-storage-failure": "reactionHandler mapped a failed loadMessages to an empty list (reaction treated as target-unknown) and caught applyInboundRumor failures; deleteEditHandler and chatHandler's edit-marked kind-9 branch caught applyDeleteEditSignal failures. Handlers completed, so the dispatcher (ack-on-success since 730b976) acked and the reaction/delete/edit was lost.",
+    "reactions-rejected-write-cache-reconcile": "enqueue sets the cache before set() (badge-revival guard c64fe0f) but had no rejection path for the writing tab: rows that never landed stayed cached and listeners were not notified."
+  },
+  "fix": {
+    "handlers": "Storage failures propagate (no catch) from loadMessages/applyInboundRumor/applyDeleteEditSignal; invalid input still completes (acked). Delete/edit paths bump setChatVersion in finally. Replay safety verified: applyInboundRumor dedups by eventId against stored rows; applyDeleteEditSignal dedups pending by rumorId, re-tombstones idempotently, no-ops on slot-meta lastRumorId; no code change needed there.",
+    "cache_reconcile": "reconcileAfterRejectedWrite: on a rejected set() the key is re-read inside the same queue slot / Web Lock, the stored rows are cached, listeners notified, cross-tab notice still posted, write error rethrown; a failing re-read drops the cache entry (warned)."
+  },
+  "files_changed": [
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/src/lib/messageEdits/api.ts",
+    "app/tests/unit/marmot/reactionEditStorageFailureReplay.test.ts",
+    "app/tests/unit/marmot/reactionHandler.test.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/reactions/crossTab-reactions.test.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/reactions-and-emoji.md",
+    "docs/behavior/message-editing-and-deletion.md",
+    "bug-reports/reaction-storage-failures-report.md",
+    "bug-reports/reaction-storage-failures-contract.json",
+    "bug-reports/reaction-storage-failures-result.json",
+    "bug-reports/reaction-storage-failures-state.json",
+    "app/tests/unit/messageEdits/pinnedRevCrossTab.test.ts",
+    "app/tests/unit/messageEdits/api.test.ts"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/reactionEditStorageFailureReplay.test.ts",
+    "bug-reports/reaction-storage-failures-report.md",
+    "bug-reports/reaction-storage-failures-contract.json",
+    "bug-reports/reaction-storage-failures-result.json",
+    "bug-reports/reaction-storage-failures-state.json",
+    "app/tests/unit/messageEdits/pinnedRevCrossTab.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/src/lib/messageEdits/api.ts",
+    "app/tests/unit/marmot/reactionHandler.test.ts",
+    "app/tests/unit/marmot/chatHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/reactions/crossTab-reactions.test.ts",
+    "docs/behavior/groups.md",
+    "docs/behavior/reactions-and-emoji.md",
+    "docs/behavior/message-editing-and-deletion.md",
+    "app/tests/unit/messageEdits/api.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot",
+    "app/src/lib/messageEdits",
+    "app/src/lib/reactions",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/marmot/reactionEditStorageFailureReplay.test.ts": 32,
+    "app/tests/unit/reactions/crossTab-reactions.test.ts": 15,
+    "app/tests/unit/marmot/reactionHandler.test.ts": 6,
+    "app/tests/unit/messageEdits/pinnedRevCrossTab.test.ts": 3
+  },
+  "counts": {
+    "unit_before": "5810 passed, 1 skipped",
+    "unit_after": "5866 passed, 1 skipped (257 files)",
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config in the session scratchpad (stryker/stryker.scratch.mjs, vitest.scratch.mjs)",
+    "mutate": "chatHandler.ts 252-266; deleteEditHandler.ts 77-101; reactionHandler.ts 31-62; reactions/api.ts 145-216",
+    "before": "83.05% (49 killed, 7 survived, 3 no coverage)",
+    "after": "100% (59 killed)",
+    "survivors_justified": []
+  },
+  "e2e": "not run (fixer brief)",
+  "open_questions": [
+    "chatHandler's post-append resolvePendingSignalsForSlot failure is still swallowed (self-heals via the thread sweep on the next message/signal of that thread; a quiet thread waits).",
+    "DM reactions/edits have no journal: a storage failure there is still not retried (documented).",
+    "Documented edit-vs-edit slot-meta residual in messageEdits/api.ts unchanged; the replay leaves the stored row correct.",
+    "Pre-existing survivors seen when a wider range was mutated (classifySignal guards 746-755, clearMessageEditsStateForThread marker/slot-meta filters and write guards) are existing test gaps outside this diff; candidates for a follow-up mutation pass."
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine; findings matched code except group edits travel via chatHandler (kind 9), covered in the same change",
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Codex: MEDIUM replay can raise a far-future delete/edit rev; LOW throwing listener replaces write error; LOW invalid delete/edit burns retries when sweep reads fail",
+    "fixes": {
+      "pinned_rev": "Option (b): a rev lowered by the ingest cap is pinned per (thread, rumor id) in few:messageEditsPinnedRevs:v1 before any effect is persisted; later processing reads it. Option (a) rejected: slot-meta holds only the last signal per slot, so an atomic meta write still misses a replay after an intervening edit or a failed ack; root cause is the time-dependent cap.",
+      "listener_isolation": "emit try/catches each listener (warn, continue); reconcileAfterRejectedWrite never throws, the write error always propagates.",
+      "classify_first": "applyDeleteEditSignal classifies before storage; a discarded signal's sweep is best-effort (warned) and it is acked first time. Authorization needs the stored row: a failed read there rejects (retried, never applied unchecked)."
+    },
+    "unit": "5858 passed, 1 skipped (256 files); tsc clean",
+    "mutation": {
+      "mutate": "messageEdits/api.ts 527-544, 743, 756, 1376-1412, 1583, 1607-1611, 1616, 1622; reactions/api.ts 130-145",
+      "after": "98.44% (63 killed, 1 survived: api.ts:756 type literal on the fall-through edit branch, equivalent)"
+    }
+  },
+  "remediation_round_2": {
+    "trigger": "Codex re-review: MEDIUM pin array read/insert (and per-thread pin cleanup) not atomic across tabs; a lost pin lets a replay recompute a higher rev",
+    "fix": "modifyPinsAtomically: pin read-modify-write in ONE readwrite IDB transaction on idb-keyval's default store (store callback + promisifyRequest(os.transaction), never update()); used for the capped-pin insert (re-checks inside the txn) and removePinsForThread (skipped when the thread has no pins). Account clear stays a blind atomic set([]).",
+    "tests": "pinnedRevCrossTab.test.ts: two module instances on fake-indexeddb, concurrent inserts and clear-vs-insert races (fail against the round-1 non-atomic code); pin txn read/commit failure injection; api.test.ts mock gains createStore/promisifyRequest and fakes only Date.",
+    "residual": "Pin store capped at 256 (oldest evicted); eviction of a still-replayable pin needs >256 far-future signals in between \u2014 accepted poisoned-clock residual (AC-ORDER-3).",
+    "unit": "5866 passed, 1 skipped (257 files); tsc clean",
+    "mutation": {
+      "mutate": "messageEdits/api.ts 541-602, 1678",
+      "after": "96.55% (56 killed, 1 survived equivalent api.ts:599, 1 no-coverage unreachable catch api.ts:563)"
+    }
+  }
+}

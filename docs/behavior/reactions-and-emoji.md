@@ -113,6 +113,19 @@ fetch the unknown message, and no stray reaction is stored.
 **The same reaction is delivered more than once** (e.g. a relay re-broadcasts it). Ignored
 as a duplicate; it is counted only once.
 
+**A group reaction that cannot be stored.** If the device fails to store a group reaction
+it received (or to look up the message it belongs to), the reaction is not dropped: the
+group keeps it and applies it again the next time the group is opened, like any other
+group message whose processing failed (see the Groups document, up to five attempts).
+Applying it again never counts it twice. A reaction for a message you do not have, or a
+malformed one, is not retried — it is discarded as described above. A direct-message
+reaction that fails to store is not retried this way.
+
+**Storing a reaction change fails on this device.** Whether the change was your own or
+arrived from someone else, the conversation then shows what is actually stored — a
+reaction that did not get stored is not shown as if it had been, and one that was stored
+despite the error is shown. Other open tabs show the same.
+
 **A malformed reaction.** Ignored rather than applied.
 
 **Removing a reaction when you have several emoji on one message.** The removal names which
@@ -172,3 +185,9 @@ shipped implementation, and the automated test suite:
 - Cross-tab refresh: `app/src/lib/reactions/api.ts` (`refreshReactionsFromStorage`) and the
   two-tab unit test `app/tests/unit/reactions/crossTab-reactions.test.ts`
   (bug `cross-tab-reactions-refresh`).
+- Storage failures (bug `reaction-storage-failures`): the reaction handler
+  (`app/src/lib/marmot/handlers/reactionHandler.ts`) lets a storage failure propagate so the
+  group keeps the reaction for replay; a rejected write re-reads storage into the writing
+  tab (`reconcileAfterRejectedWrite` in `api.ts`). Tests:
+  `app/tests/unit/marmot/reactionEditStorageFailureReplay.test.ts` and the
+  "writing tab reconciles" block of `crossTab-reactions.test.ts`.
