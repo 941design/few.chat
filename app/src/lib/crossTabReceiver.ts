@@ -19,6 +19,8 @@ export type CrossTabReceiverActions = {
   bumpGroupData: () => void;
   bumpChat: () => void;
   bumpPolls: () => void;
+  /** Re-read one reaction thread (id = its namespace key) into the cache. */
+  refreshReactions: (key: string) => void;
 };
 
 export function applyStoreChanged(message: StoreChangedMessage, actions: CrossTabReceiverActions): void {
@@ -41,6 +43,12 @@ export function applyStoreChanged(message: StoreChangedMessage, actions: CrossTa
       return;
     case 'polls':
       actions.bumpPolls();
+      return;
+    case 'reactions':
+      // Unscoped reaction notices are never posted; without a thread there is
+      // nothing to refresh (a blanket cache drop would reopen the
+      // badge-revival race, see reactions/api.ts#refreshReactionsFromStorage).
+      if (message.id !== undefined) actions.refreshReactions(message.id);
       return;
   }
 }

@@ -10,8 +10,10 @@
  *
  * Contract:
  *   - Writers call {@link postStoreChanged} only AFTER their write has
- *     succeeded. Posting never throws, so a failed post can never fail the
- *     write it reports.
+ *     succeeded (the reaction store also posts after a rejected write, which
+ *     IndexedDB leaves indeterminate — see reactions/api.ts#announce).
+ *     Posting never throws, so a failed post can never fail the write it
+ *     reports.
  *   - Receivers subscribe via {@link subscribeStoreChanged} and react by
  *     re-reading storage (bumping a revision counter / calling an existing
  *     reload). Messages are notifications only — they carry no data and
@@ -28,14 +30,17 @@
 export const CROSS_TAB_CHANNEL_NAME = 'few-tabs';
 
 /** The stores whose writes are announced to other tabs. */
-export const CROSS_TAB_STORES = ['blocked', 'known', 'contacts', 'groups', 'chat', 'polls'] as const;
+export const CROSS_TAB_STORES = ['blocked', 'known', 'contacts', 'groups', 'chat', 'polls', 'reactions'] as const;
 
 export type CrossTabStore = (typeof CROSS_TAB_STORES)[number];
 
 export type StoreChangedMessage = {
   type: 'store-changed';
   store: CrossTabStore;
-  /** Optional scope, e.g. the group id of a chat or poll write. */
+  /**
+   * Optional scope, e.g. the group id of a chat or poll write, or the
+   * reaction-thread namespace key of a reaction write.
+   */
   id?: string;
 };
 

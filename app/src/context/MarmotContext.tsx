@@ -42,7 +42,7 @@ import { incrementUnread, markAsRead, initUnreadCounts, initJoinRequestCounts, c
 import { isActiveView, getActiveGroupId } from '@/src/lib/activeViewStore';
 import { appendMessage, loadMessages, purgeStrangerDmThreads, CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import { purgeStrangerContacts } from '@/src/lib/contacts';
-import { purgeStrangerDmReactions } from '@/src/lib/reactions/api';
+import { purgeStrangerDmReactions, refreshReactionsFromStorage } from '@/src/lib/reactions/api';
 import { loadKnownPeers, rememberKnownPeers, knownPeersMigrationComplete, markKnownPeersMigrationComplete } from '@/src/lib/knownPeers';
 import { MAINTAINER_PUBKEYS_HEX } from '@/src/config/maintainer';
 import { buildDispatcher } from '@/src/lib/marmot/registerHandlers';
@@ -2674,6 +2674,9 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           bumpGroupData: () => setGroupDataVersion((v) => v + 1),
           bumpChat: () => setChatVersion((v) => v + 1),
           bumpPolls: () => setPollVersion((v) => v + 1),
+          refreshReactions: (key) => {
+            void refreshReactionsFromStorage(key);
+          },
         }),
       ),
     [reloadGroups],

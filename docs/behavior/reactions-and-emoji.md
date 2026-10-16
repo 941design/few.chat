@@ -132,6 +132,15 @@ further reactions there — leaving cuts off the channel, so no later reaction r
 **Your own reactions after a reload.** Persist — they are stored locally, so reopening a
 conversation shows them again.
 
+**A conversation open in several tabs.** A reaction added or removed in one tab — your own
+or one that arrives from someone else, in a group or a direct conversation — shows in the
+same conversation open in another tab of the same browser without a reload. Showing the
+other tab's update never brings back a reaction you are removing at that moment. If both
+tabs store a reaction change on the same conversation at the same moment, both changes are
+kept where the browser supports Web Locks. Without Web Locks, one tab's change can overwrite
+the other's, so a removed reaction can come back. Tabs exchange only a local "this changed"
+signal on the device; nothing is published.
+
 ---
 
 ## 9. Deliberately out of scope
@@ -160,3 +169,6 @@ shipped implementation, and the automated test suite:
 - The `groups-reactions` and `groups-dm-reactions` end-to-end specs and the unit tests for
   reaction aggregation, toggling, and purge — including the assertion that no plaintext
   reaction is published to a public relay.
+- Cross-tab refresh: `app/src/lib/reactions/api.ts` (`refreshReactionsFromStorage`) and the
+  two-tab unit test `app/tests/unit/reactions/crossTab-reactions.test.ts`
+  (bug `cross-tab-reactions-refresh`).

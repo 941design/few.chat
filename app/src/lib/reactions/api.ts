@@ -21,6 +21,7 @@
 import type { Reaction, ReactionThreadKey } from '@/src/lib/reactions/types';
 import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
 import * as walledGarden from '@/src/lib/walledGarden';
+import { postStoreChanged } from '@/src/lib/crossTab';
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -64,6 +65,35 @@ let clearingInProgress = false;
  */
 const listeners = new Map<string, Set<() => void>>();
 
+/**
+ * Cross-tab refresh coalescing: the not-yet-started refresh per thread key.
+ * A further notice while one is queued is a no-op — the queued one reads the
+ * latest stored state when it runs.
+ */
+const queuedRefreshes = new Map<string, Promise<void>>();
+
+/**
+ * Peer-wipe guard: number of wipes (clearDmReactionsForPeer /
+ * purgeStrangerDmReactions) in progress per thread key. A refresh that reads
+ * while a wipe of its thread is in progress may read the doomed rows, so it
+ * must not put them back into the cache. (A refresh that started reading
+ * BEFORE the wipe cannot outlive it: the wipe drains the key's queue, which
+ * holds the refresh, before it deletes.)
+ */
+const wipesInProgress = new Map<string, number>();
+
+function beginWipe(keys: string[]): void {
+  for (const k of keys) wipesInProgress.set(k, (wipesInProgress.get(k) ?? 0) + 1);
+}
+
+function endWipe(keys: string[]): void {
+  for (const k of keys) {
+    const n = (wipesInProgress.get(k) ?? 1) - 1;
+    if (n > 0) wipesInProgress.set(k, n);
+    else wipesInProgress.delete(k);
+  }
+}
+
 // ─── Key derivation ───────────────────────────────────────────────────────────
 
 /** Derives the idb-keyval namespace key for a thread. */
@@ -72,6 +102,18 @@ function idbKeyFor(thread: ReactionThreadKey): string {
     return `few:reactions:group:${thread.groupId}`;
   }
   return `few:reactions:dm:${thread.peerPubkeyHex}`;
+}
+
+/**
+ * Tells the other open tabs that this thread's stored rows changed (cross-tab
+ * S0). The id is the namespace key, so the receiving tab refreshes exactly
+ * that thread. Posted after the IDB write SETTLED — also after a rejected
+ * one: a rejected IndexedDB write is indeterminate (it may have committed),
+ * and the receiver only re-reads stored state, so a spurious notice is
+ * harmless while a missing one would leave the other tab stale.
+ */
+function announce(key: string): void {
+  postStoreChanged('reactions', key);
 }
 
 // ─── Listener helpers ─────────────────────────────────────────────────────────
@@ -91,11 +133,27 @@ function emit(key: string): void {
 
 // ─── Write queue helper ───────────────────────────────────────────────────────
 
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+function webLocks(): LockManagerLike | undefined {
+  const nav = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator;
+  return typeof nav?.locks?.request === 'function' ? nav.locks : undefined;
+}
+
 /**
  * Enqueues a write operation onto the per-thread serialised queue.
  * The task receives the current rows array and must return the next rows
  * array (or null to skip the idb write). After the idb write resolves,
  * listeners are notified.
+ *
+ * Cross-tab: where the Web Locks API exists, each read-modify-write runs
+ * under a per-thread lock shared by every tab of the origin, so two tabs
+ * writing one thread at once cannot overwrite each other (a removal in one
+ * tab undone by a stale add in another). Without Web Locks the queue
+ * serialises within this tab only and such a simultaneous cross-tab write
+ * can still be lost (pinned by crossTab-reactions.test.ts).
  */
 function enqueue(
   key: string,
@@ -106,16 +164,26 @@ function enqueue(
   if (clearingInProgress) return Promise.resolve(null);
 
   const prev = writeQueues.get(key) ?? Promise.resolve();
-  const next = prev.then(async () => {
+  const step = async (): Promise<Reaction[] | null> => {
     const { get, set } = await import('idb-keyval');
     const current = (await get<Reaction[]>(key)) ?? [];
     const nextRows = await task(current);
     if (nextRows !== null) {
       cache.set(key, nextRows);
-      await set(key, nextRows);
+      try {
+        await set(key, nextRows);
+      } finally {
+        announce(key);
+      }
       emit(key);
     }
     return nextRows;
+  };
+  // The cross-tab lock sits INSIDE this tab's per-key queue, so the in-tab
+  // ordering (the cache-first badge-revival guard, c64fe0f) is unchanged.
+  const next = prev.then(() => {
+    const locks = webLocks();
+    return locks ? locks.request(`few:reactions:${key}`, step) : step();
   });
   const settled = next.catch(() => {});
   writeQueues.set(key, settled);
@@ -148,8 +216,64 @@ export async function loadReactions(thread: ReactionThreadKey): Promise<Reaction
   if (cache.has(key)) return cache.get(key)!;
   const { get } = await import('idb-keyval');
   const stored = (await get<Reaction[]>(key)) ?? [];
+  // A write or a cross-tab refresh that completed while this cold read was in
+  // flight already put NEWER rows in the cache — never overwrite them with
+  // this (possibly older) read.
+  if (cache.has(key)) return cache.get(key)!;
   cache.set(key, stored);
   return stored;
+}
+
+/**
+ * Cross-tab receiver (multi-tab design S0): another open tab wrote reaction
+ * rows for the thread stored under `key`. Re-reads that thread's stored rows
+ * into the in-memory cache and notifies its listeners, so a mounted chat shows
+ * the other tab's reaction without a reload. Other threads' cache entries are
+ * untouched.
+ *
+ * Badge-revival guard: the re-read is queued on the thread's write queue, so
+ * it runs only AFTER every write this tab already started for the thread has
+ * persisted. A direct read could return the pre-write IDB value while, say,
+ * an applyOptimisticRemoval is mid-write, and put the removed badge back in
+ * the cache (the race that made loadReactions cache-first).
+ *
+ * Coalesced: at most one refresh per thread is queued (plus one running); a
+ * notice arriving while one is queued returns that one. A refresh whose read
+ * overlapped a peer wipe (clearDmReactionsForPeer / purgeStrangerDmReactions)
+ * leaves the cache alone, so the wiped rows are never re-cached.
+ *
+ * Read-only: never writes and never posts, so nothing bounces back. A thread
+ * this tab has neither cached nor subscribed to (which includes any key that
+ * is not a reaction-thread key) is skipped (its first load reads storage
+ * anyway). Never rejects: a failed re-read keeps the current
+ * cache (stored state unknown) and notifies nobody.
+ */
+export function refreshReactionsFromStorage(key: string): Promise<void> {
+  if (!cache.has(key) && !(listeners.get(key)?.size)) return Promise.resolve();
+  if (clearingInProgress) return Promise.resolve();
+  const queued = queuedRefreshes.get(key);
+  if (queued) return queued;
+
+  const prev = writeQueues.get(key) ?? Promise.resolve();
+  const next = prev.then(async () => {
+    // Running now: a later notice queues a fresh refresh behind this one.
+    queuedRefreshes.delete(key);
+    const { get } = await import('idb-keyval');
+    const stored = (await get<Reaction[]>(key)) ?? [];
+    // A peer wipe of this thread is in progress: the rows may be the wiped ones.
+    if (wipesInProgress.has(key)) return;
+    cache.set(key, stored);
+    emit(key);
+  });
+  const settled = next.catch((err) => {
+    console.warn('[reactions] cross-tab refresh failed', err);
+  });
+  queuedRefreshes.set(key, settled);
+  writeQueues.set(key, settled);
+  settled.then(() => {
+    if (writeQueues.get(key) === settled) writeQueues.delete(key);
+  });
+  return settled;
 }
 
 /**
@@ -519,7 +643,18 @@ export async function clearDmReactionsForPeer(peerPubkeyHex: string): Promise<vo
   );
 
   if (matchingKeys.length === 0) return;
+  beginWipe(matchingKeys);
+  try {
+    await wipeDmReactionKeys(matchingKeys, delMany);
+  } finally {
+    endWipe(matchingKeys);
+  }
+}
 
+async function wipeDmReactionKeys(
+  matchingKeys: string[],
+  delMany: (keys: string[]) => Promise<void>,
+): Promise<void> {
   // Drain any in-flight write for these keys BEFORE deleting — mirrors
   // clearAllReactions/purgeStrangerDmReactions: without this, a write that is
   // mid-flight when delMany() fires may resolve AFTER the delete, re-creating
@@ -535,7 +670,11 @@ export async function clearDmReactionsForPeer(peerPubkeyHex: string): Promise<vo
     cache.delete(key);
     writeQueues.delete(key);
   }
-  await delMany(matchingKeys);
+  try {
+    await delMany(matchingKeys);
+  } finally {
+    for (const key of matchingKeys) announce(key);
+  }
   for (const key of matchingKeys) emit(key);
 }
 
@@ -574,22 +713,31 @@ export async function purgeStrangerDmReactions(
 
   // Optimization guard: delMany([]) is a no-op; this guard avoids the call.
   if (strangerKeys.length > 0) {
-    // Drain in-flight write queue entries for the stranger keys BEFORE delMany.
-    // Without this, an enqueue that is mid-flight when delMany fires may
-    // resolve AFTER the delete, re-creating the key (in-flight write race).
-    // Mirror the clearAllReactions() pattern: await Promise.allSettled(inflight)
-    // first, then clear cache + queue handles, then delete from IDB.
-    const inflightForKeys = strangerKeys
-      .map((k) => writeQueues.get(k))
-      .filter((p): p is Promise<unknown> => p !== undefined);
-    if (inflightForKeys.length > 0) {
-      await Promise.allSettled(inflightForKeys);
+    beginWipe(strangerKeys);
+    try {
+      // Drain in-flight write queue entries for the stranger keys BEFORE delMany.
+      // Without this, an enqueue that is mid-flight when delMany fires may
+      // resolve AFTER the delete, re-creating the key (in-flight write race).
+      // Mirror the clearAllReactions() pattern: await Promise.allSettled(inflight)
+      // first, then clear cache + queue handles, then delete from IDB.
+      const inflightForKeys = strangerKeys
+        .map((k) => writeQueues.get(k))
+        .filter((p): p is Promise<unknown> => p !== undefined);
+      if (inflightForKeys.length > 0) {
+        await Promise.allSettled(inflightForKeys);
+      }
+      // Evict in-memory cache and write-queue handles for purged keys.
+      for (const key of strangerKeys) {
+        cache.delete(key);
+        writeQueues.delete(key);
+      }
+      try {
+        await delMany(strangerKeys);
+      } finally {
+        for (const key of strangerKeys) announce(key);
+      }
+    } finally {
+      endWipe(strangerKeys);
     }
-    // Evict in-memory cache and write-queue handles for purged keys.
-    for (const key of strangerKeys) {
-      cache.delete(key);
-      writeQueues.delete(key);
-    }
-    await delMany(strangerKeys);
   }
 }

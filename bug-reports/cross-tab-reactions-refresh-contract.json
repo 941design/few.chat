@@ -1,0 +1,41 @@
+{
+  "bug_name": "cross-tab-reactions-refresh",
+  "story_id": "S1",
+  "findings": ["cross-tab-reactions-refresh"],
+  "design": "bug-reports/multi-tab-design-2026-10-15.md (S0); S0 implementation 69b71d0 (bug-reports/cross-tab-change-notifications-*)",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/reactions/api.ts",
+      "app/src/lib/crossTab.ts (store list + contract comment only)",
+      "app/src/lib/crossTabReceiver.ts",
+      "app/src/context/MarmotContext.tsx (cross-tab receiver wiring only)",
+      "app/tests/unit/**",
+      "docs/behavior/reactions-and-emoji.md",
+      "docs/behavior/groups.md"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "app/tests/e2e/**",
+      "app/src/context/ChatStoreContext.tsx",
+      "app/src/hooks/useDirectReactions.ts"
+    ]
+  },
+  "behaviour": [
+    "C1: every reaction write that changes stored rows (applyOptimistic, applyOptimisticRemoval, rollbackOptimistic, applyInboundRumor; DM and group; own and incoming) posts store-changed {store:'reactions', id:<thread namespace key>} once, after the IDB write settles (also after a rejected, indeterminate write). No-op writes post nothing.",
+    "C2: clearDmReactionsForPeer and purgeStrangerDmReactions post one reactions notice per deleted thread key after delMany settles.",
+    "C3: on receipt, only the announced thread is re-read into the cache and only its listeners fire; a thread neither cached nor subscribed is not read; unscoped notices refresh nothing.",
+    "C4: the re-read is queued on the thread's write queue (after in-flight writes of this tab), so a removal in flight is never revived; a later write queued behind a refresh stays serialised; a cold loadReactions never overwrites a newer cache entry.",
+    "C5: the refresh never writes, never posts, never rejects; a failed re-read keeps the cache and notifies nobody; it is skipped while clearAllReactions runs.",
+    "C6: a failed post never fails the reaction write (postStoreChanged never throws)."
+  ],
+  "non_goals": [
+    "No cross-tab write coordination (two tabs' concurrent read-modify-writes of one thread can still lose an update; multi-tab design S1).",
+    "No account-switch notice from clearAllReactions (whole-account wipe; other tabs are out of scope of this finding).",
+    "No change to the local cache on a rejected IDB write (pre-existing; see open questions).",
+    "No new e2e spec (unit two-tab test covers the mechanism; the lead may add a dm-*/groups-* two-page spec)."
+  ],
+  "deviations_from_finding": [
+    "Notices are posted after the IDB write settles, including a rejected one (indeterminate != rejection), unlike the S0 writers which post only on success; the receiver only re-reads stored state, so this is safe.",
+    "Scope extended to the peer wipes (clearDmReactionsForPeer, purgeStrangerDmReactions) and the cold-load overwrite guard in loadReactions (same stale-cache class)."
+  ]
+}

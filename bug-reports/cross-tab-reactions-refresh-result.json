@@ -1,0 +1,112 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "reactions/api.ts serves loadReactions from a module-level in-memory cache (cache-first since c64fe0f to stop a badge-revival race). The S0 cross-tab channel (69b71d0) carried no 'reactions' store: reaction writes posted nothing and no receiver invalidated the reaction cache, so another open tab kept serving its stale cached rows until reload.",
+  "fix": "crossTab: 'reactions' store. reactions/api.ts: enqueue posts store-changed {reactions, id: thread namespace key} after the IDB set settles (also on rejection: indeterminate, receiver only re-reads); clearDmReactionsForPeer / purgeStrangerDmReactions post per deleted key after delMany settles. New refreshReactionsFromStorage(key): queued on the thread's write queue (after this tab's in-flight writes, so a removal mid-write is never revived), re-reads that one thread into the cache and emits to its listeners; skipped for threads neither cached nor subscribed and during clearAllReactions; never rejects (failed read keeps cache, no emit); read-only, no post. loadReactions cold path no longer overwrites a cache entry filled while its read was in flight. crossTabReceiver maps 'reactions' (scoped only) to refreshReactions(id); MarmotContext wires it to refreshReactionsFromStorage. UI consumers (ChatStoreContext, useDirectReactions) already recompute on subscribeReactions emits \u2014 unchanged.",
+  "deviations_from_design": [
+    "Reactions post after a settled (incl. rejected) IDB write, unlike the S0 writers (success only): a rejected IndexedDB write is indeterminate and the receiver only re-reads stored state. Recorded in api.ts#announce and the crossTab.ts contract comment.",
+    "Scope extended to the peer wipes and the cold-load overwrite guard (same stale-cache class).",
+    "No e2e spec added (optional per brief; not runnable by the fixer). dm-block-cross-tab.spec.ts is the pattern if the lead wants a two-page dm-*/groups-* check."
+  ],
+  "files_changed": [
+    "app/src/lib/reactions/api.ts",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/crossTab.test.ts",
+    "docs/behavior/reactions-and-emoji.md",
+    "docs/behavior/groups.md",
+    "app/tests/unit/reactions/crossTab-reactions.test.ts",
+    "bug-reports/cross-tab-reactions-refresh-report.md",
+    "bug-reports/cross-tab-reactions-refresh-contract.json",
+    "bug-reports/cross-tab-reactions-refresh-result.json",
+    "bug-reports/cross-tab-reactions-refresh-state.json"
+  ],
+  "files_created": [
+    "app/tests/unit/reactions/crossTab-reactions.test.ts",
+    "bug-reports/cross-tab-reactions-refresh-report.md",
+    "bug-reports/cross-tab-reactions-refresh-contract.json",
+    "bug-reports/cross-tab-reactions-refresh-result.json",
+    "bug-reports/cross-tab-reactions-refresh-state.json"
+  ],
+  "files_modified": [
+    "app/src/lib/reactions/api.ts",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/crossTab.test.ts",
+    "docs/behavior/reactions-and-emoji.md",
+    "docs/behavior/groups.md"
+  ],
+  "modules_touched": [
+    "app/src/lib",
+    "app/src/lib/reactions",
+    "app/src/context",
+    "app/tests/unit",
+    "app/tests/unit/reactions",
+    "docs/behavior"
+  ],
+  "tests_added": [
+    "tests/unit/reactions/crossTab-reactions.test.ts (new, 21 tests): two tabs = two module instances (vi.resetModules) over one Map-backed idb-keyval and a simulated BroadcastChannel bus (no echo to sender), wired through the real crossTabReceiver. Propagation: inbound group add [success signal], own DM add/remove/rollback, inbound removal, no-op writes post nothing, receiver never posts. Scoping: only the announced thread re-read / its listeners fire, uncached+unsubscribed thread not read, subscribed-but-uncached refreshed, uncached refresh is a resolved no-op, skipped during clearAllReactions (wiped account not re-cached). Badge revival: refresh mid-removal never revives; a settled refresh never unchains a later queued write; cold load never overwrites a newer cache. Failure injection: set rejects (notice still posted, other tab shows stored truth), set commits-then-rejects (other tab shows it), refresh read fails (cache kept, no emit, resolves, queue not wedged), postMessage throws (write succeeds), clearDmReactionsForPeer / purge delMany rejects (notice posted, stored truth shown).",
+    "tests/unit/crossTab.test.ts (+4): 'reactions' accepted by parseStoreChanged and mapped to exactly refreshReactions (it.each), scoped id passed through, unscoped notice refreshes nothing, MarmotContext wiring source-scan includes refreshReactionsFromStorage(key)."
+  ],
+  "counts": {
+    "baseline": {
+      "unit_files": 248,
+      "unit_passed": 5527,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "final": {
+      "unit_files": 249,
+      "unit_passed": 5552,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT"
+    },
+    "pre_fix_repro": "crossTab-reactions.test.ts run against HEAD (3166fdb) api.ts/crossTab.ts/crossTabReceiver.ts (temporarily swapped in, restored): 18 of 21 FAILED (no post, no refresh, stale cache). Guard checks: removing the write-queue chaining from the refresh fails the mid-removal revival test; removing the cold-load guard fails the cold-load test."
+  },
+  "mutation": {
+    "tool": "stryker, concurrency 1, scratch /tmp/claude-501/mutation/xtab-reactions/ (own vitest + stryker .mjs configs, own tempDir; app/reports untouched)",
+    "scope": "changed lines: reactions/api.ts:78-89 (announce), 128-132 (enqueue post), 168-215 (cold-load guard + refreshReactionsFromStorage), 599-603, 658-662 (wipe posts); crossTab.ts:33; crossTabReceiver.ts:44-56",
+    "before": "r1 (with a since-removed redundant isReactionKey guard): 85.71% (45/54 killed)",
+    "after": "r2 after simplification: 86.11% (31/36); 2 killing tests added (queue-cleanup serialisation, clearAllReactions skip) -> targeted r3 on api.ts:168-215 18/21 -> 33/36 = 91.67% overall; crossTabReceiver 100%",
+    "remaining": "3 survivors, no real gap: console.warn message string in the refresh catch (side-effect only); the refresh's queue-handle cleanup emptied / condition forced false (leaves an already-settled promise as the queue tail - the next operation chains onto a resolved promise, memory only; the harmful variants - deleting a newer entry - are killed)."
+  },
+  "e2e": "Not run (fixer brief). No e2e spec added.",
+  "open_questions": [
+    "Follow-up (lead filing): enqueue sets the cache BEFORE the IDB set; if the set rejects, this tab's cache keeps the unpersisted rows until reload.",
+    "Follow-up (lead filing): clearAllReactions (account switch) posts no notice; other open tabs keep their caches until reload.",
+    "Browsers without Web Locks: a simultaneous cross-tab write to one thread can still be lost (pinned by test, documented in reactions-and-emoji.md section 8)."
+  ],
+  "verification_answers": {},
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "A Stryker survivor on the clearAllReactions skip looked unkillable: the test's getCalls stayed empty with the guard removed because, under vi.resetModules, the refresh's dynamic import('idb-keyval') racing clearAllReactions' import resolved to the REAL idb-keyval (ReferenceError indexedDB, swallowed by the refresh catch). Assertions on mock call logs are unreliable for concurrent first dynamic imports; assert on observable state instead.",
+    "surprised_by": "",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Reviewer ACCEPTED with docs condition (F1 sentence); Codex 1 high (cross-tab lost update revives a removed badge) + 2 medium (refresh storms; refresh racing a peer wipe = reviewer F2). Lead: do items 1-3.",
+    "fix": [
+      "enqueue: each read-modify-write runs under navigator.locks.request('few:reactions:'+key) when Web Locks exist (webLocks() as in pollPersistence), inside the per-key in-tab queue (c64fe0f ordering unchanged); in-tab queue only otherwise.",
+      "refreshReactionsFromStorage coalesced per key (queuedRefreshes): at most one queued + one running; a notice while queued returns the queued promise.",
+      "Peer-wipe guard: wipesInProgress counter per key (beginWipe/endWipe in clearDmReactionsForPeer via new wipeDmReactionKeys helper, and purgeStrangerDmReactions, end in finally); the refresh skips cache.set/emit when a wipe of its key is in progress after its read.",
+      "docs/behavior/reactions-and-emoji.md section 8: guarantee stated for Web Locks; without them a simultaneous two-tab write can bring a removal back."
+    ],
+    "tests_added": "crossTab-reactions.test.ts +15 (21 -> 36): reviewer scenario with shared fake Web Locks (storage + both caches = removal + heart; lock name) and without (lost update pinned); lock inside in-tab queue keeps same-tab order; coalescing (queued notices share one refresh / one read / one emit; notice while running queues exactly one more; 10-write storm bounded); wipe races (refresh during clearDm / purge delete never re-caches; overlapping wipes hold until the last ends; after each wipe a refresh caches + notifies again; each wipe waits for an in-flight write); Web Locks detection (locks without request, no navigator).",
+    "counts": {
+      "unit_files": 249,
+      "unit_passed": 5567,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker concurrency 1, scratch /tmp/claude-501/mutation/xtab-reactions/ (r4/r5): api.ts round-1 lines (state + wipe helpers 68-96, webLocks 136-144, enqueue 167-186, loadReactions/refresh 219-278, clearDm 646-677, purge 716-741) + crossTabReceiver: r4 60/94 killed (32 survived, 2 no-coverage) -> 7 killing tests -> r5 83/94 = 88.3%. Remaining 11, no real gap: refresh console.warn string; queue-handle cleanup emptied/false (memory only, as round 0); pre-existing drain lines (moved into the try/helper) whose variants are equivalent - filter(p !== undefined) forced true/removed and the length>0 guard forced true/>=0 only pass undefined or [] to Promise.allSettled.",
+    "e2e": "not run (fixer brief)"
+  }
+}

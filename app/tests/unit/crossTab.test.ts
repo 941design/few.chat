@@ -323,6 +323,7 @@ describe('applyStoreChanged', () => {
       bumpGroupData: vi.fn(),
       bumpChat: vi.fn(),
       bumpPolls: vi.fn(),
+      refreshReactions: vi.fn(),
     };
   }
 
@@ -333,6 +334,7 @@ describe('applyStoreChanged', () => {
     groups: ['reloadGroups', 'bumpGroupData'],
     chat: ['bumpChat'],
     polls: ['bumpPolls'],
+    reactions: ['refreshReactions'],
   };
 
   it.each(CROSS_TAB_STORES.map((s) => [s]))('%s calls exactly its actions, once each', (store) => {
@@ -343,6 +345,18 @@ describe('applyStoreChanged', () => {
       const want = expected[store].includes(name as keyof CrossTabReceiverActions) ? 1 : 0;
       expect(fn, `${store} → ${name}`).toHaveBeenCalledTimes(want);
     }
+  });
+
+  it('reactions refreshes exactly the announced thread key', () => {
+    const a = actions();
+    applyStoreChanged({ type: 'store-changed', store: 'reactions', id: 'few:reactions:group:g1' }, a);
+    expect(a.refreshReactions).toHaveBeenCalledWith('few:reactions:group:g1');
+  });
+
+  it('an unscoped reactions notice refreshes nothing (no blanket cache drop)', () => {
+    const a = actions();
+    applyStoreChanged({ type: 'store-changed', store: 'reactions' }, a);
+    for (const fn of Object.values(a)) expect(fn).not.toHaveBeenCalled();
   });
 });
 
@@ -395,6 +409,7 @@ describe('MarmotContext receiver wiring', () => {
       ['bumpGroupData', 'setGroupDataVersion'],
       ['bumpChat', 'setChatVersion'],
       ['bumpPolls', 'setPollVersion'],
+      ['refreshReactions', 'refreshReactionsFromStorage(key)'],
     ]) {
       const at = body.indexOf(`${action}: `);
       expect(at, action).toBeGreaterThan(-1);
