@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T03:20:59Z",
+  "updated_at": "2026-10-16T04:39:41Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -389,20 +389,6 @@
       "approach": "Handle with the signer-authority work (2026-09-26 review task R04): route backup encrypt/sign through the active signer, decide whether background NIP-44 encrypt/sign prompts are acceptable for NIP-46/NIP-07, and gate the restore flow accordingly."
     },
     {
-      "slug": "first-relay-backup-fragile-at-cold-start",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/relayBackup.ts",
-        "line": 562
-      },
-      "text": "The first relay backup after load can fail on tight NDK timeouts and then wait 30 s / 2 min to retry, so a fresh session can go minutes without a backup",
-      "created_at": "2026-10-14",
-      "motivation": "Observed 2026-10-15 (instrumented e2e runs): with the relay unreachable at startup, the first attempt takes ~13 s to fail (connect 2.5 s + relay-list fetch 8 s + publish 2.5 s), is logged, and the next try only comes 30 s later (then 2 min). Correction: the flaky e2e that prompted this (groups-backup-restore-outcomes) was a TEST setup race, not this latency — so this is optional hardening of the cold-start window, not a confirmed user-facing failure.",
-      "behavior": "publishScheduledBackup (BackupContext.tsx:52-61): connectNdk ndk.connect(2500), kind-30051 relay-list fetch (8 s), ndkEvent.publish(relaySet) with NDK 3.0.3's default 2.5 s per-relay timeout; a failure is logged and retried after RETRY_DELAYS_MS=[30s,2m,10m]. Attempts do settle (no hang).",
-      "approach": "Optional: shorter first retry (~5 s) for start-up failures and/or a skip of the relay-list fetch when it timed out recently; privacy invariant unchanged.",
-      "success_signal": "With the relay connection deliberately slowed at startup, the first backup lands within 15 s"
-    },
-    {
       "slug": "backup-dirty-mark-lost-on-early-reload",
       "scope": "any",
       "anchor": {
@@ -612,6 +598,20 @@
       "behavior": "clearAllReactions deletes reaction keys without posting; cache-first loadReactions in another tab keeps serving deleted badges.",
       "approach": "Post an account-changed cross-tab event on switch/wipe; receivers reload or show the takeover screen per the multi-tab design.",
       "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
+    },
+    {
+      "slug": "e2e-pending-confirmation-relay-pollution",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
+        "line": 183
+      },
+      "text": "dm-pairing-pending-confirmation:104 fails when earlier USER_A/USER_B gift-wraps remain on the relay: the post-confirm unread count reads 5/7/11 instead of 2",
+      "created_at": "2026-10-16",
+      "motivation": "Seen in the full gate on 2026-10-16 (backup run) and reproduced at HEAD in a clean worktree: passes on a freshly wiped relay, fails on every --repeat-each repeat with a growing count. The full gate does not wipe between specs, so the result depends on spec order — a red gate that is not a product signal.",
+      "behavior": "Step 5 asserts readBadgeCount == 2 after confirming B; held DMs from previous runs/specs between the deterministic USER_A/USER_B keys are also revealed as unread, so the count includes them.",
+      "approach": "Make the spec independent of relay history: use fresh per-test keypairs for the pending peer (if the pairing helpers allow), or assert the delta from a baseline captured before B's two DMs; verify with --repeat-each 4 on one relay.",
+      "success_signal": "node scripts/run-e2e.mjs dm-pairing-pending-confirmation --repeat-each 4 passes on a single relay"
     }
   ],
   "archive": [
