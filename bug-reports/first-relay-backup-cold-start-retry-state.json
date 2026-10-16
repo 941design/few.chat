@@ -1,0 +1,87 @@
+{
+  "bug_name": "first-relay-backup-cold-start-retry",
+  "bug_report_file": "bug-reports/first-relay-backup-cold-start-retry-report.md",
+  "created_at": "2026-10-16T03:31:06Z",
+  "updated_at": "2026-10-16T05:05:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "small",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does a failed first attempt after load retry after 5 s (not earlier), once, outside the budget, followed by the unchanged 30 s / 2 min / 10 min schedule?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Is the success path unchanged (no extra publish; later failures use the regular 30 s)?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Is a recently timed-out relay-list fetch skipped on the publish path only, using only the currently configured relays read at call time, per identity?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Are failures injected at connect, relay-list fetch and publish (timeout and refusal), with an indeterminate publish retried exactly as before?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "SPEC",
+      "question": "Are docs/behavior/backup-and-recovery.md and AC-BRR-10 updated, unit suite + tsc green, Stryker (concurrency 1) survivors killed or justified?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "consumer_sha": "cbadcc34bbc7ccb12e082c7a8456094823d4cb36",
+  "models": {
+    "implementer": "opus"
+  },
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T03:31:06Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T03:31:06Z",
+      "trigger": "fixer_complete_awaiting_review"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-16T03:38:18Z",
+      "trigger": "lead_retry_round_1"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T03:38:18Z",
+      "trigger": "round_1_fixer_complete"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T05:05:00Z",
+      "trigger": "reviewer_accept_codex_rereview_clean_gate_failures_attributed_preexisting"
+    }
+  ],
+  "review_rounds": [
+    {
+      "round": 0,
+      "reviewer": "ACCEPTED (condition F1)",
+      "codex": "1 high (stale relay memo)",
+      "decider": "lead: RETRY round 1 (F1-F4)"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass-with-preexisting-failure",
+    "non_relay": "72 passed",
+    "groups": "347 passed, 2 failed, 19 skipped",
+    "failures": {
+      "dm-pairing-single-scan-mutual:57": "passed 2/2 on targeted rerun (wiped relay) - flake",
+      "dm-pairing-pending-confirmation:104": "fails at HEAD baseline too (worktree, --repeat-each 4: 3/4 fail on repeats) - relay pollution from earlier USER_A/USER_B gift-wraps; pre-existing, filed as e2e-pending-confirmation-relay-pollution"
+    },
+    "log": "/tmp/claude-501/e2e-gate/full-backup2.log"
+  }
+}

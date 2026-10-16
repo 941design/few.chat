@@ -1,0 +1,95 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "BackupScheduler retried every failure on RETRY_DELAYS_MS=[30s,2m,10m], including a first attempt that failed only because the relays were still connecting at start-up (NDK connect 2.5 s + kind-30051 relay-list fetch 8 s + publish 2.5 s = ~13 s to fail); the retry then paid the 8 s relay-list timeout again. A fresh session went ~43 s+ without a backup.",
+  "fix": "relayBackup.ts: (1) BackupScheduler.coldStart flag: the first failure before the first success is retried after COLD_START_RETRY_MS=5 s, once per scheduler, outside the MAX_RETRIES budget; the regular schedule follows unchanged; any success clears the flag. (2) getBackupRelays(ndk, pubkey, {reuseAfterRecentTimeout}) \u2014 used by publishBackup only: an in-memory per-pubkey record of the last relay-list timeout; within RELAY_LIST_TIMEOUT_REUSE_MS=60 s of a timeout it skips the fetch and uses the currently configured relays (getEffectiveRelays() read at call time; no remembered list). List extraction moved into relayUrlsFromNewestList (behaviour identical). resetBackupRelayListMemo() exported for tests. Indeterminate publish (timeout) keeps current semantics: failure -> retried; documented at the retry branch.",
+  "deviations_from_design": [
+    "Success signal 'within 15 s' is met except when relays stay unresponsive for the whole ~13 s first attempt: then the backup lands at ~18 s (was ~43 s+). Strict 15 s would need shorter backup-path timeouts (open question)."
+  ],
+  "files_changed": [
+    "app/src/lib/backup/relayBackup.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/backup/coldStartRetry.test.ts",
+    "docs/behavior/backup-and-recovery.md",
+    "specs/epic-backup-restore-reliability/acceptance-criteria.md",
+    "bug-reports/first-relay-backup-cold-start-retry-report.md",
+    "bug-reports/first-relay-backup-cold-start-retry-contract.json",
+    "bug-reports/first-relay-backup-cold-start-retry-result.json",
+    "bug-reports/first-relay-backup-cold-start-retry-state.json"
+  ],
+  "files_created": [
+    "app/tests/unit/backup/coldStartRetry.test.ts",
+    "bug-reports/first-relay-backup-cold-start-retry-report.md",
+    "bug-reports/first-relay-backup-cold-start-retry-contract.json",
+    "bug-reports/first-relay-backup-cold-start-retry-result.json",
+    "bug-reports/first-relay-backup-cold-start-retry-state.json"
+  ],
+  "files_modified": [
+    "app/src/lib/backup/relayBackup.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "docs/behavior/backup-and-recovery.md",
+    "specs/epic-backup-restore-reliability/acceptance-criteria.md"
+  ],
+  "modules_touched": [
+    "app/src/lib/backup",
+    "app/tests/unit/backup",
+    "docs/behavior",
+    "specs/epic-backup-restore-reliability"
+  ],
+  "tests_added": [
+    "tests/unit/backup/coldStartRetry.test.ts (new, 21 tests, fake timers, no jsdom). Scheduler: early retry at 5 s (boundary), regular 30 s/2 min/10 min x3 after it (7 calls total), rejected first attempt, success path unchanged (later failure waits 30 s), granted once, change during the wait rides along, dispose cancels. Memo (as of round 1, see remediation_round_1): 60 s boundary, complete fetch clears the timeout (lookup path always fetches), timed-out partial list not memoised, per identity, publishBackup uses it. Composed (real BackupScheduler + publishScheduledBackup + publishBackup, NDK/signer/idb mocked): connect failure -> lands 5 s after; relay-list timeout + publish timeout -> retry skips the fetch, lands at 18 s; retry after a timeout reuses the earlier complete list; publish timeout (indeterminate) retried like a refusal; outright refusal retried; healthy start publishes once; long outage -> 5 s then 30 s.",
+    "tests/unit/backup/relayBackup.test.ts: 4 AC-BRR-9/10 schedule tests updated to the 5 s first retry; resetBackupRelayListMemo in beforeEach."
+  ],
+  "counts": {
+    "baseline": {
+      "unit_files": 249,
+      "unit_passed": 5567,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "final": {
+      "unit_files": 250,
+      "unit_passed": 5589,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT"
+    },
+    "pre_fix_repro": "coldStartRetry.test.ts against the HEAD relayBackup.ts (temporarily swapped in with a no-op resetBackupRelayListMemo export, restored): 14 of 21 FAILED."
+  },
+  "mutation": {
+    "tool": "stryker, concurrency 1, scratch /tmp/claude-501/mutation/cold-start-backup/ (own vitest + stryker .mjs configs, own tempDir; app/reports untouched)",
+    "scope": "relayBackup.ts changed lines: 227 (publishBackup relay lookup), 397-476 (memo + getBackupRelays + relayUrlsFromNewestList), 638 (COLD_START_RETRY_MS), 660 (coldStart field), 730-733 (success clears coldStart), 748-753 (early-retry branch)",
+    "before": "r1: 97.47% (77/79 killed, 0 no-coverage)",
+    "after": "r1 final (no further rounds needed)",
+    "remaining": "2 equivalent survivors: (a) `timedOutAt !== undefined` -> true: Date.now() - undefined is NaN and NaN < 60000 is false, so the fetch still runs; (b) `events.size === 0` early return -> false: the newest-event loop over an empty set leaves newest null and returns null anyway (pre-existing guard, moved)."
+  },
+  "e2e": "Not run (fixer brief). No e2e spec added.",
+  "open_questions": [
+    "Strict 15 s success signal in the worst case (relays unresponsive for the whole first attempt) would need a shorter relay-list fetch timeout on the backup path (e.g. 8 s -> ~3 s; brings the worst case to ~13 s) at the cost of falling back to the effective relays more often when the user's kind-30051 list is slow. Lead/owner decision; not done.",
+    "backup-dirty-mark-lost-on-early-reload left untouched as instructed."
+  ],
+  "verification_answers": {},
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine; only friction: the backlog anchor path app/src/lib/relayBackup.ts had moved to app/src/lib/backup/relayBackup.ts, and first dynamic imports needed warming before fake-timer assertions (noted in the test file).",
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Reviewer ACCEPTED conditional on F1; Codex high (same): the remembered relay list could send a retry to relays the user removed.",
+    "fix": [
+      "F1: lastKnownRelayList deleted; inside the 60 s window getBackupRelays returns only getEffectiveRelays(), read live.",
+      "F2: getBackupRelays comment, docs/behavior/backup-and-recovery.md, AC-BRR-10 amendment: 'skips the fetch and uses the currently configured relays'.",
+      "F4: COLD_START_RETRY_MS comment clarified (first failure before any success, whenever; start-up is the motivating case)."
+    ],
+    "tests_added": "coldStartRetry.test.ts 21 -> 22: Codex sequence (complete fetch A, save B, timed-out fetch, publish fails, retry -> B only, never A); relays edited inside the window -> 5 s retry and next publish use the newest set without refetch; unit: earlier fetched list never used inside the window, configured relays read per call. Two memo-reliant tests replaced; per-identity and partial-list tests reworded. The A/B and never-earlier-list tests fail against the round-0 module.",
+    "counts": {
+      "unit_files": 250,
+      "unit_passed": 5589,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "mutation": "Stryker r2, concurrency 1, scratch /tmp/claude-501/mutation/cold-start-backup/: relayBackup.ts:227, 391-465 -> 55/57 killed (96.49%); same 2 equivalent survivors (timedOutAt !== undefined forced true -> NaN comparison false; events.size === 0 early return forced false -> loop yields null anyway).",
+    "e2e": "not run (fixer brief)"
+  }
+}

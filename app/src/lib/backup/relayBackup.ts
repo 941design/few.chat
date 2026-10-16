@@ -224,7 +224,7 @@ export async function publishBackup(
     const signedEvent = await signer.signEvent(eventTemplate);
 
     const { NDKEvent, NDKRelaySet } = await import('@nostr-dev-kit/ndk');
-    const relayUrls = await getBackupRelays(ndk, pubkeyHex);
+    const relayUrls = await getBackupRelays(ndk, pubkeyHex, { reuseAfterRecentTimeout: true });
     const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk);
 
     const ndkEvent = new NDKEvent(ndk);
@@ -389,19 +389,60 @@ export async function fetchBackup(
 }
 
 /**
+ * How long after a timed-out relay-list fetch a backup publish skips the fetch
+ * (bug: first-relay-backup-cold-start-retry). The fetch costs up to 8 s when
+ * the relays are slow; a retry shortly after such a timeout would most likely
+ * time out again and push the publish past its own deadline.
+ */
+const RELAY_LIST_TIMEOUT_REUSE_MS = 60 * 1000;
+
+/**
+ * In-memory, per identity: when the last relay-list fetch timed out. Never
+ * persisted. Deliberately no remembered relay list: a remembered list could
+ * name relays the user has since removed.
+ */
+const relayListTimedOutAt = new Map<string, number>();
+
+/** Forget the relay-list memo (tests; nothing in the app needs to reset it). */
+export function resetBackupRelayListMemo(): void {
+  relayListTimedOutAt.clear();
+}
+
+/**
  * Read relay URLs from the user's kind 30051 relay list event.
- * Falls back to DEFAULT_RELAYS if no list is found.
+ * Falls back to the effective relays (the user's configured relays, else
+ * DEFAULT_RELAYS) if no list is found — also when the fetch timed out empty.
+ *
+ * With `reuseAfterRecentTimeout` (the backup publish path), within
+ * RELAY_LIST_TIMEOUT_REUSE_MS of a timed-out fetch for this identity it skips
+ * the fetch and uses the currently configured relays (getEffectiveRelays(),
+ * read at call time) — the relays a timed-out fetch resolves to anyway.
  */
 export async function getBackupRelays(
   ndk: NDK,
   pubkeyHex: string,
+  opts?: { reuseAfterRecentTimeout?: boolean },
 ): Promise<string[]> {
-  const { events } = await fetchEventsWithTimeout(ndk, {
+  if (opts?.reuseAfterRecentTimeout) {
+    const timedOutAt = relayListTimedOutAt.get(pubkeyHex);
+    if (timedOutAt !== undefined && Date.now() - timedOutAt < RELAY_LIST_TIMEOUT_REUSE_MS) {
+      return getEffectiveRelays();
+    }
+  }
+
+  const { events, timedOut } = await fetchEventsWithTimeout(ndk, {
     kinds: [RELAY_LIST_KIND as import('@nostr-dev-kit/ndk').NDKKind],
     authors: [pubkeyHex],
   });
+  if (timedOut) relayListTimedOutAt.set(pubkeyHex, Date.now());
+  else relayListTimedOutAt.delete(pubkeyHex);
 
-  if (events.size === 0) return getEffectiveRelays();
+  return relayUrlsFromNewestList(events) ?? getEffectiveRelays();
+}
+
+/** Relay URLs of the newest dated relay-list event, or null when there are none. */
+function relayUrlsFromNewestList(events: Set<{ created_at?: number; tags: string[][] }>): string[] | null {
+  if (events.size === 0) return null;
 
   // Pick newest event
   let newest: { tags: string[][] } | null = null;
@@ -413,7 +454,7 @@ export async function getBackupRelays(
     }
   }
 
-  if (!newest) return getEffectiveRelays();
+  if (!newest) return null;
 
   // Extract relay URLs from 'relay' or 'r' tags
   const relayUrls = newest.tags
@@ -421,7 +462,7 @@ export async function getBackupRelays(
     .map((t) => t[1])
     .filter(Boolean);
 
-  return relayUrls.length > 0 ? relayUrls : getEffectiveRelays();
+  return relayUrls.length > 0 ? relayUrls : null;
 }
 
 /**
@@ -575,12 +616,26 @@ const RETRY_DELAYS_MS = [30 * 1000, 2 * 60 * 1000, 10 * 60 * 1000];
 const MAX_RETRIES = 5;
 
 /**
+ * Delay of the one extra, early retry after a failure before this scheduler's
+ * first successful publish (bug: first-relay-backup-cold-start-retry). It
+ * fires on the first failure before any success, whenever that happens; the
+ * case it is for is start-up, when the relays may still be connecting and an
+ * attempt can fail on NDK's tight timeouts (connect 2.5 s, relay-list fetch
+ * 8 s, publish 2.5 s) — waiting the regular 30 s would leave a fresh session
+ * without a backup for long. It is granted once per scheduler, does not consume the retry budget,
+ * and the regular schedule (RETRY_DELAYS_MS) follows unchanged.
+ */
+const COLD_START_RETRY_MS = 5 * 1000;
+
+/**
  * Debounces backup publishes and retries failed ones.
  *
  * `publishFn` reports failure by resolving `false` or rejecting; anything else
  * counts as success. The debounce window runs from the last *successful*
  * publish; after a failure, retries follow their own backoff and further
- * changes wait for the pending retry rather than bypassing it.
+ * changes wait for the pending retry rather than bypassing it. The first
+ * failure before any success gets one extra early retry (COLD_START_RETRY_MS)
+ * ahead of that backoff.
  */
 export class BackupScheduler {
   private publishFn: () => Promise<boolean | void>;
@@ -591,6 +646,8 @@ export class BackupScheduler {
   private dirtyDuringFlight = false;
   private retriesLeft = MAX_RETRIES;
   private retryPending = false;
+  /** True until the first success, or until the early cold-start retry is spent. */
+  private coldStart = true;
 
   constructor(publishFn: () => Promise<boolean | void>) {
     this.publishFn = publishFn;
@@ -660,7 +717,10 @@ export class BackupScheduler {
     this.inFlight = false;
     if (this.disposed) return;
 
-    if (ok) this.lastPublishAt = Date.now();
+    if (ok) {
+      this.lastPublishAt = Date.now();
+      this.coldStart = false;
+    }
 
     const pending = this.dirtyDuringFlight;
     this.dirtyDuringFlight = false;
@@ -670,6 +730,17 @@ export class BackupScheduler {
     }
     // A change made during a failed attempt rides along with the retry (its
     // budget was already reset by markDirty) rather than bypassing the backoff.
+
+    // A failed publish whose outcome is indeterminate (e.g. NDK's publish
+    // timeout: a relay may still store it) is treated exactly like a refused
+    // one — retried. Republishing is harmless: the backup is a replaceable
+    // event, so a duplicate only replaces itself.
+    if (!ok && this.coldStart) {
+      this.coldStart = false;
+      this.retryPending = true;
+      this.timer = setTimeout(() => void this.doPublish(), COLD_START_RETRY_MS);
+      return;
+    }
 
     if (!ok && this.retriesLeft > 0) {
       const attempt = MAX_RETRIES - this.retriesLeft;

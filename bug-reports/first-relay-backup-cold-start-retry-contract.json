@@ -1,0 +1,38 @@
+{
+  "bug_name": "first-relay-backup-cold-start-retry",
+  "story_id": "S1",
+  "findings": [
+    "first-relay-backup-fragile-at-cold-start"
+  ],
+  "scope": {
+    "may_edit": [
+      "app/src/lib/backup/relayBackup.ts (BackupScheduler retry branch, getBackupRelays, publishBackup relay lookup call)",
+      "app/tests/unit/backup/**",
+      "docs/behavior/backup-and-recovery.md",
+      "specs/epic-backup-restore-reliability/acceptance-criteria.md (AC-BRR-10 amendment)"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "app/tests/e2e/**",
+      "app/src/lib/ndkClient.ts (NDK timeouts unchanged)",
+      "BackupScheduler.markDirty / markBackupDirty / activateBackupScheduler (dirty-mark semantics; separate item backup-dirty-mark-lost-on-early-reload)"
+    ]
+  },
+  "behaviour": [
+    "C1: the first failed publish before the scheduler's first success is retried after 5 s; the retry is granted once per scheduler and does not consume the 5-retry budget.",
+    "C2: after the early retry (or after any success), failures follow the unchanged 30 s / 2 min / 10 min x3 schedule.",
+    "C3: a successful first attempt schedules nothing extra (success path unchanged).",
+    "C4: on the publish path, within 60 s of a timed-out relay-list fetch for the same pubkey, it skips the fetch and uses the currently configured relays (getEffectiveRelays() read at call time). No remembered relay list. The lookup path always fetches.",
+    "C5: a complete fetch clears the timeout mark; a timed-out fetch's partial list is used for that call only.",
+    "C6: privacy: the event (kind 30078, NIP-44 to self, d=few) and the set of reachable relays are unchanged; memo is in-memory and per pubkey.",
+    "C7: a publish timeout (indeterminate) is retried exactly like a refusal (current semantics)."
+  ],
+  "non_goals": [
+    "No change to NDK connect / fetch / publish timeouts.",
+    "No change to dirty-mark or debounce semantics.",
+    "No e2e spec."
+  ],
+  "deviations_from_finding": [
+    "Success signal 'first backup within 15 s' is met except when the relays stay unresponsive for the whole first attempt (~13 s): then the backup lands at ~18 s (was ~43 s+). Meeting 15 s there would need shorter NDK/fetch timeouts on the backup path (open question)."
+  ]
+}

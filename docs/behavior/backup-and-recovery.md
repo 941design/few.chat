@@ -77,7 +77,10 @@ trigger a save — it rides along with the next one that does.
 **When saving fails:** if no relay accepts the backup (or the app is not yet connected), it is
 retried in the background — after about half a minute, then two minutes, then every ten minutes,
 up to five times; changes made meanwhile are included in the next retry, and a change after the
-last retry starts a fresh round. There is no on-screen backup
+last retry starts a fresh round. Right after the app starts the relays may still be connecting, so
+the first failure before any backup has succeeded in this session is retried once early, after
+about five seconds, ahead of that round; and if looking up your relay list just timed out, the
+retry skips the fetch and uses the currently configured relays. There is no on-screen backup
 status; a backup that keeps failing is not signalled to you.
 
 **Only with the app's own key:** automatic backups are made only when the app holds your key

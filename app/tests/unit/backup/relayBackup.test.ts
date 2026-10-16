@@ -132,6 +132,7 @@ import {
   isRestorePending,
   settleRestoreGuard,
   lookupBackup,
+  resetBackupRelayListMemo,
   type BackupPayload,
   type BackupLookup,
 } from '@/src/lib/backup/relayBackup';
@@ -160,6 +161,7 @@ beforeEach(() => {
   localStorageMock.clear();
   Object.keys(stores).forEach((k) => delete stores[k]);
   vi.resetAllMocks();
+  resetBackupRelayListMemo();
 });
 
 // ---------------------------------------------------------------------------
@@ -1578,7 +1580,8 @@ describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () =
     await vi.advanceTimersByTimeAsync(0);
     scheduler.markDirty(true);
     scheduler.markDirty();
-    await vi.advanceTimersByTimeAsync(30 * SEC - 1);
+    // First failure before any success: the early cold-start retry (5 s).
+    await vi.advanceTimersByTimeAsync(5 * SEC - 1);
     expect(publishFn).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -1588,7 +1591,7 @@ describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () =
     scheduler.dispose();
   });
 
-  it('retries after 30 s, 2 min, then every 10 min, five times in total (AC-BRR-10)', async () => {
+  it('retries after 5 s (cold start), then 30 s, 2 min, then every 10 min, five more times (AC-BRR-10)', async () => {
     const publishFn = vi.fn().mockResolvedValue(false);
     const scheduler = new BackupScheduler(publishFn);
 
@@ -1596,7 +1599,7 @@ describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () =
     await vi.advanceTimersByTimeAsync(0);
     expect(publishFn).toHaveBeenCalledTimes(1);
 
-    const expectedDelays = [30 * SEC, 2 * MIN, 10 * MIN, 10 * MIN, 10 * MIN];
+    const expectedDelays = [5 * SEC, 30 * SEC, 2 * MIN, 10 * MIN, 10 * MIN, 10 * MIN];
     for (const [i, delay] of expectedDelays.entries()) {
       await vi.advanceTimersByTimeAsync(delay - 1);
       expect(publishFn).toHaveBeenCalledTimes(i + 1);
@@ -1605,7 +1608,7 @@ describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () =
     }
 
     await vi.advanceTimersByTimeAsync(60 * MIN);
-    expect(publishFn).toHaveBeenCalledTimes(6);
+    expect(publishFn).toHaveBeenCalledTimes(7);
     scheduler.dispose();
   });
 
@@ -1641,13 +1644,16 @@ describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () =
 
     scheduler.markDirty(true);
     await vi.advanceTimersByTimeAsync(60 * MIN);
-    expect(publishFn).toHaveBeenCalledTimes(6);
+    expect(publishFn).toHaveBeenCalledTimes(7);
 
+    // The cold-start retry is spent: the fresh round starts at 30 s.
     scheduler.markDirty(true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(publishFn).toHaveBeenCalledTimes(7);
-    await vi.advanceTimersByTimeAsync(30 * SEC);
     expect(publishFn).toHaveBeenCalledTimes(8);
+    await vi.advanceTimersByTimeAsync(30 * SEC - 1);
+    expect(publishFn).toHaveBeenCalledTimes(8);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(publishFn).toHaveBeenCalledTimes(9);
     scheduler.dispose();
   });
 
@@ -1683,7 +1689,7 @@ describe('BackupScheduler — failed publishes are retried (AC-BRR-9..11)', () =
     scheduler.markDirty(true);
     scheduler.markDirty(true);
     finish(false);
-    await vi.advanceTimersByTimeAsync(30 * SEC - 1);
+    await vi.advanceTimersByTimeAsync(5 * SEC - 1);
     expect(publishFn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(publishFn).toHaveBeenCalledTimes(2);

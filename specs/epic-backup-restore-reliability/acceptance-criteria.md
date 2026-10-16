@@ -52,6 +52,11 @@ retry.
 After a failure the scheduler retries after 30 s, 2 min, 10 min, 10 min, 10 min, then stops; a
 success stops retrying; a new change resets the budget.
 
+*Amended 2026-10-16 (bug first-relay-backup-cold-start-retry):* the first failure before the
+scheduler's first success gets one extra retry after 5 s, outside the budget, before the schedule
+above. Within 60 s of a timed-out relay-list fetch, a backup publish skips the fetch and uses the
+currently configured relays.
+
 ## AC-BRR-11 — One publish at a time; no lost change; nothing after dispose
 At most one publish is in flight. A change marked while a publish is in flight results in a further
 publish after it settles (subject to the debounce). After `dispose()`, no timer fires and a publish
