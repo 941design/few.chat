@@ -1691,7 +1691,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           // sender.authenticity: 'mls' directly from the library's
           // authenticatedApplicationMessage event — see
           // applicationRumorDispatcher.ts. No app-side resolver is involved.
-          unsubDispatcher = buildDispatcher({
+          const dispatcher = buildDispatcher({
             // Chat
             appendMessage,
             incrementUnread,
@@ -1819,7 +1819,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           }, {
             journal: { ack: rumorJournal.ackRumor, recordFailure: rumorJournal.recordRumorFailure },
             maxFailedAttempts: rumorJournal.RUMOR_JOURNAL_MAX_FAILED_ATTEMPTS,
-          }).subscribe(mlsGroup, dispatcherCtx);
+          });
+          unsubDispatcher = dispatcher.subscribe(mlsGroup, dispatcherCtx);
           setupController.signal.addEventListener('abort', unsubDispatcher, { once: true });
           // Captured before this subscription replaces it (see dispatcherDrainsRef).
           const previousDrain = dispatcherDrainsRef.current.get(group.id);
@@ -1850,6 +1851,16 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           } catch (err) {
             console.warn(`[Marmot] rumor journal replay for ${group.id} failed:`, err);
           }
+
+          // Bug poll-followups: a poll close / results summary held after a
+          // storage failure is otherwise retried only by a later message of
+          // that poll (often none — the close is usually the last). Sweep the
+          // group's held poll state at every (re)subscription, ON the
+          // dispatcher FIFO (settling is read-then-save) and after the
+          // replayed rumors enqueued above. Never rejects.
+          // isDisposed stops a sweep still running when this subscription is
+          // torn down (leave, wipe, re-subscribe) — its replacement sweeps again.
+          void unsubDispatcher.enqueueMaintenance((isDisposed) => dispatcher.sweepHeldPollState(dispatcherCtx, isDisposed));
 
           // Bug pending-member-removals-not-persisted: re-arm the debounced
           // auto-commit for removals that were pending when the previous

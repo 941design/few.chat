@@ -12,7 +12,7 @@ import type { Poll, PollVote, PendingPollVote } from './pollPersistence';
 export interface PollReplayDeps {
   loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   removePendingVotes: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
-  saveVoteIfNewer: (vote: PollVote) => Promise<boolean>;
+  saveVoteIfNewer: (vote: PollVote, opts?: { requirePoll?: boolean }) => Promise<boolean>;
   loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
 }
 
@@ -86,10 +86,16 @@ export function buildSanitizedVote(
  *
  * Each replayed vote keeps its queue receipt time, so a close held from
  * before the open counts only the early votes that arrived before it.
+ *
+ * Resolves the number of votes it stored. `progress.stored` counts them as
+ * they land, so a caller can still tell that some were stored when a later
+ * save throws (a partial replay rejects, the UI must still refresh — bug:
+ * poll-followups remediation 2).
  */
-export async function replayPendingVotes(poll: Poll, deps: PollReplayDeps): Promise<void> {
+export async function replayPendingVotes(poll: Poll, deps: PollReplayDeps, progress: { stored: number } = { stored: 0 }): Promise<number> {
   const pending = await deps.loadPendingVotes(poll.groupId, poll.id);
-  if (pending.length === 0) return;
+  if (pending.length === 0) return 0;
+  let stored = 0;
   for (const early of pending) {
     const vote = buildSanitizedVote(
       poll,
@@ -101,13 +107,19 @@ export async function replayPendingVotes(poll: Poll, deps: PollReplayDeps): Prom
       early.receivedAt,
     );
     if (!vote) continue;
-    await deps.saveVoteIfNewer(vote);
+    // requirePoll: written only while the poll is stored (same transaction) —
+    // a replay racing a leave or wipe must not re-create purged rows.
+    if (await deps.saveVoteIfNewer(vote, { requirePoll: true })) {
+      stored++;
+      progress.stored++;
+    }
   }
   try {
     await deps.removePendingVotes(poll.groupId, pending);
   } catch (err) {
     console.warn('[pollReplay] removing replayed early votes failed; removed by a later replay:', err);
   }
+  return stored;
 }
 
 /**

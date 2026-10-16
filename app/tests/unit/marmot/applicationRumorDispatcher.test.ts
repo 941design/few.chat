@@ -553,3 +553,101 @@ describe('applicationRumorDispatcher', () => {
     errorSpy.mockRestore();
   });
 });
+
+// ─── enqueueMaintenance (bug: poll-followups — held poll-state sweep) ────────
+
+describe('enqueueMaintenance: maintenance tasks run on the handler FIFO', () => {
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+
+  it('waits for handlers accepted before it, and a rumor accepted after it waits for the task', async () => {
+    const order: string[] = [];
+    const gate = deferred();
+    const handler = {
+      kind: 9,
+      handle: vi.fn(async (r: { id: string }) => {
+        order.push(`start:${r.id}`);
+        if (r.id === 'first') await gate.promise;
+        order.push(`end:${r.id}`);
+      }),
+    };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([handler]).subscribe(group as never, makeCtx());
+    mockRumor = makeMockRumor({ id: 'first' });
+    void group.emit({ message: new Uint8Array(), senderPubkey: mockRumor.pubkey, senderLeafIndex: 0 });
+    const task = sub.enqueueMaintenance(async () => {
+      order.push('task:start');
+      await Promise.resolve();
+      order.push('task:end');
+    });
+    mockRumor = makeMockRumor({ id: 'second' });
+    void group.emit({ message: new Uint8Array(), senderPubkey: mockRumor.pubkey, senderLeafIndex: 0 });
+    await Promise.resolve();
+    expect(order).toEqual(['start:first']);
+    gate.resolve();
+    await task;
+    await sub.drain();
+    expect(order).toEqual(['start:first', 'end:first', 'task:start', 'task:end', 'start:second', 'end:second']);
+  });
+
+  it('a throwing task is warned and never breaks the queue; it resolves (never rejects)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const handler = { kind: 9, handle: vi.fn(async () => {}) };
+      const group = makeFakeGroup();
+      const sub = createDispatcher([handler]).subscribe(group as never, makeCtx());
+      await expect(sub.enqueueMaintenance(async () => { throw new Error('sweep failed'); })).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith('[dispatcher.maintenance]', expect.objectContaining({ message: 'sweep failed' }));
+      mockRumor = makeMockRumor();
+      await group.emitAsync({ message: new Uint8Array(), senderPubkey: mockRumor.pubkey, senderLeafIndex: 0 });
+      expect(handler.handle).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('is skipped when the subscription is disposed before it starts', async () => {
+    const gate = deferred();
+    const handler = { kind: 9, handle: vi.fn(async () => { await gate.promise; }) };
+    const group = makeFakeGroup();
+    const sub = createDispatcher([handler]).subscribe(group as never, makeCtx());
+    mockRumor = makeMockRumor();
+    void group.emit({ message: new Uint8Array(), senderPubkey: mockRumor.pubkey, senderLeafIndex: 0 });
+    const task = vi.fn(async () => {});
+    const done = sub.enqueueMaintenance(task);
+    sub();
+    gate.resolve();
+    await done;
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it('hands the running task isDisposed(): false while subscribed, true once disposed mid-task (remediation 1)', async () => {
+    const group = makeFakeGroup();
+    const sub = createDispatcher([]).subscribe(group as never, makeCtx());
+    const gate = deferred();
+    const seen: boolean[] = [];
+    const done = sub.enqueueMaintenance(async (isDisposed) => {
+      seen.push(isDisposed());
+      await gate.promise;
+      seen.push(isDisposed());
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    sub();
+    gate.resolve();
+    await done;
+    expect(seen).toEqual([false, true]);
+  });
+
+  it('drain() covers an enqueued task', async () => {
+    const group = makeFakeGroup();
+    const sub = createDispatcher([]).subscribe(group as never, makeCtx());
+    let ran = false;
+    void sub.enqueueMaintenance(async () => { await new Promise((r) => setTimeout(r, 5)); ran = true; });
+    await sub.drain();
+    expect(ran).toBe(true);
+  });
+});

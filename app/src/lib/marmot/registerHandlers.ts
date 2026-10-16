@@ -14,6 +14,7 @@ import {
   queuePendingCloseAnnouncement,
   loadPendingCloseAnnouncements,
   removePendingCloseAnnouncements,
+  listHeldPollIds,
 } from '@/src/lib/marmot/pollPersistence';
 import type { ProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
@@ -21,7 +22,7 @@ import { createChatHandler, createPollCloseAnnouncementReplayer } from './handle
 import { createReactionHandler } from './handlers/reactionHandler';
 import { createProfileHandler } from './handlers/profileHandler';
 import { createProfileRequestHandler } from './handlers/profileRequestHandler';
-import { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, createHeldCloseSettler } from './handlers/pollHandler';
+import { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, createHeldCloseSettler, createHeldPollStateSweeper, guardDeps } from './handlers/pollHandler';
 import { createLeaveIntentHandler } from './handlers/leaveHandler';
 import { createDeleteEditHandler } from './handlers/deleteEditHandler';
 
@@ -82,15 +83,16 @@ export interface HandlerDeps {
     payload: ProfileRequestPayload;
   }) => Promise<void>;
   // Poll handler deps
-  savePoll: (poll: Poll) => Promise<void>;
-  saveVoteIfNewer: (vote: PollVote) => Promise<boolean>;
+  /** Resolves the poll as stored (a closed write never overwrites a closed poll, null when absent). */
+  savePoll: (poll: Poll) => Promise<Poll | null | void>;
+  saveVoteIfNewer: (vote: PollVote, opts?: { requirePoll?: boolean }) => Promise<boolean>;
   getPoll: (groupId: string, pollId: string) => Promise<Poll | null>;
   loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
   // AC-9 early-vote queue (and, always IDB-backed, the early-close and
   // early-close-announcement queues). Optional so existing wiring keeps
   // compiling; when omitted, the IDB-backed pollPersistence implementations
   // are used.
-  queuePendingVote?: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<void>;
+  queuePendingVote?: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<boolean>;
   loadPendingVotes?: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   removePendingVotes?: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
   setPollVersion: (updater: (v: number) => number) => void;
@@ -98,7 +100,19 @@ export interface HandlerDeps {
   enqueueLeave: (groupId: string, pubkey: string, rumorId: string, meta: import('./applicationRumorDispatcher').DispatchMeta) => void | Promise<void>;
 }
 
-export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = {}): Dispatcher {
+export interface BuiltDispatcher extends Dispatcher {
+  /**
+   * The held poll-state sweep for one group (pollHandler
+   * createHeldPollStateSweeper). Run it ONLY through the group's
+   * DispatcherSubscription.enqueueMaintenance — it must not interleave with
+   * that group's handlers — and pass that task's isDisposed: every storage
+   * dependency of the sweep, including the held-summary replay through the
+   * chat gate, stops once it holds.
+   */
+  sweepHeldPollState(ctx: DispatcherContext, isCancelled?: () => boolean): Promise<void>;
+}
+
+export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = {}): BuiltDispatcher {
   const chatDeps = {
     appendMessage: deps.appendMessage,
     incrementUnread: deps.incrementUnread,
@@ -174,5 +188,18 @@ export function buildDispatcher(deps: HandlerDeps, options: DispatcherOptions = 
       enqueueLeave: deps.enqueueLeave ?? (() => {}),
     }),
   ];
-  return createDispatcher(handlers, options);
+  return {
+    ...createDispatcher(handlers, options),
+    sweepHeldPollState: (ctx: DispatcherContext, isCancelled: () => boolean = () => false) => {
+      // The held-summary replay runs chat-gate reads/writes and a held-close
+      // settle: build it from guarded deps so a cancelled sweep stops there too.
+      const guardedPoll = guardDeps(pollDeps, isCancelled);
+      const guardedChat = { ...guardDeps(chatDeps, isCancelled), settleHeldCloses: createHeldCloseSettler(guardedPoll) };
+      return createHeldPollStateSweeper({
+        ...pollDeps,
+        replayHeldCloseAnnouncements: createPollCloseAnnouncementReplayer(guardedChat),
+        listHeldPollIds,
+      })(ctx, isCancelled);
+    },
+  };
 }

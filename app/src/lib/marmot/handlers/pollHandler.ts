@@ -23,10 +23,13 @@ import { buildSanitizedVote, replayPendingVotes, loadVotesWithPending } from '..
 export { replayPendingVotes } from '../pollReplay';
 
 export interface PollHandlerDeps {
-  savePoll: (poll: Poll) => Promise<void>;
+  // Resolves the poll as stored: a closed write never overwrites an already
+  // closed poll (first close wins) and resolves null when the poll is gone.
+  // void is accepted from test doubles (treated as "written as given").
+  savePoll: (poll: Poll) => Promise<Poll | null | void>;
   // The single vote write: a compare-and-set on (seq, created_at, rumor id)
   // inside pollPersistence's per-key queue (bug: poll-vote-ordering-and-early-close).
-  saveVoteIfNewer: (vote: PollVote) => Promise<boolean>;
+  saveVoteIfNewer: (vote: PollVote, opts?: { requirePoll?: boolean }) => Promise<boolean>;
   getPoll: (groupId: string, pollId: string) => Promise<Poll | null>;
   // AC-POLL-4 (epic: group-message-author-auth-app-layer S5). Injected like
   // savePoll/saveVoteIfNewer/getPoll for consistency — there is no principled
@@ -37,7 +40,8 @@ export interface PollHandlerDeps {
   loadVotes: (groupId: string, pollId: string) => Promise<PollVote[]>;
   // AC-9: votes for a poll not yet known in the group are queued and
   // applied when its poll-open arrives.
-  queuePendingVote: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<void>;
+  // Resolves false when the per-voter cap dropped the vote (not held).
+  queuePendingVote: (vote: Omit<PendingPollVote, 'receivedAt'>) => Promise<boolean>;
   loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   removePendingVotes: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
   // AC-9: closes for a poll not yet known in the group are queued (bound to
@@ -64,13 +68,31 @@ export interface PollHandlerDeps {
 // after it) — not the senders' created_at: comparing two senders' clocks would
 // let a back-dated vote into a closed tally.
 
-/** Best-effort replay for paths that must not fail on it (see callers). */
-async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<void> {
+/**
+ * Best-effort replay for paths that must not fail on it (see callers).
+ * Resolves the votes stored — also those stored before a later save threw
+ * (partial replay: warned, entries stay queued, the UI still refreshes).
+ */
+async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<number> {
+  const progress = { stored: 0 };
   try {
-    await replayPendingVotes(poll, deps);
+    await replayPendingVotes(poll, deps, progress);
   } catch (err) {
-    console.warn('[pollHandler] early-vote replay failed; entries stay queued:', err);
+    console.warn(`[pollHandler] early-vote replay failed after storing ${progress.stored}; entries stay queued:`, err);
   }
+  return progress.stored;
+}
+
+/**
+ * The closed write. Resolves the poll as stored afterwards: an earlier close
+ * that won (savePoll never overwrites a closed poll) or `closed` itself.
+ * Throws when the poll is no longer stored (left / wiped meanwhile) — the
+ * callers treat that as an unconfirmed state and write nothing more.
+ */
+async function storeClosed(closed: Poll, deps: PollHandlerDeps): Promise<Poll> {
+  const stored = await deps.savePoll(closed);
+  if (stored === null) throw new Error('poll no longer stored; close not applied');
+  return stored ?? closed;
 }
 
 /**
@@ -78,8 +100,9 @@ async function recoverPendingVotes(poll: Poll, deps: PollHandlerDeps): Promise<v
  * held poll_close announcements. Idempotent and re-entrant: called at the open
  * and again at every later vote, duplicate open and close of the poll, so a
  * step interrupted after the open's savePoll is retried by a LATER message of
- * the poll within the session (the failed rumor itself stays journaled and is
- * re-handled at the next subscription — applicationRumorDispatcher).
+ * the poll within the session, and at the latest by the held poll-state sweep
+ * at the next subscription (createHeldPollStateSweeper; the failed rumor
+ * itself also stays journaled and is re-handled then — applicationRumorDispatcher).
  *
  * The stored poll is the truth; queue cleanup is best-effort.
  * - A held close is applied only if the poll is still open and the close's
@@ -118,8 +141,7 @@ async function settleHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollHa
         .map((v) => voteAsOf(v, closeReceivedAt))
         .filter((v): v is PollVote => v !== null);
       const { results, totalVoters } = computeTally(poll.options, votes);
-      current = { ...poll, closed: true, results, totalVoters };
-      await deps.savePoll(current);
+      current = await storeClosed({ ...poll, closed: true, results, totalVoters }, deps);
     }
     try {
       await deps.removePendingCloses(ctx.groupId, poll.id);
@@ -158,6 +180,113 @@ async function recoverHeldCloses(poll: Poll, ctx: DispatcherContext, deps: PollH
       return 'unknown';
     }
   }
+}
+
+/**
+ * Apply everything held for a stored poll — early votes (open poll only), a
+ * held close and held announcements — as a re-delivered open would. Never
+ * throws: every step is best-effort and leaves what it could not apply held.
+ * Bumps the poll UI when it closed the poll.
+ */
+async function recoverStoredPoll(existing: Poll, ctx: DispatcherContext, deps: PollHandlerDeps): Promise<void> {
+  const replayed = existing.closed ? 0 : await recoverPendingVotes(existing, deps);
+  const settled = await recoverHeldCloses(existing, ctx, deps);
+  // The poll UI re-reads on a bump; stored votes count as a change even when
+  // the poll state stays unknown (remediation 1: vote-only recovery was not
+  // shown until the next unrelated bump). Cross-tab notices are posted by the
+  // persistence writes themselves.
+  const closed = settled !== 'unknown' && settled.closed && !existing.closed;
+  if (replayed > 0 || closed) deps.setPollVersion((v) => v + 1);
+}
+
+export interface HeldPollSweepDeps extends PollHandlerDeps {
+  /** pollPersistence.listHeldPollIds: polls of the group with anything held. */
+  listHeldPollIds: (groupId: string) => Promise<string[]>;
+}
+
+/** Thrown by a guarded dependency once its maintenance task was cancelled. */
+export class MaintenanceCancelled extends Error {
+  constructor() {
+    super('maintenance cancelled (subscription disposed)');
+    this.name = 'MaintenanceCancelled';
+  }
+}
+
+/**
+ * Wrap every function of a deps bag so it throws MaintenanceCancelled when
+ * `isCancelled()` holds immediately BEFORE it runs (every storage write and
+ * read goes through a dep) and again right AFTER its promise settles (every
+ * await on a dep). The recovery helpers turn such a throw into "unknown /
+ * leave held", so a disposed sweep stops without another write (bug:
+ * poll-followups remediation 1). Non-function members are copied as is.
+ */
+export function guardDeps<T extends object>(deps: T, isCancelled: () => boolean): T {
+  const check = () => {
+    if (isCancelled()) throw new MaintenanceCancelled();
+  };
+  const guarded: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(deps)) {
+    guarded[name] =
+      typeof value === 'function'
+        ? (...args: unknown[]) => {
+            check();
+            const out = (value as (...a: unknown[]) => unknown)(...args);
+            return out instanceof Promise ? out.then((v) => { check(); return v; }) : out;
+          }
+        : value;
+  }
+  return guarded as T;
+}
+
+/**
+ * Sweep of a group's held poll state (bug: poll-followups). A close or results
+ * summary held after a storage failure is otherwise retried only by a later
+ * message of the same poll — and the creator's close is usually the poll's
+ * last message, so the poll could stay open on this device until the hold
+ * expires. Run at every (re)subscription of the group, after the journal
+ * replay: for each stored poll with anything held it does what a re-delivered
+ * open does (recoverStoredPoll). Polls not stored yet are left alone — their
+ * held entries wait for the open.
+ *
+ * MUST run on the group's dispatcher FIFO
+ * (DispatcherSubscription.enqueueMaintenance), never beside it: settling is
+ * read-then-save on the poll and its votes, and a concurrent handler of the
+ * same poll could interleave. Never throws: a failed listing or poll read is
+ * logged and the entries stay held for the next message or sweep.
+ */
+export function createHeldPollStateSweeper(deps: HeldPollSweepDeps) {
+  return async (ctx: DispatcherContext, isCancelled: () => boolean = () => false): Promise<void> => {
+    // Every dep is guarded: once the subscription is disposed (leave, wipe,
+    // re-subscribe) no further read or write happens. Storage additionally
+    // refuses to re-create a purged poll or vote row (pollPersistence).
+    const g = guardDeps(deps, isCancelled);
+    let pollIds: string[];
+    try {
+      pollIds = await g.listHeldPollIds(ctx.groupId);
+    } catch (err) {
+      if (!isCancelled()) console.warn('[pollHandler] listing held poll state failed; retried at the next subscription:', err);
+      return;
+    }
+    for (const pollId of pollIds) {
+      if (isCancelled()) return;
+      let poll: Poll | null;
+      try {
+        poll = await g.getPoll(ctx.groupId, pollId);
+      } catch (err) {
+        if (isCancelled()) return;
+        console.warn('[pollHandler] reading a poll with held state failed; it stays held:', err);
+        continue;
+      }
+      if (!poll) continue;
+      try {
+        await recoverStoredPoll(poll, ctx, g);
+      } catch (err) {
+        // Only the guarded UI bump can throw here (cancelled).
+        if (isCancelled()) return;
+        console.warn('[pollHandler] recovering held poll state failed:', err);
+      }
+    }
+  };
 }
 
 /**
@@ -211,10 +340,7 @@ async function handleOpen(rumor: ApplicationRumor, ctx: DispatcherContext, sende
     // a re-delivered (or journal-replayed) open is a chance to recover early
     // votes, a held close and held announcements stranded by an interrupted
     // earlier step (AC-9). Best-effort.
-    if (!existing.closed) await recoverPendingVotes(existing, deps);
-    const settled = await recoverHeldCloses(existing, ctx, deps);
-    if (settled === 'unknown') return; // unconfirmed state: no further writes
-    if (settled.closed && !existing.closed) deps.setPollVersion((v) => v + 1);
+    await recoverStoredPoll(existing, ctx, deps);
     return;
   }
 
@@ -335,7 +461,7 @@ async function handleVote(rumor: ApplicationRumor, ctx: DispatcherContext, sende
     // (loadVotesWithPending / voteAsOf), instead of the replay finding the
     // poll closed and dropping it. If queueing fails too, the rethrow keeps
     // the rumor journaled and the replay retries.
-    await deps.queuePendingVote({
+    const held = await deps.queuePendingVote({
       groupId: ctx.groupId,
       pollId: payload.pollId,
       voterPubkey: sender.pubkey,
@@ -344,6 +470,16 @@ async function handleVote(rumor: ApplicationRumor, ctx: DispatcherContext, sende
       seq: payload.seq ?? 0,
       rumorId: rumor.id,
     });
+    // Dropped by the voter's early-vote cap: only the journal keeps it now
+    // (residual W2 — if the poll closes before the replay it is not counted).
+    if (!held) {
+      console.warn('[pollHandler] a vote whose save failed could not be held (early-vote cap reached); it stays journaled for replay:', {
+        groupId: ctx.groupId,
+        pollId: payload.pollId,
+        voterPubkey: sender.pubkey,
+        rumorId: rumor.id,
+      });
+    }
     throw err;
   }
   deps.setPollVersion((v) => v + 1);

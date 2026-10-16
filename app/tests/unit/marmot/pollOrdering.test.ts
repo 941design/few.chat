@@ -17,8 +17,27 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const idbStore = new Map<string, unknown>();
+const idbStore = mapBacking;
+const { mapTxnStore, mapBacking, realPromisifyRequest, txnFaults } = await vi.hoisted(async () => {
+  const { callableMapStore } = await import('../helpers/callableMapStore');
+  const { promisifyRequest } = await vi.importActual<typeof import('idb-keyval')>('idb-keyval');
+  // Faults for the read-check-write transactions (pollPersistence pollTxn).
+  const txnFaults = { failGet: null as null | ((key: string) => boolean), failCommit: null as null | (() => boolean) };
+  const map = new Map<string, unknown>();
+  return {
+    txnFaults,
+    realPromisifyRequest: promisifyRequest,
+    mapBacking: map,
+    mapTxnStore: callableMapStore(map, {
+      clone: true,
+      failGet: (k) => txnFaults.failGet?.(k) ?? false,
+      failCommit: () => txnFaults.failCommit?.() ?? false,
+    }),
+  };
+});
 vi.mock('idb-keyval', () => ({
+  createStore: vi.fn(() => mapTxnStore),
+  promisifyRequest: realPromisifyRequest,
   get: vi.fn(async (key: string) => structuredClone(idbStore.get(key))),
   set: vi.fn(async (key: string, value: unknown) => { idbStore.set(key, structuredClone(value)); }),
   del: vi.fn(async (key: string) => { idbStore.delete(key); }),
@@ -1604,7 +1623,10 @@ describe('a live poll_close announcement whose gate read fails is retried by the
 
 describe('poll_close gate on a closed poll stored without results (older data)', () => {
   it('recomputes the tally from stored votes instead of announcing nothing', async () => {
-    await savePoll({ id: POLL_ID, groupId: GROUP, title: 't', options: openPayload().options, pollType: 'singlechoice', creatorPubkey: CREATOR, createdAt: 1, closed: true });
+    // A closed write never creates a poll: store it open first, then closed.
+    const old = { id: POLL_ID, groupId: GROUP, title: 't', options: openPayload().options, pollType: 'singlechoice' as const, creatorPubkey: CREATOR, createdAt: 1, closed: false };
+    await savePoll(old);
+    await savePoll({ ...old, closed: true });
     await saveVoteIfNewer({ id: `${POLL_ID}:${USER}`, groupId: GROUP, pollId: POLL_ID, voterPubkey: USER, responses: ['B'], votedAt: 1, seq: 1 });
     const rows: { content: string }[] = [];
     const chat = {
@@ -1954,8 +1976,8 @@ describe('R1: receipt clock survives reloads and backward clock steps', () => {
     const getFn = idb.get as unknown as ReturnType<typeof vi.fn>;
     const setFn = idb.set as unknown as ReturnType<typeof vi.fn>;
     const a = await freshInstance();
-    getFn.mockImplementationOnce(async () => { throw new Error('seed'); });
-    const t1 = await a.receiptNow(); // seed failed; lease written
+    for (let i = 0; i < a.RECEIPT_SEED_ATTEMPTS; i++) getFn.mockImplementationOnce(async () => { throw new Error('seed'); });
+    const t1 = await a.receiptNow(); // every seed attempt failed; lease written anyway
     idbStore.set(KEY, t1 + 10 * a.RECEIPT_LEASE_MS); // what the seed would have found
     const t2 = await a.receiptNow(); // seed retried → jumps above the stored mark
     expect(t2).toBeGreaterThan(t1 + 10 * a.RECEIPT_LEASE_MS - 1);
@@ -2095,16 +2117,43 @@ describe('R1: the poll_close summary applies a held close of its poll first (F2 
 
 // ─── Remediation 2 ───────────────────────────────────────────────────────────
 
-describe('R2: the kept-votes cap — a held close counts A\'s seq1 up to the cap, not beyond (documented residual)', () => {
+describe('R2 + poll-followups: the kept-votes cap is held-close aware — a held close counts A\'s seq1 beyond the cap; only a failed held-close read falls back to dropping it', () => {
   const CAP = persistence.MAX_VOTES_KEPT_PER_VOTER;
   it('the cap is 20', () => expect(CAP).toBe(20));
 
-  /** A seq1 ('A') → creator close held → A seq2..seqN ('B') → the close is applied. */
-  async function run(path: 'queue' | 'stored', lastSeq: number) {
+  /**
+   * A seq1 ('A') → creator close held → A seq2..seqN ('B') → the close is applied.
+   * failCutoffRead: every read of the held-close queue during the vote changes fails.
+   */
+  async function run(path: 'queue' | 'stored', lastSeq: number, failCutoffRead = false) {
+    const idb = await import('idb-keyval');
+    const getFn = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const failClosesRead = () => {
+      if (!failCutoffRead) return;
+      // Stored-row path: the read inside the vote transaction; queue path: a plain get.
+      txnFaults.failGet = (key) => key.startsWith('few:poll-pending-closes:');
+      getFn.mockImplementation(async (key: string) => {
+        if (key.startsWith('few:poll-pending-closes:')) throw new Error('closes read');
+        return structuredClone(idbStore.get(key));
+      });
+    };
+    const restore = () => {
+      txnFaults.failGet = null;
+      getFn.mockImplementation(async (key: string) => structuredClone(idbStore.get(key)));
+    };
+    try {
+      return await runInner(path, lastSeq, failClosesRead, restore);
+    } finally {
+      restore();
+    }
+  }
+  async function runInner(path: 'queue' | 'stored', lastSeq: number, failClosesRead: () => void, restore: () => void) {
     if (path === 'queue') {
       await deliverVote(voteRumor(USER, ['A'], 10, 1)); // poll unknown → queued
       await close(); // held, pre-open
+      failClosesRead();
       for (let seq = 2; seq <= lastSeq; seq++) await deliverVote(voteRumor(USER, ['B'], 10 + seq, seq));
+      restore();
       await open();
     } else {
       await open();
@@ -2114,9 +2163,11 @@ describe('R2: the kept-votes cap — a held close counts A\'s seq1 up to the cap
         rumor(POLL_CLOSE_KIND, CREATOR, { pollId: POLL_ID, results: [], totalVoters: 0 }, 1_700_000_500), ctx(), sender(CREATOR),
       )).rejects.toThrow('injected');
       // Later changes land in the stored row (e.g. while settling kept failing).
+      failClosesRead();
       for (let seq = 2; seq <= lastSeq; seq++) {
         await saveVoteIfNewer({ id: `${POLL_ID}:${USER}`, groupId: GROUP, pollId: POLL_ID, voterPubkey: USER, responses: ['B'], votedAt: (10 + seq) * 1000, seq, rumorId: `s${seq}` });
       }
+      restore();
       await deliverVote(voteRumor(OTHER, ['B'], 99, 1)); // next poll message applies the held close
     }
     return getPoll(GROUP, POLL_ID);
@@ -2130,11 +2181,24 @@ describe('R2: the kept-votes cap — a held close counts A\'s seq1 up to the cap
       expect(poll?.totalVoters).toBe(1);
     });
 
-    it(`${path}: seq2..seq${CAP + 1} (cap + 1) → seq1 dropped, A NOT counted (residual; flip when pruning is held-close aware)`, async () => {
-      const poll = await run(path, CAP + 1);
+    it.each([CAP + 1, CAP + 5])(`${path}: seq2..seq%i (beyond the cap) → seq1 kept for the held close, A counted (flipped by poll-followups)`, async (last) => {
+      const poll = await run(path, last);
       expect(poll?.closed).toBe(true);
-      expect(counts(poll)).toEqual({ A: 0, B: 0 });
-      expect(poll?.totalVoters).toBe(0);
+      expect(counts(poll)).toEqual({ A: 1, B: 0 });
+      expect(poll?.totalVoters).toBe(1);
+    });
+
+    it(`${path}: beyond the cap with the held-close read failing → falls back to the plain cap: seq1 dropped, A NOT counted (residual), the vote writes still land`, async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const poll = await run(path, CAP + 1, true);
+        expect(poll?.closed).toBe(true);
+        expect(counts(poll)).toEqual({ A: 0, B: 0 });
+        expect(poll?.totalVoters).toBe(0);
+        expect(warn.mock.calls.some(([m]) => String(m).includes('reading held closes for vote pruning failed'))).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
     });
   }
 });

@@ -1,0 +1,146 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": {
+    "poll-held-close-startup-sweep": "Held closes / announcements were applied only by settleHeldCloses, called from handlers of a later message of the same poll. The journal replay covers a close or summary whose own handling threw, but not held state whose triggering rumor was acked: a held summary whose replay failed inside settleHeldCloses, recoverHeldCloses failures on the closed-poll vote and duplicate-open paths, a pre-open hold whose open-time settle failed after the open was acked on a later replay, and poison-dropped rumors.",
+    "poll-kept-votes-held-close-aware-pruning": "keptVotes sliced to the last MAX_VOTES_KEPT_PER_VOTER by receipt without knowing the held closes' receipt times, so the vote a held close needed could be the one dropped.",
+    "poll-superseded-prune-at-close": "savePoll only rewrote the poll list; vote rows kept superseded snapshots no reader uses once the poll is closed.",
+    "poll-receipt-clock-seed-failure-backward-step": "seedReceiptClock read the persisted mark once; on failure the receipt was Date.now()-based and could fall below the previous session's mark after a backward clock step.",
+    "pending-vote-cap-drop-observable": "queuePendingVote resolved void both when it stored and when the per-voter poll cap dropped the vote."
+  },
+  "fix": {
+    "sweep": "DispatcherSubscription.enqueueMaintenance(task) runs a task on the handler FIFO (skipped after disposal, throw warned, never rejects). pollHandler.createHeldPollStateSweeper lists poll ids with held state (pollPersistence.listHeldPollIds: early votes, closes, announcements) and runs recoverStoredPoll (factored out of handleOpen's existing-poll branch) for each stored poll; unstored polls are left for their open. buildDispatcher returns BuiltDispatcher.sweepHeldPollState; MarmotContext enqueues it after the journal replay at every (re)subscription.",
+    "pruning": "keptVotes(votes, cutoffs) = undominated + capKept: the newest and voteAsOf(cut-off) for each cut-off are always kept, remaining room to the latest-received others. Vote writes (saveVoteIfNewer, queuePendingVote) read the poll's held closes inside their queue slot only when the cap bites; a failed read falls back to the plain cap (warned). saveVoteIfNewer compares against the stored set unpruned so an above-cap set is not re-pruned by a re-delivery.",
+    "close_prune": "savePoll of a closed poll then drops superseded from the poll's vote rows on the votes key queue (no write if none); failure warned, closed poll stays stored.",
+    "seed_retry": "seedReceiptClock retries the read up to RECEIPT_SEED_ATTEMPTS=3 with 25/50 ms backoff before handing out the receipt; on exhaustion the receipt is handed out anyway and the next one re-seeds. Second floor source not built (same IDB failure domain, full key scan cost).",
+    "cap_drop_signal": "queuePendingVote: Promise<boolean> \u2014 true when stored or represented by a dominating kept entry, false when the per-voter cap (or the group cap, for an explicitly earlier receipt) evicted it; a failed write rejects. handleVote's save-failure fallback warns with group/poll/voter/rumor id on false and rethrows the save error."
+  },
+  "files_changed": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "app/tests/unit/marmot/pollFollowups.test.ts",
+    "docs/behavior/polls.md",
+    "bug-reports/poll-followups-report.md",
+    "bug-reports/poll-followups-contract.json",
+    "bug-reports/poll-followups-result.json",
+    "bug-reports/poll-followups-state.json",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/marmot/pollReplay.ts",
+    "app/tests/unit/helpers/callableMapStore.ts",
+    "app/tests/unit/crossTab-writers.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "app/tests/unit/marmot/pollPersistence.test.ts"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/pollFollowups.test.ts",
+    "bug-reports/poll-followups-report.md",
+    "bug-reports/poll-followups-contract.json",
+    "bug-reports/poll-followups-result.json",
+    "bug-reports/poll-followups-state.json"
+  ],
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/registerHandlers.ts",
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/registerHandlers.test.ts",
+    "docs/behavior/polls.md",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/marmot/pollReplay.ts",
+    "app/tests/unit/helpers/callableMapStore.ts",
+    "app/tests/unit/crossTab-writers.test.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollIntegrity.test.ts",
+    "app/tests/unit/marmot/pollPersistence.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot",
+    "app/src/context",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/marmot/pollFollowups.test.ts": 99,
+    "app/tests/unit/marmot/applicationRumorDispatcher.test.ts": 5,
+    "app/tests/unit/marmot/registerHandlers.test.ts": 1,
+    "app/tests/unit/marmot/pollOrdering.test.ts": 4
+  },
+  "counts": {
+    "unit_before": "5701 passed, 1 skipped",
+    "unit_after": "5809 passed, 1 skipped (255 files)",
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1, concurrency 1, scratch config in the session scratchpad (mutation/stryker.config.mjs, vitest.config.mjs)",
+    "mutate": "changed lines: pollPersistence.ts 127-205, 324-357, 413-451, 608-611, 750-790, 875-878, 973-988; pollHandler.ts 165-221, 393-412; applicationRumorDispatcher.ts 349-360; registerHandlers.ts 188-192",
+    "before": "91.29% (218 killed, 2 timeout, 21 survived)",
+    "after": "96.14% (220 killed, 4 timeout, 9 survived, all equivalent or pre-existing)",
+    "survivors_justified": [
+      "pollHandler.ts:174 settled === 'unknown' -> false / '': 'unknown'.closed is undefined, no bump either way (moved verbatim).",
+      "pollPersistence.ts:152 and :194 [] -> ['Stryker was here']: a non-numeric cut-off selects no vote; same as no cut-off.",
+      "pollPersistence.ts:159 j === i -> false; :162 j < i -> <= / >=: pre-existing domination logic; self-comparison falls through to false; tie-break only picks between identical-key entries of the same rumor.",
+      "pollPersistence.ts:431 postStoreChanged channel string: pre-existing savePoll line, re-indented; cross-tab channel tested elsewhere.",
+      "pollPersistence.ts:770 own.length === 0 && -> true: pre-existing, redundant (with an entry for this poll the voter holds at most 9 other polls)."
+    ]
+  },
+  "e2e": "not run (fixer brief)",
+  "open_questions": [
+    "Sweep scope includes held early votes of stored open polls (same as a re-delivered open), not only closes/announcements \u2014 harmless and consistent, but broader than the finding's text.",
+    "MarmotContext wiring of the sweep has no unit test (React provider); covered by the dispatcher, sweeper and buildDispatcher wiring tests. An e2e (close held after a storage failure, reload, poll closed) would need storage fault injection in the browser.",
+    "Receipt-clock residual kept: all 3 seed reads fail AND the clock was set back \u2192 receipts can sort below the pre-reload mark until a read succeeds (documented polls.md \u00a75). The alternative 'mark receipts unordered until seeded' was not built."
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine; only friction was the absence of fast-check (repo convention), replaced by a seeded loop",
+    "outcome": "merged"
+  },
+  "remediation_round_1": {
+    "trigger": "Codex: HIGH sweep not cancellable / purge undone; MEDIUM overlapping sweeps overwrite a closed result; MEDIUM vote-only recovery not shown",
+    "fixes": {
+      "cancellation": "enqueueMaintenance passes isDisposed(); sweepHeldPollState(ctx, isCancelled) guards every dep (guardDeps: check before each call and after each awaited result, throws MaintenanceCancelled); the held-summary replay is built per run from guarded chat deps and a settler over guarded poll deps.",
+      "purge_guard": "pollTxn: one readwrite transaction on the default keyval store via the store callback + promisifyRequest(os.transaction), never update(). Closed savePoll re-reads the poll in-txn: absent -> no write (null), already closed -> no overwrite (returns stored). Close-time prune is one txn. saveVoteIfNewer(vote, {requirePoll}) reads poll list + rows (+ held closes when needed, read error handled with preventDefault) and writes nothing when the poll is gone; every early-vote replay passes requirePoll.",
+      "first_close_wins": "Closing monotonic and idempotent at storage; storeClosed returns the stored close (summary gate announces what the card shows); a null result -> 'unknown', no further writes. PollStoreContext shows the stored result.",
+      "ui_refresh": "replayPendingVotes returns the count stored; recoverStoredPoll bumps pollVersion on stored votes or a close; persistence posts postStoreChanged('polls') after commit when it wrote."
+    },
+    "unit": "5795 passed, 1 skipped (255 files); tsc clean",
+    "mutation": {
+      "tool": "stryker 9.6.1, concurrency 1, scratchpad mutation/stryker.r1.mjs + vitest.r1.config.mjs",
+      "mutate": "pollPersistence.ts 420-560, 686-764, 1019-1042; pollReplay.ts 91-120; pollHandler.ts 70-95, 136-142, 186-285; applicationRumorDispatcher.ts 349-362; registerHandlers.ts 190-205",
+      "before": "83.76% (263 killed, 43 survived, 8 no coverage)",
+      "after": "94.23% (292 killed, 2 timeout, 17 survived, 1 no coverage) - all equivalent, unreachable or pre-existing (see report)"
+    },
+    "residuals": [
+      "A held summary's chat-row append can still land in the window between the gate's poll read and the append if a leave purges without disposing first (chat rows are outside the poll store; guarded by cancellation once disposed).",
+      "The summary gate's hold for a just-purged poll re-creates a held announcement entry (expires after 7 days, never applied)."
+    ]
+  },
+  "remediation_round_2": {
+    "trigger": "Decider (Fable) RETRY on Codex round-1 re-review: HIGH purge gap lets requirePoll re-create an orphan vote row; MED partial replay not bumped; LOW failed first-close prune never retried",
+    "fixes": {
+      "single_txn_purge": "clearPollData = one readwrite pollTxn (PollTxn.delete + allKeys via os.getAllKeys): delete polls key, enumerate in-txn, delete the group's vote keys, then pending votes/closes/announcements and seq reservations; settleVotesMigration first. Serialises with every requirePoll vote txn (before: committed then scanned+deleted; after: no poll list, no write).",
+      "partial_replay_bump": "replayPendingVotes(poll, deps, progress?) counts stored votes as they land; recoverPendingVotes returns progress.stored after a throw (warned with the count), so recoverStoredPoll bumps once. loadVotesWithPending still rejects; entries stay queued; handleVote unchanged.",
+      "prune_retry": "savePoll runs dropSupersededVotes whenever the closed txn resolves a stored poll (also when an earlier close won); postStoreChanged only when written; no prune for a missing poll."
+    },
+    "unit": "5809 passed, 1 skipped (255 files); tsc clean (one unrelated pre-existing timing flake in profileRequestSync.test.ts on one run, green on rerun)",
+    "mutation": {
+      "tool": "stryker 9.6.1, concurrency 1, scratchpad mutation/stryker.r2.mjs",
+      "mutate": "pollPersistence.ts 474-484, 541-550, 1158-1176; pollReplay.ts 95-116; pollHandler.ts 76-84",
+      "before": "94.23% (49 killed, 3 survived)",
+      "after": "98.08% (51 killed, 1 survived: progress default {} -> equivalent, only used by callers that ignore progress)"
+    },
+    "residuals_preexisting": [
+      "Non-requirePoll queuePendingVote and the queue removals (re-read-then-store) can re-create a few:poll-pending-* key after a racing purge; never applied (poll gone), expires with the 7-day TTL.",
+      "leaveGroupImpl.ts:218 awaits clearPollData without try/catch: a rejected (now atomic) purge stops the rest of the leave purge; the left-group tombstone lets the startup sweep finish it."
+    ]
+  }
+}

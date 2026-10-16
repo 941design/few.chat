@@ -2,8 +2,27 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 
 // Mock idb-keyval — in-memory store
-const store = new Map<string, unknown>();
+const store = mapBacking;
+const { mapTxnStore, mapBacking, realPromisifyRequest, txnFaults } = await vi.hoisted(async () => {
+  const { callableMapStore } = await import('../helpers/callableMapStore');
+  const { promisifyRequest } = await vi.importActual<typeof import('idb-keyval')>('idb-keyval');
+  // Faults for the read-check-write transactions (pollPersistence pollTxn).
+  const txnFaults = { failGet: null as null | ((key: string) => boolean), failCommit: null as null | (() => boolean) };
+  const map = new Map<string, unknown>();
+  return {
+    txnFaults,
+    realPromisifyRequest: promisifyRequest,
+    mapBacking: map,
+    mapTxnStore: callableMapStore(map, {
+      clone: true,
+      failGet: (k) => txnFaults.failGet?.(k) ?? false,
+      failCommit: () => txnFaults.failCommit?.() ?? false,
+    }),
+  };
+});
 vi.mock('idb-keyval', () => ({
+  createStore: vi.fn(() => mapTxnStore),
+  promisifyRequest: realPromisifyRequest,
   get: vi.fn(async (key: string) => store.get(key) ?? undefined),
   set: vi.fn(async (key: string, value: unknown) => { store.set(key, value); }),
   del: vi.fn(async (key: string) => { store.delete(key); }),

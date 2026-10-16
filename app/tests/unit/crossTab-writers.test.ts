@@ -30,13 +30,23 @@ Object.defineProperty(globalThis, 'localStorage', {
 });
 
 // ── idb-keyval mock (Map-backed) with failure injection ─────────────────────
+const { pollTxnStore } = await vi.hoisted(async () => {
+  const { callableMapStore } = await import('./helpers/callableMapStore');
+  return {
+    pollTxnStore: (map: Map<string, unknown>) => callableMapStore(map, { failCommit: () => idbFail }),
+  };
+});
 const idb = new Map<string, unknown>();
 let idbFail = false;
 function maybeFail(): void {
   if (idbFail) throw new Error('IDB write failed');
 }
-vi.mock('idb-keyval', () => ({
-  createStore: vi.fn(() => ({})),
+vi.mock('idb-keyval', async (importOriginal) => ({
+  // pollPersistence's read-check-write transactions run on the default
+  // database ('keyval-store'): a Map-backed transactional store over the same
+  // Map whose commit fails while idbFail is set. Other stores stay inert.
+  createStore: vi.fn((db: string) => (db === 'keyval-store' ? pollTxnStore(idb) : ({}))),
+  promisifyRequest: (await importOriginal<typeof import('idb-keyval')>()).promisifyRequest,
   get: vi.fn(async (k: string) => idb.get(k)),
   set: vi.fn(async (k: string, v: unknown) => {
     maybeFail();

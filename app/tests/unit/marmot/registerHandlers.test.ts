@@ -46,6 +46,11 @@ const KIND = {
 
 const announcementReplayer = vi.fn(async () => {});
 const heldCloseSettler = vi.fn(async (poll: unknown) => poll);
+const heldPollStateSweeper = vi.fn(async (..._a: unknown[]) => {});
+// guardDeps is pure: the real one (from the unmocked module) is used.
+const { actualGuardDeps } = await vi.hoisted(async () => ({
+  actualGuardDeps: (await vi.importActual<typeof import('@/src/lib/marmot/handlers/pollHandler')>('@/src/lib/marmot/handlers/pollHandler')).guardDeps,
+}));
 vi.mock('@/src/lib/marmot/handlers/chatHandler', () => ({
   createChatHandler: vi.fn((_deps) => ({ kind: KIND.chat, handle: vi.fn() })),
   createPollCloseAnnouncementReplayer: vi.fn((_deps) => announcementReplayer),
@@ -67,6 +72,8 @@ vi.mock('@/src/lib/marmot/handlers/pollHandler', () => ({
   createPollVoteHandler: vi.fn((_deps) => ({ kind: KIND.pollVote, handle: vi.fn() })),
   createPollCloseHandler: vi.fn((_deps) => ({ kind: KIND.pollClose, handle: vi.fn() })),
   createHeldCloseSettler: vi.fn((_deps) => heldCloseSettler),
+  createHeldPollStateSweeper: vi.fn((_deps) => heldPollStateSweeper),
+  guardDeps: actualGuardDeps,
 }));
 vi.mock('@/src/lib/marmot/handlers/leaveHandler', () => ({
   createLeaveIntentHandler: vi.fn((_deps) => ({ kind: KIND.leave, handle: vi.fn() })),
@@ -222,6 +229,45 @@ describe('buildDispatcher — every handler factory is invoked with the correct 
     heldCloseSettler.mockClear();
     await expect(chatSlice.settleHeldCloses(poll, ctx)).resolves.toBe(poll);
     expect(heldCloseSettler).toHaveBeenCalledWith(poll, ctx);
+  });
+
+  it('sweepHeldPollState builds, per run, a sweeper over the SAME poll deps bag + listHeldPollIds, with the held-summary replay built from GUARDED chat deps, and passes isCancelled (bug: poll-followups)', async () => {
+    const deps = makeDeps();
+    const built = buildDispatcher(deps);
+    const { createHeldPollStateSweeper, createHeldCloseSettler } = await import('@/src/lib/marmot/handlers/pollHandler');
+    const sweeperMock = createHeldPollStateSweeper as unknown as ReturnType<typeof vi.fn>;
+    const replayerMock = createPollCloseAnnouncementReplayer as unknown as ReturnType<typeof vi.fn>;
+    const pollArg = (createPollOpenHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>;
+    const chatSlice = (createChatHandler as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>;
+    expect(sweeperMock).not.toHaveBeenCalled();
+    const ctx = { groupId: 'g' };
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    heldPollStateSweeper.mockClear();
+    replayerMock.mockClear();
+    (createHeldCloseSettler as unknown as ReturnType<typeof vi.fn>).mockClear();
+    await built.sweepHeldPollState(ctx as never, isCancelled);
+    expect(heldPollStateSweeper).toHaveBeenCalledWith(ctx, isCancelled);
+    const sweepArg = sweeperMock.mock.calls[0][0] as Record<string, unknown>;
+    for (const [k, v] of Object.entries(pollArg)) if (k !== 'replayHeldCloseAnnouncements') expect(sweepArg[k]).toBe(v);
+    expect(sweepArg.listHeldPollIds).toBe(persistence.listHeldPollIds);
+    expect(sweepArg.replayHeldCloseAnnouncements).toBe(announcementReplayer);
+    // The replayer for the sweep is built from guarded chat deps: same keys,
+    // each one refusing to run once cancelled.
+    const guardedChat = replayerMock.mock.calls[0][0] as Record<string, (...a: unknown[]) => unknown>;
+    expect(Object.keys(guardedChat).sort()).toEqual(Object.keys(chatSlice).sort());
+    expect(guardedChat.settleHeldCloses).toBe(heldCloseSettler);
+    const settlerArg = (createHeldCloseSettler as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, (...a: unknown[]) => unknown>;
+    cancelled = true;
+    expect(() => guardedChat.incrementUnread('g')).toThrow('maintenance cancelled');
+    expect(() => settlerArg.setPollVersion((v: number) => v)).toThrow('maintenance cancelled');
+    expect(deps.incrementUnread).not.toHaveBeenCalled();
+    // Default isCancelled: never cancelled.
+    heldPollStateSweeper.mockClear();
+    await built.sweepHeldPollState(ctx as never);
+    expect((heldPollStateSweeper.mock.calls[0] as unknown[])[1]).toEqual(expect.any(Function));
+    expect(((heldPollStateSweeper.mock.calls[0] as unknown[])[1] as () => boolean)()).toBe(false);
+    expect(typeof built.subscribe).toBe('function');
   });
 
   it('builds the early-announcement replayer from the SAME chat deps slice and hands it to the poll handlers', () => {

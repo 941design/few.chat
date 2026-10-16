@@ -1,0 +1,33 @@
+{
+  "bug_name": "poll-followups",
+  "story_id": "S1",
+  "scope": {
+    "may_edit": [
+      "app/src/lib/marmot/pollPersistence.ts",
+      "app/src/lib/marmot/handlers/pollHandler.ts",
+      "app/src/lib/marmot/applicationRumorDispatcher.ts",
+      "app/src/lib/marmot/registerHandlers.ts",
+      "app/src/context/MarmotContext.tsx",
+      "app/tests/unit/**",
+      "docs/behavior/polls.md"
+    ],
+    "must_not_edit": [
+      "app/node_modules/**",
+      "BACKLOG.json",
+      "specs/**"
+    ]
+  },
+  "behaviour": [
+    "S1 (poll-held-close-startup-sweep): at every (re)subscription of a group, after the journal replay is enqueued, a maintenance task on the SAME dispatcher FIFO (DispatcherSubscription.enqueueMaintenance) sweeps the group's held poll state: for each STORED poll with held early votes, closes or close announcements it does what a re-delivered open does (early-vote replay for an open poll, settleHeldCloses incl. held-announcement replay). Polls not stored yet are untouched. Never throws; failures leave entries held.",
+    "S2 (poll-kept-votes-held-close-aware-pruning): when a voter's kept votes exceed MAX_VOTES_KEPT_PER_VOTER, the vote write reads the poll's held closes (all senders) and keeps voteAsOf(cut-off) for each plus the newest; remaining room goes to the latest-received others. A failed held-close read falls back to the plain cap (warned), never fails the write. The cap+1 test flips to counted.",
+    "S3 (poll-superseded-prune-at-close): savePoll of a closed poll drops superseded snapshots from the poll's vote rows afterwards, best-effort (a failure is warned; the closed poll stays stored); no write when there is nothing to drop.",
+    "S4 (poll-receipt-clock-seed-failure-backward-step): the receipt-clock seed read is retried up to RECEIPT_SEED_ATTEMPTS (3) times with a 25/50 ms backoff before the receipt is handed out; if all fail the receipt is still handed out (ingestion never waits on an indeterminate read) and the next receipt seeds again.",
+    "S5 (pending-vote-cap-drop-observable): queuePendingVote resolves true when the vote is held (stored or represented by a dominating kept entry), false when the per-voter poll cap dropped it; handleVote's save-failure fallback warns on false and rethrows the save error (journal keeps the vote).",
+    "P1: Privacy invariant untouched: local storage only, no new publishes."
+  ],
+  "non_goals": [
+    "A second receipt-clock floor source from persisted receivedAt values (same IDB failure domain as the seed read; see report).",
+    "Cross-tab receipt clock / seq ordering (poll-receipt-clock-and-seq-cross-tab).",
+    "Changing the early-vote caps themselves."
+  ]
+}

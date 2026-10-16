@@ -11,14 +11,27 @@
  * later macrotask, writes are buffered and applied only when the transaction
  * commits (no pending request left), and `transaction.abort()` discards them.
  * `onCommit` runs before the buffered writes are applied (e.g. to log them).
+ * `clone` returns structuredClone'd values from get (so an aborted
+ * transaction's in-place mutations never leak into the Map). `failGet(key)`
+ * makes that get fail: its onerror gets an event with preventDefault(); if the
+ * handler does not call it (or there is none) the transaction aborts, as in
+ * IndexedDB. `failCommit()` true makes the next commit abort instead.
  */
 import type { UseStore } from 'idb-keyval';
+
+/** Marks a buffered delete (store.delete) until commit. */
+const DELETED = Symbol('deleted');
 
 type Req = { result: unknown; error: unknown; onsuccess: ((e: unknown) => void) | null; onerror: ((e: unknown) => void) | null };
 
 export function callableMapStore(
   map: Map<string, unknown>,
-  opts: { onCommit?: (keys: string[]) => void | Promise<void> } = {},
+  opts: {
+    onCommit?: (keys: string[]) => void | Promise<void>;
+    clone?: boolean;
+    failGet?: (key: string) => boolean;
+    failCommit?: () => boolean;
+  } = {},
 ): Map<string, unknown> & UseStore {
   const run = <T>(_mode: IDBTransactionMode, callback: (store: IDBObjectStore) => T | PromiseLike<T>): Promise<T> => {
     const pending = new Set<Req>();
@@ -37,18 +50,44 @@ export function callableMapStore(
     };
     const commitIfIdle = async () => {
       if (done || pending.size > 0) return;
+      if (opts.failCommit?.()) {
+        txn.error = new Error('injected commit failure');
+        txn.abort();
+        return;
+      }
       done = true;
       await opts.onCommit?.(writes.map(([k]) => k));
-      for (const [k, v] of writes) map.set(k, v);
+      for (const [k, v] of writes) {
+        if (v === DELETED) map.delete(k);
+        else map.set(k, v);
+      }
       txn.oncomplete?.({});
     };
-    const request = (compute: () => unknown): Req => {
+    const request = (compute: () => unknown, fails = false): Req => {
       if (done) throw new Error('TransactionInactiveError');
       const req: Req = { result: undefined, error: null, onsuccess: null, onerror: null };
       pending.add(req);
       setTimeout(() => {
         pending.delete(req);
         if (done) return;
+        if (fails) {
+          req.error = new Error('injected get failure');
+          let prevented = false;
+          try {
+            req.onerror?.({ target: req, preventDefault: () => { prevented = true; }, stopPropagation: () => {} });
+          } catch (err) {
+            txn.error = err;
+            txn.abort();
+            return;
+          }
+          if (!prevented) {
+            txn.error = req.error;
+            txn.abort();
+            return;
+          }
+          void commitIfIdle();
+          return;
+        }
         req.result = compute();
         try {
           req.onsuccess?.({ target: req });
@@ -65,11 +104,26 @@ export function callableMapStore(
       transaction: txn,
       get: (key: string) => request(() => {
         const buffered = [...writes].reverse().find(([k]) => k === key);
-        return buffered ? buffered[1] : map.get(key);
+        const raw = buffered ? buffered[1] : map.get(key);
+        const value = raw === DELETED ? undefined : raw;
+        return opts.clone ? structuredClone(value) : value;
+      }, opts.failGet?.(key) ?? false),
+      delete: (key: string) => {
+        const req = request(() => undefined);
+        writes.push([key, DELETED]);
+        return req;
+      },
+      getAllKeys: () => request(() => {
+        const live = new Set(map.keys());
+        for (const [k, v] of writes) {
+          if (v === DELETED) live.delete(k);
+          else live.add(k);
+        }
+        return [...live];
       }),
       put: (value: unknown, key: string) => {
         const req = request(() => key);
-        writes.push([key, value]);
+        writes.push([key, opts.clone ? structuredClone(value) : value]);
         return req;
       },
     };

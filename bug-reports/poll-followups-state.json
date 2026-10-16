@@ -1,0 +1,93 @@
+{
+  "bug_name": "poll-followups",
+  "bug_report_file": "bug-reports/poll-followups-report.md",
+  "created_at": "2026-10-16T11:00:00Z",
+  "updated_at": "2026-10-16T12:55:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Is a creator close held after a storage failure applied at the next (re)subscription with no further poll message, by a sweep that runs on the dispatcher FIFO (never beside it), with failure injection at the listing, poll read, closed write, held-close read and clean-up?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does pruning beyond MAX_VOTES_KEPT_PER_VOTER keep the vote each held close selects (cap+1 test flipped to counted), fall back to the plain cap only on a failed held-close read, and never fail the vote write on that read?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "After a poll is stored closed, do its vote rows carry no superseded snapshots, with the prune best-effort under injected read/write failures?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "Seed read fails once + clock set back after a reload: is the next receipt still above the pre-reload mark, and is the retry bounded (never blocks ingestion)?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Does queuePendingVote return false on a cap drop (true when stored/represented, rejects on a failed write) and does handleVote's fallback warn and rethrow? Does polls.md \u00a75's residual sentence still hold?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "QUALITY",
+      "question": "Unit suite + tsc green; Stryker (concurrency 1) on changed lines with survivors killed or justified; polls.md updated?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "plugin_sha": "unknown",
+  "consumer_sha": "4c32336",
+  "models": {
+    "lead": "opus",
+    "implementer": "opus"
+  },
+  "baseline": {
+    "unit": "5701 passed, 1 skipped (254 files)"
+  },
+  "fix": {
+    "unit": "5809 passed, 1 skipped (255 files)",
+    "tsc": "clean",
+    "mutation": "round 0: 96.14%; rem 1: 94.23%; rem 2: 98.08% on round-2 lines",
+    "e2e": "not run by fixer"
+  },
+  "review_rounds": [],
+  "remediation_round": 2,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T11:00:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T11:05:00Z",
+      "trigger": "fixer_start"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T12:00:00Z",
+      "trigger": "remediation_round_1 (Codex 1 HIGH + 2 MEDIUM)"
+    },
+    {
+      "phase": "FIXING",
+      "timestamp": "2026-10-16T13:00:00Z",
+      "trigger": "remediation_round_2 (Decider RETRY: Codex 1 HIGH + 1 MED + 1 LOW)"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T12:55:00Z",
+      "trigger": "decider_fable_round2_conditions_met_codex_verify_clean_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-pollfu4.log",
+    "note": "first round-2 gate interrupted by a machine crash; rerun green"
+  }
+}

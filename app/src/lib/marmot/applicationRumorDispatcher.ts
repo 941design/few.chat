@@ -77,6 +77,16 @@ export interface DispatcherSubscription {
    * replayed work (and anything queued before it) has run. No-op after disposal.
    */
   replay(entries: ReadonlyArray<{ data: Uint8Array; senderPubkey: string }>): Promise<void>;
+  /**
+   * Run a maintenance task (e.g. the held poll-state sweep) on the SAME FIFO
+   * queue as the handlers, after everything accepted before this call — so a
+   * read-then-save task never interleaves with a handler of the group.
+   * Skipped when disposed before it starts; a running task gets isDisposed()
+   * and must stop writing once it holds (disposal cannot interrupt an await).
+   * A throwing task is warned, never propagated (the queue keeps running).
+   * Resolves once it has run.
+   */
+  enqueueMaintenance(task: (isDisposed: () => boolean) => Promise<void>): Promise<void>;
 }
 
 /** Write-ahead journal hook (rumorJournal.ts). */
@@ -336,6 +346,17 @@ export function createDispatcher(handlers: RumorHandler[], options: DispatcherOp
         for (const entry of entries) {
           void listener({ message: entry.data, senderPubkey: entry.senderPubkey } as AuthenticatedApplicationMessage, true);
         }
+        return tail;
+      };
+      unsubscribe.enqueueMaintenance = (task) => {
+        tail = tail.then(async () => {
+          if (disposed) return;
+          try {
+            await task(() => disposed);
+          } catch (err) {
+            console.warn('[dispatcher.maintenance]', err);
+          }
+        });
         return tail;
       };
       return unsubscribe;

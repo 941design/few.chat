@@ -321,10 +321,11 @@ export function PollStoreProvider({
 
       // Update local poll record
       const updated: Poll = { ...poll, closed: true, results, totalVoters };
-      await savePoll(updated);
+      // Resolves the stored poll: an earlier close wins (closing is final).
+      const stored = (await savePoll(updated)) ?? updated;
 
       // Optimistically update state
-      setPolls((prev) => prev.map((p) => (p.id === pollId ? updated : p)));
+      setPolls((prev) => prev.map((p) => (p.id === pollId ? stored : p)));
     },
     [groupId, group, pubkey, polls, votes, sendChatMessage],
   );
