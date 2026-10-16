@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-15T20:13:06Z",
+  "updated_at": "2026-10-16T00:13:32Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -454,19 +454,6 @@
       "success_signal": "e2e: an evicted member who is re-invited can accept and exchange messages"
     },
     {
-      "slug": "stored-group-avatars-not-resanitized",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/profileSync.ts"
-      },
-      "text": "Group member avatars stored before the 2026-10-15 avatar-URL check stay in IDB and the contact cache (and render) until that member sends a newer profile",
-      "created_at": "2026-10-15",
-      "motivation": "The untrusted-group-input hardening validates avatar URLs on receipt only; an unsafe URL (http tracker, javascript:/data:) persisted earlier is still used as an image source. Reviewer note, bug run untrusted-group-input-hardening.",
-      "behavior": "payloadToMemberProfile now drops invalid avatars on ingest; stored MemberProfile rows (few-member-profiles) and contact-cache entries are read without re-validation.",
-      "approach": "Apply isAllowedAvatarImageUrl (dmProfile/kinds.ts) on read in the member-profile / contact-cache loaders (drop the avatar, keep the profile), or a one-time sanitise pass at startup.",
-      "success_signal": "A pre-seeded stored member profile with an http:// avatar renders without the avatar after reload"
-    },
-    {
       "slug": "multi-tab-mls-cache-coherence",
       "scope": "any",
       "anchor": {
@@ -478,33 +465,6 @@
       "behavior": "Two tabs on the same identity; accept (or any epoch-advancing action) in one, then act in the other → the second tab sends undecryptable messages / overwrites fresher MLS state; today's outcome is silent divergence. Related write-back gap (leave purge, 2026-10-15): after a leave's groups.destroy, a still-cached instance (another tab, an in-flight handler, or a departure send that outlived the 5 s timeout) can save the MLS state again, leaving an orphan without tombstone — excluded from backups and purged on re-accept, but not swept.",
       "approach": "Choose (a) one active client per origin via navigator.locks leader election, passive tabs render from IDB and forward actions, or (b) BroadcastChannel mls-state-changed {groupId} after every group.save/destroy with receivers evicting and reloading; (a) is simpler to reason about. Add a two-context e2e that advances the epoch in tab 1 and sends from tab 2.",
       "success_signal": "The two-tab e2e passes and no stale-epoch sends are logged; withGroupJoinLock becomes the only cross-tab primitive or is subsumed by the election"
-    },
-    {
-      "slug": "rumor-journal-cap-evicts-unapplied",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/rumorJournal.ts"
-      },
-      "text": "The rumor journal's per-group cap (1000) can evict never-applied entries after an interrupted catch-up of more than 1000 rumors",
-      "created_at": "2026-10-15",
-      "motivation": "Decider-waived Codex HIGH (low) on bug mls-message-lost-on-unload-after-ingest, 2026-10-15: strictly better than before the fix (all were lost), but a large interrupted history catch-up still loses the overflow.",
-      "behavior": "partition()/sweep keep the newest 1000 entries per group and drop the rest regardless of whether they were applied.",
-      "approach": "Cap by age only, or raise the cap / evict only entries older than N days; replay in chunks.",
-      "success_signal": "Unit: 1500 pending entries survive a sweep and all replay"
-    },
-    {
-      "slug": "pending-member-removals-not-persisted",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/MarmotContext.tsx",
-        "line": 791
-      },
-      "text": "The 5 s debounced pending-removal queue for leave intents (pendingRemovalsRef) is in memory only; an unload inside the debounce drops the member removal",
-      "created_at": "2026-10-15",
-      "motivation": "Decider-waived Codex HIGH (medium, pre-existing) on bug mls-message-lost-on-unload-after-ingest: the leave-intent rumor is now journaled and acked when handled, but the removal it schedules is not durable, so a reload within 5 s leaves a departed member on the roster.",
-      "behavior": "leave_intent handler → enqueueLeave → in-memory pendingRemovalsRef, flushed after a 5 s debounce; nothing persists or flushes it on pagehide.",
-      "approach": "Persist the pending-removal set (IDB) and resume it at startup, or flush on pagehide; keep idempotency.",
-      "success_signal": "e2e/unit: a reload within the debounce still removes the departed member"
     },
     {
       "slug": "poll-cast-seq-and-close-vote-ordering",
@@ -548,6 +508,62 @@
       "behavior": "crossTab store-changed messages cover contacts/blocked/known/groups/chat/polls; reactions are not posted or received.",
       "approach": "Post a 'reactions' store-changed event after reaction writes and, on receipt, invalidate the affected thread's cache entry in a way that respects the badge-revival guard; add a two-page unit/e2e check.",
       "success_signal": "A reaction added in tab 1 shows in tab 2 without reload; the badge-revival regression tests still pass"
+    },
+    {
+      "slug": "journal-ack-before-durable-side-effects",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/applicationRumorDispatcher.ts"
+      },
+      "text": "The dispatcher acks a journal entry even when the handler's durable side effects failed (e.g. a pending member removal whose IndexedDB write failed), so a reload in the commit window loses it",
+      "created_at": "2026-10-15",
+      "motivation": "Decider-waived Codex HIGH (not a regression) on run robustness-journal-removals-avatars, 2026-10-15: before the durable removal store every reload in the 5 s window lost the removal; now only a failed storage write plus a reload does.",
+      "behavior": "Dispatcher acks in a finally block (at-most-once); persistPendingRemoval swallows write failures so the leave handler resolves.",
+      "approach": "Ack-on-success: handlers report durable completion; the dispatcher only acks entries whose handlers succeeded (keep at-most-once semantics for handler logic by idempotency).",
+      "success_signal": "Unit: a failing pending-removal write leaves the journal entry, and the removal is applied after reload"
+    },
+    {
+      "slug": "journal-ack-failure-replays-applied-rows",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/rumorJournal.ts"
+      },
+      "text": "If a journal ack fails, the already-applied rumor stays in the journal and is replayed every startup for up to 30 days (the removed count cap used to bound this)",
+      "created_at": "2026-10-15",
+      "motivation": "Decider-filed low follow-up from run robustness-journal-removals-avatars (2026-10-15). Handlers are idempotent, so the effect is repeated work, not corruption; the replay dedup-window widening is bounded per dispatcher lifetime.",
+      "behavior": "ack failures are warned and ignored; age-only eviction keeps the row for 30 days.",
+      "approach": "Retry the ack once after the next successful replay, or mark applied entries in memory for the session and delete them later.",
+      "success_signal": "Unit: an ack failure is retried and the row is gone after the next startup"
+    },
+    {
+      "slug": "journal-replayed-leave-evicts-rejoined-member",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/handlers/leaveHandler.ts"
+      },
+      "text": "Journal replay of an unacked leave_intent after the member has re-joined can evict the re-joined member, because the handler captures the member's current leaf at replay time",
+      "created_at": "2026-10-15",
+      "motivation": "Decider-filed low (pre-existing from d74ea00), 2026-10-15: needs an unload in a millisecond window plus a long offline gap during which the member left and re-joined; rare, but destructive.",
+      "behavior": "Replayed leave_intent entries carry no epoch; the leaf-identity guard captures the current leaf at replay, so it cannot detect a re-join.",
+      "approach": "Store the MLS epoch of the message in the journal entry (if marmot-ts exposes it) and drop a leave_intent older than the member's current leaf's join epoch.",
+      "success_signal": "Unit: replaying an old leave_intent after the member re-joined at a later epoch does not remove them"
+    },
+    {
+      "slug": "pending-removal-compare-delete-single-txn",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/pendingRemovalStorage.ts",
+        "range": [
+          143,
+          163
+        ]
+      },
+      "text": "pendingRemovalStorage deleteRowsStillMatching compares via idb-keyval entries() (readonly txn) and deletes via delMany (separate readwrite txn); another tab's put to the same key can land in between and be deleted",
+      "created_at": "2026-10-16",
+      "motivation": "Decider-waived Codex HIGH (rated low, fail-safe) on run robustness-journal-removals-avatars round 3, 2026-10-16: per-tab serialised() does not cover cross-tab writes; reachable only with two concurrent admin tabs and a divergent rumor set inside a sub-ms–ms window; worst case a departed member stays until the next leave or a manual remove. Subsumed by multi-tab-mls-cache-coherence if S1 ships.",
+      "behavior": "Compare (readonly entries()) and delete (delMany) run in two IndexedDB transactions; the settle path (deleteMatchingPendingRemovals) has had the same gap since round 1.",
+      "approach": "Do compare+delete in ONE readwrite transaction via the store callback (removalStore()('readwrite', s => cursor over the group's keys, compare in-txn, s.delete only still-matching rows)) and add a unit test with two independent createStore connections where tab B's put between A's read and delete survives.",
+      "success_signal": "Two-connection unit test passes: a row rewritten by another connection between compare and delete is never deleted"
     }
   ],
   "archive": [
