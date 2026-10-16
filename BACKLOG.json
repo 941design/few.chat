@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T06:01:19Z",
+  "updated_at": "2026-10-16T07:00:43Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -263,19 +263,6 @@
     }
   ],
   "findings": [
-    {
-      "slug": "extract-dm-profilemap-builder-tidy-feedback",
-      "scope": "any",
-      "anchor": {
-        "path": "app/pages/feedback.tsx"
-      },
-      "text": "Extract DM profileMap builder; tidy feedback-mode prop coordination in ContactChat",
-      "created_at": "2026-06-15",
-      "motivation": "The feedback channel epic surfaced a pre-existing duplication and some prop-coordination spread. The two-entry DM profileMap (self + one peer) is built near-identically in app/pages/feedback.tsx and app/pages/contacts.tsx ContactDetailView, with the 'own user' entry byte-for-byte identical. ContactChat's feedback-mode behaviour is split across two files (feedback.tsx passes source + composerPlaceholder; ContactChat derives image/reaction gating from source), so the coordinated props can silently drift. None of this is a bug today, but the duplication predates the epic and the feedback page added a third near-copy of the profileMap, so the cost will keep growing as more DM surfaces appear.",
-      "behavior": "app/pages/feedback.tsx (profileMap ~lines 43-56) and app/pages/contacts.tsx ContactDetailView (profileMap ~lines 220-233) independently construct {[selfHex]:{...}, [peerHex]:{...}} MemberProfile maps; the self entry (nickname: ownProfile.nickname || truncateNpub(pubkeyToNpub(self)), avatar: ownProfile.avatar, updatedAt: new Date().toISOString()) is duplicated verbatim. Separately, ContactChat repeats the 'source === \"feedback\"' check three times (send markers, onReact gating, allowImageAttachments).",
-      "approach": "1) Extract buildDmProfileMap({ selfHex, selfProfile, peerHex, peerNickname, peerAvatar, peerUpdatedAt? }) into a shared module (e.g. app/src/lib/contacts.ts or a profile helper) and call it from both feedback.tsx and contacts.tsx ContactDetailView — this is the high-value, low-risk extraction touching a pre-existing duplication. 2) Optionally hoist 'const isFeedback = source === \"feedback\"' in ContactChat for readability — but KEEP the three send-path gates (markers, onReact, allowImageAttachments + the paste/drop guards) as separate explicit checks: they guard independent send paths and their separateness is what makes each path auditable (do NOT merge them). 3) Do NOT introduce a <FeedbackChat> wrapper yet — wait for a second feedback-like surface; one call site does not justify the indirection.",
-      "success_signal": "feedback.tsx and contacts.tsx ContactDetailView both call one buildDmProfileMap helper; no duplicated self-profile literal; the three feedback send-path gates remain separate and explicit."
-    },
     {
       "slug": "share-contact-card-permanently-fails-when",
       "scope": "any",
