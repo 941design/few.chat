@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T12:49:50Z",
+  "updated_at": "2026-10-16T14:52:59Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -434,19 +434,6 @@
       "success_signal": "Two-instance unit test with shared IDB orders receipts and seqs across instances without Web Locks"
     },
     {
-      "slug": "reactions-rejected-write-cache-reconcile",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/reactions/api.ts"
-      },
-      "text": "After a rejected reaction write, the writing tab's cache keeps rows that never landed, so tabs can disagree",
-      "created_at": "2026-10-16",
-      "motivation": "Review follow-up from bug run cross-tab-reactions-refresh (2026-10-16). Pre-existing; cache.set runs before the IDB write on purpose (badge-revival guard c64fe0f), so moving it would reopen that race.",
-      "behavior": "enqueue sets the cache before set(); on reject the optimistic rows stay cached in the writing tab while other tabs show what is stored.",
-      "approach": "On write rejection, re-read the key from storage inside the same queue slot and reconcile the cache, preserving the revival guard.",
-      "success_signal": "Unit: write rejects without committing; writing tab's cache equals stored state afterwards"
-    },
-    {
       "slug": "cross-tab-account-switch-notice",
       "scope": "any",
       "anchor": {
@@ -458,20 +445,6 @@
       "behavior": "clearAllReactions deletes reaction keys without posting; cache-first loadReactions in another tab keeps serving deleted badges.",
       "approach": "Post an account-changed cross-tab event on switch/wipe; receivers reload or show the takeover screen per the multi-tab design.",
       "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
-    },
-    {
-      "slug": "reaction-edit-handlers-ack-on-storage-failure",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/handlers/reactionHandler.ts",
-        "line": 40
-      },
-      "text": "Group reaction and edit/delete handlers swallow storage failures and are acked, so a failed write (or a failed loadMessages in the reaction handler) silently loses the reaction/edit",
-      "created_at": "2026-10-16",
-      "motivation": "Review follow-up from bug run journal-and-removal-robustness (2026-10-16): the dispatcher now acks only on handler success, but these handlers never throw, so they do not benefit from journal replay.",
-      "behavior": "reactionHandler turns a failed loadMessages into an empty list and discards the reaction; applyInboundRumor / applyDeleteEditSignal failures are logged and the rumor is acked.",
-      "approach": "First confirm applyInboundRumor and applyDeleteEditSignal are replay-safe (rumor-id unique, pending-signal sweep idempotent); then let storage failures propagate so the journal keeps the entry; inject failures at each storage step.",
-      "success_signal": "Unit: reaction/edit whose storage write fails once is applied after the next subscription replay"
     },
     {
       "slug": "leave-fallback-identity-writeback",
