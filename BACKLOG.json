@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T14:52:59Z",
+  "updated_at": "2026-10-16T16:22:39Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -447,70 +447,17 @@
       "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
     },
     {
-      "slug": "leave-fallback-identity-writeback",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pendingRemovalStorage.ts"
-      },
-      "text": "A live leave whose identity capture failed falls back to the current leaf but does not write it onto the journal row, so a replay after a failed removal persist skips the removal",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). Triple-failure window (capture fails, persist fails, reload).",
-      "behavior": "Replayed leaves without a journaled identity are skipped by design; the live fallback identity is only used in memory.",
-      "approach": "On a live fallback capture, best-effort write the captured identity onto the journal row before acking.",
-      "success_signal": "Unit: live capture fails, fallback used, persist fails, reload → replay still removes the member"
-    },
-    {
-      "slug": "idb-keyval-update-lint-ban",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/rumorJournal.ts"
-      },
-      "text": "idb-keyval update() (6.2.2) is not transaction-bound and can hang forever on a read error/abort; nothing prevents reintroducing it",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). Round 1 introduced exactly this hang in putRumor.",
-      "behavior": "update() wires only get.onsuccess; errors/aborts before success leave the promise unsettled.",
-      "approach": "Add a no-restricted-imports rule (or a grep check in make test) banning update from idb-keyval.",
-      "success_signal": "Importing update from idb-keyval fails the build/test"
-    },
-    {
-      "slug": "rumor-journal-real-idb-suite",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/unit/marmot/rumorJournal.test.ts"
-      },
-      "text": "rumorJournal.test.ts runs on a Map mock that cannot exercise custom-store transaction callbacks (recordRumorFailure, putRumor)",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) follow-up from bug run journal-and-removal-robustness round 1 (2026-10-16). The hang in round 1 slipped past the Map-mocked suite.",
-      "behavior": "Transactional journal paths are only partially covered under real IndexedDB semantics.",
-      "approach": "Add a fake-indexeddb companion suite for the journal's transactional paths, with abort/error injection.",
-      "success_signal": "Journal transactional paths have fake-indexeddb tests incl. abort/error"
-    },
-    {
-      "slug": "poll-pending-queues-recreated-after-purge",
+      "slug": "poll-savepoll-not-purge-marked",
       "scope": "any",
       "anchor": {
         "path": "app/src/lib/marmot/pollPersistence.ts"
       },
-      "text": "A non-requirePoll early-vote queue write or a close/announcement queue removal racing a group purge can re-create a pending* poll key after clearPollData",
+      "text": "savePoll, allocateVoteSeq and the receipt clock are not purge-marked, so a poll open still in flight for a left group can recreate few:polls:<group> after the leave",
       "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) follow-up from bug run poll-followups round 1 (2026-10-16). Pre-existing; bounded by the 7-day TTL.",
-      "behavior": "queuePendingVote (unknown poll) and queue read-modify-write removals are not guarded by poll existence, so they can write a pending list back after the purge transaction.",
-      "approach": "Verify whether a remove on a null/empty list writes [] back; route these writes through pollTxn with a group-tombstone or no-write-on-empty rule.",
-      "success_signal": "Unit: purge racing a queue write/removal leaves no few:poll-pending* key"
-    },
-    {
-      "slug": "leave-clearpolldata-unguarded",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/leaveGroupImpl.ts",
-        "line": 218
-      },
-      "text": "leaveGroupImpl awaits clearPollData without try/catch while neighbouring purge steps are guarded, so a poll storage failure aborts the rest of the leave purge",
-      "created_at": "2026-10-16",
-      "motivation": "Decider (Fable) follow-up from bug run poll-followups round 1 (2026-10-16). Pre-existing.",
-      "behavior": "A rejected clearPollData propagates out of leaveGroupImpl and skips the later purge steps.",
-      "approach": "Guard it like the neighbouring steps (best-effort, logged) and keep going; consider a retry on next startup.",
-      "success_signal": "Unit: clearPollData rejects during leave → remaining purge steps still run"
+      "motivation": "Open question from bug run journal-and-purge-followups (2026-10-16).",
+      "behavior": "Only the pending queues and saveVoteIfNewer check the in-memory purge mark; savePoll writes unconditionally.",
+      "approach": "Apply the same purge-mark check inside savePoll's pollTxn (and allocateVoteSeq); keep re-join release at joinAndPersist.",
+      "success_signal": "Unit: poll open handled after clearPollData leaves no few:polls:<group> key"
     }
   ],
   "archive": [
@@ -549,6 +496,12 @@
       "text": "base:e2e-testing skill runs in a forked context but returns only 'Skill execution completed' to the parent — no pass/fail counts, no failure messages. Caller has to re-run the runner directly to learn whether tests passed.",
       "reason": "Out of repo: concerns the base plugin's e2e-testing skill, not quizzl; moved to the base meta-retro tree (2026-10-15).",
       "source_slug": "base-plugin-e2e-testing-skill-swallows-results"
+    },
+    {
+      "date": "2026-10-16",
+      "text": "A live leave whose identity capture failed falls back to the current leaf but does not write it onto the journal row, so a replay after a failed removal persist skips the removal",
+      "reason": "Unsound: a live capture can read a re-joined member's new leaf and bind it to an old leave rumor, so a replay would evict the re-joined member. Only an epoch-bound capture would make it sound, which live handling cannot obtain. Replay keeps skipping identity-less leaves (no eviction of a re-joined member outranks no lost removal). See bug-reports/journal-and-purge-followups-report.md.",
+      "source_slug": "leave-fallback-identity-writeback"
     }
   ]
 }
