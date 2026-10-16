@@ -1,9 +1,9 @@
-import type { Group, ProfileAvatar } from '@/src/types';
+import type { Group, MemberProfile, ProfileAvatar, UserProfile } from '@/src/types';
 import { STORAGE_KEYS } from '@/src/types';
 import { isStorageAvailable } from '@/src/lib/storage';
 import { isAllowedDmSender } from '@/src/lib/walledGarden';
 import type { WhitelistArgs } from '@/src/lib/walledGarden';
-import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
+import { npubToPubkeyHex, pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
 import { rememberKnownPeers } from '@/src/lib/knownPeers';
 import { postStoreChanged } from '@/src/lib/crossTab';
 import { sanitizeStoredAvatar } from '@/src/lib/dmProfile/kinds';
@@ -694,4 +694,55 @@ export function purgeStrangerContacts(
   }
 
   return { deleted };
+}
+
+export type DmProfileMapArgs = {
+  /** The signed-in user's hex pubkey. */
+  selfHex: string;
+  /** The signed-in user's own profile (ProfileContext). */
+  selfProfile: UserProfile;
+  /** The one DM peer's hex pubkey. */
+  peerHex: string;
+  /** The peer's display nickname, already resolved (incl. any fallback) by the caller. */
+  peerNickname: string;
+  peerAvatar: ProfileAvatar | null;
+  /** The peer profile's LWW timestamp; defaults to the build time when omitted. */
+  peerUpdatedAt?: string;
+};
+
+/**
+ * Builds the two-entry (self + one peer) `MemberProfile` map every 1:1 DM
+ * surface hands to `ContactChat` (contact detail view, feedback page).
+ *
+ * The self entry falls back to the truncated npub when the own nickname is
+ * empty and is stamped with the build time (`new Date().toISOString()`) —
+ * the own profile has no stored LWW timestamp. Pure and local-only: no
+ * publish/sync/fetch (privacy invariant, project CLAUDE.md).
+ *
+ * If `selfHex === peerHex` the peer entry wins (it is written second),
+ * matching the object-literal semantics the call sites had before extraction.
+ */
+export function buildDmProfileMap({
+  selfHex,
+  selfProfile,
+  peerHex,
+  peerNickname,
+  peerAvatar,
+  peerUpdatedAt,
+}: DmProfileMapArgs): Record<string, MemberProfile> {
+  const now = new Date().toISOString();
+  return {
+    [selfHex]: {
+      pubkeyHex: selfHex,
+      nickname: selfProfile.nickname || truncateNpub(pubkeyToNpub(selfHex)),
+      avatar: selfProfile.avatar,
+      updatedAt: now,
+    },
+    [peerHex]: {
+      pubkeyHex: peerHex,
+      nickname: peerNickname,
+      avatar: peerAvatar,
+      updatedAt: peerUpdatedAt ?? now,
+    },
+  };
 }

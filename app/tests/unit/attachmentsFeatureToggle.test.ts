@@ -79,7 +79,7 @@ describe('effective attach gate', () => {
 
   it('keeps the caller opt-out ANDed in, so re-enabling the toggle cannot resurrect attachments on the sealed feedback channel', () => {
     // The `&& allowImageAttachments` conjunct is what preserves ContactChat's
-    // `allowImageAttachments={source !== 'feedback'}` contract when the toggle
+    // `allowImageAttachments={!isFeedback}` contract when the toggle
     // flips back on. Asserted on the source (the gate lives in a component
     // body and cannot be re-evaluated here with a different constant).
     expect(chatBoxSource).toMatch(/ATTACHMENTS_ENABLED && allowImageAttachments/);

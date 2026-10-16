@@ -1,0 +1,55 @@
+{
+  "bug_name": "extract-dm-profilemap-builder",
+  "bug_report_file": "bug-reports/extract-dm-profilemap-builder-report.md",
+  "created_at": "2026-10-16T06:00:00Z",
+  "updated_at": "2026-10-16T06:50:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "small",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "CODE",
+      "question": "Do feedback.tsx and contacts.tsx ContactDetailView both build their profileMap via buildDmProfileMap, with no remaining duplicated self-profile literal?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "CODE",
+      "question": "Are the self and peer entries the same as before on both pages (nickname fallback, avatar, updatedAt sources)?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "CODE",
+      "question": "Do ContactChat's feedback send-path gates (markers, onReact, allowImageAttachments with its paste/drop guards, allowMessageActions) stay separate explicit checks, with no FeedbackChat wrapper?"
+    }
+  ],
+  "pre_existing_dirty_files": [],
+  "consumer_sha": "b15e1d1",
+  "models": {
+    "implementer": "opus"
+  },
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-16T06:00:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIX_IMPLEMENTED",
+      "timestamp": "2026-10-16T06:07:00Z",
+      "trigger": "fixer_complete_awaiting_review"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-16T06:50:00Z",
+      "trigger": "codex_review_clean_full_gate_green"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "result": "pass",
+    "non_relay": "72 passed",
+    "groups": "349 passed, 19 skipped",
+    "log": "/tmp/claude-501/e2e-gate/full-profilemap1.log"
+  }
+}

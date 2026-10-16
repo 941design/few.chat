@@ -31,13 +31,13 @@ import { useCopy } from '@/src/context/LanguageContext';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useProfile } from '@/src/context/ProfileContext';
-import { commonGroups, confirmContact, getContact, listContacts, rememberContactsFromGroups } from '@/src/lib/contacts';
+import { buildDmProfileMap, commonGroups, confirmContact, getContact, listContacts, rememberContactsFromGroups } from '@/src/lib/contacts';
 import { useUnreadCounts, clearPendingContact, reconcileConfirmedContactDirectMessageCount } from '@/src/lib/unreadStore';
 import { contactCardTotal } from '@/src/lib/notificationCounts';
 import { isMaintainerPubkey } from '@/src/config/maintainer';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
-import type { MemberProfile, UserProfile } from '@/src/types';
+import type { UserProfile } from '@/src/types';
 
 function ContactListView() {
   const copy = useCopy();
@@ -409,20 +409,14 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
 
   const fallbackName = truncateNpub(pubkeyToNpub(contact.pubkeyHex));
   const displayName = contact.nickname || fallbackName || copy.contacts.profileNameFallback;
-  const profileMap: Record<string, MemberProfile> = {
-    [pubkeyHex]: {
-      pubkeyHex,
-      nickname: ownProfile.nickname || truncateNpub(pubkeyToNpub(pubkeyHex)),
-      avatar: ownProfile.avatar,
-      updatedAt: new Date().toISOString(),
-    },
-    [contact.pubkeyHex]: {
-      pubkeyHex: contact.pubkeyHex,
-      nickname: contact.nickname || fallbackName,
-      avatar: contact.avatar,
-      updatedAt: contact.updatedAt ?? contact.lastSeenAt,
-    },
-  };
+  const profileMap = buildDmProfileMap({
+    selfHex: pubkeyHex,
+    selfProfile: ownProfile,
+    peerHex: contact.pubkeyHex,
+    peerNickname: contact.nickname || fallbackName,
+    peerAvatar: contact.avatar,
+    peerUpdatedAt: contact.updatedAt ?? contact.lastSeenAt,
+  });
 
   return (
     <>

@@ -241,6 +241,11 @@ export default function ContactChat({
   composerPlaceholder,
 }: ContactChatProps) {
   const copy = useCopy();
+  // The sealed feedback channel. Each send path below gates on this
+  // INDEPENDENTLY (text markers, onReact, allowImageAttachments — which also
+  // drives ChatBox's paste/drop guards — and allowMessageActions); keep them
+  // as separate explicit checks so every path stays individually auditable.
+  const isFeedback = source === 'feedback';
   const { groups, ready: marmotReady, whenReady, knownPeersRevision, blockedPeersRevision } = useMarmot();
   // Ref for groups so subscription handlers always see the latest whitelist
   // without the effect needing to re-subscribe on every membership change.
@@ -904,7 +909,7 @@ export default function ContactChat({
     // dedup — the outer kind-1059 wrap id is irrelevant to the UI layer.
     // AC-MARKER-1/3: feedback sends carry the sealed marker tags; ordinary DMs
     // pass no extraTags, so their rumor keeps only the ["p", peer] tag.
-    const extraTags = source === 'feedback' ? feedbackMarkerTags() : undefined;
+    const extraTags = isFeedback ? feedbackMarkerTags() : undefined;
     const rumor = buildChatRumor({ privateKeyHex, peerPubkeyHex, content, extraTags });
     const optimistic = toMessage(threadId, {
       id: rumor.id,
@@ -924,7 +929,7 @@ export default function ContactChat({
       setMessages((prev) => prev.filter((msg) => msg.id !== rumor.id));
       throw err;
     }
-  }, [peerPubkeyHex, privateKeyHex, pubkeyHex, threadId, upsertMessages, source]);
+  }, [peerPubkeyHex, privateKeyHex, pubkeyHex, threadId, upsertMessages, isFeedback]);
 
   const sendImageMessage = useCallback(async (file: File, caption: string) => {
     const now = Math.floor(Date.now() / 1000);
@@ -1211,12 +1216,12 @@ export default function ContactChat({
       // v1 feedback is a text-only marked channel (spec §7): omit the reaction
       // callback so kind-7 reaction DMs (which carry no feedback marker tags)
       // cannot be sent from the feedback thread.
-      onReact={source === 'feedback' ? undefined : handleReact}
+      onReact={isFeedback ? undefined : handleReact}
       // Story-08: pass DM reactions map so ChatBox doesn't read from ChatStoreContext
       // (which is group-only — arch §3 rule 3). AC-55.
       reactionsByMessageId={reactionsByMessageId}
       composerPlaceholder={composerPlaceholder}
-      allowImageAttachments={source !== 'feedback'}
+      allowImageAttachments={!isFeedback}
       // S6: DM half of the MessageActionHandlers seam (built by S4 above).
       handleDeleteMessage={handleDeleteMessage}
       handleEditMessage={handleEditMessage}
@@ -1225,7 +1230,7 @@ export default function ContactChat({
       // off entirely there (mirrors allowImageAttachments/onReact above) —
       // an edit/delete kind-14/kind-5 published from that surface would
       // land in the maintainer's sealed channel unmarked.
-      allowMessageActions={source !== 'feedback'}
+      allowMessageActions={!isFeedback}
     />
   );
 }

@@ -10,9 +10,8 @@ import ContactChat from '@/src/components/contacts/ContactChat';
 import BlockContactButton from '@/src/components/contacts/BlockContactButton';
 import { MAINTAINER_ACTIVE_PUBKEY_HEX, MAINTAINER_DISPLAY_NAME } from '@/src/config/maintainer';
 import { isBlockedPeer, loadBlockedPeers } from '@/src/lib/blockedPeers';
+import { buildDmProfileMap } from '@/src/lib/contacts';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
-import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
-import type { MemberProfile } from '@/src/types';
 
 /**
  * Gate-remediation finding 3 (epic: block-contact): whether `/feedback`
@@ -71,22 +70,13 @@ export default function FeedbackPage() {
     return null;
   }
 
-  const ownFallback = truncateNpub(pubkeyToNpub(pubkeyHex));
-
-  const profileMap: Record<string, MemberProfile> = {
-    [pubkeyHex]: {
-      pubkeyHex,
-      nickname: ownProfile.nickname || ownFallback,
-      avatar: ownProfile.avatar,
-      updatedAt: new Date().toISOString(),
-    },
-    [MAINTAINER_ACTIVE_PUBKEY_HEX]: {
-      pubkeyHex: MAINTAINER_ACTIVE_PUBKEY_HEX,
-      nickname: MAINTAINER_DISPLAY_NAME,
-      avatar: null,
-      updatedAt: new Date().toISOString(),
-    },
-  };
+  const profileMap = buildDmProfileMap({
+    selfHex: pubkeyHex,
+    selfProfile: ownProfile,
+    peerHex: MAINTAINER_ACTIVE_PUBKEY_HEX,
+    peerNickname: MAINTAINER_DISPLAY_NAME,
+    peerAvatar: null,
+  });
 
   return (
     <>

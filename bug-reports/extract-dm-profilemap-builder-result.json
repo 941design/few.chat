@@ -1,0 +1,73 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": "Pre-existing duplication, not a defect: feedback.tsx and contacts.tsx ContactDetailView each built the self + peer MemberProfile map, with the self entry the same in both. ContactChat repeated the source === 'feedback' check at four send-path gates.",
+  "fix": "Added buildDmProfileMap({ selfHex, selfProfile, peerHex, peerNickname, peerAvatar, peerUpdatedAt? }) to app/src/lib/contacts.ts and called it from both pages. The self fallback, avatar and build-time updatedAt are unchanged, the peer updatedAt defaults to build time, and entries are inserted in the same order. ContactChat sets const isFeedback once; the four gates stay separate explicit checks.",
+  "deviations_from_design": [
+    "The finding named three feedback gates; there are now four (allowMessageActions). All are kept separate.",
+    "Feedback page: self and peer updatedAt now share one build-time timestamp instead of two new Date() calls."
+  ],
+  "files_changed": [
+    "app/src/lib/contacts.ts",
+    "app/pages/feedback.tsx",
+    "app/pages/contacts.tsx",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/tests/unit/attachmentsFeatureToggle.test.ts",
+    "app/tests/unit/buildDmProfileMap.test.ts",
+    "bug-reports/extract-dm-profilemap-builder-report.md",
+    "bug-reports/extract-dm-profilemap-builder-contract.json",
+    "bug-reports/extract-dm-profilemap-builder-result.json",
+    "bug-reports/extract-dm-profilemap-builder-state.json"
+  ],
+  "files_created": [
+    "app/tests/unit/buildDmProfileMap.test.ts",
+    "bug-reports/extract-dm-profilemap-builder-report.md",
+    "bug-reports/extract-dm-profilemap-builder-contract.json",
+    "bug-reports/extract-dm-profilemap-builder-result.json",
+    "bug-reports/extract-dm-profilemap-builder-state.json"
+  ],
+  "files_modified": [
+    "app/src/lib/contacts.ts",
+    "app/pages/feedback.tsx",
+    "app/pages/contacts.tsx",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/tests/unit/attachmentsFeatureToggle.test.ts"
+  ],
+  "modules_touched": [
+    "app/src/lib",
+    "app/pages",
+    "app/src/components/contacts",
+    "app/tests/unit"
+  ],
+  "tests_added": [
+    "app/tests/unit/buildDmProfileMap.test.ts (6 tests)"
+  ],
+  "counts": {
+    "baseline": {
+      "unit_files": 250,
+      "unit_passed": 5589,
+      "unit_skipped": 1,
+      "tsc": "clean"
+    },
+    "final": {
+      "unit_files": 251,
+      "unit_passed": 5595,
+      "unit_skipped": 1,
+      "tsc": "clean",
+      "lint": "NO_LINT"
+    }
+  },
+  "mutation": "not run: pure refactor, new helper fully pinned by unit tests",
+  "e2e": {
+    "runs": [],
+    "full_gate": "not run (dev role; lead owns the gate)"
+  },
+  "open_questions": [],
+  "verification_answers": {},
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine",
+    "outcome": "merged"
+  }
+}

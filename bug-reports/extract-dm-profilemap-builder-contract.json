@@ -1,0 +1,37 @@
+{
+  "bug_name": "extract-dm-profilemap-builder",
+  "story_id": "S1",
+  "findings": [
+    "extract-dm-profilemap-builder-tidy-feedback"
+  ],
+  "scope": {
+    "may_edit": [
+      "app/src/lib/contacts.ts (new buildDmProfileMap export)",
+      "app/pages/feedback.tsx (use buildDmProfileMap)",
+      "app/pages/contacts.tsx ContactDetailView (use buildDmProfileMap)",
+      "app/src/components/contacts/ContactChat.tsx (hoist isFeedback only)",
+      "app/tests/unit/buildDmProfileMap.test.ts (new)",
+      "app/tests/unit/attachmentsFeatureToggle.test.ts (comment only)"
+    ],
+    "must_not_edit": [
+      "BACKLOG.json",
+      "product behaviour (no user-facing change)",
+      "app/pages/groups.tsx group profileMap (different semantics: no npub fallback, nickname-gated)",
+      "docs/behavior/ (pure refactor)"
+    ]
+  },
+  "behaviour": [
+    "C1: the self entry is nickname = ownProfile.nickname || truncateNpub(pubkeyToNpub(self)), avatar = ownProfile.avatar, updatedAt = build-time ISO timestamp, as on both pages before.",
+    "C2: the peer entry keeps each page's values: contacts uses contact.nickname || truncated npub, contact.avatar and contact.updatedAt ?? contact.lastSeenAt; feedback uses MAINTAINER_DISPLAY_NAME, avatar null and build time.",
+    "C3: no duplicated self-profile literal remains; both DM surfaces call the one helper.",
+    "C4: ContactChat's four feedback send-path gates (marker tags, onReact, allowImageAttachments with its paste/drop guards, allowMessageActions) stay separate, explicit checks; no FeedbackChat wrapper."
+  ],
+  "non_goals": [
+    "Folding groups.tsx's own-profile overlay into the helper.",
+    "Merging the feedback gates or introducing a FeedbackChat wrapper."
+  ],
+  "deviations_from_finding": [
+    "ContactChat now has four feedback gates, not three: allowMessageActions was added by the block-contact epic after the finding was filed. All four stay separate.",
+    "On the feedback page, self and peer updatedAt share one build-time timestamp; before, they came from two new Date() calls less than a millisecond apart."
+  ]
+}
