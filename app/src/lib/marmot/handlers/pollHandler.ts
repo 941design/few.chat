@@ -360,7 +360,9 @@ async function handleOpen(rumor: ApplicationRumor, ctx: DispatcherContext, sende
     closed: false,
   };
 
-  await deps.savePoll(poll);
+  // null: the group's poll data was purged (left) while this open was in
+  // flight; nothing was stored, so there is nothing to replay or show.
+  if ((await deps.savePoll(poll)) === null) return;
 
   try {
     // AC-9: apply what arrived before this open — queued votes first, then a

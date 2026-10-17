@@ -1,0 +1,95 @@
+{
+  "bug_name": "poll-savepoll-not-purge-marked",
+  "bug_report_file": "bug-reports/poll-savepoll-not-purge-marked-report.md",
+  "created_at": "2026-10-17T14:31:00Z",
+  "updated_at": "2026-10-17T17:50:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "low",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Do reproduction tests (real IDB via fake-indexeddb) show that before the fix savePoll(open) and allocateVoteSeq after clearPollData re-create few:polls:<g> / few:poll-seq-reservations:<g>, and after the fix leave no such key \u2014 including a write that was already queued (enqueue) when clearPollData was called?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "SPEC",
+      "question": "Is the purge-mark check performed INSIDE the same readwrite transaction as the write (as for the queues and saveVoteIfNewer), and is releasePollPurgeMark on re-join still the only way (besides clearAllPollData) to allow writes again \u2014 with a re-joined group's savePoll/allocateVoteSeq working normally?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "QUALITY",
+      "question": "Do callers behave sensibly on a purged group: allocateVoteSeq rejects (so pollCast sends nothing \u2014 fail closed), handleOpen / createPoll do not crash or surface a spurious error, and the receipt clock is shown to be not group-scoped (no change needed) with that reasoning recorded?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "QUALITY",
+      "question": "Is the change minimal (pollPersistence.ts plus only the caller adjustments strictly needed), with unit suite + tsc green, no regression in existing poll suites, and Stryker (concurrency 1) on the changed lines with survivors killed or justified?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "TEST",
+      "question": "Are behaviour docs (docs/behavior/polls.md) still accurate after the change (updated if they describe leave/purge of poll data), and does the full e2e gate pass?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "0059388",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": {
+    "unit": "5967 passed, 1 skipped (260 files)"
+  },
+  "fix": {
+    "unit": "5978 passed, 1 skipped (261 files)",
+    "tsc": "clean",
+    "mutation": "96.4% after kill (53/55; 2 equivalent)"
+  },
+  "review_rounds": [
+    {
+      "round": 0,
+      "examiner": "VQ-1..4 YES, VQ-5 docs YES (e2e pending)",
+      "reviewer": "ACCEPTED (Codex medium: allocate/send race window -> doc wording softened)"
+    }
+  ],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-17T14:31:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "FIX_READY",
+      "timestamp": "2026-10-17T15:00:00Z",
+      "trigger": "fixer_done"
+    },
+    {
+      "phase": "REVIEWING",
+      "timestamp": "2026-10-17T16:40:00Z",
+      "trigger": "review accepted; e2e gate run 1 flake"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-17T17:50:00Z",
+      "trigger": "full e2e gate green"
+    }
+  ],
+  "e2e_gate_runs": [
+    {
+      "log": "/tmp/claude-501/e2e-gate/full-pollpurge.log",
+      "result": "72 + 348 passed, 1 failed (dm-pairing-pending-confirmation:214 click timeout, unrelated area; passes 5/5 in isolation, 1-CPU VM load)",
+      "action": "re-run full gate"
+    },
+    {
+      "log": "/tmp/claude-501/e2e-gate/full-pollpurge-2.log",
+      "result": "72 passed + 349 passed, 19 skipped, 0 failed"
+    }
+  ],
+  "e2e_gate": "passed (run 2; run 1 had one unrelated load flake)"
+}

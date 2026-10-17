@@ -1,0 +1,85 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": {
+    "poll-savepoll-not-purge-marked": "savePoll for an OPEN poll was a get-then-set through enqueue and allocateVoteSeq a get-then-set of few:poll-vote-seq:<g>; neither ran in a transaction nor checked the in-memory purgedGroups mark that clearPollData sets, so a poll open / vote cast in flight for a left group re-created few:polls:<g> / few:poll-vote-seq:<g> after the purge.",
+    "receipt-clock": "Not applicable: few:poll-receipt-clock is ONE global key (RECEIPT_CLOCK_KEY), not scoped to any group. clearPollData never deletes it (only clearAllPollData does), so no left-group data can be re-created through it and it carries no group identifier. No change."
+  },
+  "fix": {
+    "savePoll_open": "Read-upsert-write in ONE pollTxn readwrite transaction inside enqueue(key); first statement checks purgedGroups.has(poll.groupId) and writes nothing. Resolves null when nothing was written; postStoreChanged only after a write. Closed path untouched. Side effect: a non-array stored value is now treated as an empty list instead of throwing.",
+    "allocateVoteSeq": "Read-max-increment-write in ONE pollTxn inside enqueue(key) under the unchanged Web Locks wrapper; throws inside the transaction on a purged group, so the transaction aborts, nothing is written and the call REJECTS (pollCast then sends nothing - fail closed; its existing failed-allocation path).",
+    "handleOpen": "Returns early when deps.savePoll resolves exactly null (nothing stored, nothing to replay, no version bump). Mocks resolving undefined keep the old flow.",
+    "createPoll_and_pollCast": "Unchanged: pollCast already propagates an allocation rejection; PollStoreContext.createPoll's optimistic setPolls for a group being left is cosmetic and was left alone (minimal change).",
+    "release": "releasePollPurgeMark (join choke point) and clearAllPollData remain the only releases."
+  },
+  "files_changed": [
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "app/tests/unit/marmot/pollPurgeMarkWrites.test.ts",
+    "docs/behavior/polls.md",
+    "bug-reports/poll-savepoll-not-purge-marked-contract.json",
+    "bug-reports/poll-savepoll-not-purge-marked-result.json"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/pollPurgeMarkWrites.test.ts",
+    "bug-reports/poll-savepoll-not-purge-marked-contract.json",
+    "bug-reports/poll-savepoll-not-purge-marked-result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "docs/behavior/polls.md"
+  ],
+  "modules_touched": [
+    "app/src/lib/marmot",
+    "app/tests/unit",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/marmot/pollPurgeMarkWrites.test.ts": 10,
+    "app/tests/unit/marmot/pollHandler.test.ts": 1
+  },
+  "tests_adapted": {
+    "app/tests/unit/marmot/pollOrdering.test.ts": "2 allocation fault-injection cases (read fails / write fails) moved from mocked idb get/set to the transaction faults (txnFaults.failGet on few:poll-vote-seq:, failCommit), because allocateVoteSeq now runs in one pollTxn; an unconsumed get mockImplementationOnce had cascaded into a third test."
+  },
+  "counts": {
+    "unit_before": "5967 passed, 1 skipped (260 files)",
+    "unit_after": "5978 passed, 1 skipped (261 files)",
+    "tsc": "clean (before and after)",
+    "lint": "NO_LINT (no eslint in project)"
+  },
+  "verification_answers": {
+    "VQ-1": "YES. pollPurgeMarkWrites.test.ts (real idb-keyval over fake-indexeddb) failed 6 of 10 before the fix (savePoll after purge, savePoll queued before the purge, update of a stored open poll, allocateVoteSeq after purge / queued before purge / re-join cycle) and passes after; row absence asserted on few:polls:<g> and few:poll-vote-seq:<g>. NB the report's key name few:poll-seq-reservations:<g> is wrong; the real key is few:poll-vote-seq:<g> (SEQ_RESERVATIONS_PREFIX).",
+    "VQ-2": "YES. The purgedGroups check is the first statement of the pollTxn body (same transaction as the put) for both writers, in enqueue like the queues/saveVoteIfNewer. Only releasePollPurgeMark and clearAllPollData delete from the set (unchanged); tests show savePoll and allocateVoteSeq work again after releasePollPurgeMark and that the purge dropped the old reservation (seq restarts at 1).",
+    "VQ-3": "YES. allocateVoteSeq rejects with /purged/ so castPollVote/pollCast sends nothing (existing fail-closed path); handleOpen returns early on null with no replay/version bump/error (new unit test); createPoll just gets null back from savePoll (no crash; optimistic UI state for a group being left left as is). Receipt clock shown to be global and not group-scoped (root_cause.receipt-clock).",
+    "VQ-4": "YES. Production diff: pollPersistence.ts (savePoll open branch, allocateVoteSeq body, one doc line) and a 3-line early return in pollHandler.ts. make test-unit green, tsc clean, existing poll suites green (two fault-injection cases adapted, see tests_adapted). Stryker concurrency 1: 94.55% on the changed lines, survivors justified below.",
+    "VQ-5": "docs: polls.md 'You leave a group' was accurate for in-flight messages and now also states that a poll opened or vote cast from this device at that moment is not stored/sent (minimal edit). Full e2e gate: NOT run by the fixer (lead's responsibility)."
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1 (project install), concurrency 1, scratch config + plain .mjs vitest config in the session scratchpad; vitest.related=false; included pollPurgeMarkWrites/pollPersistence/pollFollowups/pollOrdering/pollIntegrity",
+    "mutate": "pollPersistence.ts 501-524 (savePoll open branch), 837-864 (allocateVoteSeq)",
+    "before": "94.55% (52 killed, 3 survived of 55)",
+    "after": "1 survivor killed (error message: test now asserts /purged/); 2 equivalent remain => 53/55 killed, 96.4%",
+    "survivors_justified": [
+      "pollPersistence.ts:508 `let wrote = false` -> true: the variable is unconditionally reassigned from pollTxn's result before any read (initial value dead; equivalent)",
+      "pollPersistence.ts:850 ArrayDeclaration on the non-array fallback: the injected string fails isReservationShaped and is filtered out (equivalent, same as the prior run's 879)"
+    ]
+  },
+  "e2e": "not run (fixer brief); lead runs the gate (make test-e2e-all). Touched code is poll storage/handler only.",
+  "open_questions": [
+    "Cross-tab: the purge mark is per page; another tab's in-flight open/cast can still write (non-goal; multi-tab-mls-cache-coherence).",
+    "PollStoreContext.createPoll still sets optimistic state when savePoll returns null for a left group (cosmetic, not changed)."
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The report named the reservation key few:poll-seq-reservations:<g> but the real key is few:poll-vote-seq:<g>; my first repro asserted absence of a non-existent key (vacuously true post-fix) and only the reject assertion caught it, so a wrong key in a bug report can silently weaken a 'row must not exist' test. Also moving allocateVoteSeq into a transaction invalidated existing get/set-mock fault injections in pollOrdering.test.ts (and an unconsumed mockImplementationOnce cascaded into a third test).",
+    "scope": "project_specific",
+    "outcome": "merged"
+  },
+  "outcome": "merged"
+}

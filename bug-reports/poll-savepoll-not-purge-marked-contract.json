@@ -1,0 +1,31 @@
+{
+  "bug": "poll-savepoll-not-purge-marked",
+  "scope": "Poll writes that ignore the leave purge mark: savePoll for an OPEN poll and allocateVoteSeq must check purgedGroups inside their own readwrite transaction (same idiom as the pending queues and saveVoteIfNewer).",
+  "files_to_modify": [
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/tests/unit/marmot/pollHandler.test.ts",
+    "app/tests/unit/marmot/pollOrdering.test.ts",
+    "docs/behavior/polls.md"
+  ],
+  "files_to_create": [
+    "app/tests/unit/marmot/pollPurgeMarkWrites.test.ts"
+  ],
+  "behavior": {
+    "savePoll_open": "On a purged group writes nothing, resolves null, posts no store-changed notice. Otherwise unchanged (upsert by id, returns the poll).",
+    "allocateVoteSeq": "On a purged group rejects (caller must not send), creates no reservation row. Otherwise unchanged (max(last+1, floor), durable, Web Locks wrapper kept).",
+    "handleOpen": "Returns early when savePoll resolves null.",
+    "release": "releasePollPurgeMark on re-join (and clearAllPollData) remain the only releases."
+  },
+  "constraints": [
+    "Mark check and write in the same readwrite transaction, inside enqueue(key, ...)",
+    "Closed-poll savePoll path, queues, saveVoteIfNewer and clearPollData untouched",
+    "Receipt clock (few:poll-receipt-clock) is a single global key, never deleted by a group purge: no change"
+  ],
+  "non_goals": [
+    "Cross-tab coverage of the purge mark (finding multi-tab-mls-cache-coherence)",
+    "PollStoreContext.createPoll optimistic-state adjustment for a purged group (cosmetic, group is being left)",
+    "Persisting the purge mark across reloads"
+  ],
+  "notes": "pollOrdering.test.ts: the two allocation fault-injection cases moved from mocked get/set to the transaction faults, since allocateVoteSeq now runs in one pollTxn. The report names the reservation key few:poll-seq-reservations:<g>; the real key is few:poll-vote-seq:<g>."
+}

@@ -1259,11 +1259,19 @@ describe('own vote seq is allocated durably and atomically before the send', () 
     expect(send.mock.calls.map(([p]) => p.seq)).toEqual([1]);
   });
 
-  it.each([['read', 'get'], ['write', 'set']] as const)('an allocation whose %s fails rejects and records nothing', async (_l, op) => {
-    const idb = await import('idb-keyval');
-    const fn = idb[op] as unknown as ReturnType<typeof vi.fn>;
-    fn.mockImplementationOnce(async () => { throw new Error('idb'); });
-    await expect(allocateVoteSeq(GROUP, POLL_ID, USER, 1)).rejects.toThrow('idb');
+  // The allocation is one readwrite transaction (read-max-increment-write), so a
+  // failed read / a failed commit are injected through the transaction faults.
+  it.each([
+    ['read', () => { txnFaults.failGet = (k) => k.startsWith('few:poll-vote-seq:'); }],
+    ['write', () => { txnFaults.failCommit = () => true; }],
+  ] as const)('an allocation whose %s fails rejects and records nothing', async (_l, inject) => {
+    inject();
+    try {
+      await expect(allocateVoteSeq(GROUP, POLL_ID, USER, 1)).rejects.toThrow();
+    } finally {
+      txnFaults.failGet = null;
+      txnFaults.failCommit = null;
+    }
     expect(await loadVoteSeqReservation(GROUP, POLL_ID, USER)).toBe(0);
     expect(await allocateVoteSeq(GROUP, POLL_ID, USER, 1)).toBe(1);
   });

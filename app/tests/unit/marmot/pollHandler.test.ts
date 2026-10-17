@@ -253,6 +253,20 @@ describe('pollHandler / POLL_OPEN', () => {
     expect(deps.setPollVersion).toHaveBeenCalledOnce();
   });
 
+  it('purged group (savePoll resolves null): nothing is replayed, no version bump, no error', async () => {
+    const deps = makeDeps();
+    deps.savePoll = vi.fn(async () => null) as never;
+    const handler = createPollOpenHandler(deps);
+    const rumor = makePollOpenRumor();
+
+    await expect(handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey))).resolves.not.toThrow();
+
+    expect(deps.savePoll).toHaveBeenCalledOnce();
+    expect(deps.loadPendingVotes).not.toHaveBeenCalled();
+    expect(deps.loadPendingCloses).not.toHaveBeenCalled();
+    expect(deps.setPollVersion).not.toHaveBeenCalled();
+  });
+
   it('malformed payload: does not throw, no deps called', async () => {
     const deps = makeDeps();
     const handler = createPollOpenHandler(deps);

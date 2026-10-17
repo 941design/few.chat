@@ -501,17 +501,26 @@ function pollTxn<T>(body: (txn: PollTxn, done: (result: T) => void) => void, ini
 export async function savePoll(poll: Poll): Promise<Poll | null> {
   const key = pollsKey(poll.groupId);
   if (!poll.closed) {
+    // The open upsert reads and writes in ONE readwrite transaction that first
+    // checks the purge mark (bug: poll-savepoll-not-purge-marked): a handler or
+    // createPoll still in flight for a left group writes nothing and resolves
+    // null, so the purged poll list is not re-created.
+    let wrote = false;
     await enqueue(key, async () => {
-      const existing = (await get<Poll[]>(key)) ?? [];
-      const idx = existing.findIndex((p) => p.id === poll.id);
-      if (idx >= 0) {
-        existing[idx] = poll;
-      } else {
-        existing.push(poll);
-      }
-      await set(key, existing);
-      postStoreChanged('polls', poll.groupId);
+      wrote = await pollTxn<boolean>((txn, done) => {
+        if (purgedGroups.has(poll.groupId)) return;
+        txn.read(key, (value) => {
+          const list = Array.isArray(value) ? (value as Poll[]) : [];
+          const idx = list.findIndex((p) => p.id === poll.id);
+          if (idx >= 0) list[idx] = poll;
+          else list.push(poll);
+          txn.put(key, list);
+          done(true);
+        });
+      }, false);
     });
+    if (!wrote) return null;
+    postStoreChanged('polls', poll.groupId);
     return poll;
   }
   // The closed write (bug: poll-followups remediation 1): the poll is re-read
@@ -822,23 +831,32 @@ function webLocks(): LockManagerLike | undefined {
  * lock shared by every tab of the origin — so two casts, in one tab or two,
  * never get the same seq, and a vote whose save failed after the send (or
  * whose send outcome is unknown) never has its seq reused. Rejects when the
- * allocation cannot be read or written; the caller must then not send.
+ * allocation cannot be read or written, or when the group's poll data was
+ * purged (left); the caller must then not send.
  */
 export async function allocateVoteSeq(groupId: string, pollId: string, voterPubkey: string, floor: number): Promise<number> {
   const key = `${SEQ_RESERVATIONS_PREFIX}${groupId}`;
   const me = voterPubkey.toLowerCase();
   let assigned = 0;
+  // Read-max-increment-write in ONE readwrite transaction that first checks
+  // the purge mark (bug: poll-savepoll-not-purge-marked): a cast in flight for
+  // a left group rejects — the caller must not send — and no reservation row
+  // is re-created.
   const step = () =>
     enqueue(key, async () => {
-      const stored = await get<unknown[]>(key);
-      const entries = (Array.isArray(stored) ? stored : []).filter(isReservationShaped);
-      const idx = entries.findIndex((e) => e.pollId === pollId && e.voterPubkey === me);
-      const seq = Math.max((idx >= 0 ? entries[idx].seq : 0) + 1, floor);
-      const entry = { pollId, voterPubkey: me, seq };
-      if (idx >= 0) entries[idx] = entry;
-      else entries.push(entry);
-      await set(key, entries);
-      assigned = seq;
+      assigned = await pollTxn<number>((txn, done) => {
+        if (purgedGroups.has(groupId)) throw new Error(`poll data of group ${groupId} was purged; no vote seq allocated`);
+        txn.read(key, (stored) => {
+          const entries = (Array.isArray(stored) ? stored : []).filter(isReservationShaped);
+          const idx = entries.findIndex((e) => e.pollId === pollId && e.voterPubkey === me);
+          const seq = Math.max((idx >= 0 ? entries[idx].seq : 0) + 1, floor);
+          const entry = { pollId, voterPubkey: me, seq };
+          if (idx >= 0) entries[idx] = entry;
+          else entries.push(entry);
+          txn.put(key, entries);
+          done(seq);
+        });
+      }, 0);
     });
   const locks = webLocks();
   await (locks ? locks.request(key, step) : step());

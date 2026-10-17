@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-16T16:22:39Z",
+  "updated_at": "2026-10-17T17:06:29Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -445,19 +445,6 @@
       "behavior": "clearAllReactions deletes reaction keys without posting; cache-first loadReactions in another tab keeps serving deleted badges.",
       "approach": "Post an account-changed cross-tab event on switch/wipe; receivers reload or show the takeover screen per the multi-tab design.",
       "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
-    },
-    {
-      "slug": "poll-savepoll-not-purge-marked",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/pollPersistence.ts"
-      },
-      "text": "savePoll, allocateVoteSeq and the receipt clock are not purge-marked, so a poll open still in flight for a left group can recreate few:polls:<group> after the leave",
-      "created_at": "2026-10-16",
-      "motivation": "Open question from bug run journal-and-purge-followups (2026-10-16).",
-      "behavior": "Only the pending queues and saveVoteIfNewer check the in-memory purge mark; savePoll writes unconditionally.",
-      "approach": "Apply the same purge-mark check inside savePoll's pollTxn (and allocateVoteSeq); keep re-join release at joinAndPersist.",
-      "success_signal": "Unit: poll open handled after clearPollData leaves no few:polls:<group> key"
     }
   ],
   "archive": [
