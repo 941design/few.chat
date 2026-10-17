@@ -1502,8 +1502,9 @@ export default function SettingsPage() {
                           size="sm"
                           colorScheme="danger"
                           isDisabled={wipeConfirmInput !== copy.advanced.dangerZone.wipeConfirmWord}
-                          onClick={() => {
-                            resetAllData();
+                          onClick={async () => {
+                            // Await the wipe: reloading first can abort the IndexedDB clears.
+                            await resetAllData();
                             window.location.reload();
                           }}
                           data-testid="danger-zone-confirm-btn"

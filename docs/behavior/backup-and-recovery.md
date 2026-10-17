@@ -71,8 +71,19 @@ not of the backup's existence.
 **When it is saved:** automatically, when your profile or your groups change, and when you
 background the app — but **debounced**, so it publishes at most once every few minutes. Two
 honest consequences follow: a change made and then immediately followed by closing the app,
-inside that window, may **not** be captured; and a change to settings alone does not by itself
-trigger a save — it rides along with the next one that does.
+inside that window, may **not** be captured at that moment; and a change to settings alone does
+not by itself trigger a save — it rides along with the next one that does.
+
+**A change that has not been saved yet survives a reload.** The need for a backup is recorded on
+the device (a bare flag — no profile or group data) the moment something changes, including
+changes made while the app is still starting up and has not yet loaded your identity. The flag
+is removed only after a backup was really published, not when a save fails or is paused for a
+pending restore decision, and it is not removed if something changed again while that save was
+running — including a change made in another tab of the same browser, since the flag is shared. When the app next starts it picks the flag up and saves; so closing or reloading the
+app before the save ran delays the backup to the next start instead of losing the change. If
+the browser refuses to store the flag, the change is still remembered for the current session
+but a reload in that window loses it, as before. Only the *timing* of the already-described,
+self-encrypted backup is affected; nothing new is published.
 
 **When saving fails:** if no relay accepts the backup (or the app is not yet connected), it is
 retried in the background — after about half a minute, then two minutes, then every ten minutes,

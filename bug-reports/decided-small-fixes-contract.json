@@ -1,0 +1,54 @@
+{
+  "bug": "decided-small-fixes",
+  "scope": "Four independently small defects whose product question was decided 2026-10-17: (1) blank/whitespace leaver name in the 'left the group' row, (2) unsent backup dirty mark lost on early reload, (3) local-data wipe sends no cross-tab account-changed notice, (4) share contact card shows the generic retry error on a signer/identity pubkey mismatch.",
+  "files_to_modify": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/tests/e2e/groups-leave-intent.spec.ts",
+    "app/src/types/index.ts",
+    "app/src/context/BackupContext.tsx",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/lib/storage.ts",
+    "app/pages/_app.tsx",
+    "app/src/lib/contactCard.ts",
+    "app/src/lib/shareCard.ts",
+    "app/src/lib/i18n.ts",
+    "app/src/components/contacts/ShareContactCard.tsx",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/groups.md",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "app/pages/settings.tsx",
+    "app/src/context/NostrIdentityContext.tsx"
+  ],
+  "files_to_create": [
+    "app/src/lib/backup/dirtyMark.ts",
+    "app/tests/unit/marmot/resolveLeaveIntentDisplay.test.ts",
+    "app/tests/unit/backup/backupDirtyMark.test.ts",
+    "app/tests/unit/crossTab-accountChanged.test.ts",
+    "app/tests/unit/cards/shareCardSignerMismatch.test.ts"
+  ],
+  "behavior": {
+    "leave_row": "Display chain: embedded name -> cached profile nickname -> truncated npub; empty/whitespace at any link counts as absent. Value returned untrimmed when non-blank. Sibling announcements (canceller, invite lifecycle, rename, admitted, call) keep their existing '??' chain.",
+    "backup_dirty": "Stored value is '<immediate|debounced>:<fresh token>' written on every mark (immediate sticky). publishScheduledBackup reads the token when it begins and, on publishBackup ok, removes the key only if it still equals that token (compare-and-clear; shared across tabs). Failure, connect failure and restore-pending pause keep it. Replay on scheduler activation unchanged; resetAllData removes the key unconditionally.",
+    "account_changed": "resetAllData is async: removes localStorage keys, AWAITS the IndexedDB clears (allSettled; a rejecting clear is logged), THEN posts {type:'account-changed'}; the Danger Zone handler awaits it before window.location.reload(). NostrIdentityContext.replaceIdentity posts the notice via postAccountChangedIfSwitched when the pubkey really changed (case-insensitive), after saveStoredIdentity. _app.tsx installs the reload receiver; a burst reloads once; the posting tab never receives its own message.",
+    "share_card_mismatch": "contactCard.ts raises SignerPubkeyMismatchError (message unchanged) from both encodeCard and encodeCardV2 guards; shareCard.resolveShareCardError maps it (instanceof, never message text) to profile.shareCardSignerMismatchError (exact en/de strings from the report); every other failure keeps profile.shareCardError."
+  },
+  "constraints": [
+    "No new publish of profile data; backup timing only (privacy invariant untouched)",
+    "localStorage flag carries only the word immediate|debounced; the cross-tab message carries no data",
+    "Every localStorage access in the new dirty-mark module is try/catch wrapped",
+    "All new UI strings in both en and de in i18n.ts, read via useCopy",
+    "No jsdom/@testing-library: components tested through exported pure functions"
+  ],
+  "non_goals": [
+    "Connect-time rejection of a mismatched NIP-46/NIP-07 signer (owner question)",
+    "Multi-tab coherence beyond the account-changed notice (single active tab / invalidation design)",
+    "Any new owner-level UX",
+    "Applying the blank-name rule to the sibling announcements",
+    "NIP-46 connect with a different pubkey (owner question); unload re-mark after a wipe; old-key empty-snapshot publish during unload (backlog finding)"
+  ],
+  "notes": "The report names app/pages/settings.tsx handleOpenShareCard; the share dialog actually lives in app/src/components/contacts/ShareContactCard.tsx (extracted earlier), which is what was changed. The report's 'storage wipe path' is storage.resetAllData (used by the Danger Zone wipe). The e2e AC-MEMBERS-2 wait was placed in the 'USER_A sees USER_B in the member list before the leave' step (member-item card must contain 'Bob', plain retrying toContainText), i.e. before Bob leaves, because the announcement test itself already retries and the profile must propagate beforehand.",
+  "remediation_round_1": "Reviewer/Codex high: account-changed posted before fire-and-forget IDB clears, sender reload could abort them; VQ-3 gap: replaceIdentity (mnemonic restore) posted nothing; Codex medium: per-tab markSeq vs shared key; stale 'CURRENTLY UNUSED' comment."
+}

@@ -9,7 +9,7 @@
  * cannot bounce back as a new post.
  */
 
-import type { StoreChangedMessage } from '@/src/lib/crossTab';
+import { subscribeAccountChanged, type StoreChangedMessage } from '@/src/lib/crossTab';
 
 export type CrossTabReceiverActions = {
   bumpBlockedPeers: () => void;
@@ -60,4 +60,22 @@ export function applyStoreChanged(message: StoreChangedMessage, actions: CrossTa
  */
 export function isLatestReload(seq: number, latest: number): boolean {
   return seq === latest;
+}
+
+/**
+ * Reloads this tab when ANOTHER tab wipes the local account data: everything
+ * this tab holds in memory (reaction cache, group list, chat, identity)
+ * belongs to an account that no longer exists, and the reload comes up on
+ * whatever is stored now. The posting tab never receives its own notice
+ * (BroadcastChannel does not echo to the posting object), so it does not
+ * react to itself. A burst of notices reloads once. Returns the uninstall
+ * function.
+ */
+export function installAccountChangedReload(reload: () => void): () => void {
+  let reloading = false;
+  return subscribeAccountChanged(() => {
+    if (reloading) return;
+    reloading = true;
+    reload();
+  });
 }

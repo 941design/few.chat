@@ -430,6 +430,7 @@ export type Copy = {
     copyCardLink: string;
     copiedCardLink: string;
     shareCardError: string;
+    shareCardSignerMismatchError: string;
     sendDm: string;
     archiveAction: string;
     unarchiveAction: string;
@@ -1040,6 +1041,8 @@ const copy: Record<LanguageCode, Copy> = {
       copyCardLink: 'Copy card link',
       copiedCardLink: 'Copied!',
       shareCardError: 'Failed to build the share card. Please try again.',
+      shareCardSignerMismatchError:
+        'Your signer holds a different identity than this profile. Reconnect a signer for this identity or switch back to the local key.',
       sendDm: 'Send message',
       archiveAction: 'Block contact',
       unarchiveAction: 'Unblock contact',
@@ -1620,6 +1623,8 @@ const copy: Record<LanguageCode, Copy> = {
       copyCardLink: 'Kartenlink kopieren',
       copiedCardLink: 'Kopiert!',
       shareCardError: 'Kartenerstellung fehlgeschlagen. Bitte erneut versuchen.',
+      shareCardSignerMismatchError:
+        'Dein Signierer gehört zu einer anderen Identität als dieses Profil. Verbinde einen Signierer für diese Identität oder wechsle zurück zum lokalen Schlüssel.',
       sendDm: 'Nachricht senden',
       archiveAction: 'Kontakt blockieren',
       unarchiveAction: 'Kontakt entsperren',

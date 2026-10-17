@@ -24,6 +24,11 @@
  *   - On the server / in Node (no `window` or no `BroadcastChannel`) every
  *     call is a no-op.
  *
+ * A second message type, `account-changed`, announces that this tab wiped
+ * the local account data (resetAllData, the account-switch path). It carries
+ * no data at all — receivers reload and come up on whatever account is now
+ * stored (see crossTabReceiver.ts#installAccountChangedReload).
+ *
  * Tests inject a fake channel via {@link setCrossTabChannelFactory}.
  */
 
@@ -44,6 +49,9 @@ export type StoreChangedMessage = {
   id?: string;
 };
 
+/** This tab wiped the local account data; every other tab must drop its cached state. */
+export type AccountChangedMessage = { type: 'account-changed' };
+
 /** The subset of `BroadcastChannel` this module uses (fakeable in tests). */
 export type CrossTabChannel = {
   postMessage(message: unknown): void;
@@ -62,17 +70,26 @@ const defaultFactory: CrossTabChannelFactory = (name) => {
 let factory: CrossTabChannelFactory = defaultFactory;
 let channel: CrossTabChannel | null = null;
 const listeners = new Set<(message: StoreChangedMessage) => void>();
+const accountListeners = new Set<(message: AccountChangedMessage) => void>();
 
-function onChannelMessage(event: { data: unknown }): void {
-  const message = parseStoreChanged(event.data);
-  if (!message) return;
-  for (const listener of Array.from(listeners)) {
+function notify<M>(set: Set<(message: M) => void>, message: M): void {
+  for (const listener of Array.from(set)) {
     try {
       listener(message);
     } catch (err) {
       console.warn('[crossTab] listener failed', err);
     }
   }
+}
+
+function onChannelMessage(event: { data: unknown }): void {
+  const message = parseStoreChanged(event.data);
+  if (message) {
+    notify(listeners, message);
+    return;
+  }
+  const account = parseAccountChanged(event.data);
+  if (account) notify(accountListeners, account);
 }
 
 function openChannel(): CrossTabChannel | null {
@@ -112,6 +129,54 @@ export function parseStoreChanged(data: unknown): StoreChangedMessage | null {
   return message;
 }
 
+/** Validates an incoming `account-changed` message (it carries nothing else). */
+export function parseAccountChanged(data: unknown): AccountChangedMessage | null {
+  if (!data || typeof data !== 'object') return null;
+  if ((data as Record<string, unknown>).type !== 'account-changed') return null;
+  return { type: 'account-changed' };
+}
+
+/**
+ * Tells the other open tabs that this tab wiped the local account data, so
+ * their cached state belongs to an account that is gone. Call after the local
+ * data was removed. Never throws.
+ */
+export function postAccountChanged(): void {
+  try {
+    const target = openChannel();
+    if (!target) return;
+    const message: AccountChangedMessage = { type: 'account-changed' };
+    target.postMessage(message);
+  } catch (err) {
+    console.warn('[crossTab] post failed', err);
+  }
+}
+
+/**
+ * Announces an account change when the identity was swapped in place (mnemonic
+ * restore) and the pubkey really differs. Call after the new identity was
+ * persisted so a reloading peer comes up as the new account. Returns whether
+ * a notice was posted.
+ */
+export function postAccountChangedIfSwitched(previousPubkey: string | null | undefined, nextPubkey: string): boolean {
+  if (previousPubkey && previousPubkey.toLowerCase() === nextPubkey.toLowerCase()) return false;
+  postAccountChanged();
+  return true;
+}
+
+/**
+ * Listens for another tab's account change. Returns the unsubscribe function;
+ * the channel is closed when the last listener (of either kind) unsubscribes.
+ */
+export function subscribeAccountChanged(listener: (message: AccountChangedMessage) => void): () => void {
+  accountListeners.add(listener);
+  openChannel();
+  return () => {
+    accountListeners.delete(listener);
+    if (listeners.size === 0 && accountListeners.size === 0) closeChannel();
+  };
+}
+
 /**
  * Tells the other open tabs that `store` changed. Call only after the write
  * succeeded. Never throws.
@@ -138,7 +203,7 @@ export function subscribeStoreChanged(listener: (message: StoreChangedMessage) =
   openChannel();
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) closeChannel();
+    if (listeners.size === 0 && accountListeners.size === 0) closeChannel();
   };
 }
 
@@ -159,5 +224,6 @@ export function subscribeStoreChangedFor(store: CrossTabStore, id: string, onCha
 export function setCrossTabChannelFactory(next?: CrossTabChannelFactory): void {
   closeChannel();
   listeners.clear();
+  accountListeners.clear();
   factory = next ?? defaultFactory;
 }

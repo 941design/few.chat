@@ -27,7 +27,7 @@ import {
   shouldShowEditedMarker,
 } from '@/src/lib/messageEdits/messageActionUi';
 import type { StructuredContent } from '@/src/lib/marmot/parseStructured';
-import { parseStructured, resolveCancellerDisplay } from '@/src/lib/marmot/parseStructured';
+import { parseStructured, resolveCancellerDisplay, resolveLeaveIntentDisplay } from '@/src/lib/marmot/parseStructured';
 import type { MemberProfile } from '@/src/types';
 import type { ChatMediaAttachment } from '@/src/lib/media/imageMessage';
 import PollChatAnnouncement from '@/src/components/groups/PollChatAnnouncement';
@@ -556,9 +556,11 @@ export default function ChatBox({
       // display name), so the row reads "<name> left the group" even when we
       // never received the leaver's MemberProfile. Fall back to the cached
       // profile, then to a truncated npub only as a last resort.
-      const memberDisplay = structured.name
-        ?? profileMap[structured.pubkey]?.nickname
-        ?? truncateNpub(pubkeyToNpub(structured.pubkey));
+      const memberDisplay = resolveLeaveIntentDisplay(
+        structured,
+        profileMap,
+        (pk) => truncateNpub(pubkeyToNpub(pk)),
+      );
       return <LeaveChatAnnouncement memberDisplay={memberDisplay} />;
     }
     if (structured?.type === 'group_renamed' && allowPollMessages) {

@@ -56,6 +56,10 @@ export const STORAGE_KEYS = {
   // Pubkey of a recovered identity whose relay backup the user has not yet
   // restored or skipped; scheduled backups must not overwrite it meanwhile.
   backupRestorePending: 'lp_backupRestorePending_v1',
+  // Unsent backup dirty mark ('immediate' | 'debounced'); survives a reload so a
+  // change marked before the scheduler existed (or before a publish succeeded)
+  // is still backed up. Carries no profile or identity data.
+  backupDirty: 'few-backup-dirty',
 } as const;
 
 // ============================

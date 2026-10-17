@@ -183,7 +183,13 @@ profile (the name) is still accepted, so the member shows by name without a pict
 group you share with them, not just one.
 
 **Wiping the account.** Only proceeds after an explicit typed confirmation; it clears the
-identity and profile from the device.
+identity and profile from the device. Any other tab of the app open on the same browser is
+told and reloads, so none keeps showing — or acting on — the wiped account's cached data
+(reactions, groups, chats); each comes up on whatever is stored now. The wipe finishes erasing the device's stored data
+before the other tabs are told, so none can come back up on the old account's data; likewise,
+recovering a different identity from its seed phrase in one tab reloads the other tabs. The notice is a bare
+"the account changed" signal on the device: it carries no identity, profile or other data, and
+nothing is published.
 
 ---
 

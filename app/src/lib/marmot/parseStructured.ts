@@ -13,6 +13,27 @@ export function resolveCancellerDisplay(
   return profileMap[senderPubkey]?.nickname ?? truncate(senderPubkey);
 }
 
+/** A value that is present and not blank (empty / whitespace-only counts as absent). */
+function nonBlank(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * Resolve the display name of the member in a `leave_intent` announcement.
+ * Order: the name the leaver embedded -> cached profile nickname -> truncated
+ * npub. An empty / whitespace-only value at any link counts as absent, so the
+ * row can never read " left the group".
+ */
+export function resolveLeaveIntentDisplay(
+  structured: { pubkey: string; name?: string },
+  profileMap: Record<string, { nickname?: string }>,
+  truncate: (pubkey: string) => string,
+): string {
+  return nonBlank(structured.name)
+    ?? nonBlank(profileMap[structured.pubkey]?.nickname)
+    ?? truncate(structured.pubkey);
+}
+
 export type StructuredContent =
   | { type: 'poll_open'; pollId: string; title: string; creatorPubkey: string }
   | { type: 'poll_close'; pollId: string; title: string; results: PollResult[]; totalVoters: number }

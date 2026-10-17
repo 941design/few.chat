@@ -599,6 +599,11 @@ reappears to the admin.
 **Identity comparisons** throughout (who is an admin, who may be cancelled, who is
 blocked from leaving) are case-insensitive, so letter-casing never changes the outcome.
 
+**A "left the group" notice for a member whose name is unknown or blank.** The notice names the
+leaver by the name they included in their departure announcement, else by the name you have
+for them, else by a shortened form of their identity key — an empty or whitespace-only name
+counts as no name at all, so the notice never reads " left the group" with the name missing.
+
 **A system announcement naming a member by a malformed identity.** A "left", "invitation
 cancelled", "invited/joined/declined" or "admitted" notice whose named member is not a
 well-formed identity is not treated as an announcement at all — it shows as an ordinary

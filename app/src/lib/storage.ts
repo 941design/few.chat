@@ -6,6 +6,7 @@ import type {
 import { STORAGE_KEYS } from '@/src/types';
 import { DEFAULT_THEME_NAME, normalizeThemeName } from '@/src/lib/theme';
 import { AVATAR_BROWSER_CONFIG, capNickname } from '@/src/config/profile';
+import { postAccountChanged } from '@/src/lib/crossTab';
 
 // ============================
 // localStorage availability check
@@ -178,14 +179,14 @@ export function readOrCreateKeyPackageSlot(mintSlot: () => string): string {
 // Reset all app data
 // ============================
 //
-// CURRENTLY UNUSED. The "Reset All Data" / "Clear all data" action was removed
-// from the frontend (the Settings page) because an accidental trigger would
-// irreversibly wipe the user's identity and all local state. The logic below is
-// intentionally retained — it is still correct and unit-tested — so the
-// capability can be re-exposed behind stronger safeguards in the future. Do not
-// wire it back into the UI without a deliberate, hard-to-misfire confirmation flow.
+// Used by the Settings "Danger Zone" wipe (confirmed by typing the confirm
+// word) and is the account-switch wipe path. It is async: the caller must await
+// it before reloading, otherwise the reload can abort the IndexedDB clears.
 
-export function resetAllData(): void {
+/** Test seam: the IndexedDB clear step. */
+export type ResetAllDataDeps = { clearIdb?: () => Promise<void> };
+
+export async function resetAllData(deps: ResetAllDataDeps = {}): Promise<void> {
   if (!isStorageAvailable()) return;
   Object.values(STORAGE_KEYS).forEach((key) => {
     try {
@@ -195,13 +196,23 @@ export function resetAllData(): void {
     }
   });
 
-  // Also clear IndexedDB account-scoped data. Fire-and-forget — the caller
-  // typically reloads the page right after this returns, but each clear must
-  // run regardless of whether the previous one rejects so leftover data from
-  // the prior identity does not survive on disk.
-  if (typeof window !== 'undefined') {
-    void clearAccountScopedIdbData();
+  // Clear IndexedDB account-scoped data and WAIT for it: each clear runs
+  // regardless of whether another rejects (allSettled), so leftover data from
+  // the prior identity does not survive on disk, and the notice below is only
+  // sent once the data is really gone. A peer tab reloading on the notice
+  // therefore cannot rehydrate the wiped account from IndexedDB.
+  const clearIdb = deps.clearIdb ?? (typeof window !== 'undefined' ? clearAccountScopedIdbData : undefined);
+  if (clearIdb) {
+    try {
+      await clearIdb();
+    } catch (err) {
+      console.warn('[storage] resetAllData IDB clear failed:', err);
+    }
   }
+
+  // Tell the other open tabs: their cached account state (reactions, groups,
+  // chat) is stale and they must reload. Posted even if a clear failed.
+  postAccountChanged();
 }
 
 async function clearAccountScopedIdbData(): Promise<void> {

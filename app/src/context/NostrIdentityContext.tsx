@@ -30,6 +30,7 @@ import {
   type StoredNostrIdentity,
 } from '@/src/lib/nostrKeys';
 import { deriveIsFreshIdentity } from '@/src/lib/freshIdentity';
+import { postAccountChangedIfSwitched } from '@/src/lib/crossTab';
 
 export type SignerMode = 'local' | 'nip46' | 'nip07';
 
@@ -406,7 +407,11 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
   }
 
   const replaceIdentity = useCallback(async (newIdentity: StoredNostrIdentity) => {
+    const previousPubkey = loadStoredIdentity()?.pubkeyHex;
     saveStoredIdentity(newIdentity);
+    // Other tabs still run as the previous identity: tell them to reload (only
+    // when the pubkey really changed), now that the new one is persisted.
+    postAccountChangedIfSwitched(previousPubkey, newIdentity.pubkeyHex);
     // Rebind the global NDK signer immediately so any in-flight or follow-up
     // relay traffic uses the new private key, not the previous identity's.
     if (typeof window !== 'undefined') {

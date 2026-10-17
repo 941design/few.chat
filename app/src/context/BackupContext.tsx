@@ -19,6 +19,7 @@ import {
   publishBackup,
   settleRestoreGuard,
 } from '@/src/lib/backup/relayBackup';
+import { clearDirtyMarkIfUnchanged, readDirtyMark, readDirtyToken, writeDirtyMark } from '@/src/lib/backup/dirtyMark';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 
 type BackupContextValue = {
@@ -40,6 +41,10 @@ export async function publishScheduledBackup(
   privateKeyHex: string,
   pubkeyHex: string,
 ): Promise<boolean> {
+  // A change marked after this point (by this tab or another: the key is
+  // shared) is not guaranteed to be in the snapshot this attempt publishes, so
+  // only the mark that existed now may be cleared by a success.
+  const dirtyTokenAtStart = readDirtyToken();
   if (isRestorePending(pubkeyHex)) {
     const lookup = await lookupBackup(privateKeyHex, pubkeyHex);
     if (lookup.status === 'unreachable') return false;
@@ -60,6 +65,10 @@ export async function publishScheduledBackup(
   }
   const result = await publishBackup(signer, pubkeyHex, ndk);
   if (!result.ok) console.warn('[Backup] publish failed:', result.error);
+  // The persisted mark is cleared only by a publish that really happened (not
+  // by a failure, nor by the restore-pending pause above) and only if nothing
+  // was marked (re-tokened) since the attempt began.
+  if (result.ok) clearDirtyMarkIfUnchanged(dirtyTokenAtStart);
   return result.ok;
 }
 
@@ -67,10 +76,13 @@ let activeScheduler: BackupScheduler | null = null;
 let pendingDirty: { immediate: boolean } | null = null;
 
 /**
- * Mark backup state dirty. Forwards to the active scheduler, or remembers the
- * mark until one starts (identity not yet hydrated, or being switched).
+ * Mark backup state dirty. The mark is persisted (localStorage) until a
+ * publish succeeds, so an early reload cannot lose it; it is forwarded to the
+ * active scheduler, or remembered until one starts (identity not yet
+ * hydrated, or being switched).
  */
 export function markBackupDirty(immediate?: boolean): void {
+  writeDirtyMark(!!immediate);
   if (activeScheduler) {
     activeScheduler.markDirty(immediate);
   } else {
@@ -78,10 +90,17 @@ export function markBackupDirty(immediate?: boolean): void {
   }
 }
 
-/** Install a scheduler as the active one, replaying any mark made before it existed. */
+/**
+ * Install a scheduler as the active one, replaying any mark made before it
+ * existed — in this page load, or persisted by an earlier one that ended
+ * before its backup was published.
+ */
 export function activateBackupScheduler(scheduler: BackupScheduler): () => void {
   activeScheduler = scheduler;
-  const pending = pendingDirty;
+  const persisted = readDirtyMark();
+  const pending = pendingDirty || persisted
+    ? { immediate: !!pendingDirty?.immediate || !!persisted?.immediate }
+    : null;
   pendingDirty = null;
   if (pending) scheduler.markDirty(pending.immediate);
   return () => {
@@ -107,7 +126,7 @@ export function BackupProvider({ children }: { children: React.ReactNode }) {
     // Visibility change listener — backup on page hide
     function onVisibilityChange() {
       if (document.visibilityState === 'hidden') {
-        scheduler.markDirty(true);
+        markBackupDirty(true);
       }
     }
     document.addEventListener('visibilitychange', onVisibilityChange);

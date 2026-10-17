@@ -164,6 +164,11 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
     await openGroupDetail(pgA, GROUP_NAME);
     const bPkPrefix = USER_B.pubkeyHex.slice(0, 8);
     await expect(pgA.getByTestId(`member-item-${bPkPrefix}`)).toBeVisible({ timeout: 30_000 });
+    // Wait until Bob's profile has propagated to Alice (plain retrying assertion
+    // on the live-updating member card, no reload polling). The leave-chat row
+    // falls back to a truncated npub for a leaver whose name is unknown, so the
+    // name assertion in AC-MEMBERS-2 below is only meaningful once Alice knows it.
+    await expect(pgA.getByTestId(`member-item-${bPkPrefix}`)).toContainText('Bob', { timeout: 60_000 });
   });
 
   // Step 3: USER_B clicks "Leave Group" and confirms.

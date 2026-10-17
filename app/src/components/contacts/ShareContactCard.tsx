@@ -14,7 +14,7 @@ import NpubQrModal from '@/src/components/groups/NpubQrModal';
 import { useCopy } from '@/src/context/LanguageContext';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useProfile } from '@/src/context/ProfileContext';
-import { getOwnShareCard, hasShareableName, type ShareCardCacheEntry } from '@/src/lib/shareCard';
+import { getOwnShareCard, hasShareableName, resolveShareCardError, type ShareCardCacheEntry } from '@/src/lib/shareCard';
 
 /**
  * ShareContactCard — the "Share contact card" surface (epic:
@@ -83,11 +83,16 @@ export default function ShareContactCard({
       shareCardDisclosure.onOpen();
     } catch (err) {
       console.error('[ShareContactCard] Failed to build share card:', err);
-      setShareCardError(copy.profile.shareCardError);
+      setShareCardError(
+        resolveShareCardError(err, {
+          generic: copy.profile.shareCardError,
+          signerMismatch: copy.profile.shareCardSignerMismatchError,
+        }),
+      );
     } finally {
       setShareCardLoading(false);
     }
-  }, [npub, privateKeyHex, pubkeyHex, savedProfile.nickname, signerMode, copy.profile.shareCardError, shareCardDisclosure]);
+  }, [npub, privateKeyHex, pubkeyHex, savedProfile.nickname, signerMode, copy.profile.shareCardError, copy.profile.shareCardSignerMismatchError, shareCardDisclosure]);
 
   return (
     <>

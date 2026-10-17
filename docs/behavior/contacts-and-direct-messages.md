@@ -273,6 +273,15 @@ closed admits no one.
 **The same card opened twice.** Idempotent — the second acknowledgement admits no one new,
 and re-pairing never un-confirms or un-blocks an existing contact.
 
+**Sharing your own card while a signer for a different identity is connected.** A card is
+signed by whatever signs for you; if a connected external signer (browser extension or remote
+signer) holds a different identity than this profile, no card can be made, and the share
+dialog says so — your signer holds a different identity than this profile, so reconnect a
+signer for this identity or switch back to the local key — rather than the generic
+"try again" message, which would never succeed. Other failures to build the card keep the
+generic message. Connecting a mismatched signer is not itself refused (an open product
+question).
+
 **A nameless person opens a card.** Pairing does not complete until they have set their own
 display name.
 

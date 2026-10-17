@@ -148,25 +148,23 @@ describe('UserProfile', () => {
   });
 });
 
-// resetAllData is currently unused by the frontend — the "Reset All Data" UI was
-// removed from the Settings page to prevent accidental, irreversible identity
-// wipes. These tests keep the retained logic covered for any future re-exposure.
+// resetAllData backs the Settings "Danger Zone" wipe (typed confirmation).
 describe('resetAllData', () => {
-  it('clears all lp_* keys', () => {
+  it('clears all lp_* keys', async () => {
     writeSettings({ theme: 'spring', language: 'de' });
     writeUserProfile({ nickname: 'Pineapple Pal', avatar: null });
 
     expect(store[STORAGE_KEYS.settings]).toBeDefined();
     expect(store[STORAGE_KEYS.userProfile]).toBeDefined();
 
-    resetAllData();
+    await resetAllData();
 
     expect(store[STORAGE_KEYS.settings]).toBeUndefined();
     expect(store[STORAGE_KEYS.userProfile]).toBeUndefined();
   });
 
-  it('handles already-empty storage gracefully', () => {
-    expect(() => resetAllData()).not.toThrow();
+  it('handles already-empty storage gracefully', async () => {
+    await expect(resetAllData()).resolves.toBeUndefined();
   });
 });
 

@@ -1,0 +1,94 @@
+{
+  "bug_name": "decided-small-fixes",
+  "bug_report_file": "bug-reports/decided-small-fixes-report.md",
+  "created_at": "2026-10-17T17:55:00Z",
+  "updated_at": "2026-10-17T17:55:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "With the leaver's nickname absent, empty or whitespace-only, does the 'left the group' row show the truncated-npub fallback (same chain as the sibling announcements), proven by a test that fails before the fix; and does groups-leave-intent AC-MEMBERS-2 wait for profile propagation with a retrying assertion (no reload polling)?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does a backup dirty mark raised before the scheduler exists survive a simulated reload (module state reset, localStorage kept) and get published on scheduler activation; is the persisted flag cleared only after a successful publish (kept on failure), and does every access tolerate a throwing localStorage?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Does the account-switch / local-data wipe post an account-changed event on the existing crossTab channel, and does a receiving tab reload (or otherwise drop the old account's state) without the sending tab reacting to its own event \u2014 proven by unit tests?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "TEST",
+      "question": "On a signer/identity pubkey mismatch, does Share contact card show the distinct en/de copy from the report (and other failures still the generic copy), with the mismatch detected via a typed error or pre-check rather than message string matching?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "SECURITY",
+      "question": "Is the privacy invariant untouched (no new publish of profile data; backup timing only), and is no profile/identity data put into localStorage or the cross-tab message beyond what is needed?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "QUALITY",
+      "question": "Are changes minimal and scoped to the four findings, all new strings in both en and de in i18n.ts, affected docs/behavior topics updated (backup-and-recovery, groups/leave, profiles/contact-card as applicable), unit + tsc green, Stryker (concurrency 1) on changed logic with survivors killed or justified, and the full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml",
+    "bug-reports/decided-small-fixes-report.md",
+    "bug-reports/product-decisions-fable-2026-10-17.md"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "831c142",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": {
+    "unit": "5978 passed, 1 skipped (261 files)"
+  },
+  "fix": {
+    "unit": "6058 passed, 1 skipped (265 files)",
+    "tsc": "clean"
+  },
+  "review_rounds": [
+    {
+      "round": 0,
+      "examiner": "VQ-1,2,4,5 YES; VQ-3 PARTIAL (mnemonic-restore switch posts nothing); VQ-6 PARTIAL (e2e pending)",
+      "reviewer": "REJECTED (Codex high: notice before IDB clears)"
+    },
+    {
+      "round": 1,
+      "reviewer": "ACCEPTED; VQ-3 YES; Codex medium residual: localStorage compare-and-clear not atomic across tabs (backstopped by unload re-mark)"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-17T17:55:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REMEDIATING",
+      "timestamp": "2026-10-17T19:30:00Z",
+      "trigger": "round 0 rejected"
+    },
+    {
+      "phase": "REVIEWING",
+      "timestamp": "2026-10-17T20:10:00Z",
+      "trigger": "round 1 accepted; e2e gate running"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-17T21:20:00Z",
+      "trigger": "full e2e gate green"
+    }
+  ],
+  "e2e_gate": "passed: 72 + 349 passed, 19 skipped, 0 failed (/tmp/claude-501/e2e-gate/full-smallfixes.log)"
+}

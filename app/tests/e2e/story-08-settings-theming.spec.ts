@@ -58,10 +58,9 @@ test.describe('Story 08: Theme Settings', () => {
     await expect(page.getByTestId('theme-spring-btn')).toHaveAttribute('aria-pressed', 'true');
   });
 
-  // NOTE: The "Reset All Data" UI was removed from the Settings page because an
-  // accidental trigger would irreversibly wipe the user's identity and all local
-  // state. The underlying resetAllData() logic is retained but currently unused;
-  // its behavior is covered by app/tests/unit/storage.test.ts.
+  // NOTE: Wiping all local data lives in the Advanced settings' Danger Zone
+  // (advanced-settings.spec.ts); resetAllData() itself is covered by
+  // app/tests/unit/storage.test.ts and crossTab-accountChanged.test.ts.
 
   test('4. a deprecated/unknown stored theme name falls back to spring without error', async ({ page }) => {
     // A settings blob persisted before the old themes were removed must not

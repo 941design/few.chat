@@ -40,7 +40,7 @@
  */
 
 import type { EventSigner } from 'applesauce-core';
-import { encodeCard, encodeCardV2, buildShareUrl } from '@/src/lib/contactCard';
+import { encodeCard, encodeCardV2, buildShareUrl, SignerPubkeyMismatchError } from '@/src/lib/contactCard';
 import type { SignerMode } from '@/src/context/NostrIdentityContext';
 import { getOrMintActiveNonce, type StoredNonce } from '@/src/lib/pairing/nonceStore';
 
@@ -251,4 +251,17 @@ export async function getOwnShareCard(params: GetOwnShareCardParams): Promise<Ge
   );
   const cache: ShareCardCacheEntry = { key, shareUrl };
   return { rebuilt: true, shareUrl, cache };
+}
+
+/**
+ * The message to show when building the share card failed. A signer that holds
+ * a different identity than the local profile (typed error, never message
+ * text) gets its own actionable message; every other failure keeps the
+ * generic one.
+ */
+export function resolveShareCardError(
+  err: unknown,
+  messages: { generic: string; signerMismatch: string },
+): string {
+  return err instanceof SignerPubkeyMismatchError ? messages.signerMismatch : messages.generic;
 }

@@ -1,0 +1,140 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": {
+    "leave-announcement-blank-name": "ChatBox's leave_intent row chained `structured.name ?? profileMap[pk]?.nickname ?? truncateNpub(...)`. `??` only skips null/undefined, so a cached profile with nickname '' (or whitespace) produced an empty display and the row read ' left the group'. Sibling announcements share the same `??` shape but are not part of this finding.",
+    "backup-dirty-mark-lost": "markBackupDirty before a scheduler existed stored the mark only in module-level pendingDirty; a reload in the identity-hydration window dropped it. Even with a scheduler, the mark lived only in the scheduler's timers, so a reload before the debounced publish also lost it.",
+    "account-switch-no-notice": "storage.resetAllData (the Danger Zone wipe, the account-switch path) removed lp_* keys and fired the IDB clears but posted nothing on the few-tabs channel, so other tabs kept their in-memory reaction cache, group list and chat state of the wiped account.",
+    "share-card-signer-mismatch": "encodeCard/encodeCardV2 threw a plain Error('...signer pubkey does not match...') when a NIP-46/NIP-07 signer's pubkey differed from the local identity; ShareContactCard's catch mapped EVERY failure to the generic retry-implying shareCardError."
+  },
+  "fix": {
+    "leave-announcement-blank-name": "New pure helper parseStructured.resolveLeaveIntentDisplay (name -> nickname -> truncated npub, blank counts as absent via a private nonBlank trim check); ChatBox uses it. groups-leave-intent.spec: the 'USER_A sees USER_B in the member list before the leave' step now also waits (plain retrying toContainText, 60s) until Bob's name shows on his member card, before he leaves.",
+    "backup-dirty-mark": "New app/src/lib/backup/dirtyMark.ts (read/write/clear of localStorage few-backup-dirty = 'immediate'|'debounced', immediate sticky, all access try/catch). STORAGE_KEYS.backupDirty added so resetAllData wipes it. markBackupDirty persists on every path and bumps markSeq; publishScheduledBackup clears the mark only when publishBackup returned ok and markSeq is unchanged since the attempt began (mid-flight changes keep it; failure, connect failure and the restore-pending pause keep it); activateBackupScheduler replays in-memory OR persisted (immediate if either); the visibilitychange handler now calls markBackupDirty(true) instead of scheduler.markDirty(true) so it is persisted too. Round 1: markSeq (per tab) replaced by compare-and-clear on a fresh per-write token ('<mode>:<random>', no identity data): the publish reads the token at its start and removes the key only if unchanged, so another tab's concurrent mark survives.",
+    "account-switch-notice": "Round 1: storage.resetAllData is now async \u2014 removes lp_* keys, awaits the IndexedDB clears (allSettled; a rejecting clear is logged and does not stop the notice), THEN calls postAccountChanged; settings.tsx Danger Zone handler awaits it before window.location.reload() (so the reload can no longer abort the clears, and a peer cannot rehydrate the wiped account). NostrIdentityContext.replaceIdentity (mnemonic restore) posts the notice through crossTab.postAccountChangedIfSwitched when the pubkey really changed, after saveStoredIdentity. NIP-46 connect path untouched. Stale 'CURRENTLY UNUSED' comment replaced. Original: crossTab.ts AccountChangedMessage/parse/post/subscribe; crossTabReceiver.installAccountChangedReload; _app.tsx receiver; sender ignores own event via BroadcastChannel no-echo.",
+    "share-card-mismatch": "contactCard.SignerPubkeyMismatchError (extends Error, message unchanged so existing /signer pubkey does not match/ tests hold, prototype fixed for ES2017 target) thrown from both guards; shareCard.resolveShareCardError(err,{generic,signerMismatch}) uses instanceof; ShareContactCard uses it with copy.profile.shareCardError / new copy.profile.shareCardSignerMismatchError (en+de, exact strings from the report). No connect-time rejection."
+  },
+  "files_changed": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/tests/e2e/groups-leave-intent.spec.ts",
+    "app/src/types/index.ts",
+    "app/src/lib/backup/dirtyMark.ts",
+    "app/src/context/BackupContext.tsx",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/lib/storage.ts",
+    "app/pages/_app.tsx",
+    "app/src/lib/contactCard.ts",
+    "app/src/lib/shareCard.ts",
+    "app/src/lib/i18n.ts",
+    "app/src/components/contacts/ShareContactCard.tsx",
+    "app/tests/unit/marmot/resolveLeaveIntentDisplay.test.ts",
+    "app/tests/unit/backup/backupDirtyMark.test.ts",
+    "app/tests/unit/crossTab-accountChanged.test.ts",
+    "app/tests/unit/cards/shareCardSignerMismatch.test.ts",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/groups.md",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "bug-reports/decided-small-fixes-contract.json",
+    "bug-reports/decided-small-fixes-result.json",
+    "app/pages/settings.tsx",
+    "app/src/context/NostrIdentityContext.tsx",
+    "app/tests/unit/storage.test.ts"
+  ],
+  "files_created": [
+    "app/src/lib/backup/dirtyMark.ts",
+    "app/tests/unit/marmot/resolveLeaveIntentDisplay.test.ts",
+    "app/tests/unit/backup/backupDirtyMark.test.ts",
+    "app/tests/unit/crossTab-accountChanged.test.ts",
+    "app/tests/unit/cards/shareCardSignerMismatch.test.ts",
+    "bug-reports/decided-small-fixes-contract.json",
+    "bug-reports/decided-small-fixes-result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/parseStructured.ts",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/tests/e2e/groups-leave-intent.spec.ts",
+    "app/src/types/index.ts",
+    "app/src/context/BackupContext.tsx",
+    "app/src/lib/crossTab.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/lib/storage.ts",
+    "app/pages/_app.tsx",
+    "app/src/lib/contactCard.ts",
+    "app/src/lib/shareCard.ts",
+    "app/src/lib/i18n.ts",
+    "app/src/components/contacts/ShareContactCard.tsx",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/groups.md",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "app/pages/settings.tsx",
+    "app/src/context/NostrIdentityContext.tsx",
+    "app/tests/unit/storage.test.ts"
+  ],
+  "modules_touched": [
+    "app/pages",
+    "app/src/components",
+    "app/src/context",
+    "app/src/lib",
+    "app/src/lib/backup",
+    "app/src/lib/marmot",
+    "app/tests/e2e",
+    "app/tests/unit",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/marmot/resolveLeaveIntentDisplay.test.ts": 8,
+    "app/tests/unit/backup/backupDirtyMark.test.ts": 20,
+    "app/tests/unit/crossTab-accountChanged.test.ts": 43,
+    "app/tests/unit/cards/shareCardSignerMismatch.test.ts": 12
+  },
+  "tests_adapted": {
+    "app/tests/e2e/groups-leave-intent.spec.ts": "pre-leave member-list step now waits for Bob's name on his member card (retrying toContainText) so the leave row's name is only asserted after profile propagation",
+    "app/tests/unit/storage.test.ts": "resetAllData cases awaited; stale 'currently unused' comment fixed",
+    "app/tests/unit/crossTab-accountChanged.test.ts (resetAllData cases)": "now async/awaited; added ordering tests (notice only after clears, also when a clear rejects) and replaceIdentity tests"
+  },
+  "counts": {
+    "unit_before": "5978 passed, 1 skipped (261 files)",
+    "unit_after": "6058 passed, 1 skipped (265 files)",
+    "tsc": "clean (before and after)",
+    "lint": "NO_LINT (no eslint in project)",
+    "e2e_single_spec": "groups-leave-intent: green on a wiped relay (first attempt hit ENFILE 'file table overflow' from next dev, environmental; passed on retry). Full gate NOT run (lead's)."
+  },
+  "verification_answers": {
+    "VQ-1": "YES. resolveLeaveIntentDisplay.test.ts: empty/whitespace/absent nickname and blank embedded name fall back to the truncated npub; 4 of 8 cases failed against the characterization helper that kept `??` (expected '' to be 'npub:ababab'), all pass after the fix. e2e AC-MEMBERS-2 waits for Bob's name with a plain retrying toContainText (no reload polling) before he leaves.",
+    "VQ-2": "YES. backupDirtyMark.test.ts simulates reload with vi.resetModules while the fake localStorage survives: a mark raised before any scheduler is replayed (immediate flag preserved, non-immediate not invented); the key is cleared only after a successful publish and kept on publish failure, connect failure, restore-pending pause and mid-flight re-mark; a throwing/missing localStorage never throws (read returns null, mark still reaches a same-session scheduler). 9 of 13 first-version tests failed before the fix. Round 1: two-module-instance tests over one shared fake localStorage prove tab A's successful publish does not clear a mark tab B wrote mid-publish (compare-and-clear), and that a mark written before the publish began is covered and cleared.",
+    "VQ-3": "YES (round 1). Wipe: tests prove the notice is posted only after the IDB clears finish, still posted when a clear rejects, and localStorage is gone before the clears begin; Danger Zone awaits resetAllData before reload. Mnemonic restore: postAccountChangedIfSwitched posts on a real pubkey change (also when no previous identity), stays silent for the same identity (case-insensitive); called in replaceIdentity after persistence. Receivers reload once per burst; the sender never receives its own message (echo-free bus fake). NIP-46 different-pubkey connect deliberately not covered (owner question).",
+    "VQ-4": "YES. shareCardSignerMismatch.test.ts: both encodeCard and encodeCardV2 raise SignerPubkeyMismatchError for a foreign signer; resolveShareCardError maps it via instanceof (an ordinary Error carrying the same message text stays generic); end-to-end through getOwnShareCard with a foreign signer vs a signer that fails otherwise; en/de strings equal the report's exactly and differ from the generic copy.",
+    "VQ-5": "YES. No publish path touched; the backup change only affects WHEN the existing self-encrypted publish runs. localStorage few-backup-dirty holds only the word immediate|debounced; the account-changed message is the bare type (test asserts no identity data and that extra fields on the wire are dropped).",
+    "VQ-6": "Unit + tsc green; strings in en and de; docs updated: backup-and-recovery.md (persisted unsent mark), groups.md (blank-name leave notice), profiles-and-identity.md (wipe notifies other tabs), contacts-and-direct-messages.md (share with mismatched signer). Stryker concurrency 1 on the changed logic: see mutation. Full e2e gate: lead's responsibility (not run)."
+  },
+  "mutation": {
+    "tool": "stryker 9.6.1 (project install), concurrency 1, scratch config + plain .mjs vitest config in the session scratchpad (sm/), vitest.related=false, app/reports untouched",
+    "mutate": "parseStructured.ts 12-35, backup/dirtyMark.ts, BackupContext.tsx 40-61 and 67-108, crossTab.ts 70-95 and 130-170, crossTabReceiver.ts 60-90, shareCard.ts 255-275, contactCard.ts 258-272",
+    "before": "first run 83.03% (28 survivors, partly pre-existing lines swept in by overly wide ranges: nonce regex, console strings, deactivate closure)",
+    "after": "138/141 on the narrowed ranges = 97.9%; real survivors killed with new assertions (immediate flag not invented, dirtyMark stored words, catch-path null/warn, garbage ignored by account listeners, account-only channel close, other-listener-remains, error.name)",
+    "survivors_justified": [
+      "BackupContext.tsx:86 `markSeq += 1` -> `-= 1`: only inequality against the attempt-start snapshot is ever tested; any change of the counter is equivalent",
+      "crossTab.ts:80 `console.warn('[crossTab] listener failed', ...)` string literal: log text only (pre-existing message moved into the shared notify helper)",
+      "crossTab.ts:134 `typeof data !== 'object'` -> false in parseAccountChanged: a non-object primitive has no `.type`, so it still falls through to return null (equivalent)"
+    ],
+    "round_1": "Narrowed Stryker (concurrency 1) on dirtyMark.ts, BackupContext publish/mark/activate, storage.resetAllData, crossTab.postAccountChangedIfSwitched: 70/83 pre-triage; real survivor (warn on no-IDB path) killed. Remaining are equivalent or untestable in Node: dirtyMark `?? ''` replacement and `token===null` early return (equivalent), pre-existing console.warn lines swept into the range, log-text literal, isStorageAvailable guard (pre-existing), and the default `typeof window` -> real IDB clear wiring (needs a browser/IndexedDB; unchanged code, covered by e2e)."
+  },
+  "e2e": "groups-leave-intent run alone from a wiped relay: green. Full 60-test gate not run (lead).",
+  "open_questions": [
+    "The sibling announcements (canceller, invite lifecycle, rename, admitted, call notice) and MemberList-style lookups still use `??` and would show a blank name for a nickname of ''. Left alone (scope); a shared nonBlank helper would be the natural follow-up.",
+    "Report path drift: the share dialog is app/src/components/contacts/ShareContactCard.tsx, not settings.tsx handleOpenShareCard.",
+    "Out of scope per lead: unload re-mark after a wipe (harmless) and the old-key empty-snapshot publish during unload (lead files as backlog finding)."
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The brief's anchors had drifted (handleOpenShareCard no longer exists in settings.tsx, the wipe path is resetAllData rather than a MarmotContext clear, the leave-intent e2e name wait sits in an earlier step than the cited lines). Separately, the first e2e run died with ENFILE 'file table overflow' from next dev (system-wide, not the code) and looked like an app regression until the log was read. Round 1: the first design treated the notice as safe to send before the async IDB clear because the clear was historically fire-and-forget; the real invariant (peer reload must not see old data) forced the whole wipe async and its Danger Zone caller to await.",
+    "surprised_by": "No fast-check in this repo despite the property-test guidance, so the property-style tests are enumerated cases; and Stryker's per-line mutate ranges swept in pre-existing code (nonce regex, log strings), inflating survivors until the ranges were narrowed.",
+    "scope": "project_specific",
+    "outcome": "merged"
+  },
+  "outcome": "merged"
+}

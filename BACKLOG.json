@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-17T17:06:29Z",
+  "updated_at": "2026-10-17T18:58:54Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -264,21 +264,6 @@
   ],
   "findings": [
     {
-      "slug": "share-contact-card-permanently-fails-when",
-      "scope": "any",
-      "anchor": {
-        "path": "app/pages/settings.tsx",
-        "line": 396
-      },
-      "text": "Share contact card permanently fails when the active NIP-46 signer's pubkey differs from the local identity",
-      "created_at": "2026-07-09",
-      "motivation": "NostrIdentityContext.tsx:295 accepts a NIP-46 bunker whose reported pubkey differs from the local identity, logging only a console.warn (no hard block, by design for this epic slice). But encodeCard's signer-pubkey guard (contactCard.ts:272-273) throws whenever signed.pubkey !== pubkeyHex, and handleOpenShareCard (settings.tsx:374-402) catches that throw and always shows the generic copy.identity.shareCardError. In that identity-mismatch state, 'Share contact card' can never succeed no matter how many times the user retries, and the error copy gives no indication why or what to do.",
-      "behavior": "handleOpenShareCard calls getOwnShareCard with pubkeyHex: identityPubkeyHex (the local identity's pubkey) but getSignEvent may resolve to a NIP-46 signer whose actual signing key differs. encodeCard's guard (correctly, for privacy/integrity) refuses to sign a card claiming a pubkey the active signer cannot back, and throws. The UI has no distinct code path for this case -- it lands in the same catch as any other share failure and shows a generic retry-implying message.",
-      "approach": "Either (a) surface a distinct, actionable error when the guard-mismatch throw is caught (e.g. a message naming the signer/identity mismatch instead of a generic retry message), or (b) tighten NostrIdentityContext's accept-with-warning behavior at connect time so a mismatched bunker is rejected before it becomes the active signer, closing the gap at the source instead of downstream at share time.",
-      "success_signal": "Mismatched-bunker state either cannot become active, or Share failure copy names the mismatch instead of a generic error.",
-      "kind": "spec-gap"
-    },
-    {
       "slug": "icon-set-should-be-a-real-theme-dimension",
       "scope": "any",
       "anchor": {
@@ -357,40 +342,6 @@
       "approach": "Handle with the signer-authority work (2026-09-26 review task R04): route backup encrypt/sign through the active signer, decide whether background NIP-44 encrypt/sign prompts are acceptable for NIP-46/NIP-07, and gate the restore flow accordingly."
     },
     {
-      "slug": "backup-dirty-mark-lost-on-early-reload",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/BackupContext.tsx",
-        "range": [
-          67,
-          90
-        ]
-      },
-      "text": "A backup-needed mark raised before the identity has loaded lives only in memory (pendingDirty), so a reload/close in that window loses the change's backup until something else marks dirty",
-      "created_at": "2026-10-15",
-      "motivation": "Found 2026-10-15 while diagnosing a flaky backup e2e: a profile change made in the first ~50 ms of a page load (before the identity loads and the scheduler exists) is never backed up if the page reloads/closes in that window. Narrow, but a silent gap in an integrity feature.",
-      "behavior": "markBackupDirty before the scheduler exists stores the mark in the in-memory pendingDirty and replays it when activateBackupScheduler runs; a reload in between discards it, and the next load sees no change to mark (e.g. the avatar was already backfilled and persisted).",
-      "approach": "Persist the pending dirty flag (e.g. a localStorage boolean) and replay it on scheduler activation; product decision on backup timing — update docs/behavior backup topic accordingly. Privacy invariant unaffected (what/where is published does not change).",
-      "success_signal": "A unit test: mark dirty before identity → simulated reload → scheduler activation publishes"
-    },
-    {
-      "slug": "leave-announcement-blank-name-when-profile-unknown",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/e2e/groups-leave-intent.spec.ts",
-        "range": [
-          198,
-          204
-        ]
-      },
-      "text": "The 'left the group' chat announcement renders with a blank name (' left the group') when the leaver's profile has not reached the viewer yet",
-      "created_at": "2026-10-15",
-      "motivation": "Seen 2026-10-15 in 2 of 4 full e2e runs (groups-leave-intent AC-MEMBERS-2): Alice saw ' left the group' because Bob's member profile had not propagated within 30 s. Since 1398e4f the row shows the member's name instead of an npub, but there is no fallback for an unknown name, so the row reads as broken. Product decision: what should the row say when the name is unknown (e.g. 'A member left the group')?",
-      "behavior": "The leave-chat-announcement row interpolates the leaver's display name; when no profile is known the name is empty and no fallback is applied (the npub is deliberately not shown).",
-      "approach": "Owner picks the fallback wording (en+de in i18n.ts); render it when the name is empty; the e2e should then also wait for profile propagation before asserting the name.",
-      "success_signal": "With the leaver's profile absent, the row reads the chosen fallback; groups-leave-intent passes across 3 full runs"
-    },
-    {
       "slug": "reinvite-after-eviction-fails-already-exists",
       "scope": "any",
       "anchor": {
@@ -434,17 +385,17 @@
       "success_signal": "Two-instance unit test with shared IDB orders receipts and seqs across instances without Web Locks"
     },
     {
-      "slug": "cross-tab-account-switch-notice",
+      "slug": "backup-empty-snapshot-publish-after-wipe",
       "scope": "any",
       "anchor": {
-        "path": "app/src/lib/reactions/api.ts"
+        "path": "app/src/context/BackupContext.tsx"
       },
-      "text": "Clearing all local data on an account switch sends no cross-tab notice, so other open tabs keep the old account's reactions (and other state)",
-      "created_at": "2026-10-16",
-      "motivation": "Review follow-up from bug run cross-tab-reactions-refresh (2026-10-16). Belongs with multi-tab-mls-cache-coherence: an account switch stales the whole other tab, not only reactions.",
-      "behavior": "clearAllReactions deletes reaction keys without posting; cache-first loadReactions in another tab keeps serving deleted badges.",
-      "approach": "Post an account-changed cross-tab event on switch/wipe; receivers reload or show the takeover screen per the multi-tab design.",
-      "success_signal": "Two-tab check: switching account in tab A makes tab B drop the old account's state"
+      "text": "After a local-data wipe (Danger Zone) a tab still holding the old key in memory may publish a backup of the already-wiped storage, overwriting the old account's relay backup with an empty snapshot",
+      "created_at": "2026-10-17",
+      "motivation": "The relay backup is the user's recovery path; replacing it with an empty snapshot silently destroys it. Surfaced by the decided-small-fixes review (2026-10-17); the new cross-tab reload adds another unload trigger.",
+      "behavior": "During unload after resetAllData, and when a peer tab reloads on the cross-tab account-changed notice (visibilitychange -> markBackupDirty(true) -> immediate publish), a scheduler still holding the OLD key can publish a backup of the wiped storage (or, after a seed-phrase restore, of the new identity's profile) under the old account; nothing tears the scheduler down before the wipe/switch. Self-encrypted, so privacy-neutral, but it can overwrite the old account's relay backup.",
+      "approach": "Stop/dispose the BackupScheduler (and suppress unload flushes) before resetAllData wipes storage; or refuse to publish a snapshot that is empty when the previous published one was not. Unit test: wipe then unload flush → no publish.",
+      "success_signal": "Unit: wipe followed by an unload flush or scheduler tick publishes nothing"
     }
   ],
   "archive": [

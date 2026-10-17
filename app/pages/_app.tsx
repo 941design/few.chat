@@ -1,6 +1,7 @@
 import { ChakraProvider } from '@chakra-ui/react';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
+import { useEffect } from 'react';
 import Layout from '@/src/components/Layout';
 import { LanguageProvider } from '@/src/context/LanguageContext';
 import { ProfileProvider } from '@/src/context/ProfileContext';
@@ -8,6 +9,7 @@ import { AppThemeProvider, useAppTheme } from '@/src/hooks/useMoodTheme';
 import { useUpdateChecker } from '@/src/hooks/useUpdateChecker';
 import UpdateBanner from '@/src/components/UpdateBanner';
 import dynamic from 'next/dynamic';
+import { installAccountChangedReload } from '@/src/lib/crossTabReceiver';
 // Dev-only e2e hook (window.__fewPublishDm); inert in production builds.
 import '@/src/lib/dmPublishTestBridge';
 
@@ -42,6 +44,12 @@ if (typeof window !== 'undefined') {
 function AppShell({ Component, pageProps }: AppProps) {
   const { activeTheme } = useAppTheme();
   const { updateAvailable } = useUpdateChecker();
+
+  // Another tab wiped the local account data (account switch): this tab's
+  // in-memory state belongs to an account that is gone, so start over from
+  // whatever is stored now. Mounted above every provider so it holds even
+  // before an identity has loaded.
+  useEffect(() => installAccountChangedReload(() => window.location.reload()), []);
 
   return (
     <ChakraProvider theme={activeTheme}>

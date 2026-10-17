@@ -256,6 +256,20 @@ function assertPubkeyHex(pubkeyHex: string): void {
   }
 }
 
+/**
+ * The signer produced an event for a different pubkey than the card subject:
+ * the connected signer (NIP-46 / NIP-07) holds another identity than the local
+ * profile. Typed so callers can show an actionable message without matching on
+ * the message text.
+ */
+export class SignerPubkeyMismatchError extends Error {
+  constructor() {
+    super('contactCard: signer pubkey does not match the supplied pubkeyHex');
+    this.name = 'SignerPubkeyMismatchError';
+    Object.setPrototypeOf(this, SignerPubkeyMismatchError.prototype);
+  }
+}
+
 /** A pairing nonce is exactly 16 raw bytes, hex-encoded (RD-2). */
 function assertNonceHex(nonceHex: string): void {
   if (!/^[0-9a-f]{32}$/i.test(nonceHex)) {
@@ -413,7 +427,7 @@ export async function encodeCard(
   };
   const signed = await signEvent(draft);
   if (signed.pubkey !== pubkeyHex) {
-    throw new Error('contactCard: signer pubkey does not match the supplied pubkeyHex');
+    throw new SignerPubkeyMismatchError();
   }
   // Pack the SIGNED created_at (what the signature actually covers), not the
   // input value — they are equal only by convention, and a signer that
@@ -489,7 +503,7 @@ export async function encodeCardV2(
   });
   const signed = await signEvent(draft);
   if (signed.pubkey !== pubkeyHex) {
-    throw new Error('contactCard: signer pubkey does not match the supplied pubkeyHex');
+    throw new SignerPubkeyMismatchError();
   }
   // Pack the SIGNED created_at (what the signature actually covers), not the
   // input value, for the same reason encodeCard does (see its comment).
