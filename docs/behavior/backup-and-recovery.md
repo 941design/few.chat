@@ -85,6 +85,17 @@ the browser refuses to store the flag, the change is still remembered for the cu
 but a reload in that window loses it, as before. Only the *timing* of the already-described,
 self-encrypted backup is affected; nothing new is published.
 
+**Wiping or switching away stops saving.** From the moment this tab begins wiping the local
+data, or reloads because another tab of the same browser wiped it or switched to a different
+account, nothing more is saved as the old account's backup until the page is loaded again — so
+closing the app right afterwards cannot replace your old backup on the relays with an empty or
+foreign one. When the identity is replaced in this tab (for example by recovering with a seed
+phrase), a save already running for the previous identity is stopped from that moment: it is
+checked once more immediately before it would be sent to the relays and dropped if the identity
+has changed or saving was stopped, and the new identity is backed up normally. Once a save has
+actually been handed to the relays it cannot be recalled. Other tabs and devices are not
+coordinated.
+
 **When saving fails:** if no relay accepts the backup (or the app is not yet connected), it is
 retried in the background — after about half a minute, then two minutes, then every ten minutes,
 up to five times; changes made meanwhile are included in the next retry, and a change after the

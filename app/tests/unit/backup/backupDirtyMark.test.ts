@@ -44,7 +44,10 @@ function fakeScheduler() {
 /** A fresh page load: module state is gone, localStorage is kept. */
 async function reload(): Promise<Backup> {
   vi.resetModules();
-  return import('@/src/context/BackupContext');
+  const mod = await import('@/src/context/BackupContext');
+  // As BackupProvider does: the attempt's identity is the active scheduler's.
+  (await import('@/src/lib/backup/suspension')).bindBackupIdentity('bb');
+  return mod;
 }
 
 beforeEach(() => {
@@ -82,7 +85,7 @@ describe('a mark raised before any scheduler exists', () => {
 
     const second = await reload(); // early reload: in-memory mark is gone
     const { markDirty, scheduler } = fakeScheduler();
-    second.activateBackupScheduler(scheduler);
+    second.activateBackupScheduler(scheduler, 'bb');
     expect(markDirty).toHaveBeenCalledTimes(1);
   });
 
@@ -94,7 +97,7 @@ describe('a mark raised before any scheduler exists', () => {
 
     const second = await reload();
     const { markDirty, scheduler } = fakeScheduler();
-    second.activateBackupScheduler(scheduler);
+    second.activateBackupScheduler(scheduler, 'bb');
     expect(markDirty).toHaveBeenCalledWith(true);
   });
 
@@ -105,14 +108,14 @@ describe('a mark raised before any scheduler exists', () => {
 
     const second = await reload();
     const { markDirty, scheduler } = fakeScheduler();
-    second.activateBackupScheduler(scheduler);
+    second.activateBackupScheduler(scheduler, 'bb');
     expect(markDirty).toHaveBeenCalledWith(false);
   });
 
   it('replays nothing when nothing was marked', async () => {
     const mod = await reload();
     const { markDirty, scheduler } = fakeScheduler();
-    mod.activateBackupScheduler(scheduler);
+    mod.activateBackupScheduler(scheduler, 'bb');
     expect(markDirty).not.toHaveBeenCalled();
   });
 });
@@ -121,7 +124,7 @@ describe('a mark raised while a scheduler is active', () => {
   it('is forwarded to the scheduler AND persisted until a publish succeeds', async () => {
     const mod = await reload();
     const { markDirty, scheduler } = fakeScheduler();
-    mod.activateBackupScheduler(scheduler);
+    mod.activateBackupScheduler(scheduler, 'bb');
     mod.markBackupDirty(true);
     expect(markDirty).toHaveBeenCalledWith(true);
     expect(store.has(KEY)).toBe(true);
@@ -197,7 +200,7 @@ describe('unavailable localStorage', () => {
     const mod = await reload();
     expect(() => mod.markBackupDirty(true)).not.toThrow();
     const { markDirty, scheduler } = fakeScheduler();
-    expect(() => mod.activateBackupScheduler(scheduler)).not.toThrow();
+    expect(() => mod.activateBackupScheduler(scheduler, 'bb')).not.toThrow();
     expect(markDirty).toHaveBeenCalledWith(true);
     expect(await mod.publishScheduledBackup('aa', 'bb')).toBe(true);
   });
@@ -206,7 +209,7 @@ describe('unavailable localStorage', () => {
     const mod = await reload();
     throwing = true;
     const { markDirty, scheduler } = fakeScheduler();
-    expect(() => mod.activateBackupScheduler(scheduler)).not.toThrow();
+    expect(() => mod.activateBackupScheduler(scheduler, 'bb')).not.toThrow();
     expect(markDirty).not.toHaveBeenCalled();
   });
 

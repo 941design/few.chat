@@ -20,6 +20,12 @@ import {
   settleRestoreGuard,
 } from '@/src/lib/backup/relayBackup';
 import { clearDirtyMarkIfUnchanged, readDirtyMark, readDirtyToken, writeDirtyMark } from '@/src/lib/backup/dirtyMark';
+import {
+  bindBackupIdentity,
+  isBackupIdentityCurrent,
+  isBackupsSuspended,
+  onBackupsSuspended,
+} from '@/src/lib/backup/suspension';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 
 type BackupContextValue = {
@@ -41,17 +47,24 @@ export async function publishScheduledBackup(
   privateKeyHex: string,
   pubkeyHex: string,
 ): Promise<boolean> {
+  // Suspended (local data wiped / account switching away) or no longer the
+  // scheduler's identity: nothing to publish or retry, and no connectNdk(old
+  // key) that would rebind the shared NDK signer away from the new identity.
+  const stale = () => isBackupsSuspended() || !isBackupIdentityCurrent(pubkeyHex);
+  if (stale()) return true;
   // A change marked after this point (by this tab or another: the key is
   // shared) is not guaranteed to be in the snapshot this attempt publishes, so
   // only the mark that existed now may be cleared by a success.
   const dirtyTokenAtStart = readDirtyToken();
   if (isRestorePending(pubkeyHex)) {
     const lookup = await lookupBackup(privateKeyHex, pubkeyHex);
+    if (stale()) return true;
     if (lookup.status === 'unreachable') return false;
     settleRestoreGuard(lookup);
     if (isRestorePending(pubkeyHex)) return true;
   }
   const { createPrivateKeySigner } = await import('@/src/lib/marmot/signerAdapter');
+  if (stale()) return true;
   const signer = createPrivateKeySigner(privateKeyHex);
   // Connect first: right after start-up the shared client may not be connected
   // yet, and an unconnected publish reaches no relay.
@@ -63,7 +76,17 @@ export async function publishScheduledBackup(
     console.warn('[Backup] relay connection failed:', err);
     return false;
   }
-  const result = await publishBackup(signer, pubkeyHex, ndk);
+  if (stale()) return true;
+  // Re-checked by publishBackup as its last step, right before the network
+  // publish: the wipe or identity switch may have happened meanwhile.
+  const result = await publishBackup(
+    signer,
+    pubkeyHex,
+    ndk,
+    () => !stale(),
+  );
+  // Dropped by the guard: not a failure (nothing to retry), and the mark stays.
+  if (result.skipped) return true;
   if (!result.ok) console.warn('[Backup] publish failed:', result.error);
   // The persisted mark is cleared only by a publish that really happened (not
   // by a failure, nor by the restore-pending pause above) and only if nothing
@@ -82,6 +105,7 @@ let pendingDirty: { immediate: boolean } | null = null;
  * hydrated, or being switched).
  */
 export function markBackupDirty(immediate?: boolean): void {
+  if (isBackupsSuspended()) return;
   writeDirtyMark(!!immediate);
   if (activeScheduler) {
     activeScheduler.markDirty(immediate);
@@ -95,8 +119,13 @@ export function markBackupDirty(immediate?: boolean): void {
  * existed — in this page load, or persisted by an earlier one that ended
  * before its backup was published.
  */
-export function activateBackupScheduler(scheduler: BackupScheduler): () => void {
+export function activateBackupScheduler(scheduler: BackupScheduler, pubkeyHex: string): () => void {
+  if (isBackupsSuspended()) {
+    scheduler.dispose();
+    return () => {};
+  }
   activeScheduler = scheduler;
+  bindBackupIdentity(pubkeyHex);
   const persisted = readDirtyMark();
   const pending = pendingDirty || persisted
     ? { immediate: !!pendingDirty?.immediate || !!persisted?.immediate }
@@ -104,9 +133,21 @@ export function activateBackupScheduler(scheduler: BackupScheduler): () => void 
   pendingDirty = null;
   if (pending) scheduler.markDirty(pending.immediate);
   return () => {
-    if (activeScheduler === scheduler) activeScheduler = null;
+    if (activeScheduler === scheduler) {
+      activeScheduler = null;
+      bindBackupIdentity(null);
+    }
   };
 }
+
+// Suspension (wipe / account-changed reload) tears the running scheduler down
+// and forgets any mark made before it, so nothing replays in this page life.
+onBackupsSuspended(() => {
+  activeScheduler?.dispose();
+  activeScheduler = null;
+  pendingDirty = null;
+  bindBackupIdentity(null);
+});
 
 /**
  * Automatic backups run only in local signer mode. With an external signer the
@@ -135,7 +176,7 @@ export function BackupProvider({ children }: { children: React.ReactNode }) {
       publishScheduledBackup(currentPrivKey, currentPubkey),
     );
 
-    const deactivate = activateBackupScheduler(scheduler);
+    const deactivate = activateBackupScheduler(scheduler, currentPubkey);
 
     // Visibility change listener — backup on page hide
     function onVisibilityChange() {

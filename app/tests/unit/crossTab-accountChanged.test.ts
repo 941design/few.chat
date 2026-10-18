@@ -399,3 +399,33 @@ describe('postAccountChangedIfSwitched (identity replaced in place, e.g. mnemoni
     expect(got).toEqual([]);
   });
 });
+
+describe('backup suspension on the wipe and reload paths', () => {
+  it('resetAllData suspends backups before it removes anything', async () => {
+    const { onBackupsSuspended, resetBackupSuspensionForTests } = await import('@/src/lib/backup/suspension');
+    resetBackupSuspensionForTests();
+    lsStore['few-backup-dirty'] = 'immediate:tok';
+    let presentAtSuspend: boolean | null = null;
+    onBackupsSuspended(() => {
+      presentAtSuspend = 'few-backup-dirty' in lsStore;
+    });
+
+    await resetAllData({ clearIdb: async () => {} });
+
+    expect(presentAtSuspend).toBe(true);
+    expect('few-backup-dirty' in lsStore).toBe(false);
+  });
+
+  it('the account-changed reload suspends backups before reloading', async () => {
+    const { onBackupsSuspended, resetBackupSuspensionForTests } = await import('@/src/lib/backup/suspension');
+    resetBackupSuspensionForTests();
+    const order: string[] = [];
+    onBackupsSuspended(() => order.push('suspend'));
+    const uninstall = installAccountChangedReload(() => order.push('reload'));
+
+    otherTab().postMessage({ type: 'account-changed' });
+
+    expect(order).toEqual(['suspend', 'reload']);
+    uninstall();
+  });
+});

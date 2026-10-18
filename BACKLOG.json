@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T13:18:40Z",
+  "updated_at": "2026-10-18T15:01:53Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -342,19 +342,6 @@
       "success_signal": "Two-instance unit test with shared IDB orders receipts and seqs across instances without Web Locks"
     },
     {
-      "slug": "backup-empty-snapshot-publish-after-wipe",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/BackupContext.tsx"
-      },
-      "text": "After a local-data wipe (Danger Zone) a tab still holding the old key in memory may publish a backup of the already-wiped storage, overwriting the old account's relay backup with an empty snapshot",
-      "created_at": "2026-10-17",
-      "motivation": "The relay backup is the user's recovery path; replacing it with an empty snapshot silently destroys it. Surfaced by the decided-small-fixes review (2026-10-17); the new cross-tab reload adds another unload trigger.",
-      "behavior": "During unload after resetAllData, and when a peer tab reloads on the cross-tab account-changed notice (visibilitychange -> markBackupDirty(true) -> immediate publish), a scheduler still holding the OLD key can publish a backup of the wiped storage (or, after a seed-phrase restore, of the new identity's profile) under the old account; nothing tears the scheduler down before the wipe/switch. Self-encrypted, so privacy-neutral, but it can overwrite the old account's relay backup.",
-      "approach": "Stop/dispose the BackupScheduler (and suppress unload flushes) before resetAllData wipes storage; or refuse to publish a snapshot that is empty when the previous published one was not. Unit test: wipe then unload flush → no publish.",
-      "success_signal": "Unit: wipe followed by an unload flush or scheduler tick publishes nothing"
-    },
-    {
       "slug": "reaction-readd-same-second-not-propagated",
       "scope": "any",
       "anchor": {
@@ -442,6 +429,20 @@
       "motivation": "Last Codex finding of stale-welcome-reinvite (round 5), deferred by lead cap after five remediation rounds: retired ingest waiters and dispatcher drains are tracked in pendingDrainRef, but an aborted setup's promise is not, and its whenIdle is registered only after subscribeToGroupMessages returns.",
       "behavior": "Effect restart during a blocked historical ingest, then a replace: teardown awaits only the new setup/drains; a slow SDK state save of the old ingest could land after destroy/rejoin. Narrow (evicted member rarely decrypts new traffic).",
       "approach": "On effect cleanup, trackPending each retired lifecycle's setup promise (setup completion includes resolver.disposeAndDrain); regression: effect restart during a blocked historical ingest followed by replacement keeps destroy blocked."
+    },
+    {
+      "slug": "dm-composer-enter-press-hangs-30s",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/groups-dm-reactions.spec.ts",
+        "line": 176
+      },
+      "text": "DM composer Enter press hangs 30s under full-suite load in groups-dm-reactions",
+      "created_at": "2026-10-18",
+      "motivation": "Second sighting of an undiagnosed renderer stall that turns the full e2e gate red without a product signal; each red gate costs a 65-min rerun on the 1-CPU VM.",
+      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer).",
+      "approach": "Capture an in-page long-task/performance trace around the thread-open history load under CPU throttling to find the main-thread blocker; consider a per-test relay wipe or unique keys between DM reaction tests.",
+      "success_signal": "Three consecutive full gates without a composer key-press timeout."
     }
   ],
   "archive": [

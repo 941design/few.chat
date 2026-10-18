@@ -1,0 +1,25 @@
+{
+  "bug": "backup-empty-snapshot-publish-after-wipe",
+  "scope": "Stop backup publishes for an account once this tab begins wiping it or switching away from it (Danger Zone wipe, cross-tab account-changed reload, in-flight attempt across an identity change).",
+  "files_to_modify": [
+    "app/src/lib/backup/ (new small module or relayBackup.ts) — a page-lifetime backup suspension + identity binding",
+    "app/src/context/BackupContext.tsx",
+    "app/src/lib/storage.ts (resetAllData suspends backups FIRST, before any removal)",
+    "app/pages/_app.tsx or app/src/lib/crossTabReceiver.ts (suspend before the account-changed reload)",
+    "docs/behavior/backup-and-recovery.md"
+  ],
+  "behavior": {
+    "suspend": "suspendBackups(): in-memory, page-lifetime flag; disposes the active scheduler; markBackupDirty becomes a no-op (no persisted mark write, no pending hand-off); publishScheduledBackup returns without publishing (resolves true: nothing to retry). Not persisted: the next page load starts normally for whatever identity it hydrates.",
+    "in_flight": "A publish attempt re-checks right before the network publish (after snapshot/sign) that backups are not suspended and the attempt's pubkey is still the scheduler-bound current identity; otherwise it drops the event without publishing and does not clear the dirty mark.",
+    "callers": "resetAllData calls suspendBackups() before removing anything (lib → lib import; lib must not import React contexts). The account-changed reload handler suspends before window.location.reload(). An identity replace in the same tab disposes the old scheduler (existing effect cleanup) and the in-flight guard covers the race; it must NOT suspend, so the new identity's scheduler still backs up.",
+    "lead_decisions": "Suspension instead of 'refuse empty snapshot when the previous was non-empty' (a heuristic that would also block a legitimately emptied account and needs remote state)."
+  },
+  "tests": [
+    "Unit: after suspendBackups, markBackupDirty(true) / scheduler tick / visibilitychange-style immediate mark publish nothing and write no dirty mark",
+    "Unit: resetAllData invokes the suspension before removing storage keys (order)",
+    "Unit: an attempt started before suspension (or bound to an old pubkey) does not call the network publish",
+    "Unit: installAccountChangedReload path suspends before reload",
+    "Unit: without suspension the normal publish path is unchanged; a new scheduler for a new identity in the same tab still publishes"
+  ],
+  "non_goals": ["external-signer backup (OWNER Q5)", "multi-tab coordination (OWNER Q4)"]
+}

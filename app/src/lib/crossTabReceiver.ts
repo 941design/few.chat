@@ -9,6 +9,7 @@
  * cannot bounce back as a new post.
  */
 
+import { suspendBackups } from '@/src/lib/backup/suspension';
 import { subscribeAccountChanged, type StoreChangedMessage } from '@/src/lib/crossTab';
 
 export type CrossTabReceiverActions = {
@@ -76,6 +77,9 @@ export function installAccountChangedReload(reload: () => void): () => void {
   return subscribeAccountChanged(() => {
     if (reloading) return;
     reloading = true;
+    // The unload flush of the reloading page would back up the wiped storage
+    // under this tab's old key.
+    suspendBackups();
     reload();
   });
 }

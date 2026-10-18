@@ -29,9 +29,12 @@ import {
   markBackupDirty,
   activateBackupScheduler,
 } from '@/src/context/BackupContext';
+import { bindBackupIdentity } from '@/src/lib/backup/suspension';
 import type { BackupScheduler } from '@/src/lib/backup/relayBackup';
 
 beforeEach(() => {
+  // As BackupProvider does: the attempt's identity is the active scheduler's.
+  bindBackupIdentity('bb');
   connectNdk.mockReset();
   publishBackup.mockReset();
   lookupBackup.mockReset();
@@ -103,7 +106,7 @@ describe('markBackupDirty — changes are never dropped for want of a scheduler'
     markBackupDirty();
     markBackupDirty(true);
     const scheduler = fakeScheduler();
-    const deactivate = activateBackupScheduler(scheduler as unknown as BackupScheduler);
+    const deactivate = activateBackupScheduler(scheduler as unknown as BackupScheduler, 'bb');
 
     expect(scheduler.markDirty).toHaveBeenCalledTimes(1);
     expect(scheduler.markDirty).toHaveBeenCalledWith(true);
@@ -112,14 +115,14 @@ describe('markBackupDirty — changes are never dropped for want of a scheduler'
 
   it('forwards directly to the active scheduler and queues again once it is gone', () => {
     const first = fakeScheduler();
-    const deactivate = activateBackupScheduler(first as unknown as BackupScheduler);
+    const deactivate = activateBackupScheduler(first as unknown as BackupScheduler, 'bb');
     markBackupDirty(false);
     expect(first.markDirty).toHaveBeenCalledWith(false);
 
     deactivate();
     markBackupDirty();
     const second = fakeScheduler();
-    activateBackupScheduler(second as unknown as BackupScheduler)();
+    activateBackupScheduler(second as unknown as BackupScheduler, 'bb')();
     expect(second.markDirty).toHaveBeenCalledWith(false);
     expect(first.markDirty).toHaveBeenCalledTimes(1);
   });
@@ -127,9 +130,9 @@ describe('markBackupDirty — changes are never dropped for want of a scheduler'
   it('does not replay a change twice', () => {
     markBackupDirty(true);
     const a = fakeScheduler();
-    activateBackupScheduler(a as unknown as BackupScheduler)();
+    activateBackupScheduler(a as unknown as BackupScheduler, 'bb')();
     const b = fakeScheduler();
-    activateBackupScheduler(b as unknown as BackupScheduler)();
+    activateBackupScheduler(b as unknown as BackupScheduler, 'bb')();
     expect(a.markDirty).toHaveBeenCalledTimes(1);
     expect(b.markDirty).not.toHaveBeenCalled();
   });

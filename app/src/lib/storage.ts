@@ -4,6 +4,7 @@ import type {
   Settings,
   UserProfile,
 } from '@/src/types';
+import { suspendBackups } from '@/src/lib/backup/suspension';
 import { STORAGE_KEYS } from '@/src/types';
 import { DEFAULT_THEME_NAME, normalizeThemeName } from '@/src/lib/theme';
 import { AVATAR_BROWSER_CONFIG, capNickname } from '@/src/config/profile';
@@ -188,6 +189,9 @@ export function readOrCreateKeyPackageSlot(mintSlot: () => string): string {
 export type ResetAllDataDeps = { clearIdb?: () => Promise<void> };
 
 export async function resetAllData(deps: ResetAllDataDeps = {}): Promise<void> {
+  // First, before anything is removed: a backup published from here on would
+  // snapshot the half-wiped storage under the old key.
+  suspendBackups();
   if (!isStorageAvailable()) return;
   Object.values(STORAGE_KEYS).forEach((key) => {
     try {

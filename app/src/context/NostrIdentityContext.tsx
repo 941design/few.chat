@@ -31,6 +31,7 @@ import {
 } from '@/src/lib/nostrKeys';
 import { deriveIsFreshIdentity } from '@/src/lib/freshIdentity';
 import { postAccountChangedIfSwitched } from '@/src/lib/crossTab';
+import { detachBackupForReplace } from '@/src/lib/backup/suspension';
 
 export type SignerMode = 'local' | 'nip46' | 'nip07';
 
@@ -408,6 +409,10 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
 
   const replaceIdentity = useCallback(async (newIdentity: StoredNostrIdentity) => {
     const previousPubkey = loadStoredIdentity()?.pubkeyHex;
+    // Before the new identity is persisted: an attempt of the old identity's
+    // backup scheduler must not snapshot mixed state and publish it under the
+    // old key. The new identity's scheduler binds itself on mount.
+    detachBackupForReplace(newIdentity.pubkeyHex);
     saveStoredIdentity(newIdentity);
     // Other tabs still run as the previous identity: tell them to reload (only
     // when the pubkey really changed), now that the new one is persisted.

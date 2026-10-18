@@ -1,0 +1,76 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": "The BackupScheduler bound to the old key kept running while local data was wiped or the identity was switched. The unload after a Danger Zone wipe (visibilitychange -> immediate mark), a peer tab's reload on the account-changed notice, and attempts already in flight across an identity replace could snapshot wiped or foreign storage and publish it as the old account's relay backup. A stale attempt could also connectNdk(oldKey) and rebind the shared NDK signer.",
+  "fix": "New lib/backup/suspension.ts: page-lifetime in-memory suspension + scheduler identity binding. resetAllData suspends first; the account-changed reload suspends before reloading. Suspension disposes the scheduler, makes markBackupDirty a no-op and drops pending marks. publishScheduledBackup bails out when stale (suspended or identity no longer bound) at entry and after every await. publishBackup checks a mayPublish guard as its very last step before the network publish; a dropped attempt keeps the dirty mark and is not retried. replaceIdentity detaches the binding before persisting a different identity (detachBackupForReplace); the new identity's scheduler binds on mount.",
+  "files_modified": [
+    "app/src/context/BackupContext.tsx",
+    "app/src/lib/backup/relayBackup.ts",
+    "app/src/lib/storage.ts",
+    "app/src/lib/crossTabReceiver.ts",
+    "app/src/context/NostrIdentityContext.tsx",
+    "docs/behavior/backup-and-recovery.md",
+    "app/tests/unit/backup/backupDirtyMark.test.ts",
+    "app/tests/unit/backup/coldStartRetry.test.ts",
+    "app/tests/unit/backup/publishScheduledBackup.test.ts",
+    "app/tests/unit/crossTab-accountChanged.test.ts"
+  ],
+  "files_created": [
+    "app/src/lib/backup/suspension.ts",
+    "app/tests/unit/backup/backupSuspension.test.ts",
+    "app/tests/unit/backup/publishGuardRealPublish.test.ts",
+    "app/tests/unit/backup/staleAttemptPaths.test.ts",
+    "bug-reports/backup-empty-snapshot-publish-after-wipe-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/backup/backupSuspension.test.ts",
+      "app/tests/unit/backup/publishGuardRealPublish.test.ts",
+      "app/tests/unit/backup/staleAttemptPaths.test.ts",
+      "app/tests/unit/crossTab-accountChanged.test.ts"
+    ],
+    "pre_fix_failures": 17,
+    "kinds": "suspension semantics (no mark, no replay, scheduler disposed, not persisted); real publishBackup with deferred relay discovery (suspend / identity replace mid-flight -> no network publish, mark kept); stale-attempt paths (no connectNdk(oldKey)); resetAllData and account-changed reload ordering; same-tab identity replace still backs up"
+  },
+  "final": {
+    "passed": 6304,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config",
+    "killed": 115,
+    "timeout": 0,
+    "survived": 7,
+    "no_coverage": 1,
+    "score": 93.5,
+    "survivors": "equivalent: log strings, ok:false literal of a skipped result that nothing reads, optional chaining on a non-null scheduler"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-backup-react.log",
+    "result": "non-relay 72 passed; relay 352 passed, 19 skipped, 1 failed (AC-60 groups-dm-reactions: composer Enter press timed out after 30 s, before any reaction code ran; known undiagnosed load stall, filed as dm-composer-enter-press-hangs-30s); no INVALID marker. groups-dm-reactions rerun 5x in isolation on a fresh relay: 5/5 green (4/4 each).",
+    "status": "green-except-known-flake"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "A guard 'right before publish' was first placed before two awaits (dynamic import + up to 8 s relay discovery); mocked publishBackup tests could not see it. Only a test driving the real publishBackup with deferred discovery proved placement.",
+    "surprised_by": "connectNdk(privateKeyHex) rebinds the shared NDK signer, so even a 'harmless' stale backup attempt silently switches the signer back to the old identity (same root as connectndk-rebinds-external-signer).",
+    "absorbed_from": [],
+    "lead_clarifications": [
+      "Chose suspension over an 'empty snapshot' heuristic (would block legitimately emptied accounts and needs remote state)."
+    ],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/backup/suspension.ts",
+    "app/src/lib/backup/relayBackup.ts",
+    "app/src/context/BackupContext.tsx",
+    "app/src/context/NostrIdentityContext.tsx",
+    "app/src/lib/storage.ts",
+    "app/src/lib/crossTabReceiver.ts"
+  ]
+}

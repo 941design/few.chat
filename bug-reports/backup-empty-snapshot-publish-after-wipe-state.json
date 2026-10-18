@@ -1,0 +1,55 @@
+{
+  "bug_name": "backup-empty-snapshot-publish-after-wipe",
+  "bug_report_file": "bug-reports/backup-empty-snapshot-publish-after-wipe-report.md",
+  "created_at": "2026-10-18T19:45:00Z",
+  "updated_at": "2026-10-18T23:10:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "e69a361",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "NEEDS_REMEDIATION (guard before relay discovery; stale attempt rebinds NDK via connectNdk(oldKey); optional pubkey silently disables; identity-replace window; doc wording; test reset drops listeners)",
+      "codex": "needs-attention (guard before getBackupRelays: up to 8 s window)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "ACCEPTED (sev3 hardening: unbind decision from storage; comment; sev2 test seam)",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T19:45:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-18T21:40:00Z",
+      "trigger": "both reviewers accepted at round 1; lead requested small hardening"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-18T23:10:00Z",
+      "trigger": "full gate green except one known pre-existing load flake, which failed before the changed code ran and passes 5/5 in isolation"
+    }
+  ],
+  "e2e_gate": {
+    "log": "/tmp/claude-501/e2e-gate/full-backup-react.log",
+    "non_relay": "72 passed",
+    "relay": "352 passed / 19 skipped / 1 failed (AC-60 composer key-press stall, pre-reaction; 5/5 green in isolation; backlog dm-composer-enter-press-hangs-30s)",
+    "invalid": false
+  }
+}

@@ -212,12 +212,18 @@ export async function createBackupEvent(
 /**
  * Collect the backup payload, encrypt it, sign it, and publish to relays.
  * Returns { ok: true } on success, or { ok: false, error } if all relays reject.
+ *
+ * `mayPublish` is asked as the very last step, right before the network
+ * publish (after snapshot, signing and relay discovery); when it says no the
+ * event is dropped unpublished and the result is `{ ok: false, skipped: true }`
+ * (not a failure to retry).
  */
 export async function publishBackup(
   signer: EventSigner,
   pubkeyHex: string,
   ndk: NDK,
-): Promise<{ ok: boolean; error?: string }> {
+  mayPublish?: () => boolean,
+): Promise<{ ok: boolean; error?: string; skipped?: true }> {
   try {
     const payload = await collectBackupPayload();
     const eventTemplate = await createBackupEvent(payload, signer, pubkeyHex);
@@ -236,6 +242,10 @@ export async function publishBackup(
     ndkEvent.id = signedEvent.id;
     ndkEvent.sig = signedEvent.sig;
 
+    // Last check, with no await between it and the network publish: relay
+    // discovery above can take seconds, long enough for a wipe or identity
+    // replace to land.
+    if (mayPublish && !mayPublish()) return { ok: false, skipped: true };
     await ndkEvent.publish(relaySet);
     return { ok: true };
   } catch (err) {

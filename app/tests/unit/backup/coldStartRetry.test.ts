@@ -93,6 +93,7 @@ import {
   publishBackup,
   resetBackupRelayListMemo,
 } from '@/src/lib/backup/relayBackup';
+import { bindBackupIdentity } from '@/src/lib/backup/suspension';
 import { publishScheduledBackup } from '@/src/context/BackupContext';
 import { DEFAULT_RELAYS, STORAGE_KEYS } from '@/src/types';
 
@@ -347,6 +348,8 @@ describe('getBackupRelays — a recently timed-out relay-list fetch is not repea
 // ---------------------------------------------------------------------------
 
 function startScheduler(): BackupScheduler {
+  // As BackupProvider does: the attempt's identity is the active scheduler's.
+  bindBackupIdentity(PUB);
   const scheduler = new BackupScheduler(() => publishScheduledBackup(PRIV, PUB));
   scheduler.markDirty(true);
   return scheduler;
