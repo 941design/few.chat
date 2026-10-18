@@ -47,6 +47,16 @@ export interface Reaction {
    * Tombstoned rows are not rendered but are kept for dedup.
    */
   removed: boolean;
+
+  /**
+   * ms since epoch of the NEWEST removal seen for this triple (inbound removal:
+   * created_at * 1000; optimistic: local send time). With `createdAt` (newest
+   * add time) it decides the visible state, last writer wins: live iff
+   * createdAt > removedAt, a tie goes to the removal. Absent on legacy
+   * tombstones (written before this field existed): removal wins over any add.
+   * A row with createdAt 0 and removed: true is a removal seen before any add.
+   */
+  removedAt?: number;
 }
 
 /**

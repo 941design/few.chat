@@ -46,11 +46,28 @@ reactions, and your *other* emoji on the same message, are untouched. Removal sh
 immediately; if it fails to send it is rolled back by **restoring** the reaction, so it
 reappears rather than silently vanishing.
 
-A removal is **permanent for that emoji on that message**. Conflicts are resolved by letting
-a removal always win over an add for the same message-and-emoji — so an out-of-order delivery
-can never resurrect a reaction you took back. That rule has a sharp consequence: once you
-remove an emoji from a message, **re-adding the same emoji does not take** — it shows on your
-own device but reaches no one else. Reacting with a *different* emoji is unaffected.
+You can **add the same emoji again** after removing it, on that message, in groups and
+1:1 conversations alike. For one person, one message and one emoji, the **latest event
+wins**: the reaction is shown only if the newest add is **strictly newer** than the newest
+removal; a tie goes to the removal. The outcome depends only on which events arrive, never
+on the order they arrive in — an out-of-order delivery, or a relay replaying old events,
+can neither resurrect a reaction you took back nor undo one you restored. Every removal is
+remembered, even one that arrives before the add it undoes.
+
+The comparison uses the time each event was created, at one-second resolution. Two limits
+follow from that:
+
+- **Same second.** If you remove and re-add the same emoji within the same second, the
+  re-add is not newer. It shows on your own device but not to others.
+- **Clock skew across devices.** Timestamps come from the sending device's clock. When one
+  identity is used on two devices (for example a second device restored from a backup),
+  their clocks can disagree, and the event from the device whose clock runs ahead wins even
+  if it was made first. On a single device the order is always consistent.
+
+A removal that does not name which emoji it undoes cannot be matched to a specific emoji,
+so it is applied only when it is unambiguous (§8) and is not remembered for ordering: if it
+arrives before the add it undoes, that add stays. Reactions removed by an earlier version of
+the app carry no removal time and stay removed.
 
 ---
 
@@ -133,8 +150,16 @@ emoji it undoes, so only that one is removed; the others stay. A removal that do
 an emoji is applied only when you have exactly one reaction on that message; if it is
 ambiguous (none, or more than one), it is discarded rather than guessed.
 
-**Re-adding an emoji you previously removed from a message.** Does not take (§3) — the
-removal wins permanently; only a different emoji works.
+**Re-adding an emoji you previously removed from a message.** Takes effect when the re-add
+is strictly newer than the removal (§3): it appears for you at once and reaches everyone
+else; your own copy of the re-add, delivered back to you, confirms it without duplicating
+it. A re-add within the same second as the removal does not reach others.
+
+**A removal and an add arrive out of order.** The newest event by creation time decides,
+whatever the arrival order (§3): an add older than or equal to a removal stays removed, and
+a removal older than the add that restored the reaction is ignored. The exception is a
+removal that names no emoji (see §3) — it is not remembered, so an add delivered after it
+stays.
 
 **A member reacts and then leaves the group.** Their existing reactions stay stored and
 visible to the members who remain — leaving does not retract them.
@@ -182,6 +207,10 @@ shipped implementation, and the automated test suite:
 - The `groups-reactions` and `groups-dm-reactions` end-to-end specs and the unit tests for
   reaction aggregation, toggling, and purge — including the assertion that no plaintext
   reaction is published to a public relay.
+- Re-add after removal (bug `reaction-readd-after-removal`): `removedAt` on the stored
+  reaction row and the add/removal ordering in `applyInboundRumor` / `applyOptimisticRemoval`
+  (`app/src/lib/reactions/api.ts`): one row per reaction, newest add vs newest removal,
+  all arrival orders. Tests: `app/tests/unit/reactions/readd-after-removal.test.ts`.
 - Cross-tab refresh: `app/src/lib/reactions/api.ts` (`refreshReactionsFromStorage`) and the
   two-tab unit test `app/tests/unit/reactions/crossTab-reactions.test.ts`
   (bug `cross-tab-reactions-refresh`).

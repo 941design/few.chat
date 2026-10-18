@@ -418,10 +418,10 @@ test.describe('DM reactions UI — story-08', () => {
     // Under suite-accumulated load, relay-confirmation re-renders briefly detach
     // and reattach the badge element, so a single click can land between renders
     // and never invoke the React onClick handler — leaving the reaction in place.
-    // Retry the toggle-off until the badge is gone. This is safe: removal is
-    // permanent (reactions/api.ts applyInboundRumor: "removal wins regardless of
-    // arrival order"), and a removed reaction drops from aggregateForMessage, so
-    // a re-click can never revive an already-removed reaction.
+    // Retry the toggle-off until the badge is gone. This is safe: a re-click
+    // only happens while the badge is still visible, so it is always a removal;
+    // once removed, the late echo of the original add is older than the removal
+    // and cannot revive it (reactions/api.ts: last writer wins per triple).
     await expect(async () => {
       if (await badge.isVisible()) {
         await badge.click({ force: true });

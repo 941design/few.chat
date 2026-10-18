@@ -474,9 +474,10 @@ describe('applyInboundRumor — removal path (AC-10)', () => {
     expect(rows.find((r) => r.id === 'r-caps-hearts')!.removed).toBe(false);
   });
 
-  it('removal rumor with ["emoji", "👍"] but no matching row → returns null, no writes', async () => {
+  it('removal rumor with ["emoji", "👍"] but no matching row → returns null, only a hidden removal-only tombstone is remembered', async () => {
     // The emoji tag is present but no live row for (messageId, reactorPubkey, 👍) exists.
-    // Silent discard per §2.4.
+    // No visible change (null), but the removal time is remembered so a later
+    // out-of-order add cannot resurrect the reaction (last-writer-wins).
     const hearts = makeReaction({
       id: 'r-nomatch-hearts',
       messageId: 'msg-1',
@@ -496,10 +497,13 @@ describe('applyInboundRumor — removal path (AC-10)', () => {
     }));
 
     expect(result).toBeNull();
-    expect(vi.mocked(idbKeyval.set)).not.toHaveBeenCalled();
     const rows = await loadReactions(GROUP_THREAD);
     // The ❤️ row is still present and untouched
     expect(rows.find((r) => r.id === 'r-nomatch-hearts')!.removed).toBe(false);
+    // The 👍 removal is remembered as a hidden tombstone: never counted.
+    const tomb = rows.find((r) => r.emoji === '👍');
+    expect(tomb).toMatchObject({ removed: true, removedAt: 1_000_000 });
+    expect(aggregateForMessage(rows, 'msg-1', 'pubkey-alice').map((a) => a.emoji)).toEqual(['❤️']);
   });
 
   it('["emoji", glyph] tag narrows removal to the matching emoji only (D2 — multi-emoji policy)', async () => {

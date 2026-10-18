@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-17T18:58:54Z",
+  "updated_at": "2026-10-18T00:23:06Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -287,21 +287,8 @@
       "created_at": "2026-07-14",
       "motivation": "Originally locked product decision (epic invite-group-member-from-contacts, DD-4) wanted a pending-but-not-yet-joined contact to stay selectable so an admin could resend a lost/expired invite. Live e2e testing proved this can't work as specced: group.memberPubkeys updates the moment inviteByNpub succeeds (an MLS commit), not when the invitee accepts, so the picker's already-member check can't currently tell 'invited, still pending' apart from 'fully joined'.",
       "behavior": "Today: after A invites B, B's picker option becomes disabled ('already in group') and stays that way until B accepts or the invite is otherwise resolved (e.g. cancelled). There is no way to resend via the picker while pending.",
-      "approach": "The app already computes the right signal for this — groups.tsx's local confirmedPubkeys (a per-member 'has this person sent a profile message in this group yet' Set, currently only used to drive the member-list's Pending badge). Thread that signal (or an equivalent) through to a shared, contacts.ts-reachable form so the invite-picker predicate can distinguish 'pending invite' from 'confirmed member' and re-enable a distinct pending state per the original DD-4 intent.",
+      "approach": "The 'invitation pending' label half is done (2026-10-18, admin-and-invite-guards: invite_pending disabled reason, en 'invitation pending' / de 'Einladung ausstehend'). Remaining: the resend action — OWNER question 3 in bug-reports/LOOP-HANDOFF-2026-10-17.md (cancel + re-invite in one tap recommended if DD-4 stands).",
       "success_signal": "Re-opening the invite picker for a group where a contact was invited but hasn't accepted shows that contact as selectable (not disabled), and resubmitting the invite succeeds."
-    },
-    {
-      "slug": "two-co-admins-leaving-at-nearly",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/leaveEligibility.ts"
-      },
-      "text": "Two co-admins leaving at nearly the same moment can strand a group with zero admins; no spec/AC/ADR records or accepts this",
-      "created_at": "2026-07-19",
-      "motivation": "A group left with zero admins is permanently frozen for membership changes (no invite/remove/rename/grant). The last-admin leave guard is presented as preventing exactly this, so the gap between its intent and its actual guarantee is a silent, unrecorded correctness risk. Surfaced while writing docs/behavior/group-administration.md.",
-      "behavior": "The sole-admin leave block (selectLeaveModalState -> isSoleAdmin) is evaluated against each leaver's most-recently-known adminPubkeys, and leaveGroupImpl performs no admin re-check at execution time. Two admins leaving within the same brief window each pass the block independently and the group can reach zero admins. No spec, acceptance criterion, or ADR records this race or accepts it as a known risk.",
-      "approach": "Decide and record the intended behaviour: accept as a documented risk, or add an execution-time re-check/guard. Capture in the admin-role epic or an ADR.",
-      "kind": "spec-gap"
     },
     {
       "slug": "if-leaver-s-kind-13-departure",
@@ -314,19 +301,6 @@
       "motivation": "This is a silent, unrecoverable divergence between a member's real state (gone) and every remaining member's roster (present, indistinguishable from an active member). Unlike the normal ghost window it never resolves and shows no pending indicator, so remaining members are misled indefinitely. Surfaced while writing docs/behavior/group-administration.md.",
       "behavior": "leaveGroupImpl catches a failed kind-13 send and proceeds with the local purge (soft-leave). When the send fails (e.g. the leaver is offline), no departure signal ever reaches the group: no admin can finalise the removal and no leave-pending/removal-pending state is shown. The out-of-band-leave spec covers the ghost window assuming the signal was sent, but not the send-failed case.",
       "approach": "Record the behaviour and decide whether to mitigate (retry/queue the kind-13 until sent, or surface a local indicator) or accept it as a documented risk in the out-of-band-leave spec.",
-      "kind": "spec-gap"
-    },
-    {
-      "slug": "you-cannot-re-add-reaction-emoji",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/reactions/api.ts"
-      },
-      "text": "You cannot re-add a reaction emoji you previously removed from a message: the reaction store's removal-wins rule permanently discards any later add for the same (message, reactor, emoji), so the re-add shows only locally and reaches no peer",
-      "created_at": "2026-07-19",
-      "motivation": "A silent, confusing UX defect: a user removes 👍 from a message, later taps 👍 again, sees it appear on their own device, but no other participant ever receives it and the local row stays permanently unconfirmed. The user has no indication their re-reaction went nowhere. Surfaced while writing docs/behavior/reactions-and-emoji.md.",
-      "behavior": "The receive/merge path enforces 'removal wins regardless of arrival order' (api.ts ~401-417) to survive out-of-order relay delivery: once a (messageId, reactor, emoji) triple is tombstoned, any later add rumor for the same triple is discarded with no write. The optimistic local insert uses a fresh rumor id and shows on the sender's device, but every peer — and the sender's own inbound echo — discards it, leaving the row optimistic-only (eventId empty) forever. Re-adding a DIFFERENT emoji works; re-adding the same emoji is dead.",
-      "approach": "Decide the intended semantics: either allow re-adding a removed emoji (e.g. make add-wins when the add is strictly newer than the tombstone, keeping out-of-order protection via timestamps/rev), or surface that a removed emoji cannot be re-added. Today's removal-wins rule is order-independent but blocks legitimate re-reactions.",
       "kind": "spec-gap"
     },
     {
@@ -396,6 +370,37 @@
       "behavior": "During unload after resetAllData, and when a peer tab reloads on the cross-tab account-changed notice (visibilitychange -> markBackupDirty(true) -> immediate publish), a scheduler still holding the OLD key can publish a backup of the wiped storage (or, after a seed-phrase restore, of the new identity's profile) under the old account; nothing tears the scheduler down before the wipe/switch. Self-encrypted, so privacy-neutral, but it can overwrite the old account's relay backup.",
       "approach": "Stop/dispose the BackupScheduler (and suppress unload flushes) before resetAllData wipes storage; or refuse to publish a snapshot that is empty when the previous published one was not. Unit test: wipe then unload flush → no publish.",
       "success_signal": "Unit: wipe followed by an unload flush or scheduler tick publishes nothing"
+    },
+    {
+      "slug": "reaction-readd-same-second-not-propagated",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/reactions/rumor.ts",
+        "line": 86
+      },
+      "text": "A reaction re-added in the same second as its removal shows only on the sender's device",
+      "created_at": "2026-10-17",
+      "motivation": "Peers and the sender's other devices keep the reaction removed while the sender sees it live, so the views diverge silently (documented limit of the 2026-10-17 last-writer-wins fix).",
+      "behavior": "buildReactionRumor stamps created_at = floor(now/1000); the store compares at one-second resolution and a tie goes to the removal, so a remove-then-re-add within one second loses on every receiver, while the sender's optimistic row is bumped past the removal second.",
+      "approach": "Let the send path pass a notBefore second (stored tombstone removedAt second + 1) into buildReactionRumor so the re-add rumor is stamped past the removal; group (ChatStoreContext) and DM (ContactChat) callers; drop the limit from docs/behavior/reactions-and-emoji.md §3.",
+      "success_signal": "Unit test: remove then re-add within the same second → the re-add rumor's created_at is strictly greater than the removal's, and a peer store revives it."
+    },
+    {
+      "slug": "dm-own-send-bubble-vanishes-on-publish-reject",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/components/contacts/ContactChat.tsx",
+        "range": [
+          920,
+          930
+        ]
+      },
+      "text": "A just-sent DM bubble vanishes when the relay publish rejects; flakes groups-dm-reactions in full gates",
+      "created_at": "2026-10-18",
+      "motivation": "Three consecutive full e2e gates on the 1-CPU VM (2026-10-17/18) each failed one groups-dm-reactions test (AC-60, AC-47, AC-55) and once dm-block-cross-tab the same way, so the full gate cannot go green reliably; for users a failed send silently erases the typed message with no retry.",
+      "behavior": "sendMessage upserts the optimistic bubble into state only, awaits ndkEvent.publish(), and persists via appendMessage only on success; on a rejection the catch removes the bubble and rethrows, so the bubble appears and disappears within a second and nothing is stored. Passes in isolation and in the dm- subset (52/52); fails only in a loaded full suite (inferred mechanism, publish rejection not yet confirmed by a log).",
+      "approach": "First confirm: log the rejection reason (and connected-relay count) in the catch and capture page console in the failing test. Then decide the UX: keep the bubble marked failed with a retry instead of removing it (product copy en/de), and/or retry the publish once before failing.",
+      "success_signal": "Three consecutive full gates on the 1-CPU VM with no groups-dm-reactions own-bubble failure; a unit test shows a rejected publish leaves a failed-state bubble rather than none."
     }
   ],
   "archive": [

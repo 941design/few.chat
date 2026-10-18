@@ -94,6 +94,45 @@ function endWipe(keys: string[]): void {
   }
 }
 
+// ─── Add / removal ordering (last-writer-wins per triple) ─────────────────────
+//
+// For one (messageId, reactor, emoji) triple the store keeps ONE row whose
+//   createdAt = newest add time seen (ms), removedAt = newest removal time (ms).
+// The reaction is live iff createdAt > removedAt (a tie goes to the removal).
+// Both are folded in with max(), so the visible state depends only on WHICH
+// events arrived, never on their arrival order. A row with removed === true and
+// no removedAt is a legacy tombstone: removal wins over any add.
+
+function sameTriple(r: Reaction, messageId: string, reactor: string, emoji: string): boolean {
+  return r.messageId === messageId && r.reactorPubkey === reactor && r.emoji === emoji;
+}
+
+/** Index of the triple's row (a live one first, for pre-existing duplicates). */
+function findTripleIdx(rows: Reaction[], messageId: string, reactor: string, emoji: string): number {
+  const live = rows.findIndex((r) => sameTriple(r, messageId, reactor, emoji) && !r.removed);
+  if (live !== -1) return live;
+  // Only tombstones: the one with the newest removal decides (legacy = newest).
+  let best = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (!sameTriple(rows[i], messageId, reactor, emoji)) continue;
+    if (best === -1 || (rows[i].removedAt ?? Infinity) > (rows[best].removedAt ?? Infinity)) best = i;
+  }
+  return best;
+}
+
+function isLegacyTombstone(r: Reaction): boolean {
+  return r.removed && r.removedAt === undefined;
+}
+
+/**
+ * Removal vs add, at the one-second resolution of rumor timestamps: an add that
+ * is not in a strictly later second than the removal loses. (Optimistic adds
+ * carry ms; flooring keeps a peer's removal in the same second authoritative.)
+ */
+function isRemovedAt(createdAt: number, removedAt: number | undefined): boolean {
+  return removedAt !== undefined && removedAt >= Math.floor(createdAt / 1000) * 1000;
+}
+
 // ─── Key derivation ───────────────────────────────────────────────────────────
 
 /** Derives the idb-keyval namespace key for a thread. */
@@ -384,7 +423,28 @@ export function applyOptimistic(thread: ReactionThreadKey, row: Reaction): Promi
   return enqueue(key, async (current) => {
     // Idempotent on row id
     if (current.some((r) => r.id === row.id)) return null;
-    return [...current, row];
+    // One row per triple: a dated tombstone of an earlier removal becomes this
+    // optimistic row, keeping its removal time so a stale event still cannot
+    // override it. The local add is always newer than the removal it follows.
+    // An already live row stays as it is (the triple is reacted already; the
+    // echo confirms or the failed send's rollback finds nothing to undo). A
+    // legacy tombstone is kept beside the new row, so a rollback cannot drop it.
+    const idx = findTripleIdx(current, row.messageId, row.reactorPubkey, row.emoji);
+    if (idx === -1 || isLegacyTombstone(current[idx])) return [...current, row];
+    const prev = current[idx];
+    if (!prev.removed) return null;
+    const updated = [...current];
+    updated[idx] = {
+      ...row,
+      removed: false,
+      createdAt: Math.max(
+        row.createdAt,
+        prev.createdAt,
+        prev.removedAt !== undefined ? Math.floor(prev.removedAt / 1000) * 1000 + 1000 : 0,
+      ),
+      ...(prev.removedAt !== undefined ? { removedAt: prev.removedAt } : {}),
+    };
+    return updated;
   });
 }
 
@@ -423,7 +483,11 @@ export async function applyOptimisticRemoval(
     );
     if (idx === -1) return null;
     const updated = [...current];
-    updated[idx] = { ...updated[idx], removed: true };
+    updated[idx] = {
+      ...updated[idx],
+      removed: true,
+      removedAt: Math.max(Date.now(), updated[idx].createdAt),
+    };
     return updated;
   });
 }
@@ -444,6 +508,11 @@ export function rollbackOptimistic(
     const target = current.find((r) => r.id === optimisticId);
     // Only roll back if the row is still in-flight
     if (!target || target.eventId !== '') return null;
+    // A pending add that merged into an earlier tombstone goes back to being
+    // that tombstone; a plain pending insert is dropped.
+    if (target.removedAt !== undefined) {
+      return current.map((r) => (r.id === optimisticId ? { ...r, removed: true, createdAt: 0 } : r));
+    }
     return current.filter((r) => r.id !== optimisticId);
   });
 }
@@ -497,6 +566,9 @@ export async function applyInboundRumor(
   // Extract emoji from content (for the upsert key)
   const emoji = rumor.content;
   const isRemoval = emoji === '-';
+  /** ms timestamp of this rumor (created_at is unix seconds). */
+  const rumorMs = rumor.created_at * 1000;
+  const removalMs = rumorMs;
 
   const key = idbKeyFor(thread);
 
@@ -517,11 +589,9 @@ export async function applyInboundRumor(
     }
 
     if (isRemoval) {
-      // AC-10, D2: tombstone the matching (messageId, reactorPubkey, emoji) row.
-      //
-      // Collect all ["emoji", glyph] tags (case-insensitive tag name; glyph is
-      // case-sensitive Unicode). D2 multi-emoji policy requires we know *which*
-      // emoji is being removed; an ambiguous rumor is silently discarded.
+      // AC-10, D2: the removal names (messageId, reactorPubkey, emoji) via an
+      // ["emoji", glyph] tag (case-insensitive tag name; glyph case-sensitive).
+      // An ambiguous rumor is silently discarded.
       const emojiTags = rumor.tags
         .filter((t) => typeof t[0] === 'string' && t[0].toLowerCase() === 'emoji' && typeof t[1] === 'string' && t[1].length > 0)
         .map((t) => t[1] as string);
@@ -533,83 +603,107 @@ export async function applyInboundRumor(
       }
 
       if (distinctEmojis.length === 1) {
-        // Exactly one emoji tag: narrow tombstone to (messageId, reactorPubkey, emoji).
+        // Always remembered, even with no row yet: an add that arrives later
+        // (out of order) must see this removal.
         const targetEmoji = distinctEmojis[0];
-        const idx = current.findIndex(
-          (r) =>
-            r.messageId === messageId &&
-            r.reactorPubkey === senderPubkey &&
-            r.emoji === targetEmoji &&
-            !r.removed,
-        );
+        const idx = findTripleIdx(current, messageId, senderPubkey, targetEmoji);
         if (idx === -1) {
-          // No matching row — return null (no write), §2.4 silent discard.
-          return null;
+          // Removal-only tombstone: never rendered or counted (removed: true,
+          // createdAt 0 = no add seen). No visible change, so no result.
+          return [
+            ...current,
+            {
+              id: rumor.id,
+              messageId,
+              reactorPubkey: senderPubkey,
+              emoji: targetEmoji,
+              eventId: rumor.id,
+              createdAt: 0,
+              removed: true,
+              removedAt: removalMs,
+            },
+          ];
         }
+        const prev = current[idx];
+        if (isLegacyTombstone(prev)) return null; // removal already wins
+        const removedAt = Math.max(prev.removedAt ?? -1, removalMs);
+        const removed = isRemovedAt(prev.createdAt, removedAt);
+        if (removedAt === prev.removedAt && removed === prev.removed) return null;
         const updated = [...current];
-        updated[idx] = { ...updated[idx], removed: true, eventId: rumor.id };
-        result = { messageId };
+        updated[idx] = {
+          ...prev,
+          removed,
+          removedAt,
+          // A removal that leaves the row live (an even newer add) must not take
+          // its event id: a pending re-add keeps '' so its rollback still works.
+          eventId: removed ? rumor.id : prev.eventId,
+        };
+        if (removed !== prev.removed) result = { messageId };
         return updated;
       }
 
-      // No emoji tag present: tombstone only if exactly one non-removed row
-      // exists for (messageId, reactorPubkey) — unambiguous single-emoji case.
-      // Zero or multiple rows → silent discard (§2.4, D2 safety).
+      // No emoji tag present: the triple cannot be named. Tombstone only if
+      // exactly one live row exists for (messageId, reactorPubkey) — the
+      // unambiguous single-emoji case — and the removal is not older than that
+      // row's add. Otherwise silent discard (§2.4, D2 safety); such a removal
+      // is not remembered, so it cannot guard against a later out-of-order add.
       const candidates = current.filter(
-        (r) => r.messageId === messageId && r.reactorPubkey === senderPubkey && !r.removed,
+        (r) =>
+          r.messageId === messageId &&
+          r.reactorPubkey === senderPubkey &&
+          !r.removed &&
+          isRemovedAt(r.createdAt, removalMs),
       );
       if (candidates.length !== 1) {
         return null;
       }
-      const target = candidates[0];
-      const idx = current.indexOf(target);
+      const idx = current.indexOf(candidates[0]);
       const updated = [...current];
-      updated[idx] = { ...updated[idx], removed: true, eventId: rumor.id };
+      updated[idx] = {
+        ...updated[idx],
+        removed: true,
+        removedAt: Math.max(updated[idx].removedAt ?? -1, removalMs),
+        eventId: rumor.id,
+      };
       result = { messageId };
       return updated;
     }
 
-    // Upsert: (messageId, reactorPubkey, emoji) triple
-    const existingIdx = current.findIndex(
-      (r) =>
-        r.messageId === messageId &&
-        r.reactorPubkey === senderPubkey &&
-        r.emoji === emoji,
-    );
-
-    let updated: Reaction[];
-    if (existingIdx !== -1) {
-      // If the existing row is already removed, a later-arriving reaction event
-      // (out-of-order on the live subscription) must not revive it. The removal
-      // wins regardless of the order events arrive. This prevents the live-sub
-      // re-delivery race where both the reaction and its removal are in the relay
-      // and arrive in reverse order.
-      if (current[existingIdx].removed) {
-        // Removal wins — treat as already-processed, no write.
-        return null;
-      }
-      // Update existing row (e.g. confirm optimistic row by assigning eventId)
-      updated = [...current];
-      updated[existingIdx] = {
-        ...updated[existingIdx],
-        eventId: rumor.id,
-        removed: false,
-      };
-    } else {
-      // New row
-      const newRow: Reaction = {
-        id: rumor.id,
-        messageId,
-        reactorPubkey: senderPubkey,
-        emoji,
-        eventId: rumor.id,
-        createdAt: rumor.created_at * 1000, // rumor.created_at is unix seconds; Reaction.createdAt is ms
-        removed: false,
-      };
-      updated = [...current, newRow];
+    // Add: fold into the triple's single row.
+    const idx = findTripleIdx(current, messageId, senderPubkey, emoji);
+    if (idx === -1) {
+      result = { messageId };
+      return [
+        ...current,
+        {
+          id: rumor.id,
+          messageId,
+          reactorPubkey: senderPubkey,
+          emoji,
+          eventId: rumor.id,
+          createdAt: rumorMs, // Reaction.createdAt is ms
+          removed: false,
+        },
+      ];
     }
-
-    result = { messageId };
+    const prev = current[idx];
+    if (isLegacyTombstone(prev)) return null; // removal wins over any add
+    const createdAt = Math.max(prev.createdAt, rumorMs);
+    const removed = isRemovedAt(createdAt, prev.removedAt);
+    // The add's event id is recorded only when it confirms the optimistic row
+    // it created (id match), or when it is not older than the newest add (it
+    // then legitimately owns the live row). A late echo of an OLDER add never
+    // takes over the row, so a pending re-add keeps its '' eventId (rollback
+    // works). A removed row keeps the removal's event id.
+    let eventId = prev.eventId;
+    if (removed) eventId = prev.eventId;
+    else if (prev.id === rumor.id) eventId = rumor.id;
+    else if (rumorMs >= Math.floor(prev.createdAt / 1000) * 1000) eventId = rumor.id;
+    if (createdAt === prev.createdAt && removed === prev.removed && eventId === prev.eventId) return null;
+    const updated = [...current];
+    updated[idx] = { ...prev, createdAt, removed, eventId };
+    // Visible change = the add took the row (revival, confirmation, newest add).
+    if (eventId !== prev.eventId) result = { messageId };
     return updated;
   });
 

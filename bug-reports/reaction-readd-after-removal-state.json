@@ -1,0 +1,85 @@
+{
+  "bug_name": "reaction-readd-after-removal",
+  "bug_report_file": "bug-reports/reaction-readd-after-removal-report.md",
+  "created_at": "2026-10-17T21:30:00Z",
+  "updated_at": "2026-10-18T02:00:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does a reaction removed and later re-added (strictly newer) revive locally, on a peer, and via the sender's echo confirmation — proven by tests that fail before the fix — for every reaction path sharing the store (group and DM if both)?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Do out-of-order cases stay protected: an add older than or equal to its removal (any arrival order) stays removed; a removal newer than a revived add removes it again; a legacy tombstone without removedAt keeps removal-wins?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "SPEC",
+      "question": "Is removedAt sourced as decided (inbound removal rumor created_at*1000; optimistic local removal send time) and compared against add created_at*1000, with the same-second limit documented in docs/behavior/reactions-and-emoji.md?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "ARCHITECTURE",
+      "question": "Are storage-failure/retry, cross-tab refresh and reconcile paths (recent fixes 14bdb5d, 625c0fa) preserved, with no migration needed for existing stored rows?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "QUALITY",
+      "question": "Minimal change, unit + tsc green, Stryker (concurrency 1) on changed logic with survivors killed/justified, full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml",
+    "bug-reports/admin-and-invite-guards-report.md",
+    "bug-reports/reaction-readd-after-removal-report.md",
+    "bug-reports/stale-welcome-reinvite-report.md"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "1cb4884",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-17T21:30:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-18T02:00:00Z",
+      "trigger": "review_accepted_and_e2e_gate"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "runs": [
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:299 own DM bubble missing), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-2.log",
+        "non_relay": "72 passed",
+        "relay": "345 passed, 2 failed (dm-block-cross-tab:84 send click timeout; groups-dm-reactions:371 own DM bubble vanished), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-3.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:435 own DM bubble vanished), 19 skipped"
+      }
+    ],
+    "verdict": "NOT fully green. Every failure is in the DM own-send path (bubble removed when the relay publish rejects, ContactChat.tsx:920-930), outside this diff; groups-dm-reactions passed 3/3 in isolation and the dm- subset passed 52/52 with the changes. Filed as backlog finding dm-own-send-bubble-vanishes-on-publish-reject. Committed by lead decision under an owner pause request; disclosed to the owner."
+  }
+}

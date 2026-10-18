@@ -1,0 +1,98 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": "applyInboundRumor's upsert matched the FIRST row of the (messageId, reactor, emoji) triple including tombstones and returned null when it was removed ('removal wins regardless of arrival order'), with no notion of time. A re-add therefore never revived a tombstone for peers; for the sender the optimistic re-add was a separate live row (applyOptimistic inserts by id), and its echo matched the older tombstone and was discarded, so it never got an eventId. Round 1: round-0's tombstone-revive still lost removals that arrived with no live row to apply to, and confirming a live row ignored time, so 9 of 24 arrival orders of add@5 remove@10 add@11 remove@12 ended wrong and a stale echo could take over a pending re-add.",
+  "fix": "Last-writer-wins register per (messageId, reactor, emoji) triple, one row each: createdAt = newest add, removedAt = newest removal (max-folded); live iff the add second is strictly later than the removal, tie => removed; legacy tombstones (no removedAt) keep removal-wins. Every emoji-tagged inbound removal is remembered (hidden removal-only tombstone when no row exists, never rendered or counted). Inbound adds only raise times, and take eventId only for the id-matching optimistic row or a not-older add on a non-removed row. applyOptimistic merges into the existing triple row; rollback of a merged re-add returns it to the tombstone. Untagged removals unchanged (not remembered, documented). Group (ChatStoreContext) and DM (ContactChat) share these functions; no caller changes. Round 2 (re-review findings): applyOptimistic appends beside a legacy tombstone and is a no-op on an already-live row (so a failed send cannot delete or tombstone a confirmed reaction); a tagged removal that leaves the row live keeps the pending re-add eventId; 4 regression tests incl. the removal-failure restore path.",
+  "files_changed": [
+    "app/src/lib/reactions/types.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/tests/unit/reactions/readd-after-removal.test.ts",
+    "docs/behavior/reactions-and-emoji.md",
+    "bug-reports/reaction-readd-after-removal-contract.json",
+    "bug-reports/reaction-readd-after-removal-result.json",
+    "app/tests/e2e/groups-dm-reactions.spec.ts"
+  ],
+  "files_created": [
+    "app/tests/unit/reactions/readd-after-removal.test.ts",
+    "bug-reports/reaction-readd-after-removal-contract.json",
+    "bug-reports/reaction-readd-after-removal-result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/reactions/types.ts",
+    "app/src/lib/reactions/api.ts",
+    "docs/behavior/reactions-and-emoji.md"
+  ],
+  "modules_touched": [
+    "app/src/lib/reactions",
+    "app/tests/unit/reactions",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/reactions/readd-after-removal.test.ts": 49
+  },
+  "tests_adapted": {
+    "app/tests/unit/reactions/api.test.ts": "emoji-tagged removal with no matching row now leaves a hidden removal-only tombstone (still returns null, aggregates unaffected) instead of writing nothing"
+  },
+  "counts": {
+    "unit_before": "6058 passed, 1 skipped (265 files)",
+    "unit_after": "6135 passed, 1 skipped (268 files); includes the parallel fixer's tests, 49 are this fix",
+    "tsc": "clean before and after",
+    "lint": "NO_LINT",
+    "e2e": "not run (lead's full gate)"
+  },
+  "verification_answers": {
+    "VQ-1": "YES. readd-after-removal.test.ts (49 tests): revive/confirm on group and DM threads; all permutations of 6 event sets (4-event a1@5 r1@10 a2@11 r2@12, 3-event sets, same-second ties, two removals) assert the final state equals the LWW answer with at most one row and a matching aggregate, on both group and DM threads; local optimistic remove then re-add then echo confirms without duplicates. Round-0 code failed 9 of 24 orders (reviewer probe); all pass now.",
+    "VQ-2": "YES. Permutation tests cover older/equal adds, newer removals, replayed removals and removal-before-add in every order; legacy tombstones (also mixed with dated ones, any stored order) keep removal-wins; replays and stale events cause no write and no visible-change result.",
+    "VQ-3": "YES. removedAt = created_at*1000 for inbound removals, max(Date.now(), createdAt) for optimistic; compared with add time at second resolution, strict > for the add. Same-second limit AND the two-device clock-skew limit documented in docs/behavior/reactions-and-emoji.md section 3; untagged-removal limit documented in section 3 and edge cases.",
+    "VQ-4": "YES. enqueue, reconcileAfterRejectedWrite, refreshReactionsFromStorage and the Web Locks path are untouched; crossTab-reactions, storage-failure replay and all other reaction/marmot suites pass. removedAt is optional and old rows are read as before (legacy tombstone = removal wins), so no migration. Sender echo cases pinned: a late first-add echo leaves the pending re-add row and its '' eventId alone, and rollbackOptimistic of a failed re-add returns it to removed.",
+    "VQ-5": "Minimal change (types.ts +1 optional field, api.ts upsert/removal logic). Unit + tsc green. Stryker concurrency 1: see mutation. Full e2e gate: lead's responsibility (not run)."
+  },
+  "mutation": {
+    "tool": "stryker project install, concurrency 1, scratch config + plain .mjs vitest config in the session scratchpad, vitest.related=false, app/reports untouched; include = reactions api/api-property/readd/crossTab suites",
+    "mutate": "api.ts LWW helpers (97-135), applyOptimistic, applyOptimisticRemoval/rollbackOptimistic, applyInboundRumor",
+    "before": "round-1 first run 84.84% (47 survivors); round 0 was 98.18% on its own (now replaced) logic",
+    "after": "283 killed / 13 survived = 95.61%",
+    "survivors_justified": [
+      "api.ts:118 `>` -> `>=` in tombstone selection: differs only for equal removal times, same effect",
+      "api.ts:133 `removedAt !== undefined &&`: undefined >= n is false anyway (equivalent)",
+      "api.ts:583 eventId dedup (4 mutants): redundant now, every event is idempotent under LWW; pre-existing line",
+      "api.ts:626/660 `?? -1` -> `?? +1`: differs only for a removal at time 0 ms",
+      "api.ts:628 and :697 `removed === prev.removed` conjuncts: removed is derived from the same inputs as removedAt/createdAt, so it cannot differ when those are equal (equivalent)",
+      "api.ts:559, :593 (x2): pre-existing defensive guards on unchanged lines"
+    ]
+  },
+  "e2e": {
+    "command": "make test-e2e-all",
+    "runs": [
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:299 own DM bubble missing), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-2.log",
+        "non_relay": "72 passed",
+        "relay": "345 passed, 2 failed (dm-block-cross-tab:84 send click timeout; groups-dm-reactions:371 own DM bubble vanished), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-3.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:435 own DM bubble vanished), 19 skipped"
+      }
+    ],
+    "verdict": "NOT fully green. Every failure is in the DM own-send path (bubble removed when the relay publish rejects, ContactChat.tsx:920-930), outside this diff; groups-dm-reactions passed 3/3 in isolation and the dm- subset passed 52/52 with the changes. Filed as backlog finding dm-own-send-bubble-vanishes-on-publish-reject. Committed by lead decision under an owner pause request; disclosed to the owner."
+  },
+  "open_questions": [
+    "Removals that name no emoji are not remembered (cannot be mapped to a triple); an add delivered after such a removal stays. Documented.",
+    "One identity on two devices with skewed clocks: the later clock wins. Documented."
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The round-0 report framed the bug as 'revive a tombstone', but correctness needs an order-independent model; only a generated all-permutations test (which I had skipped for a few hand-picked orders) exposes such gaps. The sender's optimistic row plus its older echo made the single-row-per-triple rule necessary.",
+    "surprised_by": "Mixed resolution (optimistic ms vs rumor seconds) forced comparing at second resolution and bumping a local re-add past the removal's second.",
+    "scope": "project_specific",
+    "outcome": "merged"
+  },
+  "outcome": "merged"
+}

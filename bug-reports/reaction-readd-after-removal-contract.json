@@ -1,0 +1,28 @@
+{
+  "bug": "reaction-readd-after-removal",
+  "scope": "A reaction emoji removed from a message could never be added again: the store discarded every later add for a tombstoned (messageId, reactor, emoji) triple, so the re-add showed only locally. Decided 2026-10-17: add wins iff strictly newer than the removal.",
+  "files_to_modify": [
+    "app/src/lib/reactions/types.ts",
+    "app/src/lib/reactions/api.ts",
+    "docs/behavior/reactions-and-emoji.md"
+  ],
+  "files_to_create": [
+    "app/tests/unit/reactions/readd-after-removal.test.ts"
+  ],
+  "behavior": {
+    "model": "Last-writer-wins register per (messageId, reactor, emoji) triple, ONE row per triple: createdAt = newest add ms, removedAt = newest removal ms (both folded with max). Live iff createdAt (floored to the second) > removedAt; ties go to removal. Legacy tombstone (removed, no removedAt) => removal wins.",
+    "inbound_removal": "Emoji-tagged removals are always remembered: raise removedAt on the triple's row, or insert a hidden removal-only tombstone (createdAt 0, removed true) when no row exists. Untagged removals keep the old single-candidate semantics (not remembered; documented limit).",
+    "inbound_add": "Raises createdAt with max(); revives iff newer than removedAt. eventId is taken only by the id-matching optimistic row or by an add not older than the row's add second, never on a removed row, so a stale echo cannot take over a pending re-add.",
+    "optimistic": "applyOptimistic merges into the triple's existing row (keeping removedAt, createdAt bumped past the removal second); applyOptimisticRemoval sets removedAt=max(now, createdAt); rollbackOptimistic of a merged re-add returns the row to its tombstone."
+  },
+  "constraints": [
+    "No migration: removedAt optional, legacy rows keep removal-wins",
+    "enqueue/reconcile/cross-tab refresh/lock paths untouched",
+    "No new publish; privacy invariant untouched"
+  ],
+  "non_goals": [
+    "Sub-second precision of removal vs re-add on peers (documented same-second limit)",
+    "Reordering removal-before-any-add (a removal with no matching row is still discarded, as before)"
+  ],
+  "remediation_round_1": "Reviewer rejected round 0: 9 of 24 arrival orders of a1,r1,a2,r2 ended wrong, and a late a1 echo took over the re-add's eventId. Replaced the tombstone-revive logic by the LWW model above."
+}
