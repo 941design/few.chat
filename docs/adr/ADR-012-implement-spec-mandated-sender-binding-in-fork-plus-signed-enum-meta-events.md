@@ -151,6 +151,26 @@ receiver check requires — here is the fix").
   authorship — acceptable under Decision §1 (deniability is a non-goal).
 - Until the fork lands, the ADR-006 posture remains in force for existing kinds.
 
+## Implementation status (verified 2026-10-18)
+
+Status stays **Proposed** until the owner accepts it (autonomously applied, cf. ADR-011).
+The decision is implemented for every display-only group announcement:
+
+- Sender binding: the 941design ts-mls / marmot-ts forks (app/package.json) surface the
+  authenticated sender; `applicationRumorDispatcher.ts` drops any rumor whose `pubkey`
+  differs before it is marked seen (commits 9eef568, 1924c9b, 8c2b2ff).
+- Per-kind rules: `chatHandler.ts#gateAnnouncement` — leave subject = sender; member-admitted,
+  invite-lifecycle, invite-cancelled, group-renamed require an admin sender; poll-close
+  requires the poll creator. `poll_open` and `call_notice` carry no gate but render with the
+  authenticated sender as actor, ignoring self-declared actor fields.
+- Forwarded profiles: inner kind-0 signature + kind verified (`envelopeVerifier.ts`),
+  author = signed pubkey.
+
+Not built (finding `forwarded-envelope-freshness-and-replay`): the epoch/freshness bound
+and a persistent one-shot set for forwarded envelopes (today an in-memory per-subscription
+`Set`, softened for profiles by last-writer-wins merge); the group-binding check exists but
+no producer emits the `g` tag because profiles are exempt.
+
 ## Evolution Triggers
 
 - Upstream ts-mls/marmot-ts accepts the sender-surfacing change → the fork delta
