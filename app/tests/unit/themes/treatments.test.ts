@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CARD_ELEVATION, BUTTON_ELEVATION, NAV_ELEVATION, CONTENT_PANEL_STYLES } from '@/src/themes/treatments/elevation';
-import { ICON_SETS, resolveIconId } from '@/src/themes/treatments/iconSets';
+import { ICON_SETS, resolveIconId, type IconSetName } from '@/src/themes/treatments/iconSets';
 import { SURFACE_PATTERNS } from '@/src/themes/treatments/patterns';
 import { DYNAMIC_GENERATORS, type StyleToken } from '@/src/themes/treatments/dynamicVisuals';
 
@@ -47,6 +47,25 @@ describe('themes/treatments/iconSets', () => {
       expect(entry.line).toBeTruthy();
       expect(entry.filled).toBeTruthy();
       expect(entry.pixel).toBeTruthy();
+    }
+  });
+
+  // Guard for the two columns no registered theme renders yet: each column stays one
+  // coherent icon family, so a theme switching to filled/pixel gets a consistent set.
+  it('every entry defines exactly the three sets, each from its own icon family, with no id reused within a set', () => {
+    const family: Record<IconSetName, RegExp> = {
+      line: /^lucide:[a-z0-9-]+$/,
+      filled: /^ph:[a-z0-9-]+-fill$/,
+      pixel: /^pixelarticons:[a-z0-9-]+$/,
+    };
+    const seen: Record<IconSetName, Map<string, string>> = { line: new Map(), filled: new Map(), pixel: new Map() };
+    for (const [name, entry] of Object.entries(ICON_SETS)) {
+      expect(Object.keys(entry).sort(), name).toEqual(['filled', 'line', 'pixel']);
+      for (const set of Object.keys(family) as IconSetName[]) {
+        expect(entry[set], `${name}.${set}`).toMatch(family[set]);
+        expect(seen[set].get(entry[set]), `${name}.${set} duplicates`).toBeUndefined();
+        seen[set].set(entry[set], name);
+      }
     }
   });
 

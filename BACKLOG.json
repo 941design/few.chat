@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T10:27:03Z",
+  "updated_at": "2026-10-18T10:27:59Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -272,7 +272,7 @@
       "text": "Make the icon set a real, exercised theme dimension. It is modeled as a per-theme treatment (manifest.treatments.iconSet: line|filled|pixel) but only 'line' is ever rendered — aquarelle is the sole registered theme — so the 'filled' (Phosphor fill) and 'pixel' (pixelarticons) columns of ICON_SETS are dead data that silently bit-rots.",
       "created_at": "2026-07-11",
       "motivation": "Icon family is modeled as a per-theme treatment (ThemeIcon resolves manifest.treatments.iconSet against ICON_SETS), implying themes were meant to vary it. In practice there is one registered theme (aquarelle=line) after commit 8fae18e purged the rest, so 'filled' and 'pixel' are never rendered. Dead branches drift: swapping the live 'line' set from Phosphor to Lucide (2026-07-11) left filled=ph:*-fill and pixel=pixelarticons:* untouched, so a future theme selecting 'filled' or 'pixel' would get a family inconsistent with 'line' and with each other, and no test guards this.",
-      "behavior": "resolveIconId only ever runs with iconSet='line'; the filled/pixel columns of every ICON_SETS entry are unreachable. No registered theme selects them and no coverage asserts the three columns stay mutually consistent.",
+      "behavior": "Only 'line' is rendered (aquarelle is the sole theme). Since 2026-10-18 a guard test (tests/unit/themes/treatments.test.ts) keeps the filled/pixel columns coherent (one icon family per column, all three per entry, no reused ids); the direction (a theme using filled/pixel vs. collapsing to line) is OWNER Q6.",
       "approach": "Decide product intent: (a) icon family becomes a themed/selectable dimension — add at least one theme that uses filled or pixel (or expose it in settings) so all three columns are exercised, plus a test asserting each ICON_SETS entry defines all three coherently; or (b) drop the multi-set abstraction — collapse ICON_SETS to the single active family and remove IconSetName, simplifying ThemeIcon. (a) is the 'make it part of a theme' direction requested here.",
       "success_signal": "Either every IconSetName column is rendered by some registered theme (guarded by a test), or the unused columns are removed and ThemeIcon no longer branches on a set that never varies.",
       "kind": "spec-gap"
