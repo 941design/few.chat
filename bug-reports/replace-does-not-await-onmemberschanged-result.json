@@ -1,0 +1,61 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "EpochResolver calls onMembersChanged without awaiting it, and the onHistorySynced profile send ran as an untracked IIFE; neither was in pendingDrainRef, so teardownForReplace could destroy/rejoin a group while the members-changed body (persist/reload, then `void mlsGroup.commit()` with no re-check) or the profile send still ran on the old MarmotGroup.",
+  "fix": "runTracked(pending, groupId, work) in replaceTeardown.ts tracks the work synchronously from its start; teardownForReplace ends with one more bounded wait for work added during its own waits (skipped after a timeout). The members-changed body moved to membersChangedSync.ts (syncOnMembersChanged): it awaits the auto-commit and gates it on mayCommit (same client and the group not in replacingRef), so a replace blocks it but an effect restart alone does not. MarmotContext runs it (with a warn on failure) and the profile send through runTracked.",
+  "files_modified": [
+    "app/src/lib/marmot/replaceTeardown.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/replaceTeardown.test.ts"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/membersChangedSync.ts",
+    "app/tests/unit/marmot/membersChangedSync.test.ts",
+    "app/tests/unit/marmot/replaceTrackedWiring.test.ts",
+    "bug-reports/replace-does-not-await-onmemberschanged-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/marmot/replaceTeardown.test.ts",
+      "app/tests/unit/marmot/membersChangedSync.test.ts",
+      "app/tests/unit/marmot/replaceTrackedWiring.test.ts"
+    ],
+    "pre_fix_failures": 9,
+    "kinds": "real runTracked + teardownForReplace: suspended work blocks a replace, never-settling work fails closed, rejections/sync throws release it, work started during the leftover or idle wait is waited for, another group's work does not block; one timeout per stuck piece (fake timers); each pending step holds back the next. syncOnMembersChanged: parity cases, no commit while being replaced, commit after an effect restart only, resolves after the commit. Source scan of the MarmotContext wiring."
+  },
+  "final": {
+    "passed": 6410,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (replaceTeardown.ts, membersChangedSync.ts)",
+    "killed": 98,
+    "timeout": 0,
+    "survived": 4,
+    "score": 96.08,
+    "survivors": "equivalent: timesOut's 'done' placeholder (only compared with 'timeout'); the late wait's length guard/empty fallback (Promise.all([]) resolves at once)"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-membersync.log",
+    "result": "non-relay 72 passed; relay 353 passed, 19 skipped, 0 failed; no INVALID marker.",
+    "status": "green"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The added late wait silently made the earlier per-step timeouts redundant for the outcome; only Stryker showed that step ORDER was then untested, which needed explicit 'a pending step holds back the next' tests.",
+    "surprised_by": "Reusing isCurrentGroup for the commit re-check would also drop the auto-commit on a plain effect restart (same MarmotGroup instance); the reviewer caught it, hence the narrower replacingRef-based gate.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/marmot/replaceTeardown.ts",
+    "app/src/lib/marmot/membersChangedSync.ts",
+    "app/src/context/MarmotContext.tsx"
+  ]
+}

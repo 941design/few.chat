@@ -1,0 +1,16 @@
+{
+  "bug": "replace-does-not-await-onmemberschanged",
+  "scope": "Track subscription-started group work (onMembersChanged body + auto-commit, onHistorySynced profile send) in pendingDrainRef; re-check isCurrentGroup() before the auto-commit.",
+  "files_to_modify": [
+    "app/src/lib/marmot/replaceTeardown.ts (runTracked helper: start work, trackPending it, return its promise)",
+    "app/src/context/MarmotContext.tsx (onMembersChanged and profile-send IIFE run through runTracked; commit tracked and guarded)",
+    "app/tests/unit/marmot/replaceTeardown.test.ts"
+  ],
+  "behavior": {
+    "members_changed": "The callback's promise is tracked per group; after its awaits it re-checks isCurrentGroup() before mlsGroup.commit(); the commit promise is tracked too.",
+    "profile_send": "The async send is tracked per group; isCurrentGroup() still gates sendRumorSafe.",
+    "replace": "teardownForReplace waits for these like for whenIdle/drain (fail-closed after REPLACE_WAIT_MS)."
+  },
+  "tests": ["Unit: runTracked + teardownForReplace wait for suspended work; rejection settles; returns the work's result; untracked control"],
+  "non_goals": ["other tabs (stale-replace-other-tab-writes, OWNER Q4)", "subscription-generation-resubscribes-all"]
+}

@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T20:10:22Z",
+  "updated_at": "2026-10-18T21:34:38Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -404,20 +404,6 @@
       "behavior": "createGroupAndInvite waits 60 s for invite-success; Alice's invite instead shows 'This user has not set up their Few identity yet', i.e. Bob's KeyPackage was not found on the relay when Alice fetched it. Only seen on the first relay test (cold next dev compile, fresh relay).",
       "approach": "Check whether the invitee's KeyPackage publish has completed before the inviter fetches (helper readiness wait on the invitee's published KeyPackage), and whether the app's KeyPackage fetch retries once on an empty result; decide between a test readiness gate and a product retry.",
       "success_signal": "Three consecutive full gates without the 'not set up their Few identity' setup failure."
-    },
-    {
-      "slug": "replace-does-not-await-onmemberschanged",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/MarmotContext.tsx",
-        "line": 1980
-      },
-      "text": "Replace does not await onMembersChanged and the onHistorySynced profile send, which can commit or persist on a destroyed group",
-      "created_at": "2026-10-18",
-      "motivation": "Code-reviewer finding (severity 6, inference, not reproduced) on stale-replace-retired-setup-untracked: work started from inside subscribeToGroupMessages that neither whenIdle nor the dispatcher drain covers can outlive a stale-Welcome replace's teardown.",
-      "behavior": "EpochResolver fires onMembersChanged without awaiting it (epochResolver.ts:292-295). Its body awaits persistGroup/reloadGroups and then runs void mlsGroup.commit() with no isCurrentGroup() re-check, so after a replace destroys and rejoins it can commit on the old MarmotGroup object (MLS state save + publish) and persist a stale overlay record. The onHistorySynced profile send checks isCurrentGroup only before sendRumorSafe, and the in-flight send is untracked.",
-      "approach": "Track the onMembersChanged and profile-send promises per group in pendingDrainRef (trackPending) or chain them into the resolver idle; re-check isCurrentGroup() immediately before mlsGroup.commit() and persistGroup.",
-      "success_signal": "Unit test: a replace started while an onMembersChanged body is suspended waits for it (or that body does not commit/persist once the group was replaced)."
     },
     {
       "slug": "deleting-dm-image-while-still-uploading",

@@ -5,6 +5,9 @@
  * running work. The outstanding wait is remembered per group (`pending`), so
  * the next attempt awaits it first and cannot bypass unfinished work.
  */
+// Shorter than a relay publish may take (PUBLISH_TIMEOUT_MS): a replace started
+// while the group's profile send or auto-commit is still publishing is postponed
+// (retryable), never run under it.
 export const REPLACE_WAIT_MS = 3000;
 
 export interface ReplaceTeardownHandles {
@@ -78,6 +81,24 @@ export function trackRetiredSetup(
   );
 }
 
+/**
+ * Starts work the group's subscription runs on its own (the members-changed
+ * body and its auto-commit, the history-synced profile send) and tracks it from
+ * that moment until it settles, so a replace waits for it (bug
+ * replace-does-not-await-onmemberschanged). Returns the work's promise; a
+ * synchronous throw becomes its rejection.
+ */
+export function runTracked<T>(pending: Pending, groupId: string, work: () => Promise<T>): Promise<T> {
+  let result: Promise<T>;
+  try {
+    result = work();
+  } catch (err) {
+    result = Promise.reject(err);
+  }
+  trackPending(pending, groupId, result);
+  return result;
+}
+
 export async function teardownForReplace(
   groupId: string,
   handles: ReplaceTeardownHandles,
@@ -105,6 +126,14 @@ export async function teardownForReplace(
   await bounded(handles.idle?.());
   handles.cancelTimers?.();
   await bounded(handles.drain?.());
+
+  // Work the group's callbacks started during these waits (they may still pass
+  // their current-group check until abort ran) is waited for too. Skipped after
+  // a timeout: the replace throws anyway, and the work stays remembered.
+  if (!timedOut) {
+    const late = Array.from(pending.get(groupId) ?? []);
+    if (late.length > 0 && (await timesOut(Promise.all(late), waitMs))) timedOut = true;
+  }
 
   if (timedOut) {
     throw new Error('old subscription work still running; replace postponed');

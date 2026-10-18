@@ -58,7 +58,8 @@ import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import { useProfile } from '@/src/context/ProfileContext';
 import { useBackup } from '@/src/context/BackupContext';
-import { teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
+import { runTracked, teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
+import { syncOnMembersChanged } from '@/src/lib/marmot/membersChangedSync';
 
 async function startWelcomeSubscription(
   pubkeyHex: string,
@@ -1946,45 +1947,29 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             ndk,
             // Refresh memberPubkeys from MLS state after ingesting any event
             // (commits, proposals, etc. — not just application messages)
-            async (currentMembers) => {
-              if (!isCurrentGroup()) return;
-              // Always bump groupDataVersion so consumers (e.g. isAdmin) re-read
-              // group metadata after any MLS commit, even when member count is unchanged.
-              setGroupDataVersion((v) => v + 1);
-              // Read via groupsRef (always current) rather than the effect's
-              // closure `groups`: this callback outlives its effect run, and the
-              // effect now re-runs only on id-set changes, so the closure would
-              // otherwise go stale across renames/membership updates.
-              const stored = groupsRef.current.find((g) => g.id === group.id);
-              if (stored) {
-                // Resync membership AND the group name from authoritative MLS
-                // metadata after any processed commit. A rename lands here for
-                // remote members: proposeUpdateMetadata({ name }) is silent on the
-                // timeline, so this is the path that makes a rename visible to
-                // everyone (the separate kind-9 notice is display-only).
-                const mlsName = mlsGroup.groupData?.name;
-                const nameChanged =
-                  typeof mlsName === 'string' && mlsName.length > 0 && mlsName !== stored.name;
-                const memberChange = membersChanged(stored.memberPubkeys, currentMembers);
-                if (nameChanged || memberChange) {
-                  await persistGroup({
-                    ...stored,
-                    ...(memberChange ? { memberPubkeys: currentMembers } : {}),
-                    ...(nameChanged ? { name: mlsName } : {}),
-                  });
-                  await reloadGroups();
-                }
-              }
-              // WORKAROUND: auto-commit unapplied proposals (e.g. leave
-              // proposals) so all members can send application messages.
-              // Only works when the local user is admin. Fails silently
-              // if admin promotion was lost — see sendRumorSafe comment.
-              if (Object.keys(mlsGroup.unappliedProposals).length > 0) {
-                void mlsGroup.commit().catch((err: unknown) => {
-                  console.debug('[Marmot] auto-commit unapplied proposals failed:', err);
-                });
-              }
-            },
+            // Tracked per group from its start, so a replace waits for the body
+            // and its auto-commit (bug replace-does-not-await-onmemberschanged).
+            // The resolver ignores the returned promise, so failures are logged here.
+            (currentMembers) =>
+              void runTracked(pendingDrainRef.current, group.id, () =>
+                syncOnMembersChanged(currentMembers, {
+                  isCurrent: isCurrentGroup,
+                  bumpVersion: () => setGroupDataVersion((v) => v + 1),
+                  // Read via groupsRef (always current) rather than the effect's
+                  // closure `groups`: this callback outlives its effect run, and the
+                  // effect now re-runs only on id-set changes, so the closure would
+                  // otherwise go stale across renames/membership updates.
+                  stored: () => groupsRef.current.find((g) => g.id === group.id),
+                  mlsName: () => mlsGroup.groupData?.name,
+                  persist: persistGroup,
+                  reload: reloadGroups,
+                  mayCommit: () => clientRef.current === client && !replacingRef.current.has(group.id),
+                  hasUnappliedProposals: () => Object.keys(mlsGroup.unappliedProposals).length > 0,
+                  commit: () => mlsGroup.commit(),
+                }),
+              ).catch((err: unknown) => {
+                console.warn(`[Marmot] members-changed resync failed for group ${group.id}:`, err);
+              }),
             // Publish profile after historical sync completes (epoch is up-to-date).
             // Uses localProfileRef to avoid stale-closure race.
             () => {
@@ -2004,7 +1989,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
               // attempt's await resolves) is rejected by the check above
               // rather than racing into a duplicate sign+publish.
               profilePublishInFlightRef.current.add(group.id);
-              void (async () => {
+              // Tracked so a replace waits for an in-flight send.
+              void runTracked(pendingDrainRef.current, group.id, async () => {
                 try {
                   // AC-SEND-10 (VQ-S8-006): profilePublishedRef is marked ONLY
                   // after a successful signature+send — never before — so a
@@ -2038,7 +2024,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
                   // retry after a signer failure) is not permanently blocked.
                   if (isCurrentGroup()) profilePublishInFlightRef.current.delete(group.id);
                 }
-              })();
+              });
             },
             { drainApplicationMessages: () => unsubDispatcher!.drain(), signal: groupCtl.signal },
           );

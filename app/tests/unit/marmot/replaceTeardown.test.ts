@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
+import { runTracked, teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
 
 const G = 'g1';
 const never = () => new Promise<void>(() => {});
@@ -222,5 +222,197 @@ describe('trackRetiredSetup — a retired setup and the work it hands over', () 
     expect(handedOver).not.toHaveBeenCalled();
     retired.finish();
     await vi.waitFor(() => expect(handedOver).toHaveBeenCalledTimes(1));
+  });
+});
+
+// Bug replace-does-not-await-onmemberschanged: group work the subscription starts
+// itself (the members-changed body + auto-commit, the history-synced profile send)
+// is tracked from the moment it starts, so a replace waits for it.
+describe('runTracked — subscription-started group work', () => {
+  function gate<T = void>() {
+    let release!: (v: T) => void;
+    let fail!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { release = res; fail = rej; });
+    return { promise, release, fail };
+  }
+
+  it('tracks the work synchronously and returns its result', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const g = gate<number>();
+    const result = runTracked(pending, G, () => g.promise);
+    expect(pending.get(G)!.size).toBe(1);
+    g.release(42);
+    await expect(result).resolves.toBe(42);
+    await vi.waitFor(() => expect(pending.has(G)).toBe(false));
+  });
+
+  it('a replace started while the work is suspended waits for it', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const g = gate();
+    void runTracked(pending, G, async () => { await g.promise; });
+    const destroy = vi.fn();
+    const replace = teardownForReplace(G, {}, pending, 200).then(destroy);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(destroy).not.toHaveBeenCalled();
+    g.release();
+    await replace;
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('work that never settles => the replace throws (fails closed)', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    void runTracked(pending, G, never);
+    await expect(teardownForReplace(G, {}, pending, 20)).rejects.toThrow(/still running/);
+  });
+
+  it('a rejection reaches the caller and still releases the replace', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const g = gate();
+    const result = runTracked(pending, G, () => g.promise);
+    g.fail(new Error('persist failed'));
+    await expect(result).rejects.toThrow('persist failed');
+    await expect(teardownForReplace(G, {}, pending, 50)).resolves.toBeUndefined();
+  });
+
+  it('a synchronous throw of the work is a rejection, not a throw at the call site', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const result = runTracked(pending, G, () => { throw new Error('boom'); });
+    await expect(result).rejects.toThrow('boom');
+    await expect(teardownForReplace(G, {}, pending, 50)).resolves.toBeUndefined();
+  });
+
+  it('work started while the replace waits for leftovers (before abort) is waited for too', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const leftover = gate();
+    trackPending(pending, G, leftover.promise);
+    const destroy = vi.fn();
+    const replace = teardownForReplace(G, {}, pending, 200).then(destroy);
+
+    // the still-current subscription fires a members-changed body now
+    const late = gate();
+    void runTracked(pending, G, async () => { await late.promise; });
+    leftover.release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(destroy).not.toHaveBeenCalled();
+
+    late.release();
+    await replace;
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('late work that never settles => the replace throws', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const leftover = gate();
+    trackPending(pending, G, leftover.promise);
+    const replace = teardownForReplace(G, {}, pending, 30);
+    void runTracked(pending, G, never);
+    leftover.release();
+    await expect(replace).rejects.toThrow(/still running/);
+  });
+
+  it('work started during the idle wait is waited for too', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const late = gate();
+    const destroy = vi.fn();
+    const replace = teardownForReplace(G, {
+      // an ingest finishing now fires the (untracked by idle) callback
+      idle: async () => { void runTracked(pending, G, async () => { await late.promise; }); },
+    }, pending, 200).then(destroy);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(destroy).not.toHaveBeenCalled();
+    late.release();
+    await replace;
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('control: work of another group does not block the replace', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    void runTracked(pending, 'other', never);
+    await expect(teardownForReplace(G, {}, pending, 20)).resolves.toBeUndefined();
+  });
+});
+
+// The late wait must not wait a second time for work that already timed out:
+// a stuck piece costs exactly one waitMs before the replace throws.
+describe('teardownForReplace — one timeout per stuck piece (fake timers)', () => {
+  async function settlesAfter(run: () => Promise<unknown>, waitMs: number): Promise<string[]> {
+    vi.useFakeTimers();
+    try {
+      const seen: string[] = [];
+      void run().then(() => seen.push('ok'), () => seen.push('rejected'));
+      await vi.advanceTimersByTimeAsync(waitMs - 1);
+      seen.push('|');
+      await vi.advanceTimersByTimeAsync(2);
+      return seen;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it.each([
+    ['setup', { setup: never() }],
+    ['idle', { idle: never }],
+    ['drain', { drain: never }],
+  ] as const)('a stuck %s rejects right after one waitMs', async (_name, handles) => {
+    expect(await settlesAfter(() => teardownForReplace(G, handles, new Map(), 100), 100)).toEqual(['|', 'rejected']);
+  });
+
+  it('a stuck leftover rejects right after one waitMs', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    trackPending(pending, G, never());
+    expect(await settlesAfter(() => teardownForReplace(G, {}, pending, 100), 100)).toEqual(['|', 'rejected']);
+  });
+
+  it('settled work only: no wait at all', async () => {
+    expect(await settlesAfter(() => teardownForReplace(G, { idle: async () => {} }, new Map(), 100), 1)).toEqual(['ok', '|']);
+  });
+});
+
+// Each step waits for the one before it: the late wait would still catch a skipped
+// wait, but the steps would then run under the unfinished work.
+describe('teardownForReplace — a pending step holds back the next', () => {
+  function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>((r) => { release = r; });
+    return { promise, release };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 10));
+
+  it('leftover work holds back abort', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const g = gate();
+    trackPending(pending, G, g.promise);
+    const abort = vi.fn();
+    const replace = teardownForReplace(G, { abort }, pending, 200);
+    await tick();
+    expect(abort).not.toHaveBeenCalled();
+    g.release();
+    await replace;
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('the setup holds back unsub', async () => {
+    const g = gate();
+    const unsub = vi.fn();
+    const replace = teardownForReplace(G, { setup: g.promise, unsub }, new Map(), 200);
+    await tick();
+    expect(unsub).not.toHaveBeenCalled();
+    g.release();
+    await replace;
+    expect(unsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('the idle wait holds back cancelTimers and drain', async () => {
+    const g = gate();
+    const cancelTimers = vi.fn();
+    const drain = vi.fn(async () => {});
+    const replace = teardownForReplace(G, { idle: () => g.promise, cancelTimers, drain }, new Map(), 200);
+    await tick();
+    expect(cancelTimers).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+    g.release();
+    await replace;
+    expect(cancelTimers).toHaveBeenCalledTimes(1);
+    expect(drain).toHaveBeenCalledTimes(1);
   });
 });
