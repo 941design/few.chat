@@ -11,7 +11,16 @@ let ndkInstance: NDK | null = null;
 /** Track the private key currently bound to ndkInstance.signer. */
 let signerPrivateKeyHex: string | null = null;
 
+/**
+ * The NIP-07/NIP-46 signer applied via applyNdkSigner, until released.
+ * While set, a privateKeyHex passed to getNdk/connectNdk does NOT rebind: those
+ * callers pass the stored local key out of habit, and rebinding would sign the
+ * user's publishes with a different identity than the connected signer.
+ */
+let externalSigner: NDKSigner | null = null;
+
 function applySigner(ndk: NDK, privateKeyHex: string): void {
+  if (externalSigner) return;
   if (signerPrivateKeyHex === privateKeyHex && ndk.signer) return;
   ndk.signer = new NDKPrivateKeySigner(privateKeyHex);
   signerPrivateKeyHex = privateKeyHex;
@@ -19,7 +28,8 @@ function applySigner(ndk: NDK, privateKeyHex: string): void {
 
 /**
  * Get or create the global NDK singleton.
- * Pass a privateKeyHex to bind/rebind the signer to that key.
+ * Pass a privateKeyHex to bind/rebind the signer to that key (ignored while an
+ * external signer is applied).
  * Returns null on server (SSR safety).
  */
 export function getNdk(privateKeyHex?: string): NDK | null {
@@ -29,6 +39,7 @@ export function getNdk(privateKeyHex?: string): NDK | null {
     ndkInstance = new NDK({
       explicitRelayUrls: [...DEFAULT_RELAYS],
     });
+    if (externalSigner) ndkInstance.signer = externalSigner;
   }
 
   if (privateKeyHex) {
@@ -40,8 +51,9 @@ export function getNdk(privateKeyHex?: string): NDK | null {
 
 /**
  * Connect the NDK singleton to relays. Safe to call multiple times.
- * Always rebinds the signer to the supplied key — callers that pass a new
- * privateKeyHex (e.g. after identity restore) get traffic signed with that key.
+ * Rebinds the signer to the supplied key — callers that pass a new
+ * privateKeyHex (e.g. after identity restore) get traffic signed with that key —
+ * unless an external signer is applied, which stays bound.
  */
 export async function connectNdk(privateKeyHex: string): Promise<NDK> {
   const ndk = getNdk(privateKeyHex)!;
@@ -152,16 +164,25 @@ export function applyRelayChangesToPool(
 }
 
 /**
- * Bind an external NDK signer (NIP-46 or NIP-07) to the live NDK singleton.
+ * Bind an external NDK signer (NIP-46 or NIP-07) to the NDK singleton.
  * Used by Stories 04/05 after the bunker/extension connection is established.
- * No-ops silently if NDK has not been initialised yet (safe-to-call-early contract).
+ * The signer stays bound across getNdk/connectNdk(privateKeyHex) calls until
+ * releaseNdkExternalSigner; if NDK is not initialised yet, it is applied on creation.
  */
 export function applyNdkSigner(signer: NDKSigner): void {
-  if (!ndkInstance) return;
-  ndkInstance.signer = signer;
-  // Clear the tracked private key so a subsequent getNdk(privateKeyHex) call
-  // is not short-circuited and does not accidentally overwrite the external signer.
+  externalSigner = signer;
   signerPrivateKeyHex = null;
+  if (ndkInstance) ndkInstance.signer = signer;
+}
+
+/**
+ * Return NDK to local-key signing after the external signer is disconnected.
+ * With a key, binds it immediately; with null, the next getNdk/connectNdk(key) binds.
+ */
+export function releaseNdkExternalSigner(privateKeyHex: string | null): void {
+  externalSigner = null;
+  signerPrivateKeyHex = null;
+  if (privateKeyHex && ndkInstance) applySigner(ndkInstance, privateKeyHex);
 }
 
 /**
@@ -179,4 +200,5 @@ export function getNdkInstance(): NDK | null {
 export function _resetNdkSingleton(): void {
   ndkInstance = null;
   signerPrivateKeyHex = null;
+  externalSigner = null;
 }

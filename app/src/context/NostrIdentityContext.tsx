@@ -325,14 +325,12 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       });
     }
 
-    // Apply to NDK singleton
+    // Everything that can throw (module loads, payload, storage quota) runs
+    // before the signer is applied: applyNdkSigner sticks until a disconnect,
+    // so a failed activation must not leave it bound while the mode stays local.
     const { applyNdkSigner } = await import('@/src/lib/ndkClient');
-    applyNdkSigner(signer);
-
-    // Build the EventSigner adapter and set the global override
     const { createNip46EventSigner, activeEventSignerOverride } = await import('@/src/lib/marmot/signerAdapter');
     const eventSigner = createNip46EventSigner(signer);
-    activeEventSignerOverride.current = eventSigner;
 
     // Persist session payload (no private key stored — AC-SIGNER-5)
     const payload = signer.toPayload();
@@ -344,6 +342,10 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
         localStorage.removeItem(STORAGE_KEYS.nostrIdentity);
       }
     }
+
+    // Apply to the NDK singleton and the global EventSigner override (MarmotContext)
+    applyNdkSigner(signer);
+    activeEventSignerOverride.current = eventSigner;
 
     pendingNip46SignerRef.current = signer;
     setSignerModeState('nip46');
@@ -376,13 +378,12 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       });
     }
 
-    // Apply to NDK singleton
+    // Load everything first (see _activateNip46Signer), then apply to the NDK
+    // singleton and the global EventSigner override (MarmotContext).
     const { applyNdkSigner } = await import('@/src/lib/ndkClient');
-    applyNdkSigner(signer);
-
-    // Build the EventSigner adapter and set the global override
     const { createNip07EventSigner, activeEventSignerOverride } = await import('@/src/lib/marmot/signerAdapter');
     const eventSigner = createNip07EventSigner(signer);
+    applyNdkSigner(signer);
     activeEventSignerOverride.current = eventSigner;
 
     setSignerModeState('nip07');
@@ -418,7 +419,9 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     // when the pubkey really changed), now that the new one is persisted.
     postAccountChangedIfSwitched(previousPubkey, newIdentity.pubkeyHex);
     // Rebind the global NDK signer immediately so any in-flight or follow-up
-    // relay traffic uses the new private key, not the previous identity's.
+    // relay traffic uses the new private key, not the previous identity's
+    // (local mode only: an applied external signer stays bound, like
+    // activeEventSignerOverride).
     if (typeof window !== 'undefined') {
       const { getNdk } = await import('@/src/lib/ndkClient');
       getNdk(newIdentity.privateKeyHex);
@@ -555,13 +558,14 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     pendingNip46SignerRef.current?.stop?.();
     pendingNip46SignerRef.current = null;
 
-    // Restore local NDK signer
+    // Restore local NDK signer. Release first, unconditionally: without a stored
+    // identity the new key only exists after async generation, and the stopped
+    // external signer must not stay bound meanwhile (or forever, if it fails).
     const stored = loadStoredIdentity();
-    if (stored) {
-      import('@/src/lib/ndkClient').then(({ getNdk }) => {
-        getNdk(stored.privateKeyHex);
-      }).catch(() => {});
-    } else {
+    import('@/src/lib/ndkClient').then(({ releaseNdkExternalSigner }) => {
+      releaseNdkExternalSigner(stored?.privateKeyHex ?? null);
+    }).catch(() => {});
+    if (!stored) {
       // No local identity: generate one
       void generateIdentityFromSeed().then(async ({ seedHex, privateKeyHex }) => {
         const pubkeyHex = await derivePublicKeyHex(privateKeyHex);
@@ -621,13 +625,14 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
    * Mirrors disconnectBunker but without any session payload to delete.
    */
   const disconnectNip07 = useCallback(() => {
-    // Restore local NDK signer
+    // Restore local NDK signer. Release first, unconditionally: without a stored
+    // identity the new key only exists after async generation, and the stopped
+    // external signer must not stay bound meanwhile (or forever, if it fails).
     const stored = loadStoredIdentity();
-    if (stored) {
-      import('@/src/lib/ndkClient').then(({ getNdk }) => {
-        getNdk(stored.privateKeyHex);
-      }).catch(() => {});
-    } else {
+    import('@/src/lib/ndkClient').then(({ releaseNdkExternalSigner }) => {
+      releaseNdkExternalSigner(stored?.privateKeyHex ?? null);
+    }).catch(() => {});
+    if (!stored) {
       void generateIdentityFromSeed().then(async ({ seedHex, privateKeyHex }) => {
         const pubkeyHex = await derivePublicKeyHex(privateKeyHex);
         const newId = { privateKeyHex, pubkeyHex, seedHex };

@@ -1,0 +1,55 @@
+{
+  "bug_name": "connectndk-rebinds-external-signer",
+  "bug_report_file": "bug-reports/connectndk-rebinds-external-signer-report.md",
+  "created_at": "2026-10-18T23:30:00Z",
+  "updated_at": "2026-10-19T01:40:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "low",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "60178d8",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "ACCEPTED (sev4: disconnect without stored identity keeps the stopped signer until async key generation; sev3: activation can throw after applying; sev2: comment rot) — all addressed",
+      "codex": "approve"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "ACCEPTED (sev3 optional: activation ordering has no unit test, consistent with the no-jsdom convention; accepted gap, covered by review + e2e)",
+      "codex": "approve (round 0; remediation followed reviewer suggestions)"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T23:30:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-19T00:10:00Z",
+      "trigger": "both reviewers accepted; reviewer findings remediated"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-19T01:40:00Z",
+      "trigger": "full gate green except one known pre-existing cold-start flake in a local-mode path; 5/5 green in isolation"
+    }
+  ],
+  "e2e_gate": {
+    "log": "/tmp/claude-501/e2e-gate/full-signer.log",
+    "non_relay": "72 passed",
+    "relay": "348 passed / 19 skipped / 1 failed / 4 did not run (dm-block-contact setup KeyPackage cold-start flake; 5/5 green in isolation; backlog invite-fresh-peer-fails-with-has)",
+    "invalid": false
+  }
+}

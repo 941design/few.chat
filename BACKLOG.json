@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T15:02:03Z",
+  "updated_at": "2026-10-18T16:50:46Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -367,19 +367,6 @@
       "approach": "Filter rendered messages by groupId === threadId before passing them to ChatBox; keep a per-thread ref of pending own sends and merge it into seedThreadMessages (or re-upsert after appendMessage when the thread is current)."
     },
     {
-      "slug": "connectndk-rebinds-external-signer",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/ndkClient.ts",
-        "line": 46
-      },
-      "text": "connectNdk(privateKeyHex) rebinds the NDK singleton to the stored local key, silently replacing an active NIP-07/NIP-46 signer",
-      "created_at": "2026-10-18",
-      "motivation": "Found while gating backups on signer mode (2026-10-18): getNdk(privateKeyHex) calls applySigner whenever a key is passed, and applyNdkSigner clears the tracked key so the next call always rebinds. DM send/reaction/history paths call connectNdk(privateKeyHex) with the local key, so in external-signer mode NDK can sign with the local key instead of the external signer.",
-      "behavior": "In NIP-07/NIP-46 mode, any connectNdk(privateKeyHex) call (ContactChat send, reactions, history fetch) swaps NDK's signer back to the stored local key; publishes after that are signed by the local key until the external signer is re-applied.",
-      "approach": "Make connectNdk/getNdk skip the rebind while an external signer is active (signer-mode aware), or have callers use getNdkInstance()+connect when not in local mode; add a unit test that an applied external signer survives connectNdk(localKey). Ties into OWNER Q7 (reject a mismatched signer)."
-    },
-    {
       "slug": "stale-replace-other-tab-writes",
       "scope": "any",
       "anchor": {
@@ -429,6 +416,20 @@
       "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer).",
       "approach": "Capture an in-page long-task/performance trace around the thread-open history load under CPU throttling to find the main-thread blocker; consider a per-test relay wipe or unique keys between DM reaction tests.",
       "success_signal": "Three consecutive full gates without a composer key-press timeout."
+    },
+    {
+      "slug": "invite-fresh-peer-fails-with-has",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/helpers/group-setup.ts",
+        "line": 284
+      },
+      "text": "Invite of a fresh peer fails with 'has not set up their Few identity yet' on the cold first relay test",
+      "created_at": "2026-10-18",
+      "motivation": "Second sighting on the 1-CPU VM (2026-10-18, gate full-signer: dm-block-contact :146, first test of the relay bucket); it fails the setup step and skips the spec's 4 serial tests, turning a 65-min gate red.",
+      "behavior": "createGroupAndInvite waits 60 s for invite-success; Alice's invite instead shows 'This user has not set up their Few identity yet', i.e. Bob's KeyPackage was not found on the relay when Alice fetched it. Only seen on the first relay test (cold next dev compile, fresh relay).",
+      "approach": "Check whether the invitee's KeyPackage publish has completed before the inviter fetches (helper readiness wait on the invitee's published KeyPackage), and whether the app's KeyPackage fetch retries once on an empty result; decide between a test readiness gate and a product retry.",
+      "success_signal": "Three consecutive full gates without the 'not set up their Few identity' setup failure."
     }
   ],
   "archive": [

@@ -1,0 +1,56 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "applyNdkSigner cleared the tracked local key but remembered nothing, so every later getNdk/connectNdk(privateKeyHex) (DM send/edit/delete, reactions, history, watchers) put a private-key signer for the stored local key back on the NDK singleton, signing publishes with the local key instead of the connected NIP-07/NIP-46 signer.",
+  "fix": "ndkClient remembers the applied external signer: applySigner skips while it is set, the singleton is created with it, and only releaseNdkExternalSigner (called first in disconnectBunker/disconnectNip07) returns NDK to a local key. _activateNip46Signer/_activateNip07Signer do all throwing work before applying, so a failed activation leaves nothing bound.",
+  "files_modified": [
+    "app/src/lib/ndkClient.ts",
+    "app/src/context/NostrIdentityContext.tsx",
+    "docs/behavior/profiles-and-identity.md"
+  ],
+  "files_created": [
+    "app/tests/unit/ndkExternalSignerSticky.test.ts",
+    "bug-reports/connectndk-rebinds-external-signer-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/ndkExternalSignerSticky.test.ts"
+    ],
+    "pre_fix_failures": 6,
+    "kinds": "real singleton + real signers: sticky across connectNdk/getNdk(localKey) with signed-event pubkey; early apply before creation; release with/without key; local-mode rebind; getNdk() without key keeps signer; default relays; SSR null"
+  },
+  "final": {
+    "passed": 6314,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config",
+    "killed": 31,
+    "timeout": 0,
+    "survived": 1,
+    "score": 96.88,
+    "survivors": "equivalent: `if (externalSigner)` on singleton creation mutated to true assigns null instead of leaving undefined before any key is bound"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-signer.log",
+    "result": "non-relay 72 passed; relay 348 passed, 19 skipped, 1 failed + 4 did not run (dm-block-contact :146 setup: invitee KeyPackage not found on the cold first relay test, 'has not set up their Few identity yet'; local-mode path, signer binding unchanged there; filed as invite-fresh-peer-fails-with-has; the 4 are that spec's serial dependents); no INVALID marker. dm-block-contact rerun 5x in isolation on a fresh relay: 5/5 green (5/5 each).",
+    "status": "green-except-known-flake"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The sticky signer removed an accidental self-heal (the next connectNdk rebound to the local key), so every exit from external mode and every failed activation had to be audited; the reviewer found two such paths.",
+    "surprised_by": "In NIP-46 mode the stored local identity is deleted on activation and a fresh random key is generated on the next mount, so the old rebind could sign DMs under an entirely unrelated identity.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/ndkClient.ts",
+    "app/src/context/NostrIdentityContext.tsx"
+  ]
+}

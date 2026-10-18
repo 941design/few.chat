@@ -1,0 +1,17 @@
+{
+  "bug": "connectndk-rebinds-external-signer",
+  "scope": "Keep an applied external (NIP-07/NIP-46) signer on the NDK singleton across connectNdk/getNdk(localKey) calls; only an explicit disconnect returns NDK to a local key.",
+  "files_to_modify": [
+    "app/src/lib/ndkClient.ts (remember the external signer; applySigner skips while it is set; apply it on singleton creation; releaseNdkExternalSigner(privateKeyHex))",
+    "app/src/context/NostrIdentityContext.tsx (disconnectBunker/disconnectNip07 release instead of getNdk)",
+    "docs/behavior (signer topic, if it states the signing identity)"
+  ],
+  "behavior": {
+    "sticky": "applyNdkSigner(ext) then getNdk(k)/connectNdk(k) leaves ndk.signer === ext.",
+    "early_apply": "applyNdkSigner before the singleton exists: the singleton is created with ext.",
+    "release": "releaseNdkExternalSigner(k) clears ext and binds a private-key signer for k; releaseNdkExternalSigner(null) clears ext so the next getNdk(k) binds k.",
+    "local_unchanged": "Without an external signer, getNdk(k) binds k and rebinds when k changes."
+  },
+  "tests": ["Unit ndkClient signer binding cases above against the real singleton, incl. a signed event's pubkey"],
+  "non_goals": ["rejecting a mismatched signer (OWNER Q7)", "the NIP-46 local-identity regeneration on mount", "callers that sign directly with createPrivateKeySigner (they already prefer activeEventSignerOverride)"]
+}

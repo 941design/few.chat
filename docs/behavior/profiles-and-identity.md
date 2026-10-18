@@ -36,7 +36,9 @@ messages provably yours. Its public half has a shareable form (an **npub**) you 
 they can add you. Its private half normally **stays on your device** (and is what a backup
 protects — see the backup document); alternatively the app can delegate signing to an
 external signer — a browser extension or a remote signing service — in which case the private
-key lives there instead of on the device.
+key lives there instead of on the device. While an external signer is connected, the
+messages, reactions and edits the app publishes are signed by it; disconnecting it returns
+signing to a key on the device.
 
 Being invitable to groups requires publishing small **cryptographic key packages** to
 relays. These are the one identity-related thing that *is* public — but they carry **no
