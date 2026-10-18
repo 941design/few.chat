@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T15:01:53Z",
+  "updated_at": "2026-10-18T15:02:03Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -340,20 +340,6 @@
       "behavior": "Per-tab in-memory receipt counters are not ordered across tabs and the lease get-max-set is serialised only in-tab (a tab can regress the persisted mark); allocateVoteSeq is cross-tab unique only where navigator.locks exists.",
       "approach": "Resolve under multi-tab-mls-cache-coherence: shared lock around the lease write, or a single-writer tab.",
       "success_signal": "Two-instance unit test with shared IDB orders receipts and seqs across instances without Web Locks"
-    },
-    {
-      "slug": "reaction-readd-same-second-not-propagated",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/reactions/rumor.ts",
-        "line": 86
-      },
-      "text": "A reaction re-added in the same second as its removal shows only on the sender's device",
-      "created_at": "2026-10-17",
-      "motivation": "Peers and the sender's other devices keep the reaction removed while the sender sees it live, so the views diverge silently (documented limit of the 2026-10-17 last-writer-wins fix).",
-      "behavior": "buildReactionRumor stamps created_at = floor(now/1000); the store compares at one-second resolution and a tie goes to the removal, so a remove-then-re-add within one second loses on every receiver, while the sender's optimistic row is bumped past the removal second.",
-      "approach": "Let the send path pass a notBefore second (stored tombstone removedAt second + 1) into buildReactionRumor so the re-add rumor is stamped past the removal; group (ChatStoreContext) and DM (ContactChat) callers; drop the limit from docs/behavior/reactions-and-emoji.md §3.",
-      "success_signal": "Unit test: remove then re-add within the same second → the re-add rumor's created_at is strictly greater than the removal's, and a peer store revives it."
     },
     {
       "slug": "forwarded-envelope-freshness-and-replay",

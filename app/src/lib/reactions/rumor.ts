@@ -35,6 +35,10 @@ const REACTION_KIND = 7;
  * @param params.isRemoval         - When true, content is "-" instead of the emoji glyph.
  *                                   Also adds an ["emoji", emoji] tag so receivers can
  *                                   identify which reaction is being removed (multi-emoji D2).
+ * @param params.notBeforeSec      - Floor (unix seconds) for created_at, computed by stampFloorFor inside prepareOwnReaction.
+ *                                   created_at = max(floor(now), notBeforeSec), so a rumor is never
+ *                                   stamped older than the sender's own latest state for the triple
+ *                                   (receivers compare at one-second resolution).
  *
  * @returns An unsigned rumor with no sig field. id is the canonical NIP-01 SHA-256 hash.
  * @throws  When emoji is an empty string.
@@ -46,8 +50,9 @@ export function buildReactionRumor(params: {
   targetAuthorPubkey?: string;
   selfPrivKeyHex: string;
   isRemoval?: boolean;
+  notBeforeSec?: number;
 }): UnsignedRumor {
-  const { emoji, targetMessageId, targetMessageKind, targetAuthorPubkey, selfPrivKeyHex, isRemoval } = params;
+  const { emoji, targetMessageId, targetMessageKind, targetAuthorPubkey, selfPrivKeyHex, isRemoval, notBeforeSec } = params;
 
   if (!emoji) {
     throw new Error('buildReactionRumor: emoji must be a non-empty string');
@@ -83,7 +88,9 @@ export function buildReactionRumor(params: {
     tags.push(['emoji', emoji]);
   }
 
-  const created_at = Math.floor(Date.now() / 1000);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const created_at =
+    notBeforeSec !== undefined && Number.isFinite(notBeforeSec) ? Math.max(nowSec, notBeforeSec) : nowSec;
 
   // Construct a partial rumor to compute the canonical NIP-01 id.
   // getEventHash serialises [0, pubkey, created_at, kind, tags, content] and SHA-256s it.

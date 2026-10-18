@@ -29,7 +29,7 @@ import {
 import type { ReactionAggregate } from '@/src/lib/reactions/api';
 import {
   applyOptimistic,
-  applyOptimisticRemoval,
+  prepareOwnReaction,
   rollbackOptimistic,
   subscribeReactions,
   loadReactions,
@@ -690,14 +690,17 @@ export function ChatStoreProvider({
   /**
    * Send a kind-7 group reaction.
    *
-   * Mirrors ContactChat.tsx handleReact — build rumor first so its id is
-   * available before the optimistic write (guarantees optimistic row id ==
-   * published event id, matching AC-43's rationale for the DM path).
+   * Mirrors ContactChat.tsx handleReact.
    *
-   * 1. Build kind-7 rumor via buildReactionRumor — no p tag for groups (spec §3.3, AC-36).
-   * 2. Branch on isRemoval for the optimistic write (AC-35, AC-59):
-   *    - remove path → applyOptimisticRemoval flips the existing add row in place.
-   *    - add path → applyOptimistic inserts a new row keyed on rumor.id.
+   * 1. prepareOwnReaction (AC-36, AC-35, AC-59) builds the kind-7 rumor exactly
+   *    once via buildReactionRumor (no p tag for groups, spec §3.3), so the
+   *    optimistic row id == published event id. In the same write-queue step it
+   *    floors the rumor's stamp at our own latest state for the triple and
+   *    persists the optimistic state with that stamp:
+   *    - remove path → the existing live row is tombstoned in place.
+   *    - add path → a row keyed on rumor.id is inserted (or the triple's
+   *      tombstone is revived).
+   * 2. (Prepare failure) Throws before anything is sent; nothing to roll back.
    * 3. Send via sendRumorSafe (group.sendApplicationRumor with retry) (AC-36).
    * 4. On failure: branch on isRemoval for the rollback (D7, AC-37, AC-59):
    *    - remove path → re-insert a fresh removed:false row (restores badge).
@@ -713,37 +716,27 @@ export function ChatStoreProvider({
 
       const thread = { kind: 'group' as const, groupId };
 
-      // AC-36: build rumor exactly once so the optimistic row id == published event id.
-      // No p tag for groups (spec §3.3).
-      const rumor = buildReactionRumor({
+      // AC-36 / AC-35 / AC-59: prepareOwnReaction builds the rumor exactly once
+      // (optimistic row id == published event id) and, in the same write-queue
+      // step, floors its stamp at our own latest state for this triple and
+      // persists the optimistic add row / tombstone with that same stamp, so
+      // same-second remove/re-add converge on every receiver.
+      const { rumor } = await prepareOwnReaction(thread, {
+        messageId: targetMessage.id,
+        reactorPubkey: pubkey,
         emoji,
-        targetMessageId: targetMessage.id,
-        targetMessageKind: CHAT_MESSAGE_KIND, // kind 9 for group messages
-        targetAuthorPubkey: undefined, // groups omit p tag
-        selfPrivKeyHex: privateKeyHex,
-        isRemoval,
+        isRemoval: !!isRemoval,
+        build: (notBeforeSec) =>
+          buildReactionRumor({
+            emoji,
+            targetMessageId: targetMessage.id,
+            targetMessageKind: CHAT_MESSAGE_KIND, // kind 9 for group messages
+            targetAuthorPubkey: undefined, // groups omit p tag (spec §3.3)
+            selfPrivKeyHex: privateKeyHex,
+            isRemoval,
+            notBeforeSec,
+          }),
       });
-
-      // AC-35 / AC-59: optimistic state update.
-      //   remove path → tombstone the existing non-removed row in-place.
-      //     Cannot insert a fresh removed:true row (applyOptimistic is idempotent on
-      //     row id; a new UUID would leave the original add row untouched, keeping
-      //     the badge visible).
-      //   add path → insert new row keyed on rumor.id (the published id).
-      if (isRemoval) {
-        await applyOptimisticRemoval(thread, targetMessage.id, pubkey, emoji);
-      } else {
-        const optimisticRow: Reaction = {
-          id: rumor.id,
-          messageId: targetMessage.id,
-          reactorPubkey: pubkey,
-          emoji,
-          eventId: '',
-          createdAt: Date.now(),
-          removed: false,
-        };
-        await applyOptimistic(thread, optimisticRow);
-      }
 
       try {
         // AC-36: send via MLS (kind-445 on wire — no plaintext kind-7 published, AC-61)
@@ -756,6 +749,8 @@ export function ChatStoreProvider({
         //   rumor.id is observationally correct. No echo is expected on failure.
         // add path → rollbackOptimistic removes the in-flight insert by rumor.id.
         if (isRemoval) {
+          // Local-only timestamp: applyOptimistic bumps it past the tombstone's
+          // removal second, and nothing is published for it.
           const restoreRow: Reaction = {
             id: rumor.id,
             messageId: targetMessage.id,

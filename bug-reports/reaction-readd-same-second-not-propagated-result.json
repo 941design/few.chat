@@ -1,0 +1,61 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": "buildReactionRumor stamped created_at = floor(now/1000) while stores resolve add vs removal per triple at one-second resolution with ties going to the removal. A re-add within the removal's second lost on every receiver while the sender's optimistic row was bumped past it (and the mirror: a removal within a future-stamped re-add's second lost).",
+  "fix": "buildReactionRumor takes notBeforeSec. New prepareOwnReaction(thread, …, build) runs in ONE per-thread queue step (same queue/Web Lock as the store writes): reads current rows, computes the floor (re-add: removal second + 1; removal: add second), builds the rumor once, persists the optimistic row/tombstone stamped at the rumor's second. Group (ChatStoreContext) and DM (ContactChat) senders use it. An identical-id retry after a rolled-back re-add revives that pending tombstone.",
+  "files_modified": [
+    "app/src/lib/reactions/rumor.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/src/context/ChatStoreContext.tsx",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/tests/unit/reactions/readd-after-removal.test.ts",
+    "docs/behavior/reactions-and-emoji.md"
+  ],
+  "files_created": [
+    "app/tests/unit/reactions/stamp-floor.test.ts",
+    "bug-reports/reaction-readd-same-second-not-propagated-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/reactions/stamp-floor.test.ts"
+    ],
+    "pre_fix_failures": 10,
+    "kinds": "floor helper cases; build-once + stamp agreement; peer-store convergence (remove/re-add, re-add/remove, reversed delivery, 9-toggle burst); intervening queued write; failed re-add + identical-id retry; revival refusal for confirmed rows; exact createdAt/triple-match assertions"
+  },
+  "final": {
+    "passed": 6304,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config",
+    "killed": 126,
+    "timeout": 0,
+    "survived": 4,
+    "score": 96.92,
+    "survivors": "equivalent: removedAt!==undefined guards unreachable (legacy tombstones take the append path; rolled-back pending rows always carry removedAt); notBeforeSec!==undefined redundant with Number.isFinite"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-backup-react.log",
+    "result": "non-relay 72 passed; relay 352 passed, 19 skipped, 1 failed (AC-60 groups-dm-reactions: composer Enter press timed out after 30 s, before any reaction code ran; known undiagnosed load stall, filed as dm-composer-enter-press-hangs-30s); no INVALID marker. groups-dm-reactions rerun 5x in isolation on a fresh relay: 5/5 green (4/4 each).",
+    "status": "green-except-known-flake"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The first version read the floor outside the store's write queue; only adversarial review spotted the cross-tab interleaving, and the retry-after-rollback case surfaced only on the second adversarial pass.",
+    "surprised_by": "Stamping a rumor in the future (to beat a same-second removal) makes an identical-id retry within that second collide with the rolled-back row, so idempotency-on-id needed a narrow exception.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/reactions/api.ts",
+    "app/src/lib/reactions/rumor.ts",
+    "app/src/context/ChatStoreContext.tsx",
+    "app/src/components/contacts/ContactChat.tsx"
+  ]
+}

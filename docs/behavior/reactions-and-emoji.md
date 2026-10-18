@@ -54,11 +54,14 @@ on the order they arrive in — an out-of-order delivery, or a relay replaying o
 can neither resurrect a reaction you took back nor undo one you restored. Every removal is
 remembered, even one that arrives before the add it undoes.
 
-The comparison uses the time each event was created, at one-second resolution. Two limits
-follow from that:
+The comparison uses the time each event was created, at one-second resolution. Your device
+never dates a reaction event earlier than your own latest state for that emoji on that
+message: a re-add is dated strictly after your removal, and a removal no earlier than your
+add. So toggling an emoji several times within one second still ends the same way for
+everyone as it does for you.
 
-- **Same second.** If you remove and re-add the same emoji within the same second, the
-  re-add is not newer. It shows on your own device but not to others.
+One limit remains:
+
 - **Clock skew across devices.** Timestamps come from the sending device's clock. When one
   identity is used on two devices (for example a second device restored from a backup),
   their clocks can disagree, and the event from the device whose clock runs ahead wins even
@@ -153,7 +156,7 @@ ambiguous (none, or more than one), it is discarded rather than guessed.
 **Re-adding an emoji you previously removed from a message.** Takes effect when the re-add
 is strictly newer than the removal (§3): it appears for you at once and reaches everyone
 else; your own copy of the re-add, delivered back to you, confirms it without duplicating
-it. A re-add within the same second as the removal does not reach others.
+it. This holds even when the re-add follows the removal within the same second.
 
 **A removal and an add arrive out of order.** The newest event by creation time decides,
 whatever the arrival order (§3): an add older than or equal to a removal stays removed, and

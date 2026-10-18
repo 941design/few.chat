@@ -22,8 +22,6 @@ import {
   parseDirectPayload,
   publishDirectDelete,
   publishDirectEdit,
-  publishDirectReaction,
-  removeDirectReaction,
   publishPrebuiltRumor,
   sendDirectImageMessage,
   shouldIngestRumor,
@@ -33,7 +31,7 @@ import {
 import type { ChatMediaAttachment } from '@/src/lib/media/imageMessage';
 import { markDirectMessagesRead } from '@/src/lib/unreadStore';
 import { setActiveView, clearActiveView } from '@/src/lib/activeViewStore';
-import { applyOptimistic, applyOptimisticRemoval, rollbackOptimistic, applyInboundRumor } from '@/src/lib/reactions/api';
+import { applyOptimistic, prepareOwnReaction, rollbackOptimistic, applyInboundRumor } from '@/src/lib/reactions/api';
 import type { Reaction } from '@/src/lib/reactions/types';
 import { useDirectReactions } from '@/src/hooks/useDirectReactions';
 import {
@@ -1005,36 +1003,23 @@ export default function ContactChat({
 
     // Build the rumor exactly once so the optimistic row id == published event id (AC-43).
     const { buildReactionRumor } = await import('@/src/lib/reactions/rumor');
-    const rumor = buildReactionRumor({
+    const { rumor } = await prepareOwnReaction(dmThread, {
+      messageId: message.id,
+      reactorPubkey: pubkeyHex,
       emoji,
-      targetMessageId: message.id,
-      targetMessageKind: CHAT_MESSAGE_KIND,
-      targetAuthorPubkey: peerPubkeyHex,
-      selfPrivKeyHex: privateKeyHex,
       isRemoval: op === 'remove',
+      build: (notBeforeSec) =>
+        buildReactionRumor({
+          emoji,
+          targetMessageId: message.id,
+          targetMessageKind: CHAT_MESSAGE_KIND,
+          targetAuthorPubkey: peerPubkeyHex,
+          selfPrivKeyHex: privateKeyHex,
+          isRemoval: op === 'remove',
+          notBeforeSec,
+        }),
     });
     const rumorId = rumor.id;
-
-    // AC-43 / AC-59: optimistic state update.
-    //   add path → insert new row keyed on rumorId (the published id).
-    //   remove path → tombstone the existing non-removed row in-place. We
-    //   cannot insert a fresh row with `removed: true` keyed on the new
-    //   rumorId, because applyOptimistic is idempotent on row id and would
-    //   leave the original add row untouched, keeping the badge visible.
-    if (op === 'remove') {
-      await applyOptimisticRemoval(dmThread, message.id, pubkeyHex, emoji);
-    } else {
-      const optimisticRow: Reaction = {
-        id: rumorId,
-        messageId: message.id,
-        reactorPubkey: pubkeyHex,
-        emoji,
-        eventId: '',
-        createdAt: Date.now(),
-        removed: false,
-      };
-      await applyOptimistic(dmThread, optimisticRow);
-    }
 
     try {
       // Seal and publish the pre-built rumor directly (avoids rebuilding and any id mismatch).
@@ -1050,6 +1035,8 @@ export default function ContactChat({
       // on (messageId, reactorPubkey, emoji) but this branch only fires on
       // publish failure, so no echo is expected.
       if (op === 'remove') {
+        // Local-only timestamp: applyOptimistic bumps it past the tombstone's
+        // removal second, and nothing is published for it.
         const restoreRow: Reaction = {
           id: rumorId,
           messageId: message.id,

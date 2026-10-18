@@ -412,6 +412,50 @@ export function subscribeReactions(
   return () => getListeners(key).delete(listener);
 }
 
+function optimisticAddRows(current: Reaction[], row: Reaction): Reaction[] | null {
+  // Idempotent on row id, except a rolled-back pending add (the tombstone that a
+  // failed re-add was merged into: removed, eventId '', createdAt 0, dated
+  // removal). A retry reuses the same rumor id when the clock has not moved, so
+  // it revives that tombstone instead of leaving the local view removed while
+  // the published rumor makes peers show the reaction live.
+  const sameId = current.findIndex((r) => r.id === row.id);
+  if (sameId !== -1) {
+    const prev = current[sameId];
+    const rolledBackPending =
+      prev.removed && prev.eventId === '' && prev.createdAt === 0 && prev.removedAt !== undefined;
+    if (!rolledBackPending || !sameTriple(prev, row.messageId, row.reactorPubkey, row.emoji)) return null;
+    const updated = [...current];
+    updated[sameId] = {
+      ...prev,
+      removed: false,
+      createdAt: Math.max(row.createdAt, Math.floor(prev.removedAt! / 1000) * 1000 + 1000),
+    };
+    return updated;
+  }
+  // One row per triple: a dated tombstone of an earlier removal becomes this
+  // optimistic row, keeping its removal time so a stale event still cannot
+  // override it. The local add is always newer than the removal it follows.
+  // An already live row stays as it is (the triple is reacted already; the
+  // echo confirms or the failed send's rollback finds nothing to undo). A
+  // legacy tombstone is kept beside the new row, so a rollback cannot drop it.
+  const idx = findTripleIdx(current, row.messageId, row.reactorPubkey, row.emoji);
+  if (idx === -1 || isLegacyTombstone(current[idx])) return [...current, row];
+  const prev = current[idx];
+  if (!prev.removed) return null;
+  const updated = [...current];
+  updated[idx] = {
+    ...row,
+    removed: false,
+    createdAt: Math.max(
+      row.createdAt,
+      prev.createdAt,
+      prev.removedAt !== undefined ? Math.floor(prev.removedAt / 1000) * 1000 + 1000 : 0,
+    ),
+    ...(prev.removedAt !== undefined ? { removedAt: prev.removedAt } : {}),
+  };
+  return updated;
+}
+
 /**
  * Writes an optimistic Reaction row to the store. The row must be in-flight
  * (eventId === ''). Listeners are notified after the idb write resolves.
@@ -420,32 +464,55 @@ export function subscribeReactions(
  */
 export function applyOptimistic(thread: ReactionThreadKey, row: Reaction): Promise<Reaction[] | null> {
   const key = idbKeyFor(thread);
-  return enqueue(key, async (current) => {
-    // Idempotent on row id
-    if (current.some((r) => r.id === row.id)) return null;
-    // One row per triple: a dated tombstone of an earlier removal becomes this
-    // optimistic row, keeping its removal time so a stale event still cannot
-    // override it. The local add is always newer than the removal it follows.
-    // An already live row stays as it is (the triple is reacted already; the
-    // echo confirms or the failed send's rollback finds nothing to undo). A
-    // legacy tombstone is kept beside the new row, so a rollback cannot drop it.
-    const idx = findTripleIdx(current, row.messageId, row.reactorPubkey, row.emoji);
-    if (idx === -1 || isLegacyTombstone(current[idx])) return [...current, row];
-    const prev = current[idx];
-    if (!prev.removed) return null;
-    const updated = [...current];
-    updated[idx] = {
-      ...row,
-      removed: false,
-      createdAt: Math.max(
-        row.createdAt,
-        prev.createdAt,
-        prev.removedAt !== undefined ? Math.floor(prev.removedAt / 1000) * 1000 + 1000 : 0,
-      ),
-      ...(prev.removedAt !== undefined ? { removedAt: prev.removedAt } : {}),
-    };
-    return updated;
-  });
+  return enqueue(key, async (current) => optimisticAddRows(current, row));
+}
+
+/**
+ * Floor (unix seconds) for the created_at of a rumor the local user is about to
+ * send for a triple, so receivers' last-writer-wins agrees with the local view:
+ *  - re-add of a removed triple: strictly after the removal second;
+ *  - removal of a live triple: the add's second (a tie goes to the removal);
+ *  - no row, a legacy tombstone, or an add of an already live triple: no floor.
+ * Pure over the rows it is given; prepareOwnReaction calls it on fresh storage
+ * inside the thread's write queue.
+ */
+export function stampFloorFor(
+  rows: Reaction[],
+  messageId: string,
+  reactorPubkey: string,
+  emoji: string,
+  isRemoval: boolean,
+): number | undefined {
+  const idx = findTripleIdx(rows, messageId, reactorPubkey, emoji);
+  if (idx === -1) return undefined;
+  const r = rows[idx];
+  if (isRemoval) return r.removed ? undefined : Math.floor(r.createdAt / 1000);
+  if (!r.removed || r.removedAt === undefined) return undefined;
+  return Math.floor(r.removedAt / 1000) + 1;
+}
+
+function optimisticRemovalRows(
+  current: Reaction[],
+  messageId: string,
+  reactorPubkey: string,
+  emoji: string,
+  removedAtMs?: number,
+): Reaction[] | null {
+  const idx = current.findIndex(
+    (r) =>
+      r.messageId === messageId &&
+      r.reactorPubkey === reactorPubkey &&
+      r.emoji === emoji &&
+      !r.removed,
+  );
+  if (idx === -1) return null;
+  const updated = [...current];
+  updated[idx] = {
+    ...updated[idx],
+    removed: true,
+    removedAt: Math.max(removedAtMs ?? Date.now(), updated[idx].createdAt),
+  };
+  return updated;
 }
 
 /**
@@ -473,23 +540,55 @@ export async function applyOptimisticRemoval(
   emoji: string,
 ): Promise<Reaction[] | null> {
   const key = idbKeyFor(thread);
-  return enqueue(key, async (current) => {
-    const idx = current.findIndex(
-      (r) =>
-        r.messageId === messageId &&
-        r.reactorPubkey === reactorPubkey &&
-        r.emoji === emoji &&
-        !r.removed,
-    );
-    if (idx === -1) return null;
-    const updated = [...current];
-    updated[idx] = {
-      ...updated[idx],
-      removed: true,
-      removedAt: Math.max(Date.now(), updated[idx].createdAt),
-    };
-    return updated;
+  return enqueue(key, async (current) =>
+    optimisticRemovalRows(current, messageId, reactorPubkey, emoji),
+  );
+}
+
+/**
+ * Atomic prepare of a local user's own reaction add/removal.
+ *
+ * Inside ONE write-queue step (same queue and cross-tab lock as applyOptimistic),
+ * on freshly read storage: computes the stamp floor, calls `build` exactly once
+ * with it, and persists the matching optimistic add row or tombstone stamped
+ * rumor.created_at * 1000. Reading the floor and writing the optimistic state in
+ * the same step means no queued or cross-tab write can slip between them, so the
+ * published stamp and the local view always agree and receivers converge on it.
+ * The optimistic row id is the built rumor's id (optimistic id == published id).
+ */
+export async function prepareOwnReaction<R extends { id: string; created_at: number }>(
+  thread: ReactionThreadKey,
+  params: {
+    messageId: string;
+    reactorPubkey: string;
+    emoji: string;
+    isRemoval: boolean;
+    build: (notBeforeSec: number | undefined) => R;
+  },
+): Promise<{ rumor: R }> {
+  const { messageId, reactorPubkey, emoji, isRemoval, build } = params;
+  const key = idbKeyFor(thread);
+  let rumor: R | undefined;
+  await enqueue(key, async (current) => {
+    rumor = build(stampFloorFor(current, messageId, reactorPubkey, emoji, isRemoval));
+    const stampMs = rumor.created_at * 1000;
+    if (isRemoval) return optimisticRemovalRows(current, messageId, reactorPubkey, emoji, stampMs);
+    return optimisticAddRows(current, {
+      id: rumor.id,
+      messageId,
+      reactorPubkey,
+      emoji,
+      eventId: '',
+      createdAt: stampMs,
+      removed: false,
+    });
   });
+  if (!rumor) {
+    // enqueue skipped the step because the store is being cleared; nothing was
+    // built or persisted. couldntReact matches the callers' send-failure sentinel.
+    throw Object.assign(new Error('prepareOwnReaction: store is being cleared'), { couldntReact: true });
+  }
+  return { rumor };
 }
 
 /**

@@ -1,0 +1,25 @@
+{
+  "bug": "reaction-readd-same-second-not-propagated",
+  "scope": "Stamp reaction rumors so receivers' last-writer-wins agrees with the sender's local view for remove→re-add and re-add→remove within one second.",
+  "files_to_modify": [
+    "app/src/lib/reactions/rumor.ts (optional notBeforeSec; created_at = max(floor(now/1000), notBeforeSec))",
+    "app/src/lib/reactions/api.ts (read helper returning the floor second for a triple from the store)",
+    "app/src/context/ChatStoreContext.tsx (group sendReaction)",
+    "app/src/components/contacts/ContactChat.tsx (DM handleReact)",
+    "app/src/lib/directMessages.ts (publishDirectReaction/removeDirectReaction: accept and pass the floor if they are used by a send path)",
+    "docs/behavior/reactions-and-emoji.md (drop the same-second limit)"
+  ],
+  "behavior": {
+    "add_floor": "Re-add of a triple whose stored row has removedAt: notBeforeSec = floor(removedAt/1000) + 1.",
+    "remove_floor": "Removal of a live triple: notBeforeSec = floor(row.createdAt/1000) (tie goes to the removal on every store).",
+    "no_row": "No stored row for the triple: no floor (unchanged).",
+    "single_build": "The rumor is still built exactly once (optimistic row id == published id); the floor is read before building.",
+    "optimistic_consistency": "The optimistic row's createdAt should match the rumor's created_at*1000 where the code derives it, so the local and remote views agree."
+  },
+  "tests": [
+    "Unit rumor.ts: notBeforeSec in the future/past/absent",
+    "Unit api.ts floor helper: tombstone, live row, legacy tombstone (removal wins anyway: no floor needed or floor irrelevant), no row",
+    "Unit store convergence: a fresh peer store applying removal(S) then re-add(S+1) shows live; re-add(S+1) then removal(>=S+1) shows removed"
+  ],
+  "non_goals": ["clock skew between devices", "changing the tie rule"]
+}

@@ -4,7 +4,7 @@
  * A reaction that was removed can be added again: the add wins iff it is
  * STRICTLY newer than the removal (rumor.created_at * 1000 > removedAt).
  * An add older than or equal to its removal stays removed (out-of-order relay
- * delivery stays protected; same-second limit). A legacy tombstone without
+ * delivery stays protected; same-second case is covered in stamp-floor.test.ts). A legacy tombstone without
  * removedAt keeps "removal wins".
  */
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
