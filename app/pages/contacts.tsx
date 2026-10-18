@@ -507,6 +507,9 @@ function ContactDetailView({ contactPubkeyHex }: { contactPubkeyHex: string }) {
         <Divider my={6} />
         <Box>
           <ContactChat
+            // Keyed by account: an in-place account switch must not carry the previous
+            // account's rendered rows into the merge-based thread seed.
+            key={pubkeyHex}
             peerPubkeyHex={contact.pubkeyHex}
             pubkeyHex={pubkeyHex}
             privateKeyHex={privateKeyHex}

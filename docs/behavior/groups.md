@@ -519,6 +519,13 @@ members early; there is no recovery after the fact.
 
 ## 11. Edge cases and how they resolve
 
+**A message no relay accepts.** A group message that no relay acknowledges within 10 seconds
+(or that is rejected) is treated as not sent: it disappears from the conversation, its text
+returns to the composer of the conversation it was sent in (placed ahead of anything newer you have typed meanwhile), once the composer is back to plain text (if you started editing or attached an image meanwhile, it waits until you finish or cancel), and a
+"Failed to send message" notice with a retry link appears above the composer. The notice
+clears when you send again, start editing, or attach an image. Direct messages behave the
+same way.
+
 **Inviting someone with no published identity keys.** The invitation is refused with an
 explanation that the person hasn't set up their identity; it is not silently lost.
 

@@ -45,6 +45,8 @@ let __fetchResults: Array<{ events: Set<any>; timedOut: boolean }> = [];
 let __fetchCallHistory: Array<{ ndk: any; filter: any }> = [];
 
 vi.mock('@/src/lib/ndkClient', () => ({
+  PUBLISH_TIMEOUT_MS: 10_000,
+  publishWithTimeout: vi.fn().mockResolvedValue(new Set()),
   connectNdk: vi.fn().mockResolvedValue({}),
   fetchEventsWithTimeout: vi.fn().mockImplementation(async (ndk: any, filter: any) => {
     __fetchCallHistory.push({ ndk, filter });

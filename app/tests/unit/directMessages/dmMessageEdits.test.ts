@@ -105,6 +105,7 @@ const {
   applyOptimisticEditView,
   rollbackOptimisticEditView,
   resolveFreshOriginalFromStorage,
+  seedThreadMessages,
 } = await import('@/src/components/contacts/ContactChat');
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -616,6 +617,39 @@ describe('reconcileHistoricalBatch (round-4 finding 1, sev7 — offline delete/e
     };
     const result = reconcileHistoricalBatch([untouched], []);
     expect(result).toEqual([untouched]);
+  });
+});
+
+// ── seedThreadMessages (thread-open seed must not erase an unacked own send) ──
+
+describe('seedThreadMessages (an own send made before the thread-open read resolves survives it)', () => {
+  const row = (id: string, groupId: string, createdAt: number, extra: Partial<ChatMessageFixture> = {}): ChatMessageFixture => ({
+    id, content: id, senderPubkey: alicePubHex, groupId, createdAt, ...extra,
+  });
+
+  it('keeps a same-thread row storage does not know yet (pending relay ack), sorted with the stored rows', () => {
+    const pending = row('pending', 'dm:bob', 3000);
+    const stored = [row('old-b', 'dm:bob', 2000), row('old-a', 'dm:bob', 1000)];
+    expect(seedThreadMessages([pending], stored, 'dm:bob').map((m) => m.id)).toEqual(['old-a', 'old-b', 'pending']);
+  });
+
+  it('drops rows of another thread (the component is not keyed by peer)', () => {
+    const other = row('other', 'dm:carol', 1500);
+    const stored = [row('mine', 'dm:bob', 1000)];
+    expect(seedThreadMessages([other], stored, 'dm:bob').map((m) => m.id)).toEqual(['mine']);
+  });
+
+  it('storage truth replaces a rendered row and a tombstone hides it', () => {
+    const rendered = [row('e', 'dm:bob', 1000), row('d', 'dm:bob', 2000)];
+    const stored = [row('e', 'dm:bob', 1000, { content: 'edited', edited: true }), row('d', 'dm:bob', 2000, { tombstoned: true })];
+    const result = seedThreadMessages(rendered, stored, 'dm:bob');
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('edited');
+  });
+
+  it('with nothing stored (read failed) only same-thread rows remain', () => {
+    const result = seedThreadMessages([row('p', 'dm:bob', 1), row('x', 'dm:carol', 2)], [], 'dm:bob');
+    expect(result.map((m) => m.id)).toEqual(['p']);
   });
 });
 

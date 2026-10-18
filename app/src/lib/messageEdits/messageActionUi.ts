@@ -203,3 +203,127 @@ export function formatThreadPreviewText(messages: ChatMessage[], strings: Thread
   if (structured) return strings.structuredText;
   return preview.content;
 }
+
+/** Events that drive the composer's "text send failed" notice. */
+export type MessageSendFailureEvent = 'attempt' | 'failed' | 'enterEdit' | 'cancelEdit' | 'attach';
+
+/**
+ * Next value of the composer's text-send-failure flag. Raised only when a text
+ * send throws (the bubble is already rolled back and the text restored). Every
+ * other composer event clears it: a new send attempt (incl. the notice's Retry),
+ * and any mode change (entering/cancelling edit, attaching an image) — otherwise
+ * the notice's Retry would run in the wrong mode (save an edit / send the image).
+ */
+export function nextMessageSendFailed(event: MessageSendFailureEvent): boolean {
+  return event === 'failed';
+}
+
+/** The notice is only meaningful while composing plain text. */
+export function shouldShowMessageSendFailed(failed: boolean, editing: boolean, hasAttachment: boolean): boolean {
+  return failed && !editing && !hasAttachment;
+}
+
+/**
+ * Composer text after a failed send: restore the failed text, without clobbering
+ * a draft typed while the send was in flight (failed text goes first, newline-joined).
+ */
+export function mergeFailedSendIntoDraft(failed: string, current: string): string {
+  return current.trim() === '' ? failed : `${failed}\n${current}`;
+}
+
+/**
+ * Where a failed text send's content goes. While the composer is in plain-text
+ * mode it is restored at once (after anything already stashed). If the user
+ * entered edit mode or attached an image while the send was in flight, touching
+ * the composer would corrupt that edit/caption, so the text is stashed instead
+ * (newline-joined with earlier stashed text) until plain-text mode returns.
+ */
+export function routeFailedSend(
+  failed: string,
+  stash: string,
+  plainText: boolean,
+): { restoreText: string | null; stash: string } {
+  const combined = stash === '' ? failed : `${stash}\n${failed}`;
+  return plainText ? { restoreText: combined, stash: '' } : { restoreText: null, stash: combined };
+}
+
+/** Releases a stash once the composer is back in plain-text mode. */
+export function releaseStashedFailedSend(
+  stash: string,
+  plainText: boolean,
+): { restoreText: string | null; stash: string } {
+  return plainText && stash !== '' ? { restoreText: stash, stash: '' } : { restoreText: null, stash };
+}
+
+/** Failed-send text held back per conversation (thread id -> text). */
+export type FailedSendStashes = ReadonlyMap<string, string>;
+
+function withStash(stashes: FailedSendStashes, threadId: string, text: string): Map<string, string> {
+  const next = new Map(stashes);
+  if (text === '') next.delete(threadId);
+  else next.set(threadId, text);
+  return next;
+}
+
+/**
+ * Routes a failed text send, scoped to the conversation it was sent in. Text is
+ * restored to the composer only if that conversation is still the one shown AND
+ * the composer is in plain-text mode; otherwise it is stashed under its own
+ * conversation, never touching another conversation's composer.
+ */
+export function routeFailedSendForThread(params: {
+  failed: string;
+  sendThreadId: string;
+  currentThreadId: string;
+  plainText: boolean;
+  stashes: FailedSendStashes;
+}): { restoreText: string | null; stashes: Map<string, string> } {
+  const { failed, sendThreadId, currentThreadId, plainText, stashes } = params;
+  const routed = routeFailedSend(
+    failed,
+    stashes.get(sendThreadId) ?? '',
+    plainText && sendThreadId === currentThreadId,
+  );
+  return { restoreText: routed.restoreText, stashes: withStash(stashes, sendThreadId, routed.stash) };
+}
+
+/** Releases only the shown conversation's stash, and only in plain-text mode. */
+export function releaseStashForThread(params: {
+  threadId: string;
+  plainText: boolean;
+  stashes: FailedSendStashes;
+}): { restoreText: string | null; stashes: Map<string, string> } {
+  const { threadId, plainText, stashes } = params;
+  const released = releaseStashedFailedSend(stashes.get(threadId) ?? '', plainText);
+  return { restoreText: released.restoreText, stashes: withStash(stashes, threadId, released.stash) };
+}
+
+/**
+ * Moves composer text back onto a conversation's stash (e.g. an edit save failed
+ * after stashed text was already released into the composer), so it is released
+ * again when the composer returns to plain text. Blank text changes nothing.
+ */
+export function restashComposerText(
+  stashes: FailedSendStashes,
+  threadId: string,
+  composerText: string,
+): Map<string, string> {
+  if (composerText.trim() === '') return new Map(stashes);
+  const existing = stashes.get(threadId) ?? '';
+  return withStash(stashes, threadId, existing === '' ? composerText : `${existing}\n${composerText}`);
+}
+
+/**
+ * After an edit save rejects: may the failed edit be put back into the composer
+ * (and released stash text moved back out of it)? Only if the same conversation is
+ * still shown and the composer is plain text again — if the user has since entered
+ * another edit or attached an image, the composer holds something else and must be
+ * left untouched (the failed edit is already rolled back in storage).
+ */
+export function canRestoreFailedEdit(params: {
+  submitThreadId: string;
+  currentThreadId: string;
+  plainText: boolean;
+}): boolean {
+  return params.submitThreadId === params.currentThreadId && params.plainText;
+}

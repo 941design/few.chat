@@ -17,6 +17,7 @@ import type {
 import type { NostrEvent } from 'applesauce-core/helpers/event';
 import type { Filter } from 'applesauce-core/helpers/filter';
 import { getEffectiveRelays } from '@/src/lib/relay';
+import { PUBLISH_TIMEOUT_MS } from '@/src/lib/ndkClient';
 
 // applesauce Filter -> NDK Filter shape is compatible, cast directly
 function toNdkFilter(filter: Filter | Filter[]): NDKFilter {
@@ -52,7 +53,7 @@ function toNostrEvent(ndkEvent: NDKEvent): NostrEvent {
 function rawPublish(
   relayUrl: string,
   event: NostrEvent,
-  timeoutMs = 10_000,
+  timeoutMs = PUBLISH_TIMEOUT_MS,
 ): Promise<PublishResponse> {
   return new Promise((resolve) => {
     try {

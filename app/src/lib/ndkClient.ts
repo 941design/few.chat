@@ -3,7 +3,7 @@
  * Initialized lazily — safe to import in SSR but only connects on client.
  */
 
-import NDK, { NDKPrivateKeySigner, type NDKSigner } from '@nostr-dev-kit/ndk';
+import NDK, { NDKPrivateKeySigner, type NDKEvent, type NDKRelay, type NDKSigner } from '@nostr-dev-kit/ndk';
 import { DEFAULT_RELAYS } from '@/src/types';
 
 let ndkInstance: NDK | null = null;
@@ -47,6 +47,23 @@ export async function connectNdk(privateKeyHex: string): Promise<NDK> {
   const ndk = getNdk(privateKeyHex)!;
   await ndk.connect(2500);
   return ndk;
+}
+
+/**
+ * Per-relay publish-ack timeout for user-initiated DM publishes.
+ *
+ * WHY: NDK 3.0.3's `NDKRelayPublisher.publish(event, timeoutMs = 2500)` rejects
+ * a relay that has not acked within 2.5 s. Under load a relay that DID store the
+ * event acks later, the relay-set publish throws "Not enough relays received the
+ * event", and the sender rolls back a message the peer actually receives (resend
+ * then duplicates). Groups already use 10 s (NdkNetworkAdapter.rawPublish); DMs
+ * share this single value.
+ */
+export const PUBLISH_TIMEOUT_MS = 10_000;
+
+/** Publish a signed event with the shared ack timeout (instead of NDK's 2.5 s default). */
+export function publishWithTimeout(event: NDKEvent): Promise<Set<NDKRelay>> {
+  return event.publish(undefined, PUBLISH_TIMEOUT_MS);
 }
 
 const FETCH_TIMEOUT_MS = 8_000;

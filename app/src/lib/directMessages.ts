@@ -3,6 +3,7 @@ import { nip04, nip44 } from 'nostr-tools';
 import { wrapEvent, createRumor } from 'nostr-tools/nip59';
 import { getPublicKey, verifyEvent, getEventHash } from 'nostr-tools/pure';
 import { createLogger } from '@/src/lib/logger';
+import { publishWithTimeout } from '@/src/lib/ndkClient';
 import { put, get as blossomGet } from '@/src/lib/media/blossomClient';
 import { MAX_OUTPUT_BYTES } from '@/src/config/blossom';
 import { buildImageMessageContent, DIRECT_MEDIA_VERSION, type DirectMediaAttachment, type RoledAttachments } from '@/src/lib/media/imageMessage';
@@ -372,8 +373,23 @@ export async function publishDirectMessage(params: {
   const rumor = buildChatRumor(params);
   const wrap = await sealAndWrap(rumor, params.peerPubkeyHex, params.privateKeyHex);
   const ndkEvent = new NDKEvent(params.ndk, wrap as any);
-  await ndkEvent.publish();
+  await publishWithTimeout(ndkEvent);
   return rumor.id;
+}
+
+/**
+ * Seals, wraps and publishes an already-built rumor (the caller needs the rumor id
+ * before the network round-trip, e.g. for the optimistic bubble). Throws if no relay
+ * acks within PUBLISH_TIMEOUT_MS.
+ */
+export async function publishPrebuiltRumor(params: {
+  ndk: NDK;
+  privateKeyHex: string;
+  peerPubkeyHex: string;
+  rumor: UnsignedRumor;
+}): Promise<void> {
+  const wrap = await sealAndWrap(params.rumor, params.peerPubkeyHex, params.privateKeyHex);
+  await publishWithTimeout(new NDKEvent(params.ndk, wrap as any));
 }
 
 /**
@@ -405,7 +421,7 @@ export async function publishDirectReaction(params: {
   });
   const wrap = await sealAndWrap(rumor, params.peerPubkeyHex, params.privateKeyHex);
   const ndkEvent = new NDKEvent(params.ndk, wrap as any);
-  await ndkEvent.publish();
+  await publishWithTimeout(ndkEvent);
   return { rumorId: rumor.id };
 }
 
@@ -436,7 +452,7 @@ export async function removeDirectReaction(params: {
   });
   const wrap = await sealAndWrap(rumor, params.peerPubkeyHex, params.privateKeyHex);
   const ndkEvent = new NDKEvent(params.ndk, wrap as any);
-  await ndkEvent.publish();
+  await publishWithTimeout(ndkEvent);
   return { rumorId: rumor.id };
 }
 
@@ -509,7 +525,7 @@ export async function publishDirectDelete(params: {
   );
   const wrap = await sealAndWrap(rumor, params.peerPubkeyHex, params.privateKeyHex);
   const ndkEvent = new NDKEvent(params.ndk, wrap as any);
-  await ndkEvent.publish();
+  await publishWithTimeout(ndkEvent);
 
   const { applyDeleteEditSignal } = await import('@/src/lib/messageEdits/api');
   // S4 gate-remediation (finding 4, sev4): a durable-write failure AFTER a
@@ -578,7 +594,7 @@ export async function publishDirectEdit(params: {
   // no durable write has happened yet, so the caller's rollback is a pure state revert.
   const replacementWrap = await sealAndWrap(replacement, params.peerPubkeyHex, params.privateKeyHex);
   const replacementEvent = new NDKEvent(params.ndk, replacementWrap as any);
-  await replacementEvent.publish();
+  await publishWithTimeout(replacementEvent);
 
   const { applyDeleteEditSignal } = await import('@/src/lib/messageEdits/api');
   // S4 gate-remediation (finding 4, sev4): swallow a post-publish durable-write
@@ -602,7 +618,7 @@ export async function publishDirectEdit(params: {
     );
     const companionWrap = await sealAndWrap(companion, params.peerPubkeyHex, params.privateKeyHex);
     const companionEvent = new NDKEvent(params.ndk, companionWrap as any);
-    await companionEvent.publish();
+    await publishWithTimeout(companionEvent);
   } catch {
     logger.info('dm:edit-companion-publish-failed', { rumorId: replacement.id });
   }

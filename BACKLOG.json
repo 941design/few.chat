@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T00:23:06Z",
+  "updated_at": "2026-10-18T10:27:03Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -386,21 +386,29 @@
       "success_signal": "Unit test: remove then re-add within the same second → the re-add rumor's created_at is strictly greater than the removal's, and a peer store revives it."
     },
     {
-      "slug": "dm-own-send-bubble-vanishes-on-publish-reject",
+      "slug": "forwarded-envelope-freshness-and-replay",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/marmot/envelopeVerifier.ts"
+      },
+      "text": "Forwarded signed envelopes (profiles today) lack ADR-012's epoch/freshness bound and a persistent one-shot set",
+      "created_at": "2026-10-18",
+      "motivation": "ADR-012 requires forwarded meta-events to be epoch/freshness-bounded and one-shot by inner event id; any future forwardable kind would inherit the gap. Low impact today because profile merges are last-writer-wins.",
+      "behavior": "envelopeVerifier.ts checks only shape, kind, signature and an optional g tag; one-shot is an in-memory per-subscription Set (~:185-194) reset on reload; no producer emits the g tag (profiles exempt). Verified 2026-10-18.",
+      "approach": "Add a created_at freshness window (or join-generation bound) and persist the seen-inner-id set per group (idb, bounded); emit the g tag if a group-scoped forwardable kind is added."
+    },
+    {
+      "slug": "dm-thread-switch-stale-rows-and-pending-send",
       "scope": "any",
       "anchor": {
         "path": "app/src/components/contacts/ContactChat.tsx",
-        "range": [
-          920,
-          930
-        ]
+        "line": 284
       },
-      "text": "A just-sent DM bubble vanishes when the relay publish rejects; flakes groups-dm-reactions in full gates",
+      "text": "DM thread switch shows the previous thread's rows until the new read resolves; an unacked send is lost on a quick A-B-A switch",
       "created_at": "2026-10-18",
-      "motivation": "Three consecutive full e2e gates on the 1-CPU VM (2026-10-17/18) each failed one groups-dm-reactions test (AC-60, AC-47, AC-55) and once dm-block-cross-tab the same way, so the full gate cannot go green reliably; for users a failed send silently erases the typed message with no retry.",
-      "behavior": "sendMessage upserts the optimistic bubble into state only, awaits ndkEvent.publish(), and persists via appendMessage only on success; on a rejection the catch removes the bubble and rethrows, so the bubble appears and disappears within a second and nothing is stored. Passes in isolation and in the dm- subset (52/52); fails only in a loaded full suite (inferred mechanism, publish rejection not yet confirmed by a log).",
-      "approach": "First confirm: log the rejection reason (and connected-relay count) in the catch and capture page console in the failing test. Then decide the UX: keep the bubble marked failed with a retry instead of removing it (product copy en/de), and/or retry the publish once before failing.",
-      "success_signal": "Three consecutive full gates on the 1-CPU VM with no groups-dm-reactions own-bubble failure; a unit test shows a rejected publish leaves a failed-state bubble rather than none."
+      "motivation": "ContactChat is not keyed by peer (ChatBox's per-thread failed-send stash depends on staying mounted), so state survives thread switches; found by the code-reviewer in dm-own-send-bubble-vanishes-on-publish-reject round 5.",
+      "behavior": "After switching A to B, A's rows stay rendered under B's header until B's IDB read finishes (local only, nothing sent). A send in A still awaiting its relay ack is dropped by B's seed and not restored when returning to A before the ack; appendMessage persists it later without notifying the tab, so it reappears only on reload.",
+      "approach": "Filter rendered messages by groupId === threadId before passing them to ChatBox; keep a per-thread ref of pending own sends and merge it into seedThreadMessages (or re-upsert after appendMessage when the thread is current)."
     }
   ],
   "archive": [

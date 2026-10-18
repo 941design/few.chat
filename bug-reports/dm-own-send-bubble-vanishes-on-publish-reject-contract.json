@@ -1,0 +1,24 @@
+{
+  "bug": "dm-own-send-bubble-vanishes-on-publish-reject",
+  "scope": "DM publishes use NDK 3.0.3's default 2.5 s per-relay ack timeout, so under load a DM the relay stores is rolled back on the sender (bubble vanishes, text restored, resend duplicates at the peer); groups use 10 s. Plus the failed-send UX decided by Fable 2026-10-18 (option b).",
+  "files_to_modify": [
+    "app/src/lib/ndkClient.ts",
+    "app/src/lib/directMessages.ts",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/lib/i18n.ts",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/groups.md"
+  ],
+  "behavior": {
+    "timeout": "One shared constant PUBLISH_TIMEOUT_MS = 10_000 in ndkClient.ts (same value as NdkNetworkAdapter.rawPublish) and a helper that publishes an NDKEvent with it. Every user-initiated DM publish on the chat surface (ContactChat text + reaction; directMessages.ts send/reaction/removal/delete/edit replacement+companion) goes through it — no bare ndkEvent.publish() left there. Out of scope: pairing, dmProfile, calls, backup, marmot (own timeouts/semantics).",
+    "genuine_failure": "Unchanged rollback (bubble removed, text back in the composer, reaction rollback). NEW (Fable AGENT-DECIDES, DMs and groups alike): ChatBox shows an inline notice above the composer in the same slot/style as imageSendFailed, testid message-send-failed, text copy.groups.messageSendFailed, with the existing Retry link (copy.groups.imageRetry, testid message-retry-button) that calls handleSend() on the restored text. Cleared at the start of the next send attempt.",
+    "copy": {"groups.messageSendFailed": {"en": "Failed to send message", "de": "Nachricht konnte nicht gesendet werden"}}
+  },
+  "tests": [
+    "Unit: the publish helper passes PUBLISH_TIMEOUT_MS (>= 10_000) to NDK, and a relay ack arriving after 2.5 s but before the timeout resolves successfully (fails before the fix).",
+    "Unit (pure-function extraction, no jsdom): the send-failure state transitions (set on text-send failure, cleared on next attempt).",
+    "Existing unit + tsc green; full e2e gate green."
+  ],
+  "non_goals": ["Persisted 'unsent' bubble state / offline queue (option c)", "Changing marmot/group publish timeouts"]
+}

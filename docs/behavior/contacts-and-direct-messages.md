@@ -173,6 +173,15 @@ come from someone else.
 
 - **Sending** is available to any reachable contact who is not blocked — but not to a
   *pending* contact, whose conversation stays inert until you confirm them (§3).
+  A text message that is not accepted — no relay acknowledges it within 10 seconds, or the
+  relay rejects it — is treated as not sent: it disappears from the conversation, its text
+  returns to the composer of the conversation it was sent in (placed ahead of anything newer you have typed meanwhile, so no
+  text is lost), once the composer is back to plain text (if you started editing or attached an image meanwhile, it waits until you finish or cancel), and a "Failed to send message" notice with a retry link appears above the
+  composer. The notice clears when you send again, start editing, or attach an image. A
+  failed reaction is withdrawn silently, with no notice. A relay that acknowledges within
+  the 10 seconds — even slowly — keeps the message, so a slow connection does not turn a
+  delivered message into a duplicate on resend. A message sent while the conversation is
+  still loading its history stays visible; the loaded history is merged in around it.
 - **Receiving** is filtered: a message from someone outside the walled garden (§8) is
   dropped before it is stored or counted; a message from a pending contact surfaces nothing
   until they are confirmed; a message from a blocked peer is rejected.

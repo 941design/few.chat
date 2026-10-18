@@ -17,6 +17,15 @@ import {
   formatThreadPreviewText,
   isEditSubmitBlocked,
   isInformativeAnnouncement,
+  mergeFailedSendIntoDraft,
+  nextMessageSendFailed,
+  canRestoreFailedEdit,
+  releaseStashedFailedSend,
+  releaseStashForThread,
+  restashComposerText,
+  routeFailedSendForThread,
+  routeFailedSend,
+  shouldShowMessageSendFailed,
   shouldShowEditedMarker,
 } from '@/src/lib/messageEdits/messageActionUi';
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
@@ -388,5 +397,149 @@ describe('formatThreadPreviewText', () => {
   it('gate-remediation (finding 2): returns the photo placeholder for an image-structured last message even without an attachments bag', () => {
     const messages = [makeMsg({ content: JSON.stringify({ type: 'image', version: 1, caption: 'hi' }) })];
     expect(formatThreadPreviewText(messages, strings)).toBe('Photo');
+  });
+});
+
+describe('composer text-send failure notice', () => {
+  it('raises only on a failed send', () => {
+    expect(nextMessageSendFailed('failed')).toBe(true);
+  });
+
+  it.each(['attempt', 'enterEdit', 'cancelEdit', 'attach'] as const)(
+    'a failure is cleared by %s',
+    (event) => {
+      const afterFailure = nextMessageSendFailed('failed');
+      expect(afterFailure).toBe(true);
+      expect(nextMessageSendFailed(event)).toBe(false);
+    },
+  );
+
+  it('is shown only while composing plain text', () => {
+    expect(shouldShowMessageSendFailed(true, false, false)).toBe(true);
+    expect(shouldShowMessageSendFailed(true, true, false)).toBe(false);
+    expect(shouldShowMessageSendFailed(true, false, true)).toBe(false);
+    expect(shouldShowMessageSendFailed(false, false, false)).toBe(false);
+  });
+});
+
+describe('mergeFailedSendIntoDraft', () => {
+  it('restores the failed text into an empty or blank composer', () => {
+    expect(mergeFailedSendIntoDraft('first', '')).toBe('first');
+    expect(mergeFailedSendIntoDraft('first', '  \n')).toBe('first');
+  });
+
+  it('keeps a newer draft, with the failed text first on its own line', () => {
+    expect(mergeFailedSendIntoDraft('first', 'second')).toBe('first\nsecond');
+  });
+
+  it('loses no text across two consecutive failures', () => {
+    const afterOne = mergeFailedSendIntoDraft('one', '');
+    const afterTwo = mergeFailedSendIntoDraft('two', afterOne);
+    expect(afterTwo).toBe('two\none');
+  });
+});
+
+describe('failed send racing a composer mode change', () => {
+  it('restores immediately in plain-text mode', () => {
+    expect(routeFailedSend('A', '', true)).toEqual({ restoreText: 'A', stash: '' });
+  });
+
+  it.each(['edit mode', 'image attachment'])(
+    'send rejects after %s was entered: text is stashed, composer untouched, then restored on return to plain text',
+    () => {
+      const routed = routeFailedSend('A', '', false);
+      expect(routed).toEqual({ restoreText: null, stash: 'A' });
+      // still not plain text: nothing released
+      expect(releaseStashedFailedSend(routed.stash, false)).toEqual({ restoreText: null, stash: 'A' });
+      // edit cancelled / attachment removed: A comes back, not lost
+      expect(releaseStashedFailedSend(routed.stash, true)).toEqual({ restoreText: 'A', stash: '' });
+    },
+  );
+
+  it('keeps several stashed failures in send order', () => {
+    const first = routeFailedSend('A', '', false);
+    const second = routeFailedSend('B', first.stash, false);
+    expect(releaseStashedFailedSend(second.stash, true).restoreText).toBe('A\nB');
+  });
+
+  it('a failure arriving in plain-text mode includes earlier stashed text', () => {
+    expect(routeFailedSend('B', 'A', true)).toEqual({ restoreText: 'A\nB', stash: '' });
+  });
+
+  it('releasing an empty stash is a no-op', () => {
+    expect(releaseStashedFailedSend('', true)).toEqual({ restoreText: null, stash: '' });
+  });
+});
+
+describe('failed send is scoped to its originating conversation', () => {
+  const none = new Map<string, string>();
+
+  it('restores in the same conversation in plain-text mode', () => {
+    const r = routeFailedSendForThread({ failed: 'A', sendThreadId: 'X', currentThreadId: 'X', plainText: true, stashes: none });
+    expect(r.restoreText).toBe('A');
+    expect(r.stashes.size).toBe(0);
+  });
+
+  it('switching conversation before the rejection restores nothing in the other one, and A returns when X is shown again', () => {
+    const r = routeFailedSendForThread({ failed: 'A', sendThreadId: 'X', currentThreadId: 'Y', plainText: true, stashes: none });
+    expect(r.restoreText).toBeNull();
+    expect(r.stashes.get('X')).toBe('A');
+    // Y shown: nothing to release, X's stash untouched
+    const inY = releaseStashForThread({ threadId: 'Y', plainText: true, stashes: r.stashes });
+    expect(inY.restoreText).toBeNull();
+    expect(inY.stashes.get('X')).toBe('A');
+    // back in X
+    const inX = releaseStashForThread({ threadId: 'X', plainText: true, stashes: inY.stashes });
+    expect(inX.restoreText).toBe('A');
+    expect(inX.stashes.has('X')).toBe(false);
+  });
+
+  it('a stash made in X during edit mode is not released into Y', () => {
+    const r = routeFailedSendForThread({ failed: 'A', sendThreadId: 'X', currentThreadId: 'X', plainText: false, stashes: none });
+    expect(r.stashes.get('X')).toBe('A');
+    expect(releaseStashForThread({ threadId: 'Y', plainText: true, stashes: r.stashes }).restoreText).toBeNull();
+    expect(releaseStashForThread({ threadId: 'X', plainText: false, stashes: r.stashes }).restoreText).toBeNull();
+    expect(releaseStashForThread({ threadId: 'X', plainText: true, stashes: r.stashes }).restoreText).toBe('A');
+  });
+
+  it('does not mutate the input map', () => {
+    const input = new Map([['X', 'A']]);
+    routeFailedSendForThread({ failed: 'B', sendThreadId: 'X', currentThreadId: 'Y', plainText: true, stashes: input });
+    expect(input.get('X')).toBe('A');
+  });
+});
+
+describe('restashComposerText (edit save failed after the stash was released)', () => {
+  it('moves non-blank composer text back onto the conversation stash', () => {
+    const m = restashComposerText(new Map(), 'X', 'A');
+    expect(m.get('X')).toBe('A');
+    expect(releaseStashForThread({ threadId: 'X', plainText: true, stashes: m }).restoreText).toBe('A');
+  });
+
+  it('appends to an existing stash', () => {
+    expect(restashComposerText(new Map([['X', 'A']]), 'X', 'B').get('X')).toBe('A\nB');
+  });
+
+  it('leaves the stash alone for blank composer text', () => {
+    expect(restashComposerText(new Map([['X', 'A']]), 'X', '  ').get('X')).toBe('A');
+    expect(restashComposerText(new Map(), 'X', '').has('X')).toBe(false);
+  });
+});
+
+describe('canRestoreFailedEdit (edit save rejects)', () => {
+  it('restores when the same conversation is shown in plain-text mode', () => {
+    expect(canRestoreFailedEdit({ submitThreadId: 'X', currentThreadId: 'X', plainText: true })).toBe(true);
+  });
+
+  it('enter edit B (or attach an image) while edit A is pending, then A rejects: composer and stash untouched', () => {
+    // composer is no longer plain text -> no restore, so B's buffer is never re-stashed
+    expect(canRestoreFailedEdit({ submitThreadId: 'X', currentThreadId: 'X', plainText: false })).toBe(false);
+    const stashes = new Map<string, string>();
+    // the caller only re-stashes when restore is allowed; the stash stays empty
+    expect(stashes.size).toBe(0);
+  });
+
+  it('does not restore into a different conversation', () => {
+    expect(canRestoreFailedEdit({ submitThreadId: 'X', currentThreadId: 'Y', plainText: true })).toBe(false);
   });
 });

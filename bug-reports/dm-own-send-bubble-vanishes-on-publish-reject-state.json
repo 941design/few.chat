@@ -1,0 +1,115 @@
+{
+  "bug_name": "dm-own-send-bubble-vanishes-on-publish-reject",
+  "bug_report_file": "bug-reports/dm-own-send-bubble-vanishes-on-publish-reject-report.md",
+  "created_at": "2026-10-18T09:00:00Z",
+  "updated_at": "2026-10-18T15:00:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "low",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Is the mechanism confirmed by evidence (a logged NDKPublishError / per-relay 'Timeout: 2500ms' on the failing own-send), not only inferred?",
+      "answer": "Partly: NDK 3.0.3 source + late-ack unit tests prove the 2.5 s default; the gate snapshot (no notice, empty composer) proved a second mechanism, the blind thread-open seed."
+    },
+    {
+      "id": "VQ-2",
+      "category": "TEST",
+      "question": "Does a unit test that fails before the fix prove DM publishes no longer use NDK's 2.5 s default, i.e. a relay ack later than 2.5 s but within the shared timeout keeps the send successful?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "QUALITY",
+      "question": "Are ALL user-initiated DM publishes (text, reaction, edit/delete replacement + companion, image, delete) routed through the same timeout, with no remaining bare ndkEvent.publish() on the DM chat surface, and is the change minimal (no unrelated refactor)?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "ARCHITECTURE",
+      "question": "Is the timeout single-sourced and consistent with the group path (NdkNetworkAdapter.rawPublish 10 s), and does a genuine failure still roll back exactly as before (bubble removed, text restored, reaction rollback)?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "QUALITY",
+      "question": "Unit + tsc green via make, Stryker (concurrency 1) on changed logic, temporary diagnostics removed, full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "d1b9398",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (7 findings: ContactChat send unguarded, draft overwrite, notice survives edit/attach, doc misstates reactions, timeout duplicated in rawPublish, test shape, return type)",
+      "codex": "needs-attention: Retry submits an edit"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "ACCEPTED (2 minor: late failure merges into edit/caption; ndkClient mock factories)",
+      "codex": "needs-attention: late failure corrupts active edit"
+    },
+    {
+      "round": 2,
+      "codex": "needs-attention: HIGH stash leaks into another thread (ChatBox not keyed by threadId); medium edit-save failure loses released text"
+    },
+    {
+      "round": 3,
+      "codex": "needs-attention: edit-failure restashes another edit buffer"
+    },
+    {
+      "round": 4,
+      "codex": "approve"
+    },
+    {
+      "round": 5,
+      "trigger": "full gate full-dmpub: AC-60 still lost the bubble without notice (thread-open blind seed erased the unacked send); dm-block-contact :146 KeyPackage-not-found load flake",
+      "codex": "approve",
+      "code_reviewer": "ACCEPTED (4 minor: account-switch leak -> fixed by key={pubkeyHex}; thread-switch stale view + A-B-A pending send -> backlog dm-thread-switch-stale-rows-and-pending-send; wiring untested -> covered by e2e)"
+    }
+  ],
+  "remediation_round": 5,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T09:00:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-18T12:00:00Z",
+      "trigger": "codex_approve_round4"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-18T15:00:00Z",
+      "trigger": "full_e2e_gate_green"
+    }
+  ],
+  "mutation": {
+    "tool": "stryker",
+    "concurrency": 1,
+    "scope": [
+      "ndkClient.ts:PUBLISH_TIMEOUT_MS/publishWithTimeout",
+      "directMessages.ts:publishPrebuiltRumor",
+      "messageActionUi.ts:217-end",
+      "ContactChat.tsx:seedThreadMessages"
+    ],
+    "killed": 84,
+    "survived": 0,
+    "score": 100
+  },
+  "e2e_gate": {
+    "log": "/tmp/claude-501/e2e-gate/full-dmpub-2.log",
+    "non_relay": "72 passed",
+    "relay": "349 passed / 19 skipped / 0 failed",
+    "invalid": false
+  }
+}

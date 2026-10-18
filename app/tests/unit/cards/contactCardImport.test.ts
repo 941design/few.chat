@@ -17,6 +17,8 @@ import type { ProfileAvatar } from '@/src/types';
 // encode -> parse -> import cycle never reaches an NDK-client call, however
 // deep the call chain that would emit relay traffic actually is.
 vi.mock('@/src/lib/ndkClient', () => ({
+  PUBLISH_TIMEOUT_MS: 10_000,
+  publishWithTimeout: vi.fn().mockResolvedValue(new Set()),
   getNdk: vi.fn(),
   connectNdk: vi.fn(),
 }));

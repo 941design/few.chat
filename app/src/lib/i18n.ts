@@ -256,6 +256,7 @@ export type Copy = {
     imageUploading: (pct: number) => string;
     imageSendFailed: string;
     imageRetry: string;
+    messageSendFailed: string;
     imageDecryptFailed: string;
     imageUnavailable: string;
     imageDownload: string;
@@ -948,6 +949,7 @@ const copy: Record<LanguageCode, Copy> = {
       imageUploading: (pct: number) => `Uploading ${pct}%`,
       imageSendFailed: 'Failed to send image',
       imageRetry: 'Retry',
+      messageSendFailed: 'Failed to send message',
       imageDecryptFailed: "Couldn't decrypt this image",
       imageUnavailable: 'Image is no longer available',
       imageDownload: 'Download',
@@ -1531,6 +1533,7 @@ const copy: Record<LanguageCode, Copy> = {
       imageUploading: (pct: number) => `Wird hochgeladen ${pct} %`,
       imageSendFailed: 'Bild konnte nicht gesendet werden',
       imageRetry: 'Erneut versuchen',
+      messageSendFailed: 'Nachricht konnte nicht gesendet werden',
       imageDecryptFailed: 'Bild konnte nicht entschlüsselt werden',
       imageUnavailable: 'Bild ist nicht mehr verfügbar',
       imageDownload: 'Herunterladen',

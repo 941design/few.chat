@@ -24,7 +24,7 @@ import {
   publishDirectEdit,
   publishDirectReaction,
   removeDirectReaction,
-  sealAndWrap,
+  publishPrebuiltRumor,
   sendDirectImageMessage,
   shouldIngestRumor,
   unwrapAndOpen,
@@ -97,6 +97,16 @@ export function reconcileHistoricalBatch(
   const storageById = new Map(storageTruth.map((m) => [m.id, m] as const));
   const substituted = merged.map((m) => storageById.get(m.id) ?? m);
   return filterVisibleMessages(substituted).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
+ * Thread-open seed: storage truth merged into the rendered rows. Rows of another
+ * thread are dropped (ContactChat is not keyed by peer, so `prev` can still hold the
+ * previous conversation); a same-thread row storage does not know yet — an own send
+ * still waiting for its relay ack — is kept.
+ */
+export function seedThreadMessages(prev: ChatMessage[], stored: ChatMessage[], threadId: string): ChatMessage[] {
+  return reconcileMessagesWithStorage(prev.filter((m) => m.groupId === threadId), stored);
 }
 
 /**
@@ -414,8 +424,9 @@ export default function ContactChat({
           // S4 gate-remediation (finding 3a): filter tombstoned rows out of the very
           // first render — an unfiltered raw loadMessages() seed rendered a deleted
           // message for the whole session until some later signal happened to touch
-          // this thread.
-          setMessages(filterVisibleMessages(stored));
+          // this thread. Merged, not replaced: a send made before this read resolves
+          // is not in storage until the relay acks, and a blind replace erased it.
+          setMessages((prev) => seedThreadMessages(prev, stored, threadId));
         }
 
         // S4 ledger obligation: the pending-buffer/delete-marker TTL sweep
@@ -871,7 +882,7 @@ export default function ContactChat({
 
         if (giftWrapSub) giftWrapSub.on?.('event', handleGiftWrapEvent);
       } catch {
-        if (!cancelled) setMessages([]);
+        if (!cancelled) setMessages((prev) => seedThreadMessages(prev, [], threadId));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -921,9 +932,7 @@ export default function ContactChat({
 
     try {
       const ndk = await connectNdk(privateKeyHex);
-      const wrap = await sealAndWrap(rumor, peerPubkeyHex, privateKeyHex);
-      const ndkEvent = new NDKEvent(ndk, wrap as any);
-      await ndkEvent.publish();
+      await publishPrebuiltRumor({ ndk, privateKeyHex, peerPubkeyHex, rumor });
       await appendMessage(threadId, optimistic);
     } catch (err) {
       setMessages((prev) => prev.filter((msg) => msg.id !== rumor.id));
@@ -1029,9 +1038,7 @@ export default function ContactChat({
 
     try {
       // Seal and publish the pre-built rumor directly (avoids rebuilding and any id mismatch).
-      const wrap = await sealAndWrap(rumor, peerPubkeyHex, privateKeyHex);
-      const ndkEvent = new NDKEvent(ndk, wrap as any);
-      await ndkEvent.publish();
+      await publishPrebuiltRumor({ ndk, privateKeyHex, peerPubkeyHex, rumor });
       // Success: the echo will reconcile via inbound dispatch (applyInboundRumor).
     } catch (err) {
       // AC-44, D7: silently roll back the optimistic state (no toast).

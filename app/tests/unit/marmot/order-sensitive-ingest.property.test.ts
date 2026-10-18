@@ -117,6 +117,8 @@ vi.mock('@internet-privacy/marmot-ts', () => ({
 
 const mockFetchEventsWithTimeout = vi.fn();
 vi.mock('@/src/lib/ndkClient', () => ({
+  PUBLISH_TIMEOUT_MS: 10_000,
+  publishWithTimeout: vi.fn().mockResolvedValue(new Set()),
   fetchEventsWithTimeout: (...args: unknown[]) => mockFetchEventsWithTimeout(...args),
 }));
 

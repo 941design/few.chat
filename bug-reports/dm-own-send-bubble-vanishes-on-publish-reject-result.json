@@ -1,0 +1,71 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 5,
+  "root_cause": "Two mechanisms. (1) Every DM publish called NDKEvent.publish() without a timeout, so NDK 3.0.3's 2500 ms per-relay ack default applied (groups use 10 s); a late ack on a loaded machine rolled back a message the relay had stored. (2) The observed e2e signature (bubble gone, no failure notice, empty composer) was ContactChat's thread-open seed: own DMs are persisted only after the relay ack and there is no self-wrap, and the init effect replaced state with setMessages(filterVisibleMessages(stored)) (setMessages([]) on error), erasing a send made before that IDB read resolved.",
+  "fix": "ndkClient.ts: shared PUBLISH_TIMEOUT_MS (10 s) + publishWithTimeout, used by all DM publish sites and as NdkNetworkAdapter.rawPublish's default; directMessages.ts publishPrebuiltRumor for ContactChat's text/reaction sends. ChatBox: on a failed text send a 'Failed to send message' notice with Retry; the text returns to the composer of the thread it was sent in (per-thread stash, never into an active edit/caption). ContactChat: seedThreadMessages merges storage into same-thread rendered rows for the seed and the error branch; ContactChat keyed by account pubkey at both render sites.",
+  "files_modified": [
+    "app/src/lib/ndkClient.ts",
+    "app/src/lib/directMessages.ts",
+    "app/src/lib/marmot/NdkNetworkAdapter.ts",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/lib/messageEdits/messageActionUi.ts",
+    "app/src/lib/i18n.ts",
+    "app/pages/contacts.tsx",
+    "app/pages/feedback.tsx",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/groups.md"
+  ],
+  "files_created": [
+    "app/tests/unit/dmPublishTimeout.test.ts",
+    "bug-reports/dm-own-send-bubble-vanishes-on-publish-reject-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/dmPublishTimeout.test.ts",
+      "app/tests/unit/chat/messageActionUi.test.ts",
+      "app/tests/unit/directMessages/dmMessageEdits.test.ts"
+    ],
+    "pre_fix_failures": 7,
+    "kinds": "real-NDK fake-timer late-ack (4.5 s) tests per DM publish site; failed-send reducer/stash/restore pure helpers; seedThreadMessages merge cases"
+  },
+  "final": {
+    "passed": 6178,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config",
+    "killed": 84,
+    "survived": 0,
+    "score": 100
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-dmpub-2.log",
+    "result": "non-relay 72 passed; relay 349 passed, 19 skipped, 0 failed; no INVALID marker",
+    "status": "green",
+    "previous_gate": "full-dmpub.log: 2 failed (AC-60 seed race -> fixed in round 5; dm-block-contact :146 KeyPackage-not-found load flake, passed in the green rerun)"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The handoff asked to confirm the publish-rejection mechanism with a log first; it never reproduced under load, so the fix rested on the NDK source. The first full gate showed the real e2e signature (no failure notice) pointed at a second cause, costing an extra ~65-minute gate on the 1-CPU VM.",
+    "surprised_by": "Own DMs exist only in React state until the ack (no self-wrap), so any blind state replace silently loses them; ChatBox/ContactChat are not keyed by thread, which made the failed-send restore a cross-thread privacy trap.",
+    "absorbed_from": [],
+    "lead_clarifications": [
+      "Failed-send UX decided by Fable (AGENT-DECIDES): inline notice + Retry, DMs and groups alike."
+    ],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/ndkClient.ts",
+    "app/src/lib/directMessages.ts",
+    "app/src/lib/marmot/NdkNetworkAdapter.ts",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/lib/messageEdits/messageActionUi.ts"
+  ]
+}

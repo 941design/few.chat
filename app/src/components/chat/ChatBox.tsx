@@ -24,6 +24,13 @@ import {
   canShowMessageActions,
   computeDeleteConfirmTransition,
   isEditSubmitBlocked,
+  mergeFailedSendIntoDraft,
+  nextMessageSendFailed,
+  canRestoreFailedEdit,
+  releaseStashForThread,
+  restashComposerText,
+  routeFailedSendForThread,
+  shouldShowMessageSendFailed,
   shouldShowEditedMarker,
 } from '@/src/lib/messageEdits/messageActionUi';
 import type { StructuredContent } from '@/src/lib/marmot/parseStructured';
@@ -209,6 +216,16 @@ export default function ChatBox({
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imageSendFailed, setImageSendFailed] = useState(false);
+  const [messageSendFailed, setMessageSendFailed] = useState(false);
+  // Failed text held back because the composer left plain-text mode (edit / attachment)
+  // while the send was in flight; released by the effect below. Refs, because the send's
+  // catch block runs in a stale closure.
+  const stashedFailedTextRef = useRef<Map<string, string>>(new Map());
+  const composerPlainTextRef = useRef(true);
+  const threadIdRef = useRef(threadId);
+  threadIdRef.current = threadId;
+  const inputValueRef = useRef('');
+  inputValueRef.current = inputValue;
   const [imageTooLarge, setImageTooLarge] = useState(false);
   // S6: edit-mode composer state — the message currently being edited (null when composing new).
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
@@ -251,6 +268,7 @@ export default function ChatBox({
   const attachFile = useCallback((file: File) => {
     setAttachedFile(file);
     setPreviewUrl(URL.createObjectURL(file));
+    setMessageSendFailed(nextMessageSendFailed('attach'));
     setImageSendFailed(false);
     setImageTooLarge(false);
   }, []);
@@ -273,6 +291,7 @@ export default function ChatBox({
     setEditingMessage(null);
     setPendingDeleteId(null);
     setInputValue('');
+    setMessageSendFailed(nextMessageSendFailed('cancelEdit'));
     removeAttachment();
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   }, [threadId, removeAttachment]);
@@ -327,18 +346,36 @@ export default function ChatBox({
     if (isEditSubmitBlocked(inputValue)) return;
     const id = editingMessage.id;
     const content = inputValue;
+    const submitThreadId = threadId;
     setInputValue('');
     setEditingMessage(null);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
       await handleEditMessage(id, content);
     } catch {
-      setEditingMessage(editingMessage);
-      setInputValue(content);
+      if (
+        canRestoreFailedEdit({
+          submitThreadId,
+          currentThreadId: threadIdRef.current,
+          plainText: composerPlainTextRef.current,
+        })
+      ) {
+        // Stashed failed-send text may already have been released into the composer
+        // when the edit was submitted; put it back on the stash so restoring the edit
+        // buffer below does not overwrite (lose) it.
+        stashedFailedTextRef.current = restashComposerText(
+          stashedFailedTextRef.current,
+          submitThreadId,
+          inputValueRef.current,
+        );
+        setEditingMessage(editingMessage);
+        setInputValue(content);
+      }
     }
-  }, [editingMessage, handleEditMessage, inputValue]);
+  }, [editingMessage, handleEditMessage, inputValue, threadId]);
 
   const handleSend = useCallback(async () => {
+    setMessageSendFailed(nextMessageSendFailed('attempt'));
     if (editingMessage) {
       await handleEditSubmit();
       return;
@@ -365,20 +402,50 @@ export default function ChatBox({
     }
     if (!inputValue.trim()) return;
     const content = inputValue;
+    const sendThreadId = threadId;
     setInputValue('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     try {
       await sendMessage(content);
     } catch {
-      setInputValue(content);
+      const routed = routeFailedSendForThread({
+        failed: content,
+        sendThreadId,
+        currentThreadId: threadIdRef.current,
+        plainText: composerPlainTextRef.current,
+        stashes: stashedFailedTextRef.current,
+      });
+      stashedFailedTextRef.current = routed.stashes;
+      if (routed.restoreText !== null) {
+        const restore = routed.restoreText;
+        setInputValue((current) => mergeFailedSendIntoDraft(restore, current));
+        setMessageSendFailed(nextMessageSendFailed('failed'));
+      }
     }
-  }, [attachedFile, editingMessage, handleEditSubmit, inputValue, removeAttachment, sendImageMessage, sendMessage]);
+  }, [attachedFile, editingMessage, handleEditSubmit, inputValue, removeAttachment, sendImageMessage, sendMessage, threadId]);
+
+  // Track the composer mode for the send catch, and release any stashed failed text
+  // as soon as the composer is back in plain-text mode.
+  composerPlainTextRef.current = !editingMessage && !attachedFile;
+  useEffect(() => {
+    const released = releaseStashForThread({
+      threadId,
+      plainText: !editingMessage && !attachedFile,
+      stashes: stashedFailedTextRef.current,
+    });
+    if (released.restoreText === null) return;
+    stashedFailedTextRef.current = released.stashes;
+    const restore = released.restoreText;
+    setInputValue((current) => mergeFailedSendIntoDraft(restore, current));
+    setMessageSendFailed(nextMessageSendFailed('failed'));
+  }, [threadId, editingMessage, attachedFile]);
 
   // S6: enter edit mode for a message — pre-fills the composer with its
   // current content (AC-EDIT-5's composer half). Clears any armed delete
   // confirmation and any in-progress image attachment (edit is text-only).
   const handleEditClick = useCallback((msg: ChatMessage) => {
     setPendingDeleteId(null);
+    setMessageSendFailed(nextMessageSendFailed('enterEdit'));
     setEditingMessage(msg);
     setInputValue(msg.content);
     removeAttachment();
@@ -386,6 +453,7 @@ export default function ChatBox({
   }, [removeAttachment]);
 
   const handleCancelEdit = useCallback(() => {
+    setMessageSendFailed(nextMessageSendFailed('cancelEdit'));
     setEditingMessage(null);
     setInputValue('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -971,6 +1039,24 @@ export default function ChatBox({
             <Box
               as="button"
               data-testid="image-retry-button"
+              fontSize="xs"
+              color="brand.500"
+              onClick={() => void handleSend()}
+              _hover={{ textDecoration: 'underline' }}
+            >
+              {copy.groups.imageRetry}
+            </Box>
+          </Flex>
+        )}
+
+        {shouldShowMessageSendFailed(messageSendFailed, !!editingMessage, !!attachedFile) && (
+          <Flex px={2} pt={1} gap={2} align="center">
+            <Text data-testid="message-send-failed" fontSize="xs" color="red.500">
+              {copy.groups.messageSendFailed}
+            </Text>
+            <Box
+              as="button"
+              data-testid="message-retry-button"
               fontSize="xs"
               color="brand.500"
               onClick={() => void handleSend()}

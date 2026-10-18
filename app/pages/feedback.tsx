@@ -118,6 +118,9 @@ export default function FeedbackPage() {
           </>
         ) : (
           <ContactChat
+            // Keyed by account: an in-place account switch must not carry the previous
+            // account's rendered rows into the merge-based thread seed.
+            key={pubkeyHex}
             peerPubkeyHex={MAINTAINER_ACTIVE_PUBKEY_HEX}
             pubkeyHex={pubkeyHex}
             privateKeyHex={privateKeyHex}
