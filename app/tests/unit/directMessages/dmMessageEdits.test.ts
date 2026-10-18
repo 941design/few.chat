@@ -90,8 +90,9 @@ const {
   CHAT_MESSAGE_KIND,
 } = await import('@/src/lib/directMessages');
 const { appendMessage, loadMessages } = await import('@/src/lib/marmot/chatPersistence');
+const { reconcileMessagesWithStorage } = await import('@/src/context/ChatStoreContext');
 const { applyDeleteEditSignal, resolvePendingSignalsForSlot } = await import('@/src/lib/messageEdits/api');
-const { buildDeleteRumor, DELETE_EDIT_RUMOR_KIND } = await import('@/src/lib/messageEdits/rumor');
+const { buildDeleteRumor, buildEditReplacementRumor, DELETE_EDIT_RUMOR_KIND } = await import('@/src/lib/messageEdits/rumor');
 const { NDKEvent } = await import('@nostr-dev-kit/ndk');
 // S4 gate-remediation (round-4, findings 1/5): pure functions extracted from
 // ContactChat.tsx so the real transforms/reconcile logic — not a re-derived copy —
@@ -106,6 +107,11 @@ const {
   rollbackOptimisticEditView,
   resolveFreshOriginalFromStorage,
   seedThreadMessages,
+  messagesForThread,
+  persistOwnSend,
+  applyPendingSendChange,
+  overlayPendingSends,
+  swapOptimisticImageRow,
 } = await import('@/src/components/contacts/ContactChat');
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -466,6 +472,129 @@ describe('resolve-after-append wiring (mirrors ContactChat.tsx resolveFreshOrigi
   });
 });
 
+// ── applyPendingSendChange (a remounted view follows an edit/delete of a pending send) ──
+
+describe('applyPendingSendChange', () => {
+  const row = (id: string, createdAt: number, content = id): ChatMessageFixture => ({
+    id, content, senderPubkey: alicePubHex, groupId: 'dm:bob', createdAt,
+  });
+
+  it('replaces the row with that id in place', () => {
+    const result = applyPendingSendChange([row('a', 1), row('p', 2), row('b', 3)], 'p', row('p', 2, 'edited'));
+    expect(result.map((m) => [m.id, m.content])).toEqual([['a', 'a'], ['p', 'edited'], ['b', 'b']]);
+  });
+
+  it('inserts a row that is not shown, sorted (an un-hidden send)', () => {
+    const result = applyPendingSendChange([row('a', 1), row('b', 3)], 'p', row('p', 2));
+    expect(result.map((m) => m.id)).toEqual(['a', 'p', 'b']);
+  });
+
+  it('after a failed delete, the rollback plus the un-hide event leave exactly one row, sorted', () => {
+    const snap = row('p', 2);
+    const view = applyOptimisticDeleteView([row('a', 1), snap, row('b', 3)], 'p');
+    const result = applyPendingSendChange(rollbackOptimisticDeleteView(view, snap), snap.id, snap);
+    expect(result.map((m) => m.id)).toEqual(['a', 'p', 'b']);
+  });
+
+  it('the sending view\'s image swap (two registry events, then its own swap) leaves one row', () => {
+    const finalRow = row('event', 2);
+    for (const start of [[row('a', 1), row('temp', 2)], [row('a', 1), row('temp', 2), row('event', 2, 'echo')]]) {
+      let rows = applyPendingSendChange(start, 'temp', null);
+      rows = applyPendingSendChange(rows, 'event', finalRow);
+      rows = swapOptimisticImageRow(rows, 'temp', finalRow);
+      expect(rows.map((m) => [m.id, m.content])).toEqual([['a', 'a'], ['event', 'event']]);
+    }
+  });
+
+  it('swapOptimisticImageRow alone replaces the temp row and an echo under the event id', () => {
+    const result = swapOptimisticImageRow([row('temp', 2), row('event', 2, 'echo'), row('b', 3)], 'temp', row('event', 2));
+    expect(result.map((m) => [m.id, m.content])).toEqual([['event', 'event'], ['b', 'b']]);
+  });
+
+  it('null removes the row and leaves the others', () => {
+    expect(applyPendingSendChange([row('a', 1), row('p', 2)], 'p', null).map((m) => m.id)).toEqual(['a']);
+  });
+});
+
+// ── overlayPendingSends (every storage refresh keeps in-flight edits/deletes) ──
+
+describe('overlayPendingSends', () => {
+  const row = (id: string, createdAt: number, extra: Partial<ChatMessageFixture> = {}): ChatMessageFixture => ({
+    id, content: id, senderPubkey: alicePubHex, groupId: 'dm:bob', createdAt, ...extra,
+  });
+
+  it('send B settling reloads storage while A (acked) is still being deleted: A stays hidden', () => {
+    const stored = [row('a', 1), row('b', 2)];
+    const refreshed = reconcileMessagesWithStorage([row('b', 2)], stored);
+    expect(refreshed.map((m) => m.id)).toEqual(['a', 'b']); // storage alone resurrects A
+    expect(overlayPendingSends(refreshed, 'dm:bob', [{ id: 'a', threadId: 'dm:bob', message: null, replacedIds: [] }]).map((m) => m.id)).toEqual(['b']);
+  });
+
+  it('…and while A is still being edited: A keeps the edit', () => {
+    const edited = row('a', 1, { content: 'edited', edited: true });
+    const refreshed = reconcileMessagesWithStorage([edited, row('b', 2)], [row('a', 1), row('b', 2)]);
+    const result = overlayPendingSends(refreshed, 'dm:bob', [{ id: 'a', threadId: 'dm:bob', message: edited, replacedIds: [] }]);
+    expect(result.map((m) => [m.id, m.content])).toEqual([['a', 'edited'], ['b', 'b']]);
+  });
+
+  it('skips pending sends of another thread, shown or being deleted, and leaves rows alone with nothing pending', () => {
+    const rows = [row('x', 1)];
+    expect(overlayPendingSends(rows, 'dm:bob', [
+      { id: 'c', threadId: 'dm:carol', message: { ...row('c', 2), groupId: 'dm:carol' }, replacedIds: [] },
+      { id: 'x', threadId: 'dm:carol', message: null, replacedIds: [] },
+    ])).toEqual(rows);
+    expect(overlayPendingSends(rows, 'dm:bob', [])).toBe(rows);
+  });
+
+  it('an image restored under its temp id is shown once after the id swap, whatever refresh runs', () => {
+    const refreshed = [row('a', 1), row('temp', 2)];
+    const result = overlayPendingSends(refreshed, 'dm:bob', [{ id: 'event', threadId: 'dm:bob', message: row('event', 2), replacedIds: ['temp'] }]);
+    expect(result.map((m) => m.id)).toEqual(['a', 'event']);
+  });
+});
+
+// ── persistOwnSend (a delete/edit of an unacked own send holds after its ack) ──
+
+describe('persistOwnSend', () => {
+  const thread = () => ({ kind: 'dm' as const, peerPubkeyHex: bobPubHex });
+  const ownSend = (id: string) => ({
+    id, content: 'original', senderPubkey: alicePubHex, groupId: directConversationId(bobPubHex), createdAt: Date.now(),
+  });
+
+  it('applies a delete made before the ack: the stored row is tombstoned', async () => {
+    const msg = ownSend('own-' + Math.random().toString(36).slice(2));
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const buffered = await applyDeleteEditSignal(thread(), buildDeleteRumor(msg.id, [], CHAT_MESSAGE_KIND, nowSeconds, alicePrivHex));
+    expect(buffered.kind).toBe('pending');
+
+    await persistOwnSend(msg.groupId, bobPubHex, msg);
+
+    const { messages } = await loadMessages(msg.groupId);
+    expect(messages.find((m) => m.id === msg.id)?.tombstoned).toBe(true);
+  });
+
+  it('applies an edit made before the ack: the stored row has the new content', async () => {
+    const msg = ownSend('own-' + Math.random().toString(36).slice(2));
+    const createdAtSeconds = Math.floor(msg.createdAt / 1000);
+    const replacement = buildEditReplacementRumor(msg.id, createdAtSeconds, 'edited before ack', CHAT_MESSAGE_KIND, createdAtSeconds + 1, alicePrivHex);
+    expect((await applyDeleteEditSignal(thread(), replacement)).kind).toBe('pending');
+
+    await persistOwnSend(msg.groupId, bobPubHex, msg);
+
+    const stored = (await loadMessages(msg.groupId)).messages.find((m) => m.id === msg.id);
+    expect(stored?.content).toBe('edited before ack');
+    expect(stored?.edited).toBe(true);
+  });
+
+  it('with nothing buffered stores the row as sent', async () => {
+    const msg = ownSend('own-' + Math.random().toString(36).slice(2));
+    await persistOwnSend(msg.groupId, bobPubHex, msg);
+    const stored = (await loadMessages(msg.groupId)).messages.find((m) => m.id === msg.id);
+    expect(stored?.content).toBe('original');
+    expect(stored?.tombstoned).toBeFalsy();
+  });
+});
+
 // ── AC-AUTH-2 (DM half): the authenticated seal pubkey gates apply-vs-discard ──
 
 describe('AC-AUTH-2 (DM half): only the authenticated seal pubkey may signal its own slot', () => {
@@ -650,6 +779,69 @@ describe('seedThreadMessages (an own send made before the thread-open read resol
   it('with nothing stored (read failed) only same-thread rows remain', () => {
     const result = seedThreadMessages([row('p', 'dm:bob', 1), row('x', 'dm:carol', 2)], [], 'dm:bob');
     expect(result.map((m) => m.id)).toEqual(['p']);
+  });
+
+  const view = (m: ChatMessageFixture) => ({ id: m.id, threadId: m.groupId, message: m, replacedIds: [] as string[] });
+
+  it('restores an unacked own send after a switch away and back (prev no longer holds it)', () => {
+    const pending = [view(row('unacked', 'dm:bob', 3000))];
+    const prev = [row('carol-row', 'dm:carol', 2500)];
+    const stored = [row('old', 'dm:bob', 1000)];
+    expect(seedThreadMessages(prev, stored, 'dm:bob', pending).map((m) => m.id)).toEqual(['old', 'unacked']);
+  });
+
+  it('never merges another thread\'s pending send', () => {
+    const pending = [view(row('to-carol', 'dm:carol', 3000)), view(row('to-bob', 'dm:bob', 2000))];
+    expect(seedThreadMessages([], [], 'dm:bob', pending).map((m) => m.id)).toEqual(['to-bob']);
+  });
+
+  it('a pending view wins over storage (an edit still publishing after the ack), without a duplicate', () => {
+    const pending = [view(row('acked', 'dm:bob', 2000, { content: 'edited', edited: true }))];
+    const stored = [row('acked', 'dm:bob', 2000, { content: 'plain original' })];
+    const result = seedThreadMessages([], stored, 'dm:bob', pending);
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('edited');
+  });
+
+  it('a pending send being deleted stays hidden, even when storage already holds it', () => {
+    const stored = [row('old', 'dm:bob', 1000), row('deleting', 'dm:bob', 2000)];
+    const prev = [row('deleting', 'dm:bob', 2000)];
+    const result = seedThreadMessages(prev, stored, 'dm:bob', [{ id: 'deleting', threadId: 'dm:bob', message: null, replacedIds: [] }]);
+    expect(result.map((m) => m.id)).toEqual(['old']);
+  });
+
+  it('a pending send still rendered in prev is not duplicated; the pending view is shown', () => {
+    const rendered = row('p', 'dm:bob', 2000, { content: 'rendered' });
+    const result = seedThreadMessages([rendered], [], 'dm:bob', [view(row('p', 'dm:bob', 2000, { content: 'pending copy' }))]);
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('pending copy');
+  });
+
+  it('accepts any iterable of pending views', () => {
+    const pending = new Map([['q', view(row('q', 'dm:bob', 5))]]);
+    expect(seedThreadMessages([], [row('a', 'dm:bob', 9)], 'dm:bob', pending.values()).map((m) => m.id)).toEqual(['q', 'a']);
+  });
+});
+
+// ── messagesForThread (ChatBox renders only the open thread's rows) ──────────
+
+describe('messagesForThread', () => {
+  const row = (id: string, groupId: string, createdAt: number): ChatMessageFixture => ({
+    id, content: id, senderPubkey: alicePubHex, groupId, createdAt,
+  });
+
+  it('drops rows of the previous conversation still held in state', () => {
+    const rows = [row('b1', 'dm:bob', 1), row('c1', 'dm:carol', 2), row('b2', 'dm:bob', 3)];
+    expect(messagesForThread(rows, 'dm:bob').map((m) => m.id)).toEqual(['b1', 'b2']);
+  });
+
+  it('returns nothing while state still holds only the previous conversation', () => {
+    expect(messagesForThread([row('c1', 'dm:carol', 2)], 'dm:bob')).toEqual([]);
+  });
+
+  it('keeps every row and their order when all belong to the thread', () => {
+    const rows = [row('x', 'dm:bob', 5), row('y', 'dm:bob', 1)];
+    expect(messagesForThread(rows, 'dm:bob')).toEqual(rows);
   });
 });
 

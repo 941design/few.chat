@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T18:06:11Z",
+  "updated_at": "2026-10-18T20:10:22Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -354,19 +354,6 @@
       "approach": "Add a created_at freshness window (or join-generation bound) and persist the seen-inner-id set per group (idb, bounded); emit the g tag if a group-scoped forwardable kind is added."
     },
     {
-      "slug": "dm-thread-switch-stale-rows-and-pending-send",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/components/contacts/ContactChat.tsx",
-        "line": 284
-      },
-      "text": "DM thread switch shows the previous thread's rows until the new read resolves; an unacked send is lost on a quick A-B-A switch",
-      "created_at": "2026-10-18",
-      "motivation": "ContactChat is not keyed by peer (ChatBox's per-thread failed-send stash depends on staying mounted), so state survives thread switches; found by the code-reviewer in dm-own-send-bubble-vanishes-on-publish-reject round 5.",
-      "behavior": "After switching A to B, A's rows stay rendered under B's header until B's IDB read finishes (local only, nothing sent). A send in A still awaiting its relay ack is dropped by B's seed and not restored when returning to A before the ack; appendMessage persists it later without notifying the tab, so it reappears only on reload.",
-      "approach": "Filter rendered messages by groupId === threadId before passing them to ChatBox; keep a per-thread ref of pending own sends and merge it into seedThreadMessages (or re-upsert after appendMessage when the thread is current)."
-    },
-    {
       "slug": "stale-replace-other-tab-writes",
       "scope": "any",
       "anchor": {
@@ -400,7 +387,7 @@
       "text": "DM composer Enter press hangs 30s under full-suite load in groups-dm-reactions",
       "created_at": "2026-10-18",
       "motivation": "Second sighting of an undiagnosed renderer stall that turns the full e2e gate red without a product signal; each red gate costs a 65-min rerun on the 1-CPU VM.",
-      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer).",
+      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer). Same stall as a click: dm-pairing-pending-confirmation.spec.ts:214 timed out 30 s in 'performing click action' on chat-send-btn in gates full-pollpurge (2026-10-17) and full-dmswitch (2026-10-18) while the message had already reached the peer.",
       "approach": "Capture an in-page long-task/performance trace around the thread-open history load under CPU throttling to find the main-thread blocker; consider a per-test relay wipe or unique keys between DM reaction tests.",
       "success_signal": "Three consecutive full gates without a composer key-press timeout."
     },
@@ -431,6 +418,33 @@
       "behavior": "EpochResolver fires onMembersChanged without awaiting it (epochResolver.ts:292-295). Its body awaits persistGroup/reloadGroups and then runs void mlsGroup.commit() with no isCurrentGroup() re-check, so after a replace destroys and rejoins it can commit on the old MarmotGroup object (MLS state save + publish) and persist a stale overlay record. The onHistorySynced profile send checks isCurrentGroup only before sendRumorSafe, and the in-flight send is untracked.",
       "approach": "Track the onMembersChanged and profile-send promises per group in pendingDrainRef (trackPending) or chain them into the resolver idle; re-check isCurrentGroup() immediately before mlsGroup.commit() and persistGroup.",
       "success_signal": "Unit test: a replace started while an onMembersChanged body is suspended waits for it (or that body does not commit/persist once the group was replaced)."
+    },
+    {
+      "slug": "deleting-dm-image-while-still-uploading",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/components/contacts/ContactChat.tsx"
+      },
+      "text": "Deleting a DM image while it is still uploading does not stick",
+      "created_at": "2026-10-18",
+      "motivation": "The delete action is offered on an uploading image, but the delete targets its temporary id, so the image comes back when the upload finishes and the peer receives a delete for an id that never exists; the behaviour doc now states this limitation.",
+      "behavior": "handleDeleteMessage publishes and buffers a delete for the random temp id; sendImageMessage then re-adds the final row under the event id and persistOwnSend stores it untombstoned, since nothing maps the temp-id signal to the event id.",
+      "approach": "Either hide delete/edit actions on temp-id (uploading) rows, or, after the upload, check the pending registry's hidden flag and issue the delete against the event id instead of re-adding the row.",
+      "success_signal": "Deleting an uploading image keeps it deleted after the upload finishes and after reopening the conversation."
+    },
+    {
+      "slug": "pending-contact-confirm-badge-reads-1",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
+        "line": 189
+      },
+      "text": "Pending-contact confirm badge reads 1 instead of 2 when the second held DM arrives late",
+      "created_at": "2026-10-18",
+      "motivation": "Intermittent red in the pairing spec (1 of 5 isolated runs, 2026-10-18) without a known product cause; either a test race or a held DM that is not counted when it lands around the confirm.",
+      "behavior": "The test waits until A's lastSeenAt for B advances (proof of at least one processed event), then confirms; after confirm the nav badge polled 15 s stayed at 1 instead of 2. B showed both messages.",
+      "approach": "Check whether a held DM arriving during or just after confirm is counted; if it is, make the test wait for both held events (e.g. poll the stored held count) before confirming.",
+      "success_signal": "The spec passes 10 consecutive isolated runs."
     }
   ],
   "archive": [

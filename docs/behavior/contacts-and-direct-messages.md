@@ -182,6 +182,9 @@ come from someone else.
   the 10 seconds — even slowly — keeps the message, so a slow connection does not turn a
   delivered message into a duplicate on resend. A message sent while the conversation is
   still loading its history stays visible; the loaded history is merged in around it.
+  Switching to another conversation and back while a message still waits for its
+  acknowledgement keeps it visible. A conversation only ever shows its own messages,
+  including just after switching from another one.
 - **Receiving** is filtered: a message from someone outside the walled garden (§8) is
   dropped before it is stored or counted; a message from a pending contact surfaces nothing
   until they are confirmed; a message from a blocked peer is rejected.

@@ -1,0 +1,16 @@
+{
+  "bug": "dm-thread-switch-stale-rows-and-pending-send",
+  "scope": "ContactChat renders only the open thread's rows and keeps unacked own sends across thread switches.",
+  "files_to_modify": [
+    "app/src/components/contacts/ContactChat.tsx (messagesForThread render filter; per-thread pendingOwnSendsRef filled by sendMessage/sendImageMessage, cleared on ack/failure; seedThreadMessages merges pending rows)",
+    "docs/behavior/contacts-and-direct-messages.md (if it states send/thread-switch visibility)"
+  ],
+  "behavior": {
+    "render_filter": "ChatBox receives only rows with groupId === threadId.",
+    "pending_merge": "seedThreadMessages(prev, stored, threadId, pending) returns storage truth + same-thread prev rows unknown to storage + this thread's pending own sends unknown to storage, sorted by createdAt, no duplicates.",
+    "lifecycle": "A pending entry is added when the optimistic row is shown and removed after appendMessage succeeds or the send fails (rollback).",
+    "no_cross_thread": "Pending sends of other threads are never merged."
+  },
+  "tests": ["Unit: messagesForThread; seedThreadMessages with pending (merge, dedupe vs storage, other-thread ignored, sort); pending map add/remove helpers"],
+  "non_goals": ["keying ContactChat by peer", "failed-send stash behaviour", "image-send progress UI"]
+}

@@ -1,0 +1,70 @@
+{
+  "bug_name": "dm-thread-switch-stale-rows-and-pending-send",
+  "bug_report_file": "bug-reports/dm-thread-switch-stale-rows-and-pending-send-report.md",
+  "created_at": "2026-10-19T02:45:00Z",
+  "updated_at": "2026-10-19T04:50:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "d0485ea",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (sev7 pending ref dies on remount via contact list; sev6 doc overclaim; sev4 lifecycle untested; sev3 seed/settle race; sev2 image persist failure; sev2 reactions/messagesRef unfiltered)",
+      "codex": "needs-attention (delete of an unacked send resurrected by restore)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "CHANGES_REQUESTED (sev7 buffered delete/edit of an own send never applied to storage -> reverts on ack; sev4 test; sev3 pending edit; sev2 owner scoping)",
+      "codex": "needs-attention (image temp-id placeholder stranded in a remounted view)"
+    },
+    {
+      "round": 2,
+      "code_reviewer": "CHANGES_REQUESTED (sev5 doc overclaim for uploading-image delete -> qualified + filed deleting-dm-image-while-still-uploading; sev3 buffer race accepted; sev3 docblocks)",
+      "codex": "needs-attention (registry rollbacks not reaching a remounted view)"
+    },
+    {
+      "round": 3,
+      "code_reviewer": "CHANGES_REQUESTED (sev5 settle reload undoes an in-flight edit/delete; sev3 restored ids missing from reaction gate; sev2 compose test)",
+      "codex": "needs-attention (same as reviewer sev5)"
+    },
+    {
+      "round": 4,
+      "code_reviewer": "ACCEPTED (3 low notes, applied)",
+      "codex": "needs-attention (another send's settle reload bypassed the overlay)"
+    },
+    {
+      "round": 5,
+      "code_reviewer": "ACCEPTED (sev3 image temp-id duplicate in a restored view; sev1 guard)",
+      "codex": "needs-attention (same image temp-id duplicate)"
+    },
+    {
+      "round": 6,
+      "code_reviewer": "ACCEPTED (sev2 compose test, sev1 comment; both applied)",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 6,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-19T02:45:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-19T04:50:00Z",
+      "trigger": "both reviewers accepted at round 6"
+    }
+  ],
+  "e2e_gate": "passed except known flake: 72 + 352 passed, 1 failed (known renderer stall), isolated 4/5 + unrelated badge flake (/tmp/claude-501/e2e-gate/full-dmswitch.log)"
+}

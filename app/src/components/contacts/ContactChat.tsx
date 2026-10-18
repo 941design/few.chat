@@ -5,6 +5,19 @@ import type { MemberProfile } from '@/src/types';
 import ChatBox from '@/src/components/chat/ChatBox';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { reconcileMessagesWithStorage } from '@/src/context/ChatStoreContext';
+import {
+  beginPendingOwnSendAction,
+  endPendingOwnSendAction,
+  pendingOwnSendsFor,
+  registerPendingOwnSend,
+  replacePendingOwnSend,
+  setPendingOwnSendHidden,
+  settlePendingOwnSend,
+  subscribePendingOwnSendChanged,
+  subscribePendingOwnSendSettled,
+  updatePendingOwnSend,
+  type PendingSendView,
+} from '@/src/lib/pendingOwnSends';
 import { subscribeStoreChangedFor } from '@/src/lib/crossTab';
 import { isAllowedDmSenderComposite, isBlockedPeer, loadBlockedPeers } from '@/src/lib/blockedPeers';
 import { loadKnownPeers } from '@/src/lib/knownPeers';
@@ -101,10 +114,75 @@ export function reconcileHistoricalBatch(
  * Thread-open seed: storage truth merged into the rendered rows. Rows of another
  * thread are dropped (ContactChat is not keyed by peer, so `prev` can still hold the
  * previous conversation); a same-thread row storage does not know yet — an own send
- * still waiting for its relay ack — is kept.
+ * still waiting for its relay ack — is kept. `pending` (pendingOwnSendsFor) is laid
+ * over the result: after a switch away and back, or a remount, `prev` no longer has
+ * this thread's unacked own sends, and while an edit/delete of one is publishing,
+ * storage may hold its plain original — the pending view wins either way.
  */
-export function seedThreadMessages(prev: ChatMessage[], stored: ChatMessage[], threadId: string): ChatMessage[] {
-  return reconcileMessagesWithStorage(prev.filter((m) => m.groupId === threadId), stored);
+export function seedThreadMessages(
+  prev: ChatMessage[],
+  stored: ChatMessage[],
+  threadId: string,
+  pending: Iterable<PendingSendView> = [],
+): ChatMessage[] {
+  return overlayPendingSends(reconcileMessagesWithStorage(prev.filter((m) => m.groupId === threadId), stored), threadId, pending);
+}
+
+/**
+ * Lays this thread's pending own sends over rows just merged from storage. Every
+ * storage refresh needs it: while an edit/delete of an acknowledged send is still
+ * publishing, storage holds its plain original, and a refresh (another send settling,
+ * another tab, the history fetch) would otherwise undo the action on screen.
+ */
+export function overlayPendingSends(rows: ChatMessage[], threadId: string, pending: Iterable<PendingSendView>): ChatMessage[] {
+  let out = rows;
+  for (const view of pending) {
+    if (view.threadId !== threadId) continue;
+    out = out.filter((m) => !view.replacedIds.includes(m.id));
+    out = applyPendingSendChange(out, view.id, view.message);
+  }
+  return out;
+}
+
+/**
+ * Stores an acknowledged own send, then applies a delete or edit made while it was
+ * unacked: those signals wait for a stored row (AC-ORDER-1) and no echo of an own
+ * send ever arrives to resolve them. Resolving is best effort; the row is stored
+ * either way, and a throw means it was not.
+ */
+export async function persistOwnSend(threadId: string, peerPubkeyHex: string, msg: ChatMessage): Promise<void> {
+  await appendMessage(threadId, msg);
+  try {
+    await resolvePendingSignalsForSlot({ kind: 'dm', peerPubkeyHex }, msg.id, msg.senderPubkey);
+  } catch (err) {
+    dmLogger.info('dm:own-send-resolve-failed', { id: msg.id.slice(0, 8), error: String(err) });
+  }
+}
+
+/**
+ * Applies a change of a pending own send (pendingOwnSends) to the rendered rows:
+ * `message` replaces the row with that id (or is inserted, sorted), null removes it.
+ */
+export function applyPendingSendChange(prev: ChatMessage[], id: string, message: ChatMessage | null): ChatMessage[] {
+  const rest = prev.filter((m) => m.id !== id);
+  return message ? [...rest, message].sort((a, b) => a.createdAt - b.createdAt) : rest;
+}
+
+/**
+ * An image send's swap from its temp-id row to the final row: drops both ids (an echo
+ * may already sit under the event id) and inserts the final row, sorted.
+ */
+export function swapOptimisticImageRow(prev: ChatMessage[], tempId: string, finalMsg: ChatMessage): ChatMessage[] {
+  const filtered = prev.filter((msg) => msg.id !== tempId && msg.id !== finalMsg.id);
+  return [...filtered, finalMsg].sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
+ * Render filter: only the open thread's rows. Until the thread-open seed runs, state
+ * can still hold the previous conversation (the component is not keyed by peer).
+ */
+export function messagesForThread(messages: ChatMessage[], threadId: string): ChatMessage[] {
+  return messages.filter((m) => m.groupId === threadId);
 }
 
 /**
@@ -284,10 +362,13 @@ export default function ContactChat({
   const [loading, setLoading] = useState(false);
   // Story-07: DM reactions read side (S2). Map<messageId, ReactionAggregate[]>.
   const dmThread = useMemo(() => ({ kind: 'dm' as const, peerPubkeyHex }), [peerPubkeyHex]);
-  const reactionsByMessageId = useDirectReactions(peerPubkeyHex, pubkeyHex, messages);
+  // The open thread's rows only: until the thread-open seed runs, state can still hold
+  // the previous conversation (the component is not keyed by peer).
+  const visibleMessages = useMemo(() => messagesForThread(messages, threadId), [messages, threadId]);
+  const reactionsByMessageId = useDirectReactions(peerPubkeyHex, pubkeyHex, visibleMessages);
   // Ref to messages for use inside stable callbacks (avoids stale closure)
-  const messagesRef = useRef<ChatMessage[]>(messages);
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  const messagesRef = useRef<ChatMessage[]>(visibleMessages);
+  useEffect(() => { messagesRef.current = visibleMessages; }, [visibleMessages]);
   // Bug-fix (round-2, DM gate): synchronously-updated Set of known message ids.
   // messagesRef.current is synced via useEffect (after render), so there is a window
   // between setMessages and the next render where messagesRef.current is stale. A
@@ -393,7 +474,7 @@ export default function ContactChat({
         .then(({ messages: stored }) => {
           if (cancelled) return;
           for (const msg of stored) knownMessageIdsRef.current.add(msg.id);
-          setMessages((prev) => reconcileMessagesWithStorage(prev, stored));
+          setMessages((prev) => overlayPendingSends(reconcileMessagesWithStorage(prev, stored), threadId, pendingOwnSendsFor(pubkeyHex, threadId)));
         })
         .catch(() => {
           // Best-effort refresh — a read failure leaves the view as it is.
@@ -403,7 +484,38 @@ export default function ContactChat({
       cancelled = true;
       unsubscribe();
     };
-  }, [threadId]);
+  }, [pubkeyHex, threadId]);
+
+  // An own send restored by the thread-open seed may still be running in an earlier,
+  // unmounted instance of this view: once it is persisted, re-read storage; once it
+  // has failed, drop its row. An edit or delete of it started there is followed too
+  // (shown, or rolled back on failure).
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribeChanged = subscribePendingOwnSendChanged(pubkeyHex, threadId, ({ id, message }) => {
+      if (message) knownMessageIdsRef.current.add(id);
+      setMessages((prev) => applyPendingSendChange(prev, id, message));
+    });
+    const unsubscribe = subscribePendingOwnSendSettled(pubkeyHex, threadId, ({ id, replacedIds, persisted }) => {
+      const gone = new Set(persisted ? replacedIds : [...replacedIds, id]);
+      if (gone.size > 0) setMessages((prev) => prev.filter((msg) => !gone.has(msg.id)));
+      if (!persisted) return;
+      loadMessages(threadId)
+        .then(({ messages: stored }) => {
+          if (cancelled) return;
+          for (const msg of stored) knownMessageIdsRef.current.add(msg.id);
+          setMessages((prev) => overlayPendingSends(reconcileMessagesWithStorage(prev, stored), threadId, pendingOwnSendsFor(pubkeyHex, threadId)));
+        })
+        .catch(() => {
+          // Best-effort refresh — a read failure leaves the view as it is.
+        });
+    });
+    return () => {
+      cancelled = true;
+      unsubscribeChanged();
+      unsubscribe();
+    };
+  }, [pubkeyHex, threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -424,7 +536,10 @@ export default function ContactChat({
           // message for the whole session until some later signal happened to touch
           // this thread. Merged, not replaced: a send made before this read resolves
           // is not in storage until the relay acks, and a blind replace erased it.
-          setMessages((prev) => seedThreadMessages(prev, stored, threadId));
+          // Restored pending sends must pass the reaction gate like the sender's own rows.
+          const pending = pendingOwnSendsFor(pubkeyHex, threadId);
+          for (const { id, message } of pending) if (message) knownMessageIdsRef.current.add(id);
+          setMessages((prev) => seedThreadMessages(prev, stored, threadId, pending));
         }
 
         // S4 ledger obligation: the pending-buffer/delete-marker TTL sweep
@@ -461,7 +576,8 @@ export default function ContactChat({
             setMessages((prev) => {
               const byId = new Map(prev.map((m) => [m.id, m] as const));
               for (const m of freshAfterSweep) byId.set(m.id, m);
-              return filterVisibleMessages(Array.from(byId.values())).sort((a, b) => a.createdAt - b.createdAt);
+              const merged = filterVisibleMessages(Array.from(byId.values())).sort((a, b) => a.createdAt - b.createdAt);
+              return overlayPendingSends(merged, threadId, pendingOwnSendsFor(pubkeyHex, threadId));
             });
           } catch {
             // Best-effort reconciliation — a read failure here leaves state as-is.
@@ -753,7 +869,8 @@ export default function ContactChat({
             setMessages((prev) => {
               const byId = new Map(prev.map((m) => [m.id, m] as const));
               for (const m of reconciled) byId.set(m.id, m);
-              return filterVisibleMessages(Array.from(byId.values())).sort((a, b) => a.createdAt - b.createdAt);
+              const merged = filterVisibleMessages(Array.from(byId.values())).sort((a, b) => a.createdAt - b.createdAt);
+              return overlayPendingSends(merged, threadId, pendingOwnSendsFor(pubkeyHex, threadId));
             });
           }
         }
@@ -880,7 +997,11 @@ export default function ContactChat({
 
         if (giftWrapSub) giftWrapSub.on?.('event', handleGiftWrapEvent);
       } catch {
-        if (!cancelled) setMessages((prev) => seedThreadMessages(prev, [], threadId));
+        if (!cancelled) {
+          const pending = pendingOwnSendsFor(pubkeyHex, threadId);
+          for (const { id, message } of pending) if (message) knownMessageIdsRef.current.add(id);
+          setMessages((prev) => seedThreadMessages(prev, [], threadId, pending));
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -927,14 +1048,19 @@ export default function ContactChat({
       content,
     });
     upsertMessages([optimistic]);
+    registerPendingOwnSend(pubkeyHex, optimistic);
+    let persisted = false;
 
     try {
       const ndk = await connectNdk(privateKeyHex);
       await publishPrebuiltRumor({ ndk, privateKeyHex, peerPubkeyHex, rumor });
-      await appendMessage(threadId, optimistic);
+      await persistOwnSend(threadId, peerPubkeyHex, optimistic);
+      persisted = true;
     } catch (err) {
       setMessages((prev) => prev.filter((msg) => msg.id !== rumor.id));
       throw err;
+    } finally {
+      settlePendingOwnSend(pubkeyHex, optimistic.id, persisted);
     }
   }, [peerPubkeyHex, privateKeyHex, pubkeyHex, threadId, upsertMessages, isFeedback]);
 
@@ -949,6 +1075,9 @@ export default function ContactChat({
       attachments: { full: null, thumb: null },
     });
     upsertMessages([optimistic]);
+    registerPendingOwnSend(pubkeyHex, optimistic);
+    let pendingId = tempId;
+    let persisted = false;
 
     try {
       const ndk = await connectNdk(privateKeyHex);
@@ -970,14 +1099,16 @@ export default function ContactChat({
       // leave a duplicate echo entry under the real event id.
       // Also register the real event id synchronously so the kind-7 gate is up-to-date.
       knownMessageIdsRef.current.add(result.eventId);
-      setMessages((prev) => {
-        const filtered = prev.filter((msg) => msg.id !== tempId && msg.id !== result.eventId);
-        return [...filtered, finalMsg].sort((a, b) => a.createdAt - b.createdAt);
-      });
-      await appendMessage(threadId, finalMsg);
+      replacePendingOwnSend(pubkeyHex, tempId, finalMsg);
+      pendingId = finalMsg.id;
+      setMessages((prev) => swapOptimisticImageRow(prev, tempId, finalMsg));
+      await persistOwnSend(threadId, peerPubkeyHex, finalMsg);
+      persisted = true;
     } catch (err) {
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId && msg.id !== pendingId));
       throw err;
+    } finally {
+      settlePendingOwnSend(pubkeyHex, pendingId, persisted);
     }
   }, [peerPubkeyHex, privateKeyHex, pubkeyHex, signer, threadId, upsertMessages]);
 
@@ -1067,7 +1198,8 @@ export default function ContactChat({
    * function's doc comment for why a pre-publish durable write + synthetic-undo
    * rollback would corrupt the `edited` flag) — so a failed publish never leaves a
    * durable side effect to undo; this handler's rollback is a pure, always-correct
-   * React-state revert.
+   * React-state revert. For an own send not stored yet (relay ack pending) the
+   * tombstone is only buffered; persistOwnSend applies it once the send is stored.
    *
    * Failure-UX: throws, does not toast (see result.json's documented cross-cutting
    * decision — matches the group transport's throw-only behavior; toasting would
@@ -1085,6 +1217,9 @@ export default function ContactChat({
     if (snapshot.senderPubkey.toLowerCase() !== pubkeyHex.toLowerCase()) return;
 
     setMessages((prev) => applyOptimisticDeleteView(prev, messageId));
+    // An unacked send being deleted must not come back on the next thread open.
+    const trackedPending = beginPendingOwnSendAction(pubkeyHex, messageId);
+    setPendingOwnSendHidden(pubkeyHex, messageId, true);
 
     try {
       const ndk = await connectNdk(privateKeyHex);
@@ -1104,7 +1239,10 @@ export default function ContactChat({
     } catch (err) {
       // AC-DEL-2: restore the prior visible state on publish failure.
       setMessages((prev) => rollbackOptimisticDeleteView(prev, snapshot));
+      setPendingOwnSendHidden(pubkeyHex, messageId, false);
       throw err;
+    } finally {
+      if (trackedPending) endPendingOwnSendAction(pubkeyHex, messageId);
     }
   }, [peerPubkeyHex, privateKeyHex, pubkeyHex]);
 
@@ -1116,7 +1254,8 @@ export default function ContactChat({
    * (before publish resolves) and rolls back to the prior content if the
    * REPLACEMENT publish fails. A failed/absent companion kind-5 never reaches this
    * catch block (publishDirectEdit swallows that failure internally) — see that
-   * function's doc comment.
+   * function's doc comment. For an own send not stored yet (relay ack pending) the
+   * edit is only buffered; persistOwnSend applies it once the send is stored.
    */
   const handleEditMessage = useCallback(async (messageId: string, newContent: string): Promise<void> => {
     const snapshot = messagesRef.current.find((m) => m.id === messageId);
@@ -1127,6 +1266,9 @@ export default function ContactChat({
     if (snapshot.senderPubkey.toLowerCase() !== pubkeyHex.toLowerCase()) return;
 
     setMessages((prev) => applyOptimisticEditView(prev, messageId, newContent));
+    // Keep the edit if this is an unacked send restored by a later thread open.
+    const trackedPending = beginPendingOwnSendAction(pubkeyHex, messageId);
+    updatePendingOwnSend(pubkeyHex, applyOptimisticEditView([snapshot], messageId, newContent)[0]);
 
     try {
       const ndk = await connectNdk(privateKeyHex);
@@ -1143,7 +1285,10 @@ export default function ContactChat({
     } catch (err) {
       // AC-EDIT-8: roll back to the prior content on publish failure.
       setMessages((prev) => rollbackOptimisticEditView(prev, messageId, snapshot));
+      updatePendingOwnSend(pubkeyHex, snapshot);
       throw err;
+    } finally {
+      if (trackedPending) endPendingOwnSendAction(pubkeyHex, messageId);
     }
   }, [peerPubkeyHex, privateKeyHex, pubkeyHex, threadId]);
 
@@ -1201,7 +1346,7 @@ export default function ContactChat({
       threadId={threadId}
       pubkey={pubkeyHex}
       profileMap={profileMap}
-      messages={messages}
+      messages={visibleMessages}
       loading={loading}
       sendMessage={sendMessage}
       sendImageMessage={sendImageMessage}

@@ -1,0 +1,59 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 6,
+  "root_cause": "ContactChat is not keyed by peer and kept unacked own sends only in component state: after a thread switch the previous conversation's rows stayed rendered until the new thread's read resolved, and the thread-open seed (or a remount through the contact list) dropped an own send still awaiting its relay ack, since own DMs are stored only after the ack. Underneath, a delete/edit of such an unacked send was only buffered and never applied once the send was stored.",
+  "fix": "ChatBox, reactions and messagesRef get only the open thread's rows (messagesForThread). New module-scope, per-account registry app/src/lib/pendingOwnSends.ts holds unacked own sends (register/replace for the image id swap/settle), tracks edits and hides of them with change notifications, and holds a settle while an edit/delete of the send is publishing. Every storage refresh in ContactChat lays the pending views over the merged rows (overlayPendingSends, also inside seedThreadMessages); settle events let a remounted view drop failed/replaced rows and re-read storage. persistOwnSend stores an acked own send and resolves delete/edit signals buffered for it.",
+  "files_modified": [
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/tests/unit/directMessages/dmMessageEdits.test.ts",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/message-editing-and-deletion.md"
+  ],
+  "files_created": [
+    "app/src/lib/pendingOwnSends.ts",
+    "app/tests/unit/pendingOwnSends.test.ts",
+    "bug-reports/dm-thread-switch-stale-rows-and-pending-send-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/pendingOwnSends.test.ts",
+      "app/tests/unit/directMessages/dmMessageEdits.test.ts"
+    ],
+    "pre_fix_failures": 6,
+    "kinds": "Pure helpers (messagesForThread, seedThreadMessages overlay, overlayPendingSends incl. two-send interleaving and image id swap, applyPendingSendChange, swapOptimisticImageRow compose tests); registry lifecycle (accounts, settle notifications, held settle with overlapping actions, aliases, change events); persistOwnSend against the idb mock (buffered delete -> tombstone, buffered edit -> content; fails without the resolve). Gap (accepted, no-jsdom convention): the ContactChat effect/handler wiring itself."
+  },
+  "final": {
+    "passed": 6377,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (pendingOwnSends.ts + ContactChat.tsx pure helpers 122-186)",
+    "killed": 153,
+    "timeout": 0,
+    "survived": 4,
+    "score": 95.03,
+    "survivors": "Equivalent or logging only: default pending [] (unused by callers), owner case normalisation direction (toUpperCase), listener catch body / warn text; 4 no-coverage in persistOwnSend's resolve-failure log branch."
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-dmswitch.log",
+    "result": "non-relay 72 passed; relay 352 passed, 19 skipped, 1 failed: dm-pairing-pending-confirmation:214 30 s stall on chat-send-btn click (known renderer stall dm-composer-enter-press-hangs-30s; same failure in gate full-pollpurge 2026-10-17, before this change; the message had reached the peer). Isolated 5x: 4 green, 1 failure of :110 (badge 1 vs 2 on the peer's confirm side, untouched by this change; filed pending-contact-confirm-badge-reads-1). No INVALID marker.",
+    "status": "green-except-known-flake"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The bug report assumed thread switches keep ContactChat mounted; the common path (contact list) remounts it, which turned a ref fix into a module-scope registry and six review rounds of concurrency cases (remount, held settles, image id swap, overlapping refreshes).",
+    "surprised_by": "A delete or edit of an unacked own DM was never applied to storage at all (buffered, then no echo ever resolved it); and deleting an uploading image cannot stick (temp id) — filed as deleting-dm-image-while-still-uploading.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/src/lib/pendingOwnSends.ts"
+  ]
+}
