@@ -381,11 +381,13 @@ describe('isLatestReload', () => {
 describe('MarmotContext receiver wiring', () => {
   itSourceScan('reloadGroups numbers each reload and drops a superseded result before setGroups', () => {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'src/context/MarmotContext.tsx'), 'utf-8');
-    const start = src.indexOf('const reloadGroups = useCallback(');
+    // reloadGroups wraps loadAndSetGroups (which also returns the list).
+    expect(src).toMatch(/const reloadGroups = useCallback\(async \(\): Promise<void> => \{\s*await loadAndSetGroups\(\);/);
+    const start = src.indexOf('const loadAndSetGroups = useCallback(');
     const body = src.slice(start, src.indexOf('}, []);', start));
     const seq = body.indexOf('++reloadGroupsSeqRef.current');
     const load = body.indexOf('await loadAllGroups()');
-    const guard = body.indexOf('if (!isLatestReload(seq, reloadGroupsSeqRef.current)) return;');
+    const guard = body.indexOf('if (!isLatestReload(seq, reloadGroupsSeqRef.current)) return loaded;');
     const apply = body.indexOf('setGroups(loaded)');
     expect(seq).toBeGreaterThan(-1);
     expect(load).toBeGreaterThan(seq);

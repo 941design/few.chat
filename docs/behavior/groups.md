@@ -559,7 +559,8 @@ alone.
 group on their device until they act on it. If an admin re-invites them and they accept,
 that old copy is replaced by the new invitation: the stale group state, messages and
 other local data of that group are deleted on the device (nothing is sent) and the person
-rejoins with fresh history, able to send and receive again. This applies only when they
+rejoins with fresh history, able to send and receive again. Their other groups are not
+interrupted by this: their messages keep arriving live meanwhile. This applies only when they
 are no longer in the group's member list as their own device sees it, or that state
 cannot be read; an invitation for a group they are still a member of never wipes local
 data, whatever its age. The invitation stays available across a reload until accepted.

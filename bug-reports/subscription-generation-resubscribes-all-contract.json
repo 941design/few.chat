@@ -1,0 +1,16 @@
+{
+  "bug": "subscription-generation-resubscribes-all",
+  "scope": "Replace re-subscribes only missing groups; per-group abort no longer ends the subscribe loop.",
+  "files_to_modify": [
+    "app/src/context/MarmotContext.tsx (subscribeMissingRef registered per effect run; onAfterReplace calls it; subscriptionGeneration removed; per-run in-progress set; per-group abort continues)",
+    "app/src/lib/marmot/subscriptionSelection.ts (new, pure: groupsToSubscribe)",
+    "app/tests/unit/marmot/subscriptionSelection.test.ts (new)"
+  ],
+  "behavior": {
+    "replace": "After a replace attempt the current effect run subscribes the groups that have no live or starting subscription; others are untouched.",
+    "loop": "A group whose own lifecycle was aborted is skipped; the loop goes on with the next group. The whole run still stops when the run itself is no longer current.",
+    "init": "Unread/join-request count init and the journal sweep stay once per effect run."
+  },
+  "tests": ["Unit: groupsToSubscribe; source scan of the wiring"],
+  "non_goals": ["other tabs (stale-replace-other-tab-writes)", "the 8 s historical refetch itself"]
+}

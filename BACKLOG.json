@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T21:34:38Z",
+  "updated_at": "2026-10-18T23:03:09Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -364,18 +364,6 @@
       "motivation": "Found by the code-reviewer in stale-welcome-reinvite round 2. The join lock is cross-tab but teardown is per tab; the leave/destroy path has the same exposure. Narrow window (an evicted tab mostly buffers unreadable events without saving).",
       "behavior": "Tab B keeps the old MarmotGroup for the group; its grace-timer save or an in-flight ingest can write the evicted MLS state back after tab A replaced it.",
       "approach": "Post a crossTab store-changed notice for the group after a replace/destroy so other tabs dispose and re-subscribe it; ties to OWNER Q4 (single active tab)."
-    },
-    {
-      "slug": "subscription-generation-resubscribes-all",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/MarmotContext.tsx"
-      },
-      "text": "A stale-group replace bumps subscriptionGeneration, re-running the subscription effect for every group (full historical refetch for all)",
-      "created_at": "2026-10-18",
-      "motivation": "Correct but costly for users in many groups; noted by the code-reviewer in stale-welcome-reinvite round 2.",
-      "behavior": "Every replace attempt (including failed ones) tears down and rebuilds all group subscriptions.",
-      "approach": "Drop only the replaced group's entry from groupSubsRef and subscribe the missing groups without tearing down the others."
     },
     {
       "slug": "dm-composer-enter-press-hangs-30s",

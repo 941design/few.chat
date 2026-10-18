@@ -1,0 +1,55 @@
+{
+  "bug_name": "subscription-generation-resubscribes-all",
+  "bug_report_file": "bug-reports/subscription-generation-resubscribes-all-report.md",
+  "created_at": "2026-10-18T20:27:16Z",
+  "updated_at": "2026-10-18T23:03:03Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "113cdf9",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (sev7 stale group list in post-replace pass; stale comment; join-request count; tests)",
+      "codex": "needs-attention (timed-out replace leaves group unsubscribed: skipped as starting)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "CHANGES_REQUESTED (sev6 stored lookup still reads groupsRef)",
+      "codex": "approve"
+    },
+    {
+      "round": 2,
+      "code_reviewer": "ACCEPTED (nit: stale line-number comment, fixed)",
+      "codex": "approve (round 1 tree)"
+    }
+  ],
+  "remediation_round": 2,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T20:27:16Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-18T21:56:30Z",
+      "trigger": "both reviewers accepted"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-18T23:03:03Z",
+      "trigger": "full e2e gate green"
+    }
+  ],
+  "e2e_gate": "passed: 72 + 353 passed, 19 skipped, 0 failed (/tmp/claude-501/e2e-gate/full-resub.log)"
+}

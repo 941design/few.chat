@@ -1,0 +1,58 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 2,
+  "root_cause": "onAfterReplace bumped subscriptionGeneration because the effect is keyed on the group-id set, which a same-id re-join does not change; the bump re-ran the effect, whose cleanup tears down every group's subscription and whose new run refetches all history. It also hid that a per-group `if (!isCurrentGroup()) return;` ended the whole subscribe loop when only that group was aborted by a replace.",
+  "fix": "Per-run subscribeMissing pass (subscribeMissingRef) over the reloaded list, called by onAfterReplace instead of the generation bump; needsSubscription (subscribed/replacing/starting) with a per-run starting set prevents double subscription between passes; loop-body aborts continue with the next group; a setup aborted on its own asks for another pass from its finally (a replace pass may have skipped it as still starting). loadAndSetGroups returns the loaded list and sets groupsRef at once so the pass never reads or re-persists the pre-purge record. The purge also clears the in-memory join-request count (the old full restart re-initialised it).",
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/crossTab.test.ts",
+    "app/tests/unit/inviteExpiries-groupScope.test.ts",
+    "docs/behavior/groups.md"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/subscriptionSelection.ts",
+    "app/tests/unit/marmot/subscriptionSelection.test.ts",
+    "bug-reports/subscription-generation-resubscribes-all-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/marmot/subscriptionSelection.test.ts"
+    ],
+    "pre_fix_failures": 10,
+    "kinds": "needsSubscription unit cases; source scans of the effect wiring (no generation bump, reloaded list handed to the pass, groupsRef set at once, starting set, per-group continue, finally re-pass, purge clears the join-request count). Gap (accepted, no-jsdom convention): the interleaving of passes is verified by review only, not by a behavioural test."
+  },
+  "final": {
+    "passed": 6420,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (subscriptionSelection.ts)",
+    "killed": 9,
+    "timeout": 0,
+    "survived": 0,
+    "score": 100.0,
+    "survivors": "none (the MarmotContext effect itself is not mutation-tested: no behavioural harness)"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-resub.log",
+    "result": "non-relay 72 passed; relay 353 passed, 19 skipped, 0 failed; no INVALID marker.",
+    "status": "green"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The effect's correctness depends on render timing (groupsRef updates in a passive effect) and on interleaving async passes; with no jsdom harness only review could check it, and it took three rounds (stale list, starting-set retry, stored lookup).",
+    "surprised_by": "The full restart masked two things: a per-group abort ending the whole loop, and the join-request badge being reset only by the re-run count init.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/subscriptionSelection.ts"
+  ]
+}

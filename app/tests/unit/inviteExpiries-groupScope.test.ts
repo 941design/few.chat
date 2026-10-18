@@ -145,7 +145,7 @@ describe('MarmotContext wiring (source assertion — no jsdom in this repo)', ()
     expect(SOURCE).toMatch(
       // (a sequence guard may sit between the load and setGroups — a superseded
       // reload returns before either applies)
-      /const reloadGroups = useCallback\(async \(\) => \{[^}]*?const loaded = await loadAllGroups\(\);\s*(?:if \(![^\n]*\) return;\s*)?setGroups\(loaded\);[\s\S]*?scopeInviteExpiriesToGroups\(loaded\.map\(\(g\) => g\.id\)\);/,
+      /const loadAndSetGroups = useCallback\(async \(\): Promise<Group\[\]> => \{[^}]*?const loaded = await loadAllGroups\(\);\s*(?:if \(![^\n]*\) return(?: loaded)?;\s*)?setGroups\(loaded\);[\s\S]*?scopeInviteExpiriesToGroups\(loaded\.map\(\(g\) => g\.id\)\);/,
     );
   });
 });

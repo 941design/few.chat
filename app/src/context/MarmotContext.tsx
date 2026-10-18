@@ -38,7 +38,7 @@ import { LEAVE_INTENT_KIND, serialiseLeaveIntent } from '@/src/lib/marmot/leaveS
 import { PROFILE_REQUEST_KIND } from '@/src/lib/marmot/profileRequestSync';
 import { recordRequestEmitted, recordRequestAnswered, loadProfileRequestMemo, clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage';
 import { handleIncomingProfileRequest, notifyProfileObserved, sweepStaleProfiles } from '@/src/lib/marmot/profileRequestRunner';
-import { incrementUnread, markAsRead, initUnreadCounts, initJoinRequestCounts, clearUnreadGroup, incrementJoinRequest, decrementJoinRequest, purgeStrangerDmCounters, clearInviteExpiries, scopeInviteExpiriesToGroups } from '@/src/lib/unreadStore';
+import { incrementUnread, markAsRead, initUnreadCounts, initJoinRequestCounts, clearUnreadGroup, incrementJoinRequest, decrementJoinRequest, clearJoinRequestGroup, purgeStrangerDmCounters, clearInviteExpiries, scopeInviteExpiriesToGroups } from '@/src/lib/unreadStore';
 import { isActiveView, getActiveGroupId } from '@/src/lib/activeViewStore';
 import { appendMessage, loadMessages, purgeStrangerDmThreads, CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import { purgeStrangerContacts } from '@/src/lib/contacts';
@@ -60,6 +60,7 @@ import { useProfile } from '@/src/context/ProfileContext';
 import { useBackup } from '@/src/context/BackupContext';
 import { runTracked, teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
 import { syncOnMembersChanged } from '@/src/lib/marmot/membersChangedSync';
+import { needsSubscription } from '@/src/lib/marmot/subscriptionSelection';
 
 async function startWelcomeSubscription(
   pubkeyHex: string,
@@ -822,6 +823,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   const welcomeSubRef = useRef<(() => void) | null>(null);
   // Track group message subscription cleanup functions keyed by groupId
   const groupSubsRef = useRef<Map<string, () => void>>(new Map());
+  // Subscribes the groups the current subscription run is missing (set per run;
+  // bug subscription-generation-resubscribes-all). Used after a stale-Welcome
+  // replace instead of re-running the whole effect.
+  const subscribeMissingRef = useRef<((list?: Group[]) => void) | null>(null);
   // Latest dispatcher subscription's drain() per group. A re-subscribe awaits
   // the previous one before reading the rumor journal, so a handler still
   // running in the torn-down subscription acks its entry first and is not
@@ -843,11 +848,6 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   // S4: Per-group 5-second debounce timers for the pending-removal queue (AC-QUEUE-1).
   // MUST be useRef — timer handles must not trigger re-renders.
   const debounceTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
-  // Bumped after a stale local group was replaced from a fresh Welcome
-  // (bug: stale-welcome-reinvite): the subscription effect is keyed on the id
-  // SET, which does not change when the same id is re-joined, so this forces the
-  // re-subscribe with the fresh MarmotGroup.
-  const [subscriptionGeneration, setSubscriptionGeneration] = useState(0);
   // Track groups where profile has been published (to avoid re-publishing)
   const profilePublishedRef = useRef<Set<string>>(new Set());
   // S8-F1: SYNCHRONOUS re-entry guard for onHistorySynced's profile publish.
@@ -1220,16 +1220,29 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   // user actions); only the most recently STARTED reload may apply its list,
   // so a slower older read can never overwrite a newer one.
   const reloadGroupsSeqRef = useRef(0);
-  const reloadGroups = useCallback(async () => {
+  // Returns the loaded list (see the post-replace subscribe pass); reloadGroups
+  // below is the void form every other caller uses.
+  const loadAndSetGroups = useCallback(async (): Promise<Group[]> => {
     const seq = ++reloadGroupsSeqRef.current;
+    // Returned even when a newer reload supersedes this one: a caller that acts
+    // on the list right away (the post-replace subscribe pass) must not wait for
+    // the render that updates groupsRef.
     const loaded = await loadAllGroups();
-    if (!isLatestReload(seq, reloadGroupsSeqRef.current)) return;
+    if (!isLatestReload(seq, reloadGroupsSeqRef.current)) return loaded;
     setGroups(loaded);
+    // Also now, not only once the render commits: a subscribe pass right after a
+    // replace reads the stored group from groupsRef and must not persist the
+    // pre-purge record over the joined one (the render sets the same value).
+    groupsRef.current = loaded;
     // Only a loaded list scopes invite-expiry counters (never a loading state):
     // drops counts for groups not in it, e.g. restored links of a non-member
     // group (BACKLOG stale-foreign-group-invite-expiry-count).
     scopeInviteExpiriesToGroups(loaded.map((g) => g.id));
+    return loaded;
   }, []);
+  const reloadGroups = useCallback(async (): Promise<void> => {
+    await loadAndSetGroups();
+  }, [loadAndSetGroups]);
 
   // Check and update discoverability status based on available key packages
   const updateDiscoverability = useCallback(async (client: MarmotClientType) => {
@@ -1642,30 +1655,43 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     const runSetups: Array<{ groupId: string; setup: Promise<void>; handedOver: Promise<unknown>[] }> = [];
     const isCurrent = () => !setupController.signal.aborted && clientRef.current === client;
 
-    async function subscribeNewGroups() {
-      // Initialise unread counts from persisted messages on first run
-      const gids = groups.map((g) => g.id);
-      if (pubkeyHex) {
-        void initUnreadCounts(gids, pubkeyHex);
+    // Groups this run is setting up right now, so a second pass (after a
+    // replace) does not subscribe them twice.
+    const starting = new Set<string>();
+
+    // `first`: the run's initial pass over `groups`; later passes (after a
+    // replace) take the current list and skip the once-per-run work.
+    async function subscribeNewGroups(list: Group[], first: boolean) {
+      if (first) {
+        // Initialise unread counts from persisted messages on first run
+        const gids = list.map((g) => g.id);
+        if (pubkeyHex) {
+          void initUnreadCounts(gids, pubkeyHex);
+        }
+        void initJoinRequestCounts(gids);
       }
-      void initJoinRequestCounts(gids);
 
       const { subscribeToGroupMessages } = await import('@/src/lib/marmot/welcomeSubscription');
       const rumorJournal = await import('@/src/lib/marmot/rumorJournal');
       const { getNdk } = await import('@/src/lib/ndkClient');
       const ndk = getNdk();
       if (!ndk || !isCurrent()) return;
-      // Bound the write-ahead rumor journal (age only) once per run,
-      // incl. entries of groups this device no longer subscribes to.
-      await rumorJournal.sweepRumorJournal().catch((err: unknown) => {
-        console.warn('[Marmot] rumor journal sweep failed:', err);
-      });
-      if (!isCurrent()) return;
-
-      for (const group of groups) {
+      if (first) {
+        // Bound the write-ahead rumor journal (age only) once per run,
+        // incl. entries of groups this device no longer subscribes to.
+        await rumorJournal.sweepRumorJournal().catch((err: unknown) => {
+          console.warn('[Marmot] rumor journal sweep failed:', err);
+        });
         if (!isCurrent()) return;
-        if (subsMap.has(group.id)) continue; // Already subscribed
-        if (replacingRef.current.has(group.id)) continue; // stale-Welcome replace in progress
+      }
+
+      for (const group of list) {
+        if (!isCurrent()) return;
+        if (!needsSubscription(group.id, {
+          subscribed: (id) => subsMap.has(id),
+          replacing: (id) => replacingRef.current.has(id), // stale-Welcome replace in progress
+          starting: (id) => starting.has(id),
+        })) continue;
         // Per-group lifecycle, registered BEFORE the async setup so a stale-Welcome
         // replace can abort it and wait for it (see makeStaleReplace). Aborted
         // together with the effect via setupController.
@@ -1682,6 +1708,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         // the effect-cleanup path. Keep both.
         const handedOver: Promise<unknown>[] = [];
         runSetups.push({ groupId: group.id, setup: setupDone, handedOver });
+        // A group aborted on its own (a replace) is skipped with `continue`; the
+        // loop goes on with the next group. The whole run stops only via isCurrent().
         const isCurrentGroup = () => isCurrent() && !groupCtl.signal.aborted;
         let unsubDispatcher: import('@/src/lib/marmot/applicationRumorDispatcher').DispatcherSubscription | undefined;
         // A retired dispatcher's handlers may still be running: keep its drain for
@@ -1694,9 +1722,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             handedOver.push(drained);
           } catch { /* nothing to wait for */ }
         };
+        starting.add(group.id);
         try {
           const mlsGroup = await client!.groups.get(group.id).catch(() => null);
-          if (!isCurrentGroup()) return;
+          if (!isCurrentGroup()) continue;
           if (!mlsGroup) continue;
 
           // Immediately sync member list from MLS state (authoritative source).
@@ -1705,9 +1734,9 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           // is up-to-date without needing to re-ingest historical events (which
           // is impossible after the MLS key schedule advances due to forward secrecy).
           const { getGroupMembers } = await import('@internet-privacy/marmot-ts');
-          if (!isCurrentGroup()) return;
+          if (!isCurrentGroup()) continue;
           const mlsMembers = getGroupMembers(mlsGroup.state);
-          // groupsRef.current (kept in sync near line 398) rather than the
+          // groupsRef.current (kept in sync by its effect and loadAndSetGroups) rather than the
           // closure `groups`, for consistency with the onMembersChanged callback
           // below and to stay correct if this read ever moves off the subscribe path.
           const stored = groupsRef.current.find((g) => g.id === group.id);
@@ -1729,7 +1758,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
-          if (!isCurrentGroup()) return;
+          if (!isCurrentGroup()) continue;
 
           // Wire the unified dispatcher for all application rumor handlers (Stories 02–03).
           const dispatcherCtx = {
@@ -1895,10 +1924,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
                 previousDrain().catch(() => undefined),
                 new Promise<void>((resolve) => setTimeout(resolve, 3000)),
               ]);
-              if (!isCurrentGroup()) return;
+              if (!isCurrentGroup()) continue;
             }
             const pending = await rumorJournal.listPendingRumors(group.id);
-            if (!isCurrentGroup()) return;
+            if (!isCurrentGroup()) continue;
             if (pending.length > 0) {
               console.info(`[Marmot] replaying ${pending.length} journaled rumor(s) for group ${group.id}`);
               void unsubDispatcher.replay(pending);
@@ -1937,7 +1966,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             queue: pendingRemovalsRef.current,
             arm: armRemovalTimer,
           });
-          if (!isCurrentGroup()) return;
+          if (!isCurrentGroup()) continue;
 
 
           const unsub = await subscribeToGroupMessages(
@@ -2039,7 +2068,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
               trackPending(pendingDrainRef.current, group.id, idle);
               handedOver.push(idle);
             }
-            return;
+            continue;
           }
 
           // Combine both unsubscribe functions so cleanup tears down both listeners.
@@ -2060,13 +2089,23 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           retireDispatcher(unsubDispatcher);
           console.warn(`[Marmot] subscribeToGroupMessages for ${group.id} failed:`, err);
         } finally {
+          starting.delete(group.id);
           finishSetup();
           if (groupLifecycleRef.current.get(group.id) === lifecycleEntry) groupLifecycleRef.current.delete(group.id);
+          // Aborted on its own (a replace) while the run goes on: a pass the
+          // replace requested meanwhile skipped this group as still starting, so
+          // ask again now (still skipped while the replace is in progress; its
+          // own pass follows then).
+          if (groupCtl.signal.aborted && isCurrent() && !subsMap.has(group.id)) subscribeMissing();
         }
       }
     }
 
-    void subscribeNewGroups();
+    function subscribeMissing(list: Group[] = groupsRef.current) {
+      void subscribeNewGroups(list, false);
+    }
+    void subscribeNewGroups(groups, true);
+    subscribeMissingRef.current = subscribeMissing;
 
     // Cleanup: unsubscribe ALL tracked group subscriptions on unmount or
     // dependency change. The next effect run will re-subscribe as needed.
@@ -2093,12 +2132,13 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       }
       profilePublishedRef.current.clear();
       profilePublishInFlightRef.current.clear();
+      if (subscribeMissingRef.current === subscribeMissing) subscribeMissingRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed
     // on the id SET (groupSubscriptionKey), not the `groups` array reference; see
     // the comment above groupSubscriptionKey for why re-running on every churn
     // regressed live propagation.
-  }, [ready, groupSubscriptionKey, subscriptionGeneration, pubkeyHex, subscriptionClient]);
+  }, [ready, groupSubscriptionKey, pubkeyHex, subscriptionClient]);
 
   // Profile updates are published automatically via the onHistorySynced callback
   // (once per group, after historical events are ingested and the local epoch is
@@ -2547,7 +2587,12 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       clearGroupMedia,
       clearProfileRequestMemos,
       clearUnreadGroup,
-      clearPendingJoinRequestsForGroup,
+      // The stored rows and the in-memory badge count (no later count init
+      // resets it: a replace keeps the other subscriptions running).
+      clearPendingJoinRequestsForGroup: async (groupId) => {
+        await clearPendingJoinRequestsForGroup(groupId);
+        clearJoinRequestGroup(groupId);
+      },
       clearInviteLinksForGroup,
       clearInviteExpiries,
       clearPendingDirectInvitesForGroup,
@@ -2602,12 +2647,16 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       const { purgeGroupLocalData } = await import('@/src/lib/marmot/leaveGroupImpl');
       return purgeGroupLocalData(await loadPurgeDeps(), groupId, { bestEffort: true });
     },
-    // Reload the overlay first so the re-run subscription effect does not read
-    // the pre-purge group list, then bump the generation to re-subscribe.
+    // Reload the overlay first and pass the reloaded list (groupsRef updates only
+    // on the next render) so the re-subscription does not read the pre-purge
+    // group list, then subscribe what the current run is missing (the
+    // replaced group, and any group the replace cut short) — the other groups'
+    // subscriptions stay live (bug subscription-generation-resubscribes-all).
+    // Without a current run there is nothing to add to: the next run subscribes all.
     onAfterReplace: (groupId) => {
-      void reloadGroups().catch(() => undefined).then(() => {
+      void loadAndSetGroups().catch(() => undefined).then((list) => {
         replacingRef.current.delete(groupId);
-        setSubscriptionGeneration((n) => n + 1);
+        subscribeMissingRef.current?.(list);
       });
     },
   });
