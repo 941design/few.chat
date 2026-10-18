@@ -555,6 +555,28 @@ keys from the device (§7), that leftover state is deleted on accept (nothing is
 and they rejoin; the earlier leave's pending deletion then leaves the rejoined group
 alone.
 
+**Re-inviting someone who was removed.** A removed member keeps their old copy of the
+group on their device until they act on it. If an admin re-invites them and they accept,
+that old copy is replaced by the new invitation: the stale group state, messages and
+other local data of that group are deleted on the device (nothing is sent) and the person
+rejoins with fresh history, able to send and receive again. This applies only when they
+are no longer in the group's member list as their own device sees it, or that state
+cannot be read; an invitation for a group they are still a member of never wipes local
+data, whatever its age. The invitation stays available across a reload until accepted.
+What a removed member sees of the group before re-joining is not specified here.
+Limitation: if the device never processed the removal (it is still in the group's member
+list as that device sees it), a re-invite is treated as already joined and does not replace
+the local copy. A refused invitation (one that cannot be read with a key this device still holds, or is
+for a different group) is removed and local data is left untouched, unless an unfinished
+replacement of that same group is pending, in which case it is kept. If the old
+background work of the group does not stop in time, the replacement is postponed the same
+way: nothing is deleted, the invitation is kept and can be accepted again. Declining an
+invitation whose replacement is unfinished, once no group state is left on the device,
+abandons that recovery. A full data reset also discards it. Once a replacement has started, any failure keeps the
+invitation and shows a "try again" notice instead of "no longer valid"; this holds across
+a reload, and repeated failures, until a join succeeds and the leftover local data is
+cleaned up.
+
 **An accept cut short by a reload or a closed tab.** After reopening, the person ends
 up either in the group with the invitation gone, or still seeing the invitation and
 able to accept it again. They never end up in a group that isn't shown to them. A

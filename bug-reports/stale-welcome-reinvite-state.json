@@ -1,0 +1,113 @@
+{
+  "bug_name": "stale-welcome-reinvite",
+  "bug_report_file": "bug-reports/stale-welcome-reinvite-report.md",
+  "created_at": "2026-10-18T12:30:00Z",
+  "updated_at": "2026-10-18T19:30:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "high",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "Does a new e2e (A removes C, A re-invites C, C accepts, A and C exchange messages both ways) pass with the fix and fail (C stuck / cannot chat) without it?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "SPEC",
+      "question": "Is the stale rule exactly: own leaf absent OR local state unreadable => replace; own leaf present => short-circuit regardless of Welcome epoch; with the fail direction commented as deliberately opposite to the leave guard?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "ARCHITECTURE",
+      "question": "Is the replace sequence ordered teardown -> clear seenIds -> destroy -> purge -> join -> resubscribe under the join lock, with purge only after a successful destroy, and does the old subscription stop ingesting into the destroyed group?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "SECURITY",
+      "question": "Does the replace path publish nothing (no kind-13/kind-9/commit) and never broadcast profile data; can a Welcome for a group where we are still a member never wipe local state?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "ARCHITECTURE",
+      "question": "Is the purge shared with leaveGroupImpl (leave behaviour and its tests unchanged), with lib not importing MarmotContext?"
+    },
+    {
+      "id": "VQ-6",
+      "category": "TEST",
+      "question": "Unit tests cover stale-by-leaf, leaf-present-higher-epoch short-circuit, unreadable state, destroy failure, call order; existing inviteAcceptIdempotentJoin/leftGroupStatePurge tests green?"
+    },
+    {
+      "id": "VQ-7",
+      "category": "QUALITY",
+      "question": "Minimal change, docs/behavior/groups.md updated, unit + tsc green via make, Stryker (concurrency 1) on changed logic, full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "ecb110f",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "fix": {
+    "e2e_without_fix": "groups-reinvite-after-removal failed at message exchange with makeStaleReplace unwired (fixer, isolated run)"
+  },
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (sev5: invitation lost when join fails after destroy; VQ-id in comment; plumbing seams untested; unprocessed-removal residual; in-flight ingest save after destroy; duplicated purge deps; generation bump before reload)",
+      "codex": "needs-attention (high: destroy/purge before Welcome validated; high: teardown does not await subscription setup/ingest)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "CHANGES_REQUESTED (sev5 pre-destroy failure drops invitation; sev4 subscription re-entry mid-replace; sev4 residue marker in memory; sev3 unbounded waits under lock; bestEffort purge untested; seen-ids test claim; one-retry guarantee; inert epoch field)",
+      "codex": "needs-attention (high: live ingest not awaited before destroy; high: retry protection expires after first failure)",
+      "mutation": "74.55% (82 killed / 27 survived / 1 no-cov) -> sent to fixer"
+    },
+    {
+      "round": 2,
+      "code_reviewer": "ACCEPTED (sev4 timeout proceeds; sev3 marker not wiped by resetAllData; sev3 marker hygiene/doc; sev3 other-tab writes -> backlog stale-replace-other-tab-writes; sev2 lifecycle map clearing, generation cost -> backlog subscription-generation-resubscribes-all, dead started flag)",
+      "codex": "needs-attention (high: drain timeout proceeds to destroy)",
+      "mutation": "85.03% (125 killed / 18 survived / 4 no-cov)"
+    },
+    {
+      "round": 3,
+      "code_reviewer": "CHANGES_REQUESTED (sev6 outstanding-set doubling on retries; sev3 decline mid-replace clears marker; sev2 empty set leak)",
+      "codex": "needs-attention (high: effect cleanup drops retired ingest waiters)"
+    },
+    {
+      "round": 4,
+      "code_reviewer": "ACCEPTED (sev4 wall-clock timing test; sev3 decline guard race after await; sev2 sleep in test; sev1 duplicate tracked entry, harmless)",
+      "codex": "needs-attention (high: retired dispatcher drains not tracked)"
+    },
+    {
+      "round": 5,
+      "code_reviewer": "ACCEPTED at round 4; round-5 delta addresses its remaining findings",
+      "codex": "needs-attention (high: retired setup untracked across effect restart) -> deferred by lead cap to backlog stale-replace-retired-setup-untracked",
+      "mutation": "89.66% at round 4 (181/21); round-5 killed replaceTeardown 46/53/55 + welcomeSubscription 709, rest justified equivalent"
+    }
+  ],
+  "remediation_round": 5,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T12:30:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-18T19:30:00Z",
+      "trigger": "full_e2e_gate_green; remediation capped at round 5, residual Codex finding deferred to backlog stale-replace-retired-setup-untracked"
+    }
+  ],
+  "e2e_gate": {
+    "log": "/tmp/claude-501/e2e-gate/full-reinvite.log",
+    "non_relay": "72 passed",
+    "relay": "353 passed / 19 skipped / 0 failed",
+    "invalid": false
+  }
+}

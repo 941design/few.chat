@@ -214,6 +214,16 @@ export class EpochResolver {
     this.snapshot = null;
   }
 
+  /**
+   * dispose() plus waiting for the in-flight ingest (serialised by lockChain,
+   * which includes the SDK state save) to finish. Events queued behind it see
+   * `disposed` and do nothing, so after this resolves nothing writes any more.
+   */
+  async disposeAndDrain(): Promise<void> {
+    this.dispose();
+    await this.lockChain;
+  }
+
   // -----------------------------------------------------------------------
   // Internal processing
   // -----------------------------------------------------------------------

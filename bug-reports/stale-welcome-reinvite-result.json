@@ -1,0 +1,84 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 5,
+  "root_cause": "A member removed from a group keeps its local overlay and MLS state (removal only drops them from the tree). On re-invite, accepting the new Welcome hit joinIdempotent, which saw the group id already held and either short-circuited onto dead state or threw 'already exists'; the invitation then ended as 'no longer valid' and the member could not chat.",
+  "fix": "A held group is treated as stale iff our own leaf is absent from its tree or its state cannot be read (welcomeSubscription isHeldGroupStale / staleLocalGroup.isLocalGroupStale). For a stale group the Welcome is pre-validated (readPreJoinGroupData), then under the join lock: live subscription teardown with bounded waits that fail closed (replaceTeardown, EpochResolver.disposeAndDrain, retired dispatcher/ingest drains), seen-id clear, destroy, shared purge (leaveGroupImpl.purgeGroupLocalData), join, resubscribe. A localStorage recovery marker keeps the invitation retryable across repeated post-destroy join failures and reloads (InvitationRetryableError -> 'Joining failed. Please try again.'). Nothing is published by the replace path.",
+  "files_modified": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/storage.ts",
+    "app/src/components/groups/InvitationCard.tsx",
+    "app/pages/groups.tsx",
+    "app/src/lib/i18n.ts",
+    "app/tests/e2e/helpers/group-setup.ts",
+    "docs/behavior/groups.md"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/staleLocalGroup.ts",
+    "app/src/lib/marmot/inviteAcceptError.ts",
+    "app/src/lib/marmot/replaceTeardown.ts",
+    "app/src/lib/marmot/staleReplaceMarker.ts",
+    "app/tests/e2e/groups-reinvite-after-removal.spec.ts",
+    "app/tests/unit/marmot/replaceTeardown.test.ts",
+    "app/tests/unit/marmot/staleReplaceMarker.test.ts",
+    "bug-reports/stale-welcome-reinvite-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/e2e/groups-reinvite-after-removal.spec.ts",
+      "app/tests/unit/marmot/inviteAcceptIdempotentJoin.test.ts",
+      "app/tests/unit/marmot/replaceTeardown.test.ts",
+      "app/tests/unit/marmot/staleReplaceMarker.test.ts",
+      "app/tests/unit/marmot/epochResolver.test.ts",
+      "app/tests/unit/marmot/leaveGroupImpl.test.ts",
+      "app/tests/unit/storage.test.ts"
+    ],
+    "pre_fix_failures": 1,
+    "kinds": "e2e remove -> re-invite -> accept -> two-way chat (fails with the replace path unwired); unit: stale-by-leaf, leaf-present short-circuit, unreadable state, destroy failure, call order, fail-closed teardown timeouts, retired drains, recovery marker across repeated failures/reload, decline mid-join"
+  },
+  "final": {
+    "passed": 6235,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config",
+    "killed": 181,
+    "timeout": 1,
+    "survived": 21,
+    "score": 89.66,
+    "survivors": "justified equivalent (log text, unobservable error messages, empty catch bodies)"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-reinvite.log",
+    "result": "non-relay 72 passed; relay 353 passed, 19 skipped, 0 failed; no INVALID marker",
+    "status": "green"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "Each adversarial round found a further async path (live ingest, retired dispatcher, retired ingest waiter, retired setup) that could write MLS state after destroy; MarmotContext's subscription lifecycle has no single owner of 'all outstanding work for group X', so teardown completeness had to be proven path by path. Remediation was capped after round 5 with the last path filed as a backlog finding.",
+    "surprised_by": "marmot-ts dispose() is a flag, not a drain: an ingest already in its state save completes after dispose, so destroy-then-rejoin needs an explicit await of resolver work.",
+    "absorbed_from": [],
+    "lead_clarifications": [
+      "Stale rule narrowed to own-leaf-absent OR unreadable state (Welcome epoch ignored); flagged for owner confirmation.",
+      "Remediation capped at round 5; Codex round-5 finding deferred to backlog stale-replace-retired-setup-untracked."
+    ],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/lib/marmot/epochResolver.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/replaceTeardown.ts",
+    "app/src/lib/marmot/staleReplaceMarker.ts",
+    "app/src/lib/marmot/staleLocalGroup.ts",
+    "app/src/lib/marmot/inviteAcceptError.ts"
+  ]
+}

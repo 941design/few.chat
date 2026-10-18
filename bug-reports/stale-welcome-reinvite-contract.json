@@ -1,0 +1,24 @@
+{
+  "bug": "stale-welcome-reinvite",
+  "scope": "Engineering half of reinvite-after-eviction-fails-already-exists: accepting a valid Welcome for a locally held group whose local state is stale replaces local state (teardown, purge, destroy, re-join); history starts fresh. Evicted-member view stays OWNER Q2.",
+  "files_to_modify": [
+    "app/src/lib/marmot/welcomeSubscription.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/context/MarmotContext.tsx",
+    "docs/behavior/groups.md"
+  ],
+  "behavior": {
+    "stale_rule": "Lead decision (implementation detail, deviates from 'or epoch newer'): local state is stale iff our own leaf is absent from the local ratchet tree (getPubkeyLeafNodeIndexes/getGroupMembers) OR the local state read throws. Leaf present => NOT stale regardless of the Welcome epoch (an admin cannot add a member still in the tree, so such a Welcome is forged/forked; replacing would be a data-loss vector). Fail direction is deliberately OPPOSITE to the leave guard (throw => stale => replace); comment both sides.",
+    "replace_sequence": "Under the existing few-join-<id> lock, in joinIdempotent's overlay-exists branch when stale: (1) injected onBeforeReplace(groupId) tears down the group's subscription entry + debounce timer in MarmotContext; (2) clear the group's welcome seenIds (new exported clearGroupSeenIds); (3) groups.destroy(groupId); (4) purge local app data via a shared purgeGroupLocalData(deps, groupId) extracted from leaveGroupImpl (no sends, no tombstone) — purge only after destroy succeeds so a destroy failure leaves state as before; (5) joinAndPersist from the Welcome; (6) bump a subscriptionGeneration counter (MarmotContext effect deps) so the group is re-subscribed with the fresh MarmotGroup; reloadGroups + markBackupDirty via the existing onGroupJoined. Nothing is published.",
+    "fresh_case": "Overlay exists and own leaf present: unchanged short-circuit (interrupted accept).",
+    "plumbing": "Self pubkey and the replace callbacks are injected through joinGroupFromWelcomeCore for all callers (acceptPendingInvitation, auto-accept ~:1120); lib must not import MarmotContext (AC-BOUND-1)."
+  },
+  "tests": [
+    "Unit (inviteAcceptIdempotentJoin.test.ts): stale-by-leaf => teardown, destroy, purge, join, returns new group, in that order, no publish; leaf present => short-circuit even with higher Welcome epoch; state read throws => replace; destroy failure => no purge, invitation removed as today; existing already-joined case updated to a fresh local group with own leaf.",
+    "Unit: isLocalGroupStale pure helper; purgeGroupLocalData shared by leave (leave tests stay green).",
+    "E2E: new relay-bucket spec groups-reinvite-after-removal.spec.ts — A+C in group, A removes C, A re-invites C, C accepts (acceptInvitationAndWaitJoined), A and C exchange messages both ways; app publishes only.",
+    "Full gate make test-e2e-all."
+  ],
+  "docs": "docs/behavior/groups.md re-invite section: a removed member who is re-invited and accepts rejoins with fresh history.",
+  "non_goals": ["Evicted-member view while removed (OWNER Q2)", "Cross-tab coherence (OWNER Q4)"]
+}

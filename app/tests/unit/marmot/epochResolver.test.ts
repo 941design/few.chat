@@ -548,3 +548,35 @@ describe('EpochResolver — dispose', () => {
     }
   });
 });
+
+// ----------- disposeAndDrain (stale-Welcome replace) -----------
+
+describe('EpochResolver — disposeAndDrain', () => {
+  it('resolves only after an ingest that is paused mid-save finishes; ingests queued behind it do nothing', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const group = makeMlsGroup({ initialEpoch: 1 });
+    const ingest = vi.fn(async function* () {
+      await gate; // the SDK's state save, paused
+      yield { kind: 'processed', result: { kind: 'newState' }, event: makeEvent({ id: 'late' }) };
+    });
+    (group as unknown as { ingest: unknown }).ingest = ingest;
+    const cb = makeCallbacks();
+    const resolver = new EpochResolver(group as never, cb);
+
+    const inFlight = resolver.ingestEvent(makeEvent({ id: 'late' }));
+    const queued = resolver.ingestEvent(makeEvent({ id: 'queued' }));
+    await Promise.resolve();
+
+    let drained = false;
+    const drain = resolver.disposeAndDrain().then(() => { drained = true; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(drained).toBe(false);
+
+    release();
+    await drain;
+    await inFlight;
+    expect(await queued).toEqual({ buffered: false });
+    expect(ingest).toHaveBeenCalledTimes(1); // the queued event never reached the group
+  });
+});

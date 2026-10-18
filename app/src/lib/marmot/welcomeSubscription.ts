@@ -10,6 +10,7 @@
  * the join request handler for nonce validation, dedup, and persistence.
  */
 
+import { InvitationRetryableError } from '@/src/lib/marmot/inviteAcceptError';
 import type { Group } from '@/src/types';
 import { DEFAULT_RELAYS, STORAGE_KEYS } from '@/src/types';
 import { saveGroup, loadGroup, loadAllGroups } from './groupStorage';
@@ -27,6 +28,8 @@ import { createRumor } from 'nostr-tools/nip59';
 import { sealAndWrap } from '@/src/lib/directMessages';
 import { EpochResolver } from './epochResolver';
 import { createApplicationMessageJournaler } from './rumorJournal';
+import { isLocalGroupStale } from './staleLocalGroup';
+import { hasRecoveryMarker, setRecoveryMarker, clearRecoveryMarker } from './staleReplaceMarker';
 import { deleteLeftGroupTombstone, listLeftGroupTombstones } from './leftGroupTombstones';
 import { releasePollPurgeMark } from './pollPersistence';
 import { handleJoinRequest, JOIN_REQUEST_KIND } from './joinRequestHandler';
@@ -536,13 +539,24 @@ async function joinGroupFromWelcomeCore(
   welcomeRumor: unknown,
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
   knownGroupId = '',
+  staleReplace?: StaleWelcomeReplace,
 ): Promise<Group> {
   const groupId =
     knownGroupId ||
     ((await readPreJoinGroupData(welcomeRumor as UnwrappedRumor, marmotClient))?.groupId ?? '');
   if (!groupId) return joinAndPersist(welcomeRumor, marmotClient);
-  return withGroupJoinLock(groupId, () => joinIdempotent(groupId, welcomeRumor, marmotClient));
+  joinsInFlight.set(groupId, (joinsInFlight.get(groupId) ?? 0) + 1);
+  try {
+    return await withGroupJoinLock(groupId, () => joinIdempotent(groupId, welcomeRumor, marmotClient, staleReplace));
+  } finally {
+    const left = (joinsInFlight.get(groupId) ?? 1) - 1;
+    if (left <= 0) joinsInFlight.delete(groupId);
+    else joinsInFlight.set(groupId, left);
+  }
 }
+
+/** Groups with a join/replace queued or running in this tab (declinePendingInvitation must not touch their recovery marker). */
+const joinsInFlight = new Map<string, number>();
 
 /** In-tab fallback for {@link withGroupJoinLock}: per-group promise chains. */
 const groupJoinChains = new Map<string, Promise<unknown>>();
@@ -568,14 +582,140 @@ function withGroupJoinLock<T>(groupId: string, fn: () => Promise<T>): Promise<T>
   return run;
 }
 
+/**
+ * What the join core needs to REPLACE a stale local copy of a group with a
+ * fresh Welcome (bug: stale-welcome-reinvite). Injected by the composition
+ * root (MarmotContext) — lib code never imports the context (AC-BOUND-1).
+ * Omitted => the replace path is disabled (legacy behaviour).
+ */
+export interface StaleWelcomeReplace {
+  /** Our own pubkey (hex): the leaf whose absence marks local state stale. */
+  selfPubkey: string;
+  /** Tears down the group's live subscription + debounce timer. Runs FIRST. */
+  onBeforeReplace: (groupId: string) => void | Promise<void>;
+  /** Purges local app data (shared purgeGroupLocalData); sends nothing. */
+  purgeLocalData: (groupId: string) => Promise<boolean | void>;
+  /** Runs after the fresh join: re-subscribe the group with the new MarmotGroup. */
+  onAfterReplace?: (groupId: string) => void;
+}
+
+/**
+ * Is the locally held MLS state of `groupId` stale (we are no longer in its
+ * ratchet tree, or it cannot be read)? See {@link isLocalGroupStale}.
+ */
+async function isHeldGroupStale(
+  groupId: string,
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  selfPubkey: string,
+): Promise<boolean> {
+  let mlsGroup: { state?: unknown } | null | undefined;
+  try {
+    mlsGroup = (await marmotClient.groups.get(groupId)) as { state?: unknown } | null | undefined;
+  } catch {
+    return true; // unreadable => stale (opposite of the leave guard, see staleLocalGroup.ts)
+  }
+  const state = mlsGroup?.state;
+  if (!state) return true;
+  const { getGroupMembers } = await import('@internet-privacy/marmot-ts');
+  return isLocalGroupStale(selfPubkey, () => getGroupMembers(state as never));
+}
+
+/**
+ * Side-effect-free check that the Welcome can be read with a local KeyPackage
+ * and really is for `groupId` (the pending entry's id is not trusted).
+ */
+async function welcomeMatchesGroup(
+  welcomeRumor: unknown,
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  groupId: string,
+): Promise<boolean> {
+  const data = await readPreJoinGroupData(welcomeRumor as UnwrappedRumor, marmotClient);
+  return !!data && data.groupId === groupId;
+}
+
+async function destroyAndConfirm(
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  groupId: string,
+): Promise<void> {
+  await marmotClient.groups.destroy(groupId);
+  if (await marmotClient.groups.has(groupId)) {
+    await marmotClient.groups.destroy(groupId); // one retry
+    if (await marmotClient.groups.has(groupId)) {
+      throw new Error('stale group state still present after destroy');
+    }
+  }
+}
+
 async function joinIdempotent(
   groupId: string,
   welcomeRumor: unknown,
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  staleReplace?: StaleWelcomeReplace,
 ): Promise<Group> {
+  try {
+    return await joinIdempotentCore(groupId, welcomeRumor, marmotClient, staleReplace);
+  } catch (err) {
+    // A replace (or its recovery) is in progress for this group: whatever
+    // failed, the invitation is the way back in and must be kept.
+    if (!(err instanceof InvitationRetryableError) && hasRecoveryMarker(groupId)) {
+      throw new InvitationRetryableError();
+    }
+    throw err;
+  }
+}
+
+async function joinIdempotentCore(
+  groupId: string,
+  welcomeRumor: unknown,
+  marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  staleReplace?: StaleWelcomeReplace,
+): Promise<Group> {
+  // Purges residue of an earlier, unfinished replace (marker set) before a
+  // plain / orphan join; false when anything may remain.
+  const purgeResidueIfRecovering = async (): Promise<boolean> => {
+    if (!staleReplace || !hasRecoveryMarker(groupId)) return true;
+    try {
+      return (await staleReplace.purgeLocalData(groupId)) !== false;
+    } catch {
+      return false;
+    }
+  };
+  let clean: boolean;
+
   if (await marmotClient.groups.has(groupId)) {
     const existing = await loadGroup(groupId);
     if (existing) {
+      if (staleReplace?.selfPubkey && (await isHeldGroupStale(groupId, marmotClient, staleReplace.selfPubkey))) {
+        // Evicted-then-re-invited: replace the dead local copy with the fresh
+        // Welcome. FIRST prove the Welcome is usable and is for this very group
+        // (nothing is touched otherwise; this refusal is not retryable). Then,
+        // with the recovery marker set: stop the old subscription so it cannot
+        // ingest into a destroyed group -> forget its seen ids -> destroy the
+        // MLS state (confirmed gone) -> purge app data ONLY after destroy
+        // succeeded -> join. Local-only: nothing is published.
+        if (!(await welcomeMatchesGroup(welcomeRumor, marmotClient, groupId))) {
+          throw new Error('Welcome is not usable for the held group; local state left untouched');
+        }
+        logger.info('dm:invite-accept-stale-replaced', { group: groupId.slice(0, 8) });
+        setRecoveryMarker(groupId);
+        try {
+          await staleReplace.onBeforeReplace(groupId);
+          clearGroupSeenIds(groupId);
+          await destroyAndConfirm(marmotClient, groupId);
+          clean = (await staleReplace.purgeLocalData(groupId)) !== false;
+          const replaced = await joinAndPersist(welcomeRumor, marmotClient);
+          if (clean) clearRecoveryMarker(groupId);
+          await dropLeftGroupTombstoneAfterJoin(groupId);
+          staleReplace.onAfterReplace?.(groupId);
+          return replaced;
+        } catch (err) {
+          // The subscription may already be torn down; whatever local state is
+          // left must not go unsubscribed. The wrapper turns err into a
+          // retryable failure (marker set).
+          staleReplace.onAfterReplace?.(groupId);
+          throw err;
+        }
+      }
       logger.info('dm:invite-accept-already-joined', { group: groupId.slice(0, 8) });
       releasePollPurgeMark(groupId); // live group (see joinAndPersist)
       await dropLeftGroupTombstoneAfterJoin(groupId);
@@ -583,8 +723,12 @@ async function joinIdempotent(
     }
     logger.info('dm:invite-accept-orphan-state-purged', { group: groupId.slice(0, 8) });
     await marmotClient.groups.destroy(groupId);
+    clean = await purgeResidueIfRecovering();
+  } else {
+    clean = await purgeResidueIfRecovering();
   }
   const joined = await joinAndPersist(welcomeRumor, marmotClient);
+  if (clean) clearRecoveryMarker(groupId);
   await dropLeftGroupTombstoneAfterJoin(groupId);
   return joined;
 }
@@ -874,6 +1018,7 @@ export async function subscribeToWelcomes(
   // then authenticates and drops without side effects, exactly like the
   // join-request branch's `onJoinRequestReceived && groupMemberPubkeys` guard.
   declineDeps?: DeclineReceiveDeps,
+  staleReplace?: StaleWelcomeReplace,
 ): Promise<() => void> {
   // Subscribe to kind 1059, NOT kind 444. marmot-ts wraps the kind 444 Welcome
   // rumor in a NIP-59 gift wrap (kind 1059) before publishing. The inner rumor
@@ -1117,7 +1262,7 @@ export async function subscribeToWelcomes(
             // acceptPendingInvitation uses below — no enqueue-then-dequeue
             // detour, so the pending queue never transiently contains this
             // Welcome and knownPeers population matches a manual accept.
-            const joinedGroup = await joinGroupFromWelcomeCore(welcomeRumor, marmotClient);
+            const joinedGroup = await joinGroupFromWelcomeCore(welcomeRumor, marmotClient, '', staleReplace);
 
             // AC-AUTO-5: consume ONLY the disambiguated matched record —
             // sibling records for the same admin (a different group) survive.
@@ -1274,6 +1419,11 @@ function getGroupSeenIds(groupKey: string): Set<string> {
   return set;
 }
 
+/** Forgets a group's processed-event ids (stale-Welcome replace: fresh history). */
+export function clearGroupSeenIds(groupKey: string): void {
+  seenIdsByGroup.delete(groupKey);
+}
+
 function markGroupSeen(set: Set<string>, id: string): void {
   set.add(id);
   if (set.size > GROUP_SEEN_IDS_CAP) {
@@ -1285,6 +1435,9 @@ function markGroupSeen(set: Set<string>, id: string): void {
     }
   }
 }
+
+/** Unsubscribe function; `whenIdle` additionally waits for in-flight ingest. */
+export type GroupMessagesUnsubscribe = (() => void) & { whenIdle?: () => Promise<void> };
 
 /**
  * Subscribe to kind 445 (encrypted group messages) for a specific group.
@@ -1298,7 +1451,7 @@ export async function subscribeToGroupMessages(
   onMembersChanged?: (members: string[]) => void,
   onHistorySynced?: () => void,
   lifecycle?: { drainApplicationMessages?: () => Promise<void>; signal?: AbortSignal },
-): Promise<() => void> {
+): Promise<GroupMessagesUnsubscribe> {
   // marmot-ts tags kind 445 events with #h using the Nostr group ID
   // (MarmotGroupData.nostrGroupId), NOT the MLS group context ID (idStr).
   const nostrGroupIdBytes = mlsGroup.groupData?.nostrGroupId;
@@ -1333,13 +1486,16 @@ export async function subscribeToGroupMessages(
 
   let disposed = false;
   let liveSubscription: { stop(): void } | undefined;
-  const dispose = () => {
+  const dispose: GroupMessagesUnsubscribe = () => {
     if (disposed) return;
     disposed = true;
     resolver.dispose();
     liveSubscription?.stop();
     lifecycle?.signal?.removeEventListener('abort', dispose);
   };
+  // Resolves once an ingest already running (incl. its SDK state save) is done;
+  // used by the stale-Welcome replace before it destroys the group's state.
+  dispose.whenIdle = () => resolver.disposeAndDrain();
   if (lifecycle?.signal?.aborted) {
     dispose();
     return dispose;
@@ -1492,10 +1648,16 @@ export async function subscribeToGroupMessages(
  * interrupted between its overlay and MLS-state writes) cannot be used, and
  * its invitation is the way back in, so it is kept. A failing MLS-state check
  * also keeps the invitation. Entries with an empty `groupId` are never touched.
+ * With `selfPubkey` given, an invitation for a group whose local state is STALE
+ * (own leaf gone / unreadable — see {@link isLocalGroupStale}) is kept too: it
+ * is the re-invite of an evicted member and accepting it replaces the dead
+ * state (bug stale-welcome-reinvite). Without it, a reload between the
+ * re-invite arriving and the accept would silently drop the only copy.
  * Local-only; returns how many invitations were dropped.
  */
 export async function dropInvitationsForJoinedGroups(
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  selfPubkey = '',
 ): Promise<number> {
   const overlayIds = new Set((await loadAllGroups()).map((g) => g.id));
   let dropped = 0;
@@ -1506,6 +1668,9 @@ export async function dropInvitationsForJoinedGroups(
       hasMlsState = await marmotClient.groups.has(inv.groupId);
     } catch {
       hasMlsState = false;
+    }
+    if (hasMlsState && selfPubkey && (await isHeldGroupStale(inv.groupId, marmotClient, selfPubkey))) {
+      continue; // re-invite of an evicted member: keep, accept replaces the dead state
     }
     if (hasMlsState) {
       removePendingInvitation(inv.id);
@@ -1524,6 +1689,7 @@ export async function dropInvitationsForJoinedGroups(
  */
 export async function loadGroupsAndReconcileInvitations(
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
+  selfPubkey = '',
 ): Promise<void> {
   try {
     await marmotClient.groups.loadAll();
@@ -1537,7 +1703,7 @@ export async function loadGroupsAndReconcileInvitations(
     console.warn('[Marmot] left-group sweep failed:', err);
   }
   try {
-    await dropInvitationsForJoinedGroups(marmotClient);
+    await dropInvitationsForJoinedGroups(marmotClient, selfPubkey);
   } catch (err) {
     console.warn('[Marmot] invitation reconciliation failed:', err);
   }
@@ -1555,6 +1721,7 @@ export async function acceptPendingInvitation(
   id: string,
   marmotClient: import('@internet-privacy/marmot-ts').MarmotClient,
   onGroupJoined: WelcomeReceivedCallback,
+  staleReplace?: StaleWelcomeReplace,
 ): Promise<void> {
   const list = listPendingInvitations();
   const entry = list.find((inv) => inv.id === id);
@@ -1577,10 +1744,16 @@ export async function acceptPendingInvitation(
     // S4: shared join core — the SAME join-and-persist logic the auto-accept
     // path (inside subscribeToWelcomes) calls, so knownPeers population and
     // downstream effects are identical regardless of path.
-    joinedGroup = await joinGroupFromWelcomeCore(parsedWelcome, marmotClient, entry.groupId);
+    joinedGroup = await joinGroupFromWelcomeCore(parsedWelcome, marmotClient, entry.groupId, staleReplace);
     removePendingInvitation(id);
     logger.info('dm:walled-garden-invite-accept', { id: id.slice(0, 8) });
   } catch (err) {
+    if (err instanceof InvitationRetryableError) {
+      // A stale-group replace is unfinished: keep the invitation so the user
+      // can retry (recovery marker; a retry takes the plain join path).
+      logger.warn('dm:walled-garden-invite-replace-incomplete', { id: id.slice(0, 8) });
+      throw err;
+    }
     // MLS failure: remove from queue so the user isn't stuck, log WARN, rethrow
     removePendingInvitation(id);
     logger.warn('dm:walled-garden-invite-stale', {
@@ -1669,9 +1842,13 @@ async function sendDeclineGiftWrap(
  *
  * AC-INVITE-6, AC-OBS-3
  */
-export async function declinePendingInvitation(id: string, sendKeys?: DeclineSendKeys): Promise<void> {
+export async function declinePendingInvitation(
+  id: string,
+  sendKeys?: DeclineSendKeys,
+  marmotClient?: import('@internet-privacy/marmot-ts').MarmotClient,
+): Promise<void> {
+  const entry = listPendingInvitations().find((inv) => inv.id === id);
   try {
-    const entry = listPendingInvitations().find((inv) => inv.id === id);
     if (entry && sendKeys && entry.authenticated && entry.groupId) {
       try {
         await sendDeclineGiftWrap(entry.groupId, entry.inviterPubkeyHex, sendKeys);
@@ -1685,7 +1862,19 @@ export async function declinePendingInvitation(id: string, sendKeys?: DeclineSen
       }
     }
   } finally {
+    const declinedGroupId = entry?.groupId;
     removePendingInvitation(id);
     logger.info('dm:walled-garden-invite-decline', { id: id.slice(0, 8) });
+    // Marker hygiene: declining the invitation of an unfinished replace, when no
+    // MLS state of the group is left, abandons the recovery — drop its marker.
+    // The in-flight guard covers only joins of THIS tab whose group id has been
+    // resolved (it is re-checked after the async state check, right before
+    // clearing); it does not see another tab's join.
+    if (declinedGroupId && marmotClient && !joinsInFlight.has(declinedGroupId) && hasRecoveryMarker(declinedGroupId)) {
+      try {
+        const hasState = await marmotClient.groups.has(declinedGroupId);
+        if (!hasState && !joinsInFlight.has(declinedGroupId)) clearRecoveryMarker(declinedGroupId);
+      } catch { /* keep the marker when the check fails */ }
+    }
   }
 }

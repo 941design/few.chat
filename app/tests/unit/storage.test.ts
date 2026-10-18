@@ -163,6 +163,18 @@ describe('resetAllData', () => {
     expect(store[STORAGE_KEYS.userProfile]).toBeUndefined();
   });
 
+  it('wipes every stale-replace recovery marker by prefix, and only those', async () => {
+    store['few-stale-replace-recovery:aa'] = '1';
+    store['few-stale-replace-recovery:bb'] = '2';
+    store['unrelated-key'] = 'keep';
+
+    await resetAllData();
+
+    expect(store['few-stale-replace-recovery:aa']).toBeUndefined();
+    expect(store['few-stale-replace-recovery:bb']).toBeUndefined();
+    expect(store['unrelated-key']).toBe('keep');
+  });
+
   it('handles already-empty storage gracefully', async () => {
     await expect(resetAllData()).resolves.toBeUndefined();
   });

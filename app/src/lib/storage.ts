@@ -1,3 +1,4 @@
+import { clearAllRecoveryMarkers } from '@/src/lib/marmot/staleReplaceMarker';
 import type {
   LanguageCode,
   Settings,
@@ -195,6 +196,9 @@ export async function resetAllData(deps: ResetAllDataDeps = {}): Promise<void> {
       // Silent fail
     }
   });
+
+  // Per-group stale-replace recovery markers belong to the wiped account.
+  clearAllRecoveryMarkers();
 
   // Clear IndexedDB account-scoped data and WAIT for it: each clear runs
   // regardless of whether another rejects (allSettled), so leftover data from

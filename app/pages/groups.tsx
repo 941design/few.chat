@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { acceptErrorKind } from '@/src/lib/marmot/inviteAcceptError';
 import {
   Box,
   Flex,
@@ -999,7 +1000,7 @@ function InvitationPreviewView({ id }: { id: string }) {
       await acceptPendingInvitation(invitation!.id);
       await router.replace('/groups');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'unknown');
+      setError(acceptErrorKind(err));
       setAccepting(false);
     }
   }
@@ -1057,7 +1058,9 @@ function InvitationPreviewView({ id }: { id: string }) {
             <Alert status="error" borderRadius="md" py={1} px={3}>
               <AlertIcon />
               <AlertDescription fontSize="xs">
-                {copy.groups.pendingInvitations.acceptError}
+                {error === 'retry'
+                  ? copy.groups.pendingInvitations.acceptRetryError
+                  : copy.groups.pendingInvitations.acceptError}
               </AlertDescription>
             </Alert>
           )}

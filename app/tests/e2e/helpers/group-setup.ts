@@ -141,11 +141,15 @@ export async function inviteContactViaPicker(inviterPage: Page, inviteeNpub: str
  *     wait is the discriminating one).
  *
  * A join that never completes (MLS failure, accept no-op) fails at step 3.
+ *
+ * `replacesStaleGroup`: for a re-invite of an evicted member whose stale
+ * joined card is already listed — step 3 then only waits for the invitation
+ * card to disappear (the card count stays the same).
  */
 export async function acceptInvitationAndWaitJoined(
   page: Page,
   groupName: string,
-  opts: { timeout?: number } = {},
+  opts: { timeout?: number; replacesStaleGroup?: boolean } = {},
 ): Promise<void> {
   const timeout = opts.timeout ?? 90_000;
   const exactName = page.getByText(groupName, { exact: true });
@@ -165,7 +169,15 @@ export async function acceptInvitationAndWaitJoined(
 
   await page.getByTestId(invitationTestId).locator('[data-testid^="accept-invitation-"]').click();
 
-  await expect(joinedCards).toHaveCount(joinedBefore + 1, { timeout });
+  if (opts.replacesStaleGroup) {
+    // Re-invite of an evicted member: the stale joined card is already listed
+    // and is REPLACED, so the count does not grow. The invitation card is
+    // removed on success AND failure, so callers must prove the join by using
+    // the group (e.g. exchanging messages) afterwards.
+    await expect(joinedCards).toHaveCount(joinedBefore, { timeout });
+  } else {
+    await expect(joinedCards).toHaveCount(joinedBefore + 1, { timeout });
+  }
   await expect(joinedCards.last()).toBeVisible();
   await expect(page.getByTestId(invitationTestId)).toHaveCount(0, { timeout });
 }

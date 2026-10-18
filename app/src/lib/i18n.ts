@@ -287,6 +287,7 @@ export type Copy = {
       acceptBtn: string;
       declineBtn: string;
       acceptError: string;
+      acceptRetryError: string;
     };
     /**
      * Returning-user invite-link awaiting landing (epic-invite-link-awaiting-landing, S1).
@@ -974,6 +975,7 @@ const copy: Record<LanguageCode, Copy> = {
         acceptBtn: 'Accept',
         declineBtn: 'Decline',
         acceptError: 'This invitation is no longer valid',
+        acceptRetryError: 'Joining failed. Please try again.',
       },
       inviteAwaitingBanner: (groupName: string) => `You've been invited to join ${groupName}.`,
       awaitingApprovalBanner: (groupName: string) => `Waiting for the admin to approve your request to join ${groupName}.`,
@@ -1558,6 +1560,7 @@ const copy: Record<LanguageCode, Copy> = {
         acceptBtn: 'Annehmen',
         declineBtn: 'Ablehnen',
         acceptError: 'Diese Einladung ist nicht mehr gültig',
+        acceptRetryError: 'Beitreten fehlgeschlagen. Bitte versuche es erneut.',
       },
       inviteAwaitingBanner: (groupName: string) => `Du wurdest eingeladen, der Gruppe ${groupName} beizutreten.`,
       awaitingApprovalBanner: (groupName: string) => `Warte darauf, dass der Admin deine Anfrage zum Beitritt zu ${groupName} genehmigt.`,

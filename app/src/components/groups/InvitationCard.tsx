@@ -16,6 +16,7 @@
  * or fetch profile/group data over any public channel.
  */
 
+import { acceptErrorKind } from '@/src/lib/marmot/inviteAcceptError';
 import React, { useEffect, useState } from 'react';
 import {
   Box,
@@ -92,7 +93,7 @@ export default function InvitationCard({ invitation }: InvitationCardProps) {
     try {
       await acceptPendingInvitation(invitation.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'unknown');
+      setError(acceptErrorKind(err));
     } finally {
       setAccepting(false);
     }
@@ -171,7 +172,9 @@ export default function InvitationCard({ invitation }: InvitationCardProps) {
       {error && (
         <Alert status="error" mt={1} borderRadius="md" py={1} px={3}>
           <AlertDescription fontSize="xs">
-            {copy.groups.pendingInvitations.acceptError}
+            {error === 'retry'
+              ? copy.groups.pendingInvitations.acceptRetryError
+              : copy.groups.pendingInvitations.acceptError}
           </AlertDescription>
         </Alert>
       )}

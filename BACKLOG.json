@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T10:27:59Z",
+  "updated_at": "2026-10-18T13:18:40Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -312,25 +312,8 @@
       "text": "External-signer users (NIP-07/NIP-46) get no automatic relay backup: BackupProvider only schedules backups when a local private key exists",
       "created_at": "2026-10-14",
       "motivation": "A user signed in through a browser extension or remote signer believes their groups are backed up like everyone else's, but nothing is ever published; losing the device loses all group state. The limit is now documented in docs/behavior/backup-and-recovery.md §3, but not fixed.",
-      "behavior": "BackupProvider's effect returns early when privateKeyHex is null, so no BackupScheduler exists in external-signer mode and markDirty is a no-op; publishBackup/fetchBackup also assume a local-key signer (createPrivateKeySigner).",
+      "behavior": "Corrected 2026-10-18: in NIP-07/NIP-46 mode the stored local key stays loaded, so BackupProvider kept scheduling backups with it (and connectNdk rebound NDK to the local key). Now gated on isLocalMode (shouldScheduleBackups); Settings shows 'Automatic backup is off while an external signer is connected.' Whether external-signer users get a manual or signer-routed backup is OWNER Q5.",
       "approach": "Handle with the signer-authority work (2026-09-26 review task R04): route backup encrypt/sign through the active signer, decide whether background NIP-44 encrypt/sign prompts are acceptable for NIP-46/NIP-07, and gate the restore flow accordingly."
-    },
-    {
-      "slug": "reinvite-after-eviction-fails-already-exists",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/marmot/welcomeSubscription.ts",
-        "range": [
-          511,
-          532
-        ]
-      },
-      "text": "Re-inviting a member who was evicted (remove-member) fails on their side: their device still holds the overlay + MLS state, so accepting the new Welcome throws 'already exists' and ends as 'This invitation is no longer valid'",
-      "created_at": "2026-10-15",
-      "motivation": "Found 2026-10-15 (Fable design consult): the app has no self-eviction detection, so an evicted member keeps both records; a fresh valid Welcome for a group they still hold means the admin removed and re-added them. groups-remove-member.spec.ts:189 re-invites but never accepts, so this is untested.",
-      "behavior": "Evicted members keep overlay + MLS state. Before 2026-10-15 accepting a re-invite threw 'already exists' → 'This invitation is no longer valid'; after the invite-accept-not-atomic fix the core treats overlay+MLS present as 'already joined', clears the invitation silently and does not adopt the new Welcome — the user stays on stale, dead group state either way.",
-      "approach": "Detect self-removal (own leaf gone after a commit) and/or, on a Welcome for a group whose local epoch/state is stale, replace local state: tear down the per-group subscription (MarmotContext.tsx ~:1522 only re-runs on id add/remove), groups.destroy, re-join. Add an e2e: remove C → re-invite C → C accepts → C can chat.",
-      "success_signal": "e2e: an evicted member who is re-invited can accept and exchange messages"
     },
     {
       "slug": "multi-tab-mls-cache-coherence",
@@ -409,6 +392,56 @@
       "motivation": "ContactChat is not keyed by peer (ChatBox's per-thread failed-send stash depends on staying mounted), so state survives thread switches; found by the code-reviewer in dm-own-send-bubble-vanishes-on-publish-reject round 5.",
       "behavior": "After switching A to B, A's rows stay rendered under B's header until B's IDB read finishes (local only, nothing sent). A send in A still awaiting its relay ack is dropped by B's seed and not restored when returning to A before the ack; appendMessage persists it later without notifying the tab, so it reappears only on reload.",
       "approach": "Filter rendered messages by groupId === threadId before passing them to ChatBox; keep a per-thread ref of pending own sends and merge it into seedThreadMessages (or re-upsert after appendMessage when the thread is current)."
+    },
+    {
+      "slug": "connectndk-rebinds-external-signer",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/ndkClient.ts",
+        "line": 46
+      },
+      "text": "connectNdk(privateKeyHex) rebinds the NDK singleton to the stored local key, silently replacing an active NIP-07/NIP-46 signer",
+      "created_at": "2026-10-18",
+      "motivation": "Found while gating backups on signer mode (2026-10-18): getNdk(privateKeyHex) calls applySigner whenever a key is passed, and applyNdkSigner clears the tracked key so the next call always rebinds. DM send/reaction/history paths call connectNdk(privateKeyHex) with the local key, so in external-signer mode NDK can sign with the local key instead of the external signer.",
+      "behavior": "In NIP-07/NIP-46 mode, any connectNdk(privateKeyHex) call (ContactChat send, reactions, history fetch) swaps NDK's signer back to the stored local key; publishes after that are signed by the local key until the external signer is re-applied.",
+      "approach": "Make connectNdk/getNdk skip the rebind while an external signer is active (signer-mode aware), or have callers use getNdkInstance()+connect when not in local mode; add a unit test that an applied external signer survives connectNdk(localKey). Ties into OWNER Q7 (reject a mismatched signer)."
+    },
+    {
+      "slug": "stale-replace-other-tab-writes",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx"
+      },
+      "text": "A stale-group replace in one tab does not tear down the same group's MarmotGroup/EpochResolver in other open tabs; their late save can overwrite the freshly joined state",
+      "created_at": "2026-10-18",
+      "motivation": "Found by the code-reviewer in stale-welcome-reinvite round 2. The join lock is cross-tab but teardown is per tab; the leave/destroy path has the same exposure. Narrow window (an evicted tab mostly buffers unreadable events without saving).",
+      "behavior": "Tab B keeps the old MarmotGroup for the group; its grace-timer save or an in-flight ingest can write the evicted MLS state back after tab A replaced it.",
+      "approach": "Post a crossTab store-changed notice for the group after a replace/destroy so other tabs dispose and re-subscribe it; ties to OWNER Q4 (single active tab)."
+    },
+    {
+      "slug": "subscription-generation-resubscribes-all",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx"
+      },
+      "text": "A stale-group replace bumps subscriptionGeneration, re-running the subscription effect for every group (full historical refetch for all)",
+      "created_at": "2026-10-18",
+      "motivation": "Correct but costly for users in many groups; noted by the code-reviewer in stale-welcome-reinvite round 2.",
+      "behavior": "Every replace attempt (including failed ones) tears down and rebuilds all group subscriptions.",
+      "approach": "Drop only the replaced group's entry from groupSubsRef and subscribe the missing groups without tearing down the others."
+    },
+    {
+      "slug": "stale-replace-retired-setup-untracked",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx",
+        "line": 1673
+      },
+      "text": "Stale-group replace does not await a retired subscription setup whose historical ingest is still running after an effect restart",
+      "created_at": "2026-10-18",
+      "motivation": "Last Codex finding of stale-welcome-reinvite (round 5), deferred by lead cap after five remediation rounds: retired ingest waiters and dispatcher drains are tracked in pendingDrainRef, but an aborted setup's promise is not, and its whenIdle is registered only after subscribeToGroupMessages returns.",
+      "behavior": "Effect restart during a blocked historical ingest, then a replace: teardown awaits only the new setup/drains; a slow SDK state save of the old ingest could land after destroy/rejoin. Narrow (evicted member rarely decrypts new traffic).",
+      "approach": "On effect cleanup, trackPending each retired lifecycle's setup promise (setup completion includes resolver.disposeAndDrain); regression: effect restart during a blocked historical ingest followed by replacement keeps destroy blocked."
     }
   ],
   "archive": [

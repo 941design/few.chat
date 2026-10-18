@@ -58,6 +58,7 @@ import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import { useProfile } from '@/src/context/ProfileContext';
 import { useBackup } from '@/src/context/BackupContext';
+import { teardownForReplace, trackPending } from '@/src/lib/marmot/replaceTeardown';
 
 async function startWelcomeSubscription(
   pubkeyHex: string,
@@ -72,6 +73,7 @@ async function startWelcomeSubscription(
   // S6 (decline-a, authorized external-port extension): the Remove/announce
   // capability the decline receive branch needs — see the call site below.
   declineDeps?: import('@/src/lib/marmot/welcomeSubscription').DeclineReceiveDeps,
+  staleReplace?: import('@/src/lib/marmot/welcomeSubscription').StaleWelcomeReplace,
 ): Promise<() => void> {
   const { subscribeToWelcomes } = await import('@/src/lib/marmot/welcomeSubscription');
   return subscribeToWelcomes(
@@ -85,6 +87,7 @@ async function startWelcomeSubscription(
     ownPrivateKeyHex,
     onPairingAckReceived,
     declineDeps,
+    staleReplace,
   );
 }
 import { DEFAULT_RELAYS } from '@/src/types';
@@ -822,6 +825,16 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   // the previous one before reading the rumor journal, so a handler still
   // running in the torn-down subscription acks its entry first and is not
   // replayed a second time (at-most-once across re-subscribes).
+  // Per-group abort + in-flight-setup handle of the group-message subscription,
+  // used by the stale-Welcome replace to stop old work before destroy/purge.
+  // Groups whose stale-Welcome replace is in progress: the subscription loop
+  // skips them so an effect re-run cannot re-subscribe a group mid-replace.
+  const replacingRef = useRef<Set<string>>(new Set());
+  // Per-group "in-flight ingest finished" waiter of the live subscription.
+  // Unfinished teardown waits per group (see teardownForReplace).
+  const pendingDrainRef = useRef<Map<string, Set<Promise<unknown>>>>(new Map());
+  const groupIdleRef = useRef<Map<string, () => Promise<void>>>(new Map());
+  const groupLifecycleRef = useRef<Map<string, { abort: () => void; setup: Promise<void> }>>(new Map());
   const dispatcherDrainsRef = useRef<Map<string, () => Promise<void>>>(new Map());
   // S4: Pending out-of-band leave entries queued for debounced auto-commit (AC-QUEUE-1).
   // MUST be useRef — mutations must not trigger re-renders.
@@ -829,6 +842,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
   // S4: Per-group 5-second debounce timers for the pending-removal queue (AC-QUEUE-1).
   // MUST be useRef — timer handles must not trigger re-renders.
   const debounceTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  // Bumped after a stale local group was replaced from a fresh Welcome
+  // (bug: stale-welcome-reinvite): the subscription effect is keyed on the id
+  // SET, which does not change when the same id is re-joined, so this forces the
+  // re-subscribe with the fresh MarmotGroup.
+  const [subscriptionGeneration, setSubscriptionGeneration] = useState(0);
   // Track groups where profile has been published (to avoid re-publishing)
   const profilePublishedRef = useRef<Set<string>>(new Set());
   // S8-F1: SYNCHRONOUS re-entry guard for onHistorySynced's profile publish.
@@ -1302,7 +1320,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         // when loadAll fails; neither step throws.
         try {
           const { loadGroupsAndReconcileInvitations } = await import('@/src/lib/marmot/welcomeSubscription');
-          await loadGroupsAndReconcileInvitations(client);
+          await loadGroupsAndReconcileInvitations(client, pubkeyHex ?? '');
         } catch (err) {
           console.warn('[Marmot] group load/reconciliation failed:', err);
         }
@@ -1448,6 +1466,8 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             },
             clearPendingDirectInvite,
           },
+          // Stale-Welcome replace (bug: stale-welcome-reinvite) for auto-accept.
+          makeStaleReplace(pubkeyHex!),
         ).then((unsub) => {
           if (cancelled) {
             unsub();
@@ -1640,10 +1660,28 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       for (const group of groups) {
         if (!isCurrent()) return;
         if (subsMap.has(group.id)) continue; // Already subscribed
+        if (replacingRef.current.has(group.id)) continue; // stale-Welcome replace in progress
+        // Per-group lifecycle, registered BEFORE the async setup so a stale-Welcome
+        // replace can abort it and wait for it (see makeStaleReplace). Aborted
+        // together with the effect via setupController.
+        const groupCtl = new AbortController();
+        const abortWithEffect = () => groupCtl.abort();
+        setupController.signal.addEventListener('abort', abortWithEffect, { once: true });
+        let finishSetup: () => void = () => {};
+        const setupDone = new Promise<void>((resolve) => { finishSetup = resolve; });
+        const lifecycleEntry = { abort: () => groupCtl.abort(), setup: setupDone };
+        groupLifecycleRef.current.set(group.id, lifecycleEntry);
+        const isCurrentGroup = () => isCurrent() && !groupCtl.signal.aborted;
         let unsubDispatcher: import('@/src/lib/marmot/applicationRumorDispatcher').DispatcherSubscription | undefined;
+        // A retired dispatcher's handlers may still be running: keep its drain for
+        // a later stale-Welcome replace to await (see teardownForReplace).
+        const retireDispatcher = (d: import('@/src/lib/marmot/applicationRumorDispatcher').DispatcherSubscription | undefined) => {
+          if (!d) return;
+          try { trackPending(pendingDrainRef.current, group.id, d.drain()); } catch { /* nothing to wait for */ }
+        };
         try {
           const mlsGroup = await client!.groups.get(group.id).catch(() => null);
-          if (!isCurrent()) return;
+          if (!isCurrentGroup()) return;
           if (!mlsGroup) continue;
 
           // Immediately sync member list from MLS state (authoritative source).
@@ -1652,7 +1690,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
           // is up-to-date without needing to re-ingest historical events (which
           // is impossible after the MLS key schedule advances due to forward secrecy).
           const { getGroupMembers } = await import('@internet-privacy/marmot-ts');
-          if (!isCurrent()) return;
+          if (!isCurrentGroup()) return;
           const mlsMembers = getGroupMembers(mlsGroup.state);
           // groupsRef.current (kept in sync near line 398) rather than the
           // closure `groups`, for consistency with the onMembersChanged callback
@@ -1676,7 +1714,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
-          if (!isCurrent()) return;
+          if (!isCurrentGroup()) return;
 
           // Wire the unified dispatcher for all application rumor handlers (Stories 02–03).
           const dispatcherCtx = {
@@ -1821,9 +1859,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             maxFailedAttempts: rumorJournal.RUMOR_JOURNAL_MAX_FAILED_ATTEMPTS,
           });
           unsubDispatcher = dispatcher.subscribe(mlsGroup, dispatcherCtx);
-          setupController.signal.addEventListener('abort', unsubDispatcher, { once: true });
+          groupCtl.signal.addEventListener('abort', unsubDispatcher, { once: true });
           // Captured before this subscription replaces it (see dispatcherDrainsRef).
           const previousDrain = dispatcherDrainsRef.current.get(group.id);
+          // The handle being overwritten belongs to a retired dispatcher: track it first.
+          if (previousDrain) trackPending(pendingDrainRef.current, group.id, previousDrain());
           dispatcherDrainsRef.current.set(group.id, unsubDispatcher.drain);
 
           // Write-ahead rumor journal (bug: mls-message-lost-on-unload-after-ingest):
@@ -1840,10 +1880,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
                 previousDrain().catch(() => undefined),
                 new Promise<void>((resolve) => setTimeout(resolve, 3000)),
               ]);
-              if (!isCurrent()) return;
+              if (!isCurrentGroup()) return;
             }
             const pending = await rumorJournal.listPendingRumors(group.id);
-            if (!isCurrent()) return;
+            if (!isCurrentGroup()) return;
             if (pending.length > 0) {
               console.info(`[Marmot] replaying ${pending.length} journaled rumor(s) for group ${group.id}`);
               void unsubDispatcher.replay(pending);
@@ -1882,7 +1922,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             queue: pendingRemovalsRef.current,
             arm: armRemovalTimer,
           });
-          if (!isCurrent()) return;
+          if (!isCurrentGroup()) return;
 
 
           const unsub = await subscribeToGroupMessages(
@@ -1893,7 +1933,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // Refresh memberPubkeys from MLS state after ingesting any event
             // (commits, proposals, etc. — not just application messages)
             async (currentMembers) => {
-              if (!isCurrent()) return;
+              if (!isCurrentGroup()) return;
               // Always bump groupDataVersion so consumers (e.g. isAdmin) re-read
               // group metadata after any MLS commit, even when member count is unchanged.
               setGroupDataVersion((v) => v + 1);
@@ -1934,7 +1974,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             // Publish profile after historical sync completes (epoch is up-to-date).
             // Uses localProfileRef to avoid stale-closure race.
             () => {
-              if (!isCurrent()) return;
+              if (!isCurrentGroup()) return;
               // S8-F1: check the durable published-ref AND the transient
               // in-flight ref. Either one already covers this group means a
               // second concurrent (or completed) attempt must be skipped.
@@ -1962,14 +2002,14 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
                     profile: currentProfile,
                     logLabel: `onHistorySynced (group ${group.id})`,
                     sendRumor: async (payload) => {
-                      if (!isCurrent()) throw new Error('Group subscription replaced');
+                      if (!isCurrentGroup()) throw new Error('Group subscription replaced');
                       console.info(`[Marmot] onHistorySynced: publishing profile for group ${group.id}, nickname="${currentProfile.nickname}"`);
                       const rumor = buildRumor(PROFILE_RUMOR_KIND, payload, pubkeyHex ?? '');
                       await sendRumorSafe(mlsGroup, rumor as any, { softFail: true });
                       console.info(`[Marmot] onHistorySynced: profile published successfully for group ${group.id}`);
                     },
                   });
-                  if (sent && isCurrent()) {
+                  if (sent && isCurrentGroup()) {
                     profilePublishedRef.current.add(group.id);
                   }
                 } catch (err) {
@@ -1982,28 +2022,42 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
                   // Always release the in-flight marker (success or failure)
                   // so a future onHistorySynced firing (e.g. a legitimate
                   // retry after a signer failure) is not permanently blocked.
-                  if (isCurrent()) profilePublishInFlightRef.current.delete(group.id);
+                  if (isCurrentGroup()) profilePublishInFlightRef.current.delete(group.id);
                 }
               })();
             },
-            { drainApplicationMessages: () => unsubDispatcher!.drain(), signal: setupController.signal },
+            { drainApplicationMessages: () => unsubDispatcher!.drain(), signal: groupCtl.signal },
           );
 
 
-          if (!isCurrent()) {
+          if (!isCurrentGroup()) {
             unsub();
             unsubDispatcher();
+            retireDispatcher(unsubDispatcher);
+            if (unsub.whenIdle) trackPending(pendingDrainRef.current, group.id, unsub.whenIdle());
             return;
           }
 
           // Combine both unsubscribe functions so cleanup tears down both listeners.
+          const idleHandle = unsub.whenIdle;
           subsMap.set(group.id, () => {
             unsub();
             unsubDispatcher?.();
+            retireDispatcher(unsubDispatcher);
+            // The retired run's ingest may still be running: keep it for a later
+            // replace to await (dropped from pendingDrainRef when it settles).
+            if (idleHandle) trackPending(pendingDrainRef.current, group.id, idleHandle());
+            // Forget this run's idle waiter (not a newer run's).
+            if (idleHandle && groupIdleRef.current.get(group.id) === idleHandle) groupIdleRef.current.delete(group.id);
           });
+          if (idleHandle) groupIdleRef.current.set(group.id, idleHandle);
         } catch (err) {
           unsubDispatcher?.();
+          retireDispatcher(unsubDispatcher);
           console.warn(`[Marmot] subscribeToGroupMessages for ${group.id} failed:`, err);
+        } finally {
+          finishSetup();
+          if (groupLifecycleRef.current.get(group.id) === lifecycleEntry) groupLifecycleRef.current.delete(group.id);
         }
       }
     }
@@ -2037,7 +2091,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     // on the id SET (groupSubscriptionKey), not the `groups` array reference; see
     // the comment above groupSubscriptionKey for why re-running on every churn
     // regressed live propagation.
-  }, [ready, groupSubscriptionKey, pubkeyHex, subscriptionClient]);
+  }, [ready, groupSubscriptionKey, subscriptionGeneration, pubkeyHex, subscriptionClient]);
 
   // Profile updates are published automatically via the onHistorySynced callback
   // (once per group, after historical events are ingested and the local epoch is
@@ -2206,11 +2260,6 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     const selfPubkeyHex = pubkeyHex ?? '';
     const { leaveGroupImpl } = await import('@/src/lib/marmot/leaveGroupImpl');
     const { getGroupMembers } = await import('@internet-privacy/marmot-ts');
-    const { clearMessages } = await import('@/src/lib/marmot/chatPersistence');
-    const { clearPendingJoinRequestsForGroup } = await import('@/src/lib/marmot/joinRequestStorage');
-    const { clearInviteLinksForGroup } = await import('@/src/lib/marmot/inviteLinkStorage');
-    const { clearPendingDirectInvitesForGroup } = await import('@/src/lib/marmot/pendingDirectInviteStorage');
-    const { clearRumorJournalForGroup } = await import('@/src/lib/marmot/rumorJournal');
     const { putLeftGroupTombstone, deleteLeftGroupTombstone } = await import('@/src/lib/marmot/leftGroupTombstones');
     const { destroyLeftGroupState } = await import('@/src/lib/marmot/welcomeSubscription');
 
@@ -2223,19 +2272,7 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         getGroupMembers,
         sendRumorSafe: (group, rumor) => sendRumorSafe(group as any, rumor as any),
         buildRumor,
-        removeGroupFromStorage,
-        clearMemberProfiles,
-        clearMessages,
-        clearPollData,
-        clearGroupMedia,
-        clearProfileRequestMemos,
-        clearUnreadGroup,
-        clearPendingJoinRequestsForGroup,
-        clearInviteLinksForGroup,
-        clearInviteExpiries,
-        clearPendingDirectInvitesForGroup,
-        clearRumorJournalForGroup,
-        clearPendingRemovalsForGroup,
+        ...(await loadPurgeDeps()),
         putLeftGroupTombstone: (id) => putLeftGroupTombstone(id),
         deleteLeftGroupTombstone,
         // Local-only MLS-state destroy under the per-group join lock. With no
@@ -2487,6 +2524,87 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     return loadPendingDirectInviteMarkers(groupId);
   }, []);
 
+  // The local-data clears shared by leave and the stale-Welcome replace
+  // (purgeGroupLocalData); built in one place so the two cannot drift.
+  const loadPurgeDeps = async (): Promise<import('@/src/lib/marmot/leaveGroupImpl').PurgeGroupLocalDataDeps> => {
+    const { clearMessages } = await import('@/src/lib/marmot/chatPersistence');
+    const { clearPendingJoinRequestsForGroup } = await import('@/src/lib/marmot/joinRequestStorage');
+    const { clearInviteLinksForGroup } = await import('@/src/lib/marmot/inviteLinkStorage');
+    const { clearPendingDirectInvitesForGroup } = await import('@/src/lib/marmot/pendingDirectInviteStorage');
+    const { clearRumorJournalForGroup } = await import('@/src/lib/marmot/rumorJournal');
+    return {
+      removeGroupFromStorage,
+      clearMemberProfiles,
+      clearMessages,
+      clearPollData,
+      clearGroupMedia,
+      clearProfileRequestMemos,
+      clearUnreadGroup,
+      clearPendingJoinRequestsForGroup,
+      clearInviteLinksForGroup,
+      clearInviteExpiries,
+      clearPendingDirectInvitesForGroup,
+      clearRumorJournalForGroup,
+      clearPendingRemovalsForGroup,
+    };
+  };
+
+  // Stale-Welcome replace wiring (bug: stale-welcome-reinvite). Uses refs and
+  // stable setters only, so it is safe to capture from long-lived effects.
+  // onBeforeReplace stops the group's old subscription work BEFORE anything is
+  // destroyed or purged: abort the lifecycle entry, wait for an in-flight
+  // setup, tear the subscription down, wait for the dispatcher to drain, and
+  // cancel the debounce timer.
+  const makeStaleReplace = (selfPubkey: string): import('@/src/lib/marmot/welcomeSubscription').StaleWelcomeReplace => ({
+    selfPubkey,
+    onBeforeReplace: async (groupId) => {
+      replacingRef.current.add(groupId);
+      const lifecycle = groupLifecycleRef.current.get(groupId);
+      const idle = groupIdleRef.current.get(groupId);
+      await teardownForReplace(
+        groupId,
+        {
+          abort: lifecycle?.abort,
+          setup: lifecycle?.setup,
+          unsub: () => {
+            groupLifecycleRef.current.delete(groupId);
+            const unsub = groupSubsRef.current.get(groupId);
+            if (unsub) {
+              try { unsub(); } catch { /* best-effort teardown */ }
+              groupSubsRef.current.delete(groupId);
+            }
+          },
+          // Wait for an ingest already running (incl. its MLS state save) so it
+          // cannot write into the state about to be destroyed.
+          idle,
+          cancelTimers: () => {
+            const timer = debounceTimersRef.current.get(groupId);
+            if (timer !== undefined) {
+              clearTimeout(timer);
+              debounceTimersRef.current.delete(groupId);
+            }
+            profilePublishedRef.current.delete(groupId);
+            profilePublishInFlightRef.current.delete(groupId);
+          },
+          drain: dispatcherDrainsRef.current.get(groupId),
+        },
+        pendingDrainRef.current,
+      );
+    },
+    purgeLocalData: async (groupId) => {
+      const { purgeGroupLocalData } = await import('@/src/lib/marmot/leaveGroupImpl');
+      return purgeGroupLocalData(await loadPurgeDeps(), groupId, { bestEffort: true });
+    },
+    // Reload the overlay first so the re-run subscription effect does not read
+    // the pre-purge group list, then bump the generation to re-subscribe.
+    onAfterReplace: (groupId) => {
+      void reloadGroups().catch(() => undefined).then(() => {
+        replacingRef.current.delete(groupId);
+        setSubscriptionGeneration((n) => n + 1);
+      });
+    },
+  });
+
   // S2: Accept a pending invitation — calls joinGroupFromWelcome via the stored
   // welcomeEventJson, removes from queue on success or MLS failure, fires onGroupJoined.
   const acceptPendingInvitation = useCallback(async (id: string): Promise<void> => {
@@ -2497,8 +2615,9 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
       await reloadGroups();
       markBackupDirty(true);
       console.info('[Marmot] Accepted invitation and joined group:', joinedGroup.name);
-    });
-  }, [reloadGroups, markBackupDirty]);
+    }, pubkeyHex ? makeStaleReplace(pubkeyHex) : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- makeStaleReplace only touches refs + a stable setter
+  }, [reloadGroups, markBackupDirty, pubkeyHex]);
 
   // S2/S5: Decline a pending invitation — removes from queue unconditionally;
   // additionally sends an auth-gated gift-wrapped decline DM to the inviter
@@ -2510,9 +2629,9 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     const { declinePendingInvitation: doDecline } = await import('@/src/lib/marmot/welcomeSubscription');
     const ndk = privateKeyHex && pubkeyHex ? (await import('@/src/lib/ndkClient')).getNdk() : null;
     if (ndk && privateKeyHex && pubkeyHex) {
-      await doDecline(id, { ndk, selfPubkeyHex: pubkeyHex, selfPrivateKeyHex: privateKeyHex });
+      await doDecline(id, { ndk, selfPubkeyHex: pubkeyHex, selfPrivateKeyHex: privateKeyHex }, clientRef.current ?? undefined);
     } else {
-      await doDecline(id);
+      await doDecline(id, undefined, clientRef.current ?? undefined);
     }
   }, [privateKeyHex, pubkeyHex]);
 

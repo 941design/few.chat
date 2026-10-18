@@ -646,3 +646,57 @@ describe('leaveGroupImpl — MLS state destroyed after leave (tombstone-guarded)
     expect(deps.deleteLeftGroupTombstone).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// purgeGroupLocalData — shared with the stale-Welcome replace
+// ---------------------------------------------------------------------------
+
+describe('purgeGroupLocalData', () => {
+  function makePurgeDeps(failing?: string) {
+    const calls: string[] = [];
+    const step = (name: string) => async () => {
+      calls.push(name);
+      if (name === failing) throw new Error(`${name} failed`);
+    };
+    const deps = {
+      removeGroupFromStorage: step('removeGroupFromStorage'),
+      clearMemberProfiles: step('clearMemberProfiles'),
+      clearMessages: step('clearMessages'),
+      clearPollData: step('clearPollData'),
+      clearGroupMedia: step('clearGroupMedia'),
+      clearProfileRequestMemos: step('clearProfileRequestMemos'),
+      clearUnreadGroup: () => { calls.push('clearUnreadGroup'); },
+      clearPendingJoinRequestsForGroup: step('clearPendingJoinRequestsForGroup'),
+      clearInviteLinksForGroup: step('clearInviteLinksForGroup'),
+      clearPendingDirectInvitesForGroup: step('clearPendingDirectInvitesForGroup'),
+      clearInviteExpiries: () => { calls.push('clearInviteExpiries'); },
+      clearRumorJournalForGroup: step('clearRumorJournalForGroup'),
+      clearPendingRemovalsForGroup: step('clearPendingRemovalsForGroup'),
+    };
+    return { deps, calls };
+  }
+
+  it('bestEffort: a failing step does not stop the later steps; the result is false', async () => {
+    const { purgeGroupLocalData } = await import('@/src/lib/marmot/leaveGroupImpl');
+    const { deps, calls } = makePurgeDeps('clearMessages');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await purgeGroupLocalData(deps as never, 'g', { bestEffort: true })).toBe(false);
+    expect(calls).toContain('clearRumorJournalForGroup');
+    expect(calls[calls.length - 1]).toBe('clearPendingRemovalsForGroup');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('bestEffort with no failure returns true', async () => {
+    const { purgeGroupLocalData } = await import('@/src/lib/marmot/leaveGroupImpl');
+    const { deps } = makePurgeDeps();
+    expect(await purgeGroupLocalData(deps as never, 'g', { bestEffort: true })).toBe(true);
+  });
+
+  it('default mode: a failing core step rethrows and later steps do not run', async () => {
+    const { purgeGroupLocalData } = await import('@/src/lib/marmot/leaveGroupImpl');
+    const { deps, calls } = makePurgeDeps('clearMemberProfiles');
+    await expect(purgeGroupLocalData(deps as never, 'g')).rejects.toThrow('clearMemberProfiles failed');
+    expect(calls).toEqual(['removeGroupFromStorage', 'clearMemberProfiles']);
+  });
+});

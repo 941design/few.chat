@@ -111,6 +111,86 @@ type Deps = {
 };
 
 /**
+ * Local app-data fields the purge needs. A subset of {@link Deps} so both
+ * leaveGroupImpl and the stale-Welcome replace path (welcomeSubscription.ts)
+ * share ONE purge sequence.
+ */
+export type PurgeGroupLocalDataDeps = Pick<
+  Deps,
+  | 'removeGroupFromStorage'
+  | 'clearMemberProfiles'
+  | 'clearMessages'
+  | 'clearPollData'
+  | 'clearGroupMedia'
+  | 'clearProfileRequestMemos'
+  | 'clearUnreadGroup'
+  | 'clearPendingJoinRequestsForGroup'
+  | 'clearInviteLinksForGroup'
+  | 'clearPendingDirectInvitesForGroup'
+  | 'clearInviteExpiries'
+  | 'clearRumorJournalForGroup'
+  | 'clearPendingRemovalsForGroup'
+>;
+
+/**
+ * Purges every piece of LOCAL app data of a group (overlay, member profiles,
+ * messages, polls, media, memos, unread, join requests, invite links/markers/
+ * expiries, rumor journal, pending removals). Local-only: sends nothing,
+ * writes no tombstone, leaves the MLS state alone. Shared by leaveGroupImpl
+ * and the stale-Welcome replace path.
+ */
+export async function purgeGroupLocalData(
+  deps: PurgeGroupLocalDataDeps,
+  groupId: string,
+  opts: { bestEffort?: boolean } = {},
+): Promise<boolean> {
+  // Default (leave): a failing core step aborts the purge by throwing, as
+  // before. bestEffort (stale-Welcome replace): every step runs, failures are
+  // warned, and the result says whether anything was left behind.
+  let clean = true;
+  const step = async (fn: () => unknown): Promise<void> => {
+    try {
+      await fn();
+    } catch (err) {
+      if (!opts.bestEffort) throw err;
+      clean = false;
+      console.warn('[Marmot] purgeGroupLocalData: step failed, continuing:', err);
+    }
+  };
+  await step(() => deps.removeGroupFromStorage(groupId));
+  await step(() => deps.clearMemberProfiles(groupId));
+  await step(() => deps.clearMessages(groupId));
+  // Best-effort (finding leave-clearpolldata-unguarded): a poll storage
+  // failure must not abort the rest of the purge, the MLS-state destroy or the
+  // reload. Residual: the left group's poll rows may survive (nothing reads
+  // them for a group without an overlay; clearAllPollData removes them).
+  try {
+    await deps.clearPollData(groupId);
+  } catch (err) {
+    console.warn('[Marmot] purgeGroupLocalData: poll data cleanup failed, proceeding with purge:', err);
+  }
+  await step(() => deps.clearGroupMedia(groupId));
+  await step(() => deps.clearProfileRequestMemos(groupId));
+  await step(() => deps.clearUnreadGroup(groupId));
+  // AC-PURGE-1/2: leak-fixing clears, unconditional on both paths.
+  await step(() => deps.clearPendingJoinRequestsForGroup(groupId));
+  await step(() => deps.clearInviteLinksForGroup(groupId));
+  // AC-MARKER-9: per-group leave fan-out clear — scoped to groupId only, the
+  // account-wide sibling clear lives exclusively in clearAllGroupData (S2).
+  await step(() => deps.clearPendingDirectInvitesForGroup(groupId));
+  // AC-DEEPLINK-4: same unconditional purge call, not a separate step —
+  // see the Deps field doc comment above.
+  await step(() => deps.clearInviteExpiries(groupId));
+  await step(() => deps.clearRumorJournalForGroup(groupId));
+  try {
+    await deps.clearPendingRemovalsForGroup(groupId);
+  } catch (err) {
+    console.warn('[Marmot] purgeGroupLocalData: pending-removal cleanup failed, proceeding with purge:', err);
+  }
+  return clean;
+}
+
+/**
  * Leave the group identified by `groupId`, on behalf of `selfPubkeyHex`.
  *
  * Contracts:
@@ -238,36 +318,7 @@ export async function leaveGroupImpl(
   }
 
   // AC-PURGE-1: purge sequence — runs unconditionally on both paths.
-  await deps.removeGroupFromStorage(groupId);
-  await deps.clearMemberProfiles(groupId);
-  await deps.clearMessages(groupId);
-  // Best-effort (finding leave-clearpolldata-unguarded): a poll storage
-  // failure must not abort the rest of the purge, the MLS-state destroy or the
-  // reload. Residual: the left group's poll rows may survive (nothing reads
-  // them for a group without an overlay; clearAllPollData removes them).
-  try {
-    await deps.clearPollData(groupId);
-  } catch (err) {
-    console.warn('[Marmot] leaveGroup: poll data cleanup failed, proceeding with purge:', err);
-  }
-  await deps.clearGroupMedia(groupId);
-  await deps.clearProfileRequestMemos(groupId);
-  deps.clearUnreadGroup(groupId);
-  // AC-PURGE-1/2: leak-fixing clears, unconditional on both paths.
-  await deps.clearPendingJoinRequestsForGroup(groupId);
-  await deps.clearInviteLinksForGroup(groupId);
-  // AC-MARKER-9: per-group leave fan-out clear — scoped to groupId only, the
-  // account-wide sibling clear lives exclusively in clearAllGroupData (S2).
-  await deps.clearPendingDirectInvitesForGroup(groupId);
-  // AC-DEEPLINK-4: same unconditional purge call, not a separate step —
-  // see the Deps field doc comment above.
-  deps.clearInviteExpiries(groupId);
-  await deps.clearRumorJournalForGroup(groupId);
-  try {
-    await deps.clearPendingRemovalsForGroup(groupId);
-  } catch (err) {
-    console.warn('[Marmot] leaveGroup: pending-removal cleanup failed, proceeding with purge:', err);
-  }
+  await purgeGroupLocalData(deps, groupId);
 
   // Destroy the MLS state (keys, history) — local-only. With a departure
   // announcement in flight, only after it settles (or the timeout): the send
