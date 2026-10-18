@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { teardownForReplace, trackPending } from '@/src/lib/marmot/replaceTeardown';
+import { teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
 
 const G = 'g1';
 const never = () => new Promise<void>(() => {});
@@ -142,5 +142,85 @@ describe('trackPending bookkeeping', () => {
     r();
     await new Promise((res) => setTimeout(res, 5)); // an unhandled TypeError would fail the run
     expect(pending.size).toBe(0);
+  });
+});
+
+// Bug stale-replace-retired-setup-untracked: an effect restart retires a setup
+// still blocked in its historical ingest. The retired setup hands over its
+// ingest-idle / dispatcher drain only when it finishes — after a replace may
+// already have snapshotted `pending`.
+describe('trackRetiredSetup — a retired setup and the work it hands over', () => {
+  function retiredSetup() {
+    const handedOver: Promise<unknown>[] = [];
+    let finish!: () => void;
+    const setup = new Promise<void>((r) => { finish = r; });
+    return { handedOver, setup, finish };
+  }
+
+  it('blocks a replace until the setup AND the idle it hands over later have settled', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const retired = retiredSetup();
+    trackRetiredSetup(pending, G, retired.setup, () => retired.handedOver); // effect cleanup
+    const destroy = vi.fn();
+
+    // replace starts while the retired setup still runs
+    const replace = teardownForReplace(G, {}, pending, 200).then(destroy);
+
+    // the retired setup finishes and hands over an ingest that is still saving
+    let releaseIdle!: () => void;
+    retired.handedOver.push(new Promise<void>((r) => { releaseIdle = r; }));
+    retired.finish();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(destroy).not.toHaveBeenCalled();
+
+    releaseIdle();
+    await replace;
+    expect(destroy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(pending.has(G)).toBe(false));
+  });
+
+  it('a handed-over idle that never settles => the replace throws (fails closed)', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const retired = retiredSetup();
+    trackRetiredSetup(pending, G, retired.setup, () => retired.handedOver);
+    const replace = teardownForReplace(G, {}, pending, 30);
+    retired.handedOver.push(never());
+    retired.finish();
+    await expect(replace).rejects.toThrow(/still running/);
+    expect(pending.get(G)!.size).toBe(1); // still remembered for the next attempt
+  });
+
+  it('a setup that never finishes => the replace throws', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    trackRetiredSetup(pending, G, never(), () => []);
+    await expect(teardownForReplace(G, {}, pending, 20)).rejects.toThrow(/still running/);
+  });
+
+  it('rejections of the setup or the handed-over work count as finished', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    trackRetiredSetup(pending, G, Promise.reject(new Error('setup failed')), () => [
+      Promise.reject(new Error('drain failed')),
+    ]);
+    await expect(teardownForReplace(G, {}, pending, 50)).resolves.toBeUndefined();
+  });
+
+  it('nothing handed over: the entry is dropped once the setup settles', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const retired = retiredSetup();
+    trackRetiredSetup(pending, G, retired.setup, () => retired.handedOver);
+    expect(pending.get(G)!.size).toBe(1);
+    retired.finish();
+    await vi.waitFor(() => expect(pending.has(G)).toBe(false));
+  });
+
+  it('reads the handed-over work only after the setup settled', async () => {
+    const pending = new Map<string, Set<Promise<unknown>>>();
+    const retired = retiredSetup();
+    const handedOver = vi.fn(() => retired.handedOver);
+    trackRetiredSetup(pending, G, retired.setup, handedOver);
+    await Promise.resolve();
+    expect(handedOver).not.toHaveBeenCalled();
+    retired.finish();
+    await vi.waitFor(() => expect(handedOver).toHaveBeenCalledTimes(1));
   });
 });

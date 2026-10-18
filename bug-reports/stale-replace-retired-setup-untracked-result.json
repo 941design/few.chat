@@ -1,0 +1,55 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": "On a group-subscription effect restart the new run overwrote groupLifecycleRef, so nothing referenced the retired run's still-running setup; the retired setup tracked its whenIdle/drain only when it finished, after a stale-Welcome replace may already have snapshotted pendingDrainRef, so the replace could destroy/rejoin under the old ingest's state save.",
+  "fix": "New trackRetiredSetup(pending, groupId, setup, handedOver) in replaceTeardown.ts: one pendingDrainRef entry that settles after the setup and then all work it handed over. The effect keeps a per-run runSetups list (setupDone + handedOver array filled by retireDispatcher and the aborted-after-subscribe path) and registers each in its cleanup, synchronously with the abort.",
+  "files_modified": [
+    "app/src/lib/marmot/replaceTeardown.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/marmot/replaceTeardown.test.ts"
+  ],
+  "files_created": [
+    "bug-reports/stale-replace-retired-setup-untracked-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/marmot/replaceTeardown.test.ts"
+    ],
+    "pre_fix_failures": 6,
+    "kinds": "real trackRetiredSetup + teardownForReplace: late handed-over idle blocks a replace until settled; never-settling handover/setup fails closed; rejections count as settled; entry dropped when nothing handed over; handedOver read lazily after the setup settled. Gap (accepted, no-jsdom convention): the MarmotContext cleanup wiring itself has no unit test."
+  },
+  "final": {
+    "passed": 6320,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (trackRetiredSetup)",
+    "killed": 3,
+    "timeout": 0,
+    "survived": 0,
+    "score": 100.0,
+    "survivors": "none"
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-retired.log",
+    "result": "non-relay 72 passed; relay 353 passed, 19 skipped, 0 failed; no INVALID marker.",
+    "status": "green"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The fix lives in a React effect the project cannot unit-test (no jsdom), so correctness rests on two orderings (pushes before finishSetup; registration synchronous with abort) that only review verifies.",
+    "surprised_by": "Reviewing the drain set showed more untracked work started from inside the subscription (onMembersChanged commit, profile send); filed separately as replace-does-not-await-onmemberschanged.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/marmot/replaceTeardown.ts",
+    "app/src/context/MarmotContext.tsx"
+  ]
+}

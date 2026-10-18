@@ -1,0 +1,16 @@
+{
+  "bug": "stale-replace-retired-setup-untracked",
+  "scope": "Track a retired subscription setup (and the idle/drain work it hands over on completion) in pendingDrainRef at effect cleanup, so teardownForReplace awaits it.",
+  "files_to_modify": [
+    "app/src/lib/marmot/replaceTeardown.ts (helper: trackRetiredSetup(pending, groupId, setup, handedOver) = trackPending(setup.then(() => Promise.all(handedOver()))))",
+    "app/src/context/MarmotContext.tsx (per-run lifecycle list; the retired path records idle/drain promises; cleanup calls the helper for each run lifecycle)"
+  ],
+  "behavior": {
+    "tracked": "After an effect cleanup, pendingDrainRef for the group holds a promise that settles only after the retired setup AND the idle/drain work it handed over settle.",
+    "late_handover": "Idle work registered when the retired setup finishes (after a replace snapshotted pending) is still awaited by that replace.",
+    "bounded": "Unchanged fail-closed timeout (REPLACE_WAIT_MS) in teardownForReplace.",
+    "no_leak": "Settled entries are removed (trackPending semantics)."
+  },
+  "tests": ["Unit replaceTeardown: retired setup + late idle blocks teardown until settled; never-settling late idle makes teardown throw; settled work is dropped from pending"],
+  "non_goals": ["subscription-generation-resubscribes-all", "multi-tab writes"]
+}

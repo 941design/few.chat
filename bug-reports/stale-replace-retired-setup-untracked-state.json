@@ -1,0 +1,50 @@
+{
+  "bug_name": "stale-replace-retired-setup-untracked",
+  "bug_report_file": "bug-reports/stale-replace-retired-setup-untracked-report.md",
+  "created_at": "2026-10-19T00:20:00Z",
+  "updated_at": "2026-10-19T03:45:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "60178d8",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "ACCEPTED (sev6 pre-existing out-of-contract: onMembersChanged/profile send untracked -> filed; sev4 wiring untested (accepted gap); sev3 liveness note; sev2 comment -> added)",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-19T00:20:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-19T02:30:00Z",
+      "trigger": "both reviewers accepted at round 0"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-19T03:45:00Z",
+      "trigger": "full e2e gate green"
+    }
+  ],
+  "e2e_gate": {
+    "log": "/tmp/claude-501/e2e-gate/full-retired.log",
+    "non_relay": "72 passed",
+    "relay": "353 passed / 19 skipped",
+    "invalid": false
+  }
+}

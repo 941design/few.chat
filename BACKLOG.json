@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T16:50:46Z",
+  "updated_at": "2026-10-18T18:06:11Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -391,19 +391,6 @@
       "approach": "Drop only the replaced group's entry from groupSubsRef and subscribe the missing groups without tearing down the others."
     },
     {
-      "slug": "stale-replace-retired-setup-untracked",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/context/MarmotContext.tsx",
-        "line": 1673
-      },
-      "text": "Stale-group replace does not await a retired subscription setup whose historical ingest is still running after an effect restart",
-      "created_at": "2026-10-18",
-      "motivation": "Last Codex finding of stale-welcome-reinvite (round 5), deferred by lead cap after five remediation rounds: retired ingest waiters and dispatcher drains are tracked in pendingDrainRef, but an aborted setup's promise is not, and its whenIdle is registered only after subscribeToGroupMessages returns.",
-      "behavior": "Effect restart during a blocked historical ingest, then a replace: teardown awaits only the new setup/drains; a slow SDK state save of the old ingest could land after destroy/rejoin. Narrow (evicted member rarely decrypts new traffic).",
-      "approach": "On effect cleanup, trackPending each retired lifecycle's setup promise (setup completion includes resolver.disposeAndDrain); regression: effect restart during a blocked historical ingest followed by replacement keeps destroy blocked."
-    },
-    {
       "slug": "dm-composer-enter-press-hangs-30s",
       "scope": "any",
       "anchor": {
@@ -430,6 +417,20 @@
       "behavior": "createGroupAndInvite waits 60 s for invite-success; Alice's invite instead shows 'This user has not set up their Few identity yet', i.e. Bob's KeyPackage was not found on the relay when Alice fetched it. Only seen on the first relay test (cold next dev compile, fresh relay).",
       "approach": "Check whether the invitee's KeyPackage publish has completed before the inviter fetches (helper readiness wait on the invitee's published KeyPackage), and whether the app's KeyPackage fetch retries once on an empty result; decide between a test readiness gate and a product retry.",
       "success_signal": "Three consecutive full gates without the 'not set up their Few identity' setup failure."
+    },
+    {
+      "slug": "replace-does-not-await-onmemberschanged",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx",
+        "line": 1980
+      },
+      "text": "Replace does not await onMembersChanged and the onHistorySynced profile send, which can commit or persist on a destroyed group",
+      "created_at": "2026-10-18",
+      "motivation": "Code-reviewer finding (severity 6, inference, not reproduced) on stale-replace-retired-setup-untracked: work started from inside subscribeToGroupMessages that neither whenIdle nor the dispatcher drain covers can outlive a stale-Welcome replace's teardown.",
+      "behavior": "EpochResolver fires onMembersChanged without awaiting it (epochResolver.ts:292-295). Its body awaits persistGroup/reloadGroups and then runs void mlsGroup.commit() with no isCurrentGroup() re-check, so after a replace destroys and rejoins it can commit on the old MarmotGroup object (MLS state save + publish) and persist a stale overlay record. The onHistorySynced profile send checks isCurrentGroup only before sendRumorSafe, and the in-flight send is untracked.",
+      "approach": "Track the onMembersChanged and profile-send promises per group in pendingDrainRef (trackPending) or chain them into the resolver idle; re-check isCurrentGroup() immediately before mlsGroup.commit() and persistGroup.",
+      "success_signal": "Unit test: a replace started while an onMembersChanged body is suspended waits for it (or that body does not commit/persist once the group was replaced)."
     }
   ],
   "archive": [

@@ -56,6 +56,28 @@ export function trackPending(pending: Pending, groupId: string, work: Promise<un
   });
 }
 
+/**
+ * Remembers a subscription setup retired by an effect restart while it still
+ * runs (bug stale-replace-retired-setup-untracked). The new run overwrites the
+ * group's lifecycle entry, and the retired setup hands over its ingest-idle and
+ * dispatcher-drain work only when it finishes — possibly after a replace has
+ * snapshotted `pending`. One entry therefore covers both: it settles once the
+ * setup has settled and then everything `handedOver()` returns has settled.
+ */
+export function trackRetiredSetup(
+  pending: Pending,
+  groupId: string,
+  setup: Promise<unknown>,
+  handedOver: () => Iterable<Promise<unknown>>,
+): void {
+  const settled = (p: Promise<unknown>) => Promise.resolve(p).then(() => undefined, () => undefined);
+  trackPending(
+    pending,
+    groupId,
+    settled(setup).then(() => Promise.all(Array.from(handedOver(), settled))),
+  );
+}
+
 export async function teardownForReplace(
   groupId: string,
   handles: ReplaceTeardownHandles,

@@ -58,7 +58,7 @@ import { readOrCreateKeyPackageSlot } from '@/src/lib/storage';
 import type { Poll, PollVote } from '@/src/lib/marmot/pollPersistence';
 import { useProfile } from '@/src/context/ProfileContext';
 import { useBackup } from '@/src/context/BackupContext';
-import { teardownForReplace, trackPending } from '@/src/lib/marmot/replaceTeardown';
+import { teardownForReplace, trackPending, trackRetiredSetup } from '@/src/lib/marmot/replaceTeardown';
 
 async function startWelcomeSubscription(
   pubkeyHex: string,
@@ -1635,6 +1635,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
 
     const subsMap = groupSubsRef.current;
     const setupController = new AbortController();
+    // This run's per-group setups; the cleanup hands each one (and the work it
+    // hands over when it finishes) to pendingDrainRef, because the next run
+    // overwrites groupLifecycleRef (bug stale-replace-retired-setup-untracked).
+    const runSetups: Array<{ groupId: string; setup: Promise<void>; handedOver: Promise<unknown>[] }> = [];
     const isCurrent = () => !setupController.signal.aborted && clientRef.current === client;
 
     async function subscribeNewGroups() {
@@ -1671,13 +1675,23 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         const setupDone = new Promise<void>((resolve) => { finishSetup = resolve; });
         const lifecycleEntry = { abort: () => groupCtl.abort(), setup: setupDone };
         groupLifecycleRef.current.set(group.id, lifecycleEntry);
+        // Work a retired setup leaves running when it finishes (see runSetups).
+        // Each such promise is ALSO tracked directly: the direct entry covers a
+        // replace that aborts this group without an effect cleanup, handedOver
+        // the effect-cleanup path. Keep both.
+        const handedOver: Promise<unknown>[] = [];
+        runSetups.push({ groupId: group.id, setup: setupDone, handedOver });
         const isCurrentGroup = () => isCurrent() && !groupCtl.signal.aborted;
         let unsubDispatcher: import('@/src/lib/marmot/applicationRumorDispatcher').DispatcherSubscription | undefined;
         // A retired dispatcher's handlers may still be running: keep its drain for
         // a later stale-Welcome replace to await (see teardownForReplace).
         const retireDispatcher = (d: import('@/src/lib/marmot/applicationRumorDispatcher').DispatcherSubscription | undefined) => {
           if (!d) return;
-          try { trackPending(pendingDrainRef.current, group.id, d.drain()); } catch { /* nothing to wait for */ }
+          try {
+            const drained = d.drain();
+            trackPending(pendingDrainRef.current, group.id, drained);
+            handedOver.push(drained);
+          } catch { /* nothing to wait for */ }
         };
         try {
           const mlsGroup = await client!.groups.get(group.id).catch(() => null);
@@ -2034,7 +2048,11 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
             unsub();
             unsubDispatcher();
             retireDispatcher(unsubDispatcher);
-            if (unsub.whenIdle) trackPending(pendingDrainRef.current, group.id, unsub.whenIdle());
+            if (unsub.whenIdle) {
+              const idle = unsub.whenIdle();
+              trackPending(pendingDrainRef.current, group.id, idle);
+              handedOver.push(idle);
+            }
             return;
           }
 
@@ -2070,6 +2088,9 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     // duplicate subscriptions alive across re-renders.
     return () => {
       setupController.abort();
+      for (const { groupId, setup, handedOver } of runSetups) {
+        trackRetiredSetup(pendingDrainRef.current, groupId, setup, () => handedOver);
+      }
       for (const [groupId, unsub] of Array.from(subsMap.entries())) {
         unsub();
         subsMap.delete(groupId);
