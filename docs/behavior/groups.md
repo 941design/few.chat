@@ -179,7 +179,9 @@ invited into a group. A stranger cannot be invited directly; they must be added 
 contact first. A contact who is already a member, blocked, or still pending
 confirmation as a contact cannot be selected. A contact who has been invited but has
 not yet accepted already counts as a member of the group, so they too cannot be
-selected again — there is no resend path while an invitation is outstanding.
+selected again; they are marked as **invitation pending** — distinct from a confirmed
+member, who is marked as already in the group. There is no resend path while an
+invitation is outstanding.
 
 For an invitation to succeed, the invitee must have **published the identity keys**
 that let others add them (this happens automatically when someone sets up their
@@ -357,7 +359,12 @@ in their own group.
   erased from your device.
 - **Blocked.** If you are the only admin and other members remain, the leave is
   **refused**; you are told you must first grant admin to another member. This prevents
-  a group being stranded with no one able to change its membership (§10). It does not
+  a group being stranded with no one able to change its membership (§10). The check is
+  repeated at the moment of leaving, against the group's admin list as it is then: if
+  it changed after the leaver's confirmation was shown and they have become the only
+  admin, the leave is **aborted** — nothing is sent or erased — and they are told the
+  same thing. An admin list that cannot be read at that moment never blocks the leave
+  (a group in unreadable state must stay deletable). It does not
   fix an admin who loses their key or abandons the app — the only defence there is to
   grant admin to trusted members early, and because grants are permanent, so are those.
 - **Confirm.** Any other member confirms and leaves. Leaving is **always immediate and
@@ -446,6 +453,13 @@ promise a timeline — if no admin ever comes online it can persist indefinitely
 
 The deferred finalisation here only ever completes a member's own departure. Removing a
 member who has not chosen to leave is a separate, immediate admin action (§4.5).
+
+**Residual zero-admin window.** Leaving re-checks that the leaver is not the only admin
+(§7), but only against departures whose removal has already been committed on the
+leaver's device, which happens a few seconds after a departure arrives. Two admins who
+confirm leaving within that window of each other can both pass, and the group is left
+with no admin. This is a sub-case of the accepted "no admin reachable"
+failure (§10): the group keeps working as a conversation but its membership is frozen.
 
 ---
 
@@ -563,11 +577,12 @@ that removes them; remaining admins keep their authority. No successor is auto-p
 **The group's membership can't be read when leaving.** The decision fails safe: the
 destructive "abandon" outcome is never offered on unknown membership.
 
-**Two co-admins leaving at nearly the same moment.** The last-admin block is judged
-against each leaver's most-recently-known admin list, with no re-check at execution, so
-both can pass independently and leave the group with no admins — the read-only-for-
-membership state of §10. Keeping more than two admins avoids exposure to this window.
-(This follows from the leave logic rather than being a separately specified rule.)
+**Two co-admins leaving at nearly the same moment.** Each leave re-checks the admin
+list at execution (§7), so the second leaver is stopped once the first departure's
+removal has been committed on their device, a few seconds after it arrives. If both
+leave within that window, the group ends with no admins — the residual window described in §8, resolving to the
+read-only-for-membership state of §10. Keeping more than two admins avoids exposure to
+this window.
 
 **A leaver's departure signal never reaches the group.** If the signal fails to send
 (e.g. the leaver was offline), they still purge locally but persist in every remaining

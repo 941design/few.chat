@@ -117,6 +117,7 @@ export type Copy = {
     inviteTitle: string;
     inviteContactLabel: string;
     inviteReasonAlreadyMember: string;
+    inviteReasonInvitePending: string;
     inviteReasonBlocked: string;
     inviteReasonPendingConfirmation: string;
     inviteGuidanceMessage: string;
@@ -813,6 +814,7 @@ const copy: Record<LanguageCode, Copy> = {
       inviteTitle: 'Invite a contact',
       inviteContactLabel: 'Choose a contact',
       inviteReasonAlreadyMember: 'already in group',
+      inviteReasonInvitePending: 'invitation pending',
       inviteReasonBlocked: 'blocked',
       inviteReasonPendingConfirmation: 'not yet confirmed',
       inviteGuidanceMessage: 'No contacts available to invite. Add contacts by sharing your profile card from the Contacts page.',
@@ -1396,6 +1398,7 @@ const copy: Record<LanguageCode, Copy> = {
       inviteTitle: 'Kontakt einladen',
       inviteContactLabel: 'Kontakt auswählen',
       inviteReasonAlreadyMember: 'bereits in der Gruppe',
+      inviteReasonInvitePending: 'Einladung ausstehend',
       inviteReasonBlocked: 'blockiert',
       inviteReasonPendingConfirmation: 'noch nicht bestätigt',
       inviteGuidanceMessage: 'Keine Kontakte zum Einladen verfügbar. Füge Kontakte hinzu, indem du deine Profilkarte über die Kontakte-Seite teilst.',

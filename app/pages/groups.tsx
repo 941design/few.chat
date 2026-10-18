@@ -902,6 +902,10 @@ function GroupDetailView({ id }: { id: string }) {
         onClose={inviteDisclosure.onClose}
         groupId={group.id}
         sendAnnouncement={(content: string) => sendAnnouncementRef.current?.(content) ?? Promise.resolve()}
+        // An empty set means the member-profile load has not completed (it always
+        // contains the viewer once loaded): degrade to the plain "already in
+        // group" label rather than labelling every member "invitation pending".
+        confirmedPubkeys={confirmedPubkeys.size > 0 ? confirmedPubkeys : undefined}
       />
 
       <GenerateInviteLinkModal

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSoleAdmin, isLastMember, selectLeaveModalState } from '@/src/lib/marmot/leaveEligibility';
+import { isSoleAdmin, isLastMember, selectLeaveModalState, shouldAbortLeaveAsSoleAdmin, resolveLeaveModalState } from '@/src/lib/marmot/leaveEligibility';
 
 describe('isSoleAdmin', () => {
   it('returns true when the single admin matches the current user (exact case)', () => {
@@ -96,5 +96,41 @@ describe('selectLeaveModalState', () => {
     expect(selectLeaveModalState(undefined, ['alice'], 'alice')).not.toBe('abandon');
     expect(selectLeaveModalState(undefined, ['bob'], 'alice')).not.toBe('abandon');
     expect(selectLeaveModalState(undefined, undefined, 'alice')).not.toBe('abandon');
+  });
+});
+
+describe('shouldAbortLeaveAsSoleAdmin (execution-time guard)', () => {
+  it('aborts only for a known multi-member group where the leaver is the sole admin', () => {
+    expect(shouldAbortLeaveAsSoleAdmin(['alice', 'bob'], ['alice'], 'alice')).toBe(true);
+  });
+
+  it('does not abort for the last member (abandon wins)', () => {
+    expect(shouldAbortLeaveAsSoleAdmin(['alice'], ['alice'], 'alice')).toBe(false);
+  });
+
+  it('does not abort for a co-admin or a non-admin', () => {
+    expect(shouldAbortLeaveAsSoleAdmin(['alice', 'bob'], ['alice', 'bob'], 'alice')).toBe(false);
+    expect(shouldAbortLeaveAsSoleAdmin(['alice', 'bob'], ['bob'], 'alice')).toBe(false);
+  });
+
+  it('does not abort when the member list is unknown (purge must not be skipped)', () => {
+    expect(shouldAbortLeaveAsSoleAdmin(undefined, ['alice'], 'alice')).toBe(false);
+  });
+
+  it('does not abort when the admin list is unknown', () => {
+    expect(shouldAbortLeaveAsSoleAdmin(['alice', 'bob'], undefined, 'alice')).toBe(false);
+  });
+});
+
+describe('resolveLeaveModalState (aborted execution surfaces the blocked notice)', () => {
+  it("shows 'blocked' once the execution-time check aborted, whatever the stale modal state said", () => {
+    expect(resolveLeaveModalState('confirm', true)).toBe('blocked');
+    expect(resolveLeaveModalState('abandon', true)).toBe('blocked');
+  });
+
+  it('passes the computed modal state through when nothing aborted', () => {
+    expect(resolveLeaveModalState('confirm', false)).toBe('confirm');
+    expect(resolveLeaveModalState('abandon', false)).toBe('abandon');
+    expect(resolveLeaveModalState('blocked', false)).toBe('blocked');
   });
 });

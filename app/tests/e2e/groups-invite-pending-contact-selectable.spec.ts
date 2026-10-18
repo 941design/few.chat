@@ -1,4 +1,4 @@
-// E2E: pending-invitee is treated as already-member (epic: invite-group-member-from-contacts, S3)
+// E2E: a pending invitee cannot be re-selected (epic: invite-group-member-from-contacts, S3)
 //
 // Covers AC-E2E-8. Originally written to assert the opposite (a pending
 // invitee stays selectable so the admin can re-invite) — that assertion was
@@ -13,9 +13,10 @@
 // re-invite path (tracked as a follow-up finding).
 //
 // This test now asserts the corrected, verified-real behavior: after Alice
-// invites Bob, Bob's picker option becomes disabled with the "already in
-// group" reason (identical to any other already-member contact, AC-UX-2),
-// and Alice cannot re-select or resubmit him. Carol is also seeded so the
+// invites Bob, Bob's picker option becomes disabled with the "invitation
+// pending" reason (bug run admin-and-invite-guards, 2026-10-17: a member who
+// has not yet confirmed is labelled apart from a joined member), and Alice
+// cannot re-select or resubmit him. Carol is also seeded so the
 // picker still renders (not the guidance state) — this isolates "Bob
 // specifically is disabled" from "Alice has no contacts at all."
 //
@@ -104,7 +105,7 @@ test.describe.serial('Pending invitee is treated as already-member', () => {
     await expect(pageA.getByTestId('invite-member-modal-content')).not.toBeVisible({ timeout: 10_000 });
   });
 
-  test("AC-E2E-8: B's option becomes disabled (already in group) and cannot be re-submitted", async () => {
+  test("AC-E2E-8: B's option becomes disabled (invitation pending) and cannot be re-submitted", async () => {
     // B never accepted — reopen the invite modal on A's side.
     await pageA.getByTestId('invite-member-btn').click();
     await expect(pageA.getByTestId('invite-member-modal-content')).toBeVisible();
@@ -112,10 +113,11 @@ test.describe.serial('Pending invitee is treated as already-member', () => {
     const list = pageA.getByTestId('invite-contact-list');
     await expect(list).toBeVisible({ timeout: 10_000 });
 
-    // Bob is now already-member (memberPubkeys updated synchronously by the
-    // successful invite) — disabled, same reason as any other member.
+    // Bob is now a member (memberPubkeys updated synchronously by the
+    // successful invite) who has not confirmed yet — disabled as pending.
     const bobRow = pageA.getByTestId(`invite-contact-row-${USER_B.pubkeyHex}`);
     await expect(bobRow).toBeAttached({ timeout: 10_000 });
+    await expect(bobRow).toContainText('invitation pending', { timeout: 10_000 });
 
     // Carol remains selectable — confirms the picker itself still renders
     // (this isn't the zero-selectable guidance state).

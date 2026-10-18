@@ -431,12 +431,14 @@ describe('getInviteReasonText — maps each disabledReason to its own copy key, 
     inviteReasonAlreadyMember: 'already-member-copy',
     inviteReasonBlocked: 'blocked-copy',
     inviteReasonPendingConfirmation: 'pending-confirmation-copy',
+    inviteReasonInvitePending: 'invite-pending-copy',
   };
 
   it.each([
     ['already_member', copy.inviteReasonAlreadyMember],
     ['blocked', copy.inviteReasonBlocked],
     ['pending_confirmation', copy.inviteReasonPendingConfirmation],
+    ['invite_pending', copy.inviteReasonInvitePending],
   ] as const)('maps %s to its own distinct copy string', (reason, expected) => {
     expect(getInviteReasonText(reason, copy)).toBe(expected);
   });

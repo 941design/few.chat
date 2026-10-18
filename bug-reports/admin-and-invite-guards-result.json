@@ -1,0 +1,114 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "root_cause": {
+    "zero-admin-race": "The sole-admin block lived only in the leave modal (selectLeaveModalState over the last-known adminPubkeys); leaveGroupImpl never re-read admins at execution, so two co-admins both passing the stale modal check could both depart and leave zero admins.",
+    "invite-label": "selectableContactsForGroup keyed only on group.memberPubkeys, which already includes an invitee at the MLS commit; a not-yet-confirmed invitee therefore got 'already_member'. The confirmedPubkeys (Pending badge) signal computed in groups.tsx was never passed to the picker."
+  },
+  "fix": {
+    "zero-admin-race": "New pure shouldAbortLeaveAsSoleAdmin + resolveLeaveModalState in leaveEligibility.ts. leaveGroupImpl re-reads mlsGroup.groupData.adminPubkeys in its own try/catch right after the member read and before sends/tombstone/purge; returns false on abort. LeaveGroupButton stays on the page and shows the existing lastAdminLeaveBlocked notice when leaveGroup resolves false.",
+    "invite-label": "selectableContactsForGroup takes optional confirmedPubkeys and yields 'invite_pending' for unconfirmed members; getInviteReasonText + new i18n key inviteReasonInvitePending (en/de); InviteMemberModal takes a confirmedPubkeys prop, groups.tsx passes it when non-empty."
+  },
+  "files_changed": [
+    "app/src/lib/marmot/leaveEligibility.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/components/groups/LeaveGroupButton.tsx",
+    "app/src/lib/contacts.ts",
+    "app/src/components/groups/InviteMemberModal.tsx",
+    "app/pages/groups.tsx",
+    "app/src/lib/i18n.ts",
+    "app/tests/unit/leaveEligibility.test.ts",
+    "app/tests/unit/cards/inviteByCard.test.ts",
+    "docs/behavior/groups.md",
+    "app/tests/unit/marmot/leaveGroupImplAdminRecheck.test.ts",
+    "app/tests/unit/contacts-selectable-invite-pending.test.ts",
+    "bug-reports/admin-and-invite-guards-contract.json",
+    "bug-reports/admin-and-invite-guards-result.json"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/leaveGroupImplAdminRecheck.test.ts",
+    "app/tests/unit/contacts-selectable-invite-pending.test.ts",
+    "bug-reports/admin-and-invite-guards-contract.json",
+    "bug-reports/admin-and-invite-guards-result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/leaveEligibility.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/components/groups/LeaveGroupButton.tsx",
+    "app/src/lib/contacts.ts",
+    "app/src/components/groups/InviteMemberModal.tsx",
+    "app/pages/groups.tsx",
+    "app/src/lib/i18n.ts",
+    "app/tests/unit/leaveEligibility.test.ts",
+    "app/tests/unit/cards/inviteByCard.test.ts",
+    "docs/behavior/groups.md"
+  ],
+  "modules_touched": [
+    "app/pages",
+    "app/src/components/groups",
+    "app/src/lib",
+    "app/src/lib/marmot",
+    "app/tests/unit",
+    "docs/behavior"
+  ],
+  "tests_added": {
+    "app/tests/unit/marmot/leaveGroupImplAdminRecheck.test.ts": 12,
+    "app/tests/unit/contacts-selectable-invite-pending.test.ts": 8,
+    "app/tests/unit/leaveEligibility.test.ts": 7,
+    "app/tests/unit/cards/inviteByCard.test.ts": 1
+  },
+  "tests_adapted": {
+    "app/tests/unit/cards/inviteByCard.test.ts": "getInviteReasonText copy fixture gained inviteReasonInvitePending and the it.each a row for invite_pending"
+  },
+  "counts": {
+    "unit_before": "6058 passed, 1 skipped (265 files)",
+    "unit_after": "6108 passed, 1 skipped (268 files); +28 tests/+2 files are this fix, the remainder is the parallel reactions fixer",
+    "tsc": "clean (before and after)",
+    "lint": "NO_LINT",
+    "e2e": "not run (lead's gate)"
+  },
+  "verification_answers": {
+    "VQ-1": "YES. leaveGroupImplAdminRecheck.test.ts: admins [self] with other members => returns false, with no sends, tombstone, purge, destroy, reload or backup mark; an admins-shrink-between-calls test proves the read is at execution time; co-admin and non-admin leave unchanged; last member who is sole admin still abandons. Tests fail pre-fix (leave returned true and purged).",
+    "VQ-2": "YES. The admin read is its own try/catch placed after the member read and before the first send/tombstone/purge. Direction chosen deliberately and documented in leaveGroupImpl: unknown (throwing groupData, null/absent/empty adminPubkeys, unreadable member list) never aborts, same direction as the member twin read, so the purge is never skipped. Tests cover a throwing groupData getter and a throwing member read with groupData naming the leaver sole admin.",
+    "VQ-3": "YES. contacts-selectable-invite-pending.test.ts: unconfirmed member => invite_pending; confirmed => already_member; non-member selectable; no signal => already_member; case-insensitive; order preserved. getInviteReasonText maps it; en 'invitation pending' / de 'Einladung ausstehend' asserted.",
+    "VQ-4": "YES. docs/behavior/groups.md: section 4.1 (invitation pending marking), section 7 Blocked bullet (execution-time re-check, fail-open on unreadable), new 'Residual zero-admin window' paragraph in section 8, section 11 co-admin edge case rewritten. No resend added.",
+    "VQ-5": "PARTIAL. Minimal change; unit + tsc green; Stryker concurrency 1 on changed logic: 58 killed / 3 survived (all equivalent, see mutation); full e2e gate is the lead's."
+  },
+  "mutation": {
+    "tool": "stryker",
+    "concurrency": 1,
+    "scope": "leaveEligibility.ts:55-78, leaveGroupImpl.ts:178-193, contacts.ts:509-536, InviteMemberModal.tsx:245-266",
+    "score": "95.08% (58 killed, 3 survived, 0 no-cov)",
+    "survivors": "3, all equivalent: (a,b) optional-chaining removal on mlsGroup?.groupData?.adminPubkeys throws TypeError on null mlsGroup/groupData which the surrounding try/catch turns into the same undefined; (c) emptying the catch body leaves adminPubkeys at its undefined initial value (the assignment is documentation)."
+  },
+  "e2e": {
+    "command": "make test-e2e-all",
+    "runs": [
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:299 own DM bubble missing), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-2.log",
+        "non_relay": "72 passed",
+        "relay": "345 passed, 2 failed (dm-block-cross-tab:84 send click timeout; groups-dm-reactions:371 own DM bubble vanished), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-3.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:435 own DM bubble vanished), 19 skipped"
+      }
+    ],
+    "verdict": "NOT fully green. Every failure is in the DM own-send path (bubble removed when the relay publish rejects, ContactChat.tsx:920-930), outside this diff; groups-dm-reactions passed 3/3 in isolation and the dm- subset passed 52/52 with the changes. Filed as backlog finding dm-own-send-bubble-vanishes-on-publish-reject. Committed by lead decision under an owner pause request; disclosed to the owner."
+  },
+  "open_questions": [
+    "MarmotContext's no-provider default NOOP_BOOL returns false, which LeaveGroupButton would now render as the blocked notice; only reachable outside a provider (never in the app)."
+  ],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "outcome": "merged"
+}

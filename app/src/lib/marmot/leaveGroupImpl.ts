@@ -11,7 +11,7 @@
  * they arrive here as Deps fields rather than being exported and imported back.
  */
 
-import { isLastMember } from '@/src/lib/marmot/leaveEligibility';
+import { isLastMember, shouldAbortLeaveAsSoleAdmin } from '@/src/lib/marmot/leaveEligibility';
 import { LEAVE_INTENT_KIND, serialiseLeaveIntent } from '@/src/lib/marmot/leaveSync';
 
 // Use `any` (not `unknown`) for marmot-ts opaque types so the impl can accept
@@ -19,6 +19,8 @@ import { LEAVE_INTENT_KIND, serialiseLeaveIntent } from '@/src/lib/marmot/leaveS
 // The decoupling intent is preserved: the impl never reaches into these shapes.
 type MarmotGroupLike = {
   state: any;
+  /** Live group context; `adminPubkeys` is re-read at execution time. */
+  groupData?: { adminPubkeys?: string[] } | null;
   sendApplicationRumor: (rumor: any) => Promise<unknown>;
 };
 
@@ -137,9 +139,20 @@ type Deps = {
  *    navigation stay immediate — or inline when nothing was sent; then the
  *    tombstone is deleted. A failed destroy keeps the tombstone for the
  *    startup sweep.
+ *  - Execution-time sole-admin re-check (bug: admin-and-invite-guards): before
+ *    any irreversible step (departure sends, tombstone, purge) adminPubkeys is
+ *    re-read from the live group; when the leaver is now the sole admin of a
+ *    group that still has other members the leave is ABORTED and `false` is
+ *    returned — nothing sent, nothing purged — so the caller can surface
+ *    `lastAdminLeaveBlocked`. This closes the stale-modal race where two
+ *    co-admins both pass the modal check. Residual window (both pass before
+ *    either departure is processed) is accepted: docs/behavior/groups.md §8.
+ *    Fail direction is the SAME as the member read (third twin read): an
+ *    unreadable/throwing admin read, or an unknown member list, never aborts —
+ *    the local purge must never be skipped (undeletable-group failure, F1).
  *  - Never throws to the caller: a failed kind-13 send is caught and logged;
- *    the purge always proceeds. Returns `true` unconditionally, matching the
- *    pre-extraction signature.
+ *    the purge always proceeds. Returns `true` when the leave ran and `false`
+ *    only for the sole-admin abort above.
  *  - Zero imports from app/src/context/ (AC-BOUND-1).
  */
 export async function leaveGroupImpl(
@@ -163,6 +176,19 @@ export async function leaveGroupImpl(
     members = undefined;
   }
   const lastMember = isLastMember(members, selfPubkeyHex);
+
+  // Execution-time sole-admin re-check, before ANY irreversible step. Its own
+  // guarded read of live state (twin of the member read above): a throw means
+  // "unknown" ⇒ proceed, never abort.
+  let adminPubkeys: string[] | undefined;
+  try {
+    adminPubkeys = mlsGroup?.groupData?.adminPubkeys;
+  } catch {
+    adminPubkeys = undefined;
+  }
+  if (shouldAbortLeaveAsSoleAdmin(members, adminPubkeys, selfPubkeyHex)) {
+    return false;
+  }
   // The kind-9 departure announcement, when one is sent; the MLS-state destroy
   // waits for it.
   let departureSent: Promise<unknown> | undefined;

@@ -14,7 +14,7 @@ import {
 import { useRouter } from 'next/router';
 import { useCopy } from '@/src/context/LanguageContext';
 import { useMarmot } from '@/src/context/MarmotContext';
-import { selectLeaveModalState } from '@/src/lib/marmot/leaveEligibility';
+import { selectLeaveModalState, resolveLeaveModalState } from '@/src/lib/marmot/leaveEligibility';
 
 type LeaveGroupButtonProps = {
   groupId: string;
@@ -42,6 +42,9 @@ export default function LeaveGroupButton({ groupId, adminPubkeys, ownPubkeyHex }
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [isLoading, setIsLoading] = useState(false);
   const [liveMembers, setLiveMembers] = useState<string[] | undefined>(undefined);
+  // Set when leaveGroup reports the execution-time sole-admin re-check aborted
+  // the leave (admins changed after the modal opened): shows the blocked notice.
+  const [leaveAborted, setLeaveAborted] = useState(false);
 
   async function handleOpen() {
     // Fail-closed: a null/throwing read leaves liveMembers undefined, so
@@ -53,15 +56,25 @@ export default function LeaveGroupButton({ groupId, adminPubkeys, ownPubkeyHex }
       members = undefined;
     }
     setLiveMembers(members);
+    setLeaveAborted(false);
     onOpen();
   }
 
-  const modalState = selectLeaveModalState(liveMembers, adminPubkeys, ownPubkeyHex);
+  const modalState = resolveLeaveModalState(
+    selectLeaveModalState(liveMembers, adminPubkeys, ownPubkeyHex),
+    leaveAborted,
+  );
 
   async function handleLeave() {
     setIsLoading(true);
     try {
-      await leaveGroup(groupId);
+      const left = await leaveGroup(groupId);
+      if (!left) {
+        // Aborted at execution time: nothing was sent or purged. Stay on the
+        // page and swap the modal body for the blocked notice.
+        setLeaveAborted(true);
+        return;
+      }
       onClose();
       await router.push('/groups');
     } catch (err) {

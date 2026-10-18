@@ -1,0 +1,38 @@
+{
+  "bug": "admin-and-invite-guards",
+  "scope": "Two decided defects: (1) leaveGroupImpl has no execution-time sole-admin re-check, so two co-admins leaving at nearly the same moment can strand a group with zero admins; (2) the invite picker labels a not-yet-confirmed (invited, pending) member 'already in group'.",
+  "files_to_modify": [
+    "app/src/lib/marmot/leaveEligibility.ts",
+    "app/src/lib/marmot/leaveGroupImpl.ts",
+    "app/src/components/groups/LeaveGroupButton.tsx",
+    "app/src/lib/contacts.ts",
+    "app/src/components/groups/InviteMemberModal.tsx",
+    "app/pages/groups.tsx",
+    "app/src/lib/i18n.ts",
+    "app/tests/unit/leaveEligibility.test.ts",
+    "app/tests/unit/cards/inviteByCard.test.ts",
+    "docs/behavior/groups.md"
+  ],
+  "files_to_create": [
+    "app/tests/unit/marmot/leaveGroupImplAdminRecheck.test.ts",
+    "app/tests/unit/contacts-selectable-invite-pending.test.ts"
+  ],
+  "behavior": {
+    "leave_recheck": "leaveGroupImpl reads mlsGroup.groupData.adminPubkeys (own try/catch, twin of the member read) after the member read and BEFORE the kind-13/kind-9 sends, tombstone and purge. If members are known, the leaver is not the last member, and the leaver is the sole admin (case-insensitive), it returns false having done nothing. Otherwise unchanged and returns true.",
+    "fail_direction": "Same as the member read: unknown/throwing admin read, null groupData, unknown member list, or no MLS group never abort (purge must never be skipped; undeletable-group failure F1). Last member who is sole admin still abandons.",
+    "ui_surface": "MarmotContext.leaveGroup passes the boolean through; LeaveGroupButton treats false as aborted: no navigation, modal switches to the existing 'blocked' state showing copy.groups.lastAdminLeaveBlocked (resolveLeaveModalState). Reset on re-open.",
+    "picker": "selectableContactsForGroup accepts optional confirmedPubkeys; a member outside it gets disabledReason 'invite_pending' (case-insensitive); confirmed members keep 'already_member'; without the signal all members stay 'already_member'. getInviteReasonText maps it to groups.inviteReasonInvitePending: en 'invitation pending', de 'Einladung ausstehend'. groups.tsx passes confirmedPubkeys only when non-empty (empty = not yet loaded)."
+  },
+  "constraints": [
+    "No resend action",
+    "No new publish of anything; no privacy surface touched",
+    "en+de copy in i18n.ts via useCopy",
+    "No jsdom: logic tested through pure functions",
+    "Do not touch app/src/lib/reactions/ or docs/behavior/reactions-and-emoji.md"
+  ],
+  "non_goals": [
+    "Closing the residual both-pass-before-either-departure window (documented, accepted)",
+    "Resend / cancel+re-invite of a pending invitee",
+    "Changing eligibleGroupsForContact (contact-profile 'add to group')"
+  ]
+}

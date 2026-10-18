@@ -458,7 +458,7 @@ export function addableGroupsForContact(
 export type ContactSelectabilityEntry = {
   contact: ContactListItem;
   selectable: boolean;
-  disabledReason?: 'already_member' | 'blocked' | 'pending_confirmation';
+  disabledReason?: 'already_member' | 'invite_pending' | 'blocked' | 'pending_confirmation';
 };
 
 /**
@@ -487,6 +487,14 @@ export type ContactSelectabilityEntry = {
  * other contact is `{ selectable: true }` — the `disabledReason` key is
  * omitted entirely, not set to `undefined`.
  *
+ * `'invite_pending'` (bug: admin-and-invite-guards) splits the member case:
+ * when `group.confirmedPubkeys` is supplied, a member who is NOT in it (the
+ * "Pending" badge signal: invited, MLS commit applied, no confirmed profile
+ * yet) is `{ selectable: false, disabledReason: 'invite_pending' }` instead of
+ * `'already_member'`. Same precedence slot as `'already_member'` (membership
+ * wins over blocked/pending_confirmation). Without `confirmedPubkeys` (signal
+ * not loaded) every member stays `'already_member'`.
+ *
  * Pure and synchronous: no storage or network access. Callers pass
  * `listContacts(ownPubkeyHex, { includeArchived: true })` output directly.
  *
@@ -500,12 +508,20 @@ export type ContactSelectabilityEntry = {
  */
 export function selectableContactsForGroup(
   contacts: ContactListItem[],
-  group: { memberPubkeys: string[] },
+  group: { memberPubkeys: string[]; confirmedPubkeys?: ReadonlySet<string> },
 ): ContactSelectabilityEntry[] {
   const memberPubkeys = new Set(group.memberPubkeys.map((pubkey) => pubkey.toLowerCase()));
+  const confirmedPubkeys = group.confirmedPubkeys
+    ? new Set([...group.confirmedPubkeys].map((pubkey) => pubkey.toLowerCase()))
+    : undefined;
   return contacts.map((contact) => {
-    if (memberPubkeys.has(contact.pubkeyHex.toLowerCase())) {
-      return { contact, selectable: false, disabledReason: 'already_member' };
+    const key = contact.pubkeyHex.toLowerCase();
+    if (memberPubkeys.has(key)) {
+      return {
+        contact,
+        selectable: false,
+        disabledReason: confirmedPubkeys && !confirmedPubkeys.has(key) ? 'invite_pending' : 'already_member',
+      };
     }
     if (contact.isArchived) {
       return { contact, selectable: false, disabledReason: 'blocked' };

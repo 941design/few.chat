@@ -1,0 +1,85 @@
+{
+  "bug_name": "admin-and-invite-guards",
+  "bug_report_file": "bug-reports/admin-and-invite-guards-report.md",
+  "created_at": "2026-10-17T21:30:00Z",
+  "updated_at": "2026-10-18T02:00:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ-1",
+      "category": "TEST",
+      "question": "If adminPubkeys shrink between the leave modal and execution so the leaver becomes sole admin, does leaveGroupImpl abort (no departure sent, no purge) and surface lastAdminLeaveBlocked — proven by a test failing before the fix; and does a normal co-admin or non-admin leave proceed unchanged?"
+    },
+    {
+      "id": "VQ-2",
+      "category": "ARCHITECTURE",
+      "question": "Is the execution-time admin read wrapped per the twin-read discipline (corrupt-state throw handled with a deliberately chosen, documented direction) and placed before any irreversible step?"
+    },
+    {
+      "id": "VQ-3",
+      "category": "TEST",
+      "question": "Does the invite picker give a not-yet-confirmed member the distinct invite_pending reason with en 'invitation pending' / de 'Einladung ausstehend', while confirmed members keep 'already in group' and non-members stay selectable?"
+    },
+    {
+      "id": "VQ-4",
+      "category": "SPEC",
+      "question": "Is the residual zero-admin window documented in docs/behavior/groups.md §8 and the pending label in the invite section, with no resend action added?"
+    },
+    {
+      "id": "VQ-5",
+      "category": "QUALITY",
+      "question": "Minimal change, unit + tsc green, Stryker (concurrency 1) on changed logic with survivors killed/justified, full e2e gate green?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml",
+    "bug-reports/admin-and-invite-guards-report.md",
+    "bug-reports/reaction-readd-after-removal-report.md",
+    "bug-reports/stale-welcome-reinvite-report.md"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "1cb4884",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "fix": null,
+  "review_rounds": [],
+  "remediation_round": 0,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-17T21:30:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-18T02:00:00Z",
+      "trigger": "review_accepted_and_e2e_gate"
+    }
+  ],
+  "e2e_gate": {
+    "command": "make test-e2e-all",
+    "runs": [
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:299 own DM bubble missing), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-2.log",
+        "non_relay": "72 passed",
+        "relay": "345 passed, 2 failed (dm-block-cross-tab:84 send click timeout; groups-dm-reactions:371 own DM bubble vanished), 19 skipped"
+      },
+      {
+        "log": "/tmp/claude-501/e2e-gate/full-reactions-admin-3.log",
+        "non_relay": "72 passed",
+        "relay": "348 passed, 1 failed (groups-dm-reactions:435 own DM bubble vanished), 19 skipped"
+      }
+    ],
+    "verdict": "NOT fully green. Every failure is in the DM own-send path (bubble removed when the relay publish rejects, ContactChat.tsx:920-930), outside this diff; groups-dm-reactions passed 3/3 in isolation and the dm- subset passed 52/52 with the changes. Filed as backlog finding dm-own-send-bubble-vanishes-on-publish-reject. Committed by lead decision under an owner pause request; disclosed to the owner."
+  }
+}

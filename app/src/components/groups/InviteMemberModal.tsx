@@ -33,6 +33,12 @@ type InviteMemberModalProps = {
   onClose: () => void;
   groupId: string;
   sendAnnouncement?: (content: string) => Promise<void>;
+  /**
+   * Members with a confirmed (non-provisional) profile, as computed by
+   * groups.tsx for the Pending badge. A member outside it is labelled
+   * "invitation pending" instead of "already in group". Omit while unloaded.
+   */
+  confirmedPubkeys?: ReadonlySet<string>;
 };
 
 export type ResolveInviteTargetResult =
@@ -237,9 +243,10 @@ export function getErrorMessage(
  * a pending contact's invite row rendered disabled with no explanation.
  */
 export function getInviteReasonText(
-  disabledReason: 'already_member' | 'blocked' | 'pending_confirmation' | undefined,
+  disabledReason: 'already_member' | 'invite_pending' | 'blocked' | 'pending_confirmation' | undefined,
   copy: {
     inviteReasonAlreadyMember: string;
+    inviteReasonInvitePending: string;
     inviteReasonBlocked: string;
     inviteReasonPendingConfirmation: string;
   },
@@ -247,6 +254,8 @@ export function getInviteReasonText(
   switch (disabledReason) {
     case 'already_member':
       return copy.inviteReasonAlreadyMember;
+    case 'invite_pending':
+      return copy.inviteReasonInvitePending;
     case 'blocked':
       return copy.inviteReasonBlocked;
     case 'pending_confirmation':
@@ -256,7 +265,7 @@ export function getInviteReasonText(
   }
 }
 
-export default function InviteMemberModal({ isOpen, onClose, groupId, sendAnnouncement }: InviteMemberModalProps) {
+export default function InviteMemberModal({ isOpen, onClose, groupId, sendAnnouncement, confirmedPubkeys }: InviteMemberModalProps) {
   const copy = useCopy();
   const { inviteByNpub, groups } = useMarmot();
   const { pubkeyHex: ownPubkeyHex } = useNostrIdentity();
@@ -272,7 +281,7 @@ export default function InviteMemberModal({ isOpen, onClose, groupId, sendAnnoun
   // predicate output (AC-ERR-4).
   const memberPubkeys = groups.find((g) => g.id === groupId)?.memberPubkeys ?? [];
   const entries = isOpen
-    ? selectableContactsForGroup(listContacts(ownPubkeyHex, { includeArchived: true }), { memberPubkeys })
+    ? selectableContactsForGroup(listContacts(ownPubkeyHex, { includeArchived: true }), { memberPubkeys, confirmedPubkeys })
     : [];
   const { hasSelectable, isSelectionValid } = computeSelectionState(entries, selectedPubkeyHex);
 
