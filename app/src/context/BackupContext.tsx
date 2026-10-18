@@ -108,11 +108,25 @@ export function activateBackupScheduler(scheduler: BackupScheduler): () => void 
   };
 }
 
+/**
+ * Automatic backups run only in local signer mode. With an external signer the
+ * stored local key is still in memory, but backing up with it would publish under
+ * that key and connectNdk(privateKeyHex) would rebind the NDK signer away from the
+ * external one. Settings tells the user backup is off (externalSignerBackupOff).
+ */
+export function shouldScheduleBackups(identity: {
+  privateKeyHex: string | null;
+  pubkeyHex: string | null;
+  isLocalMode: boolean;
+}): boolean {
+  return identity.isLocalMode && !!identity.privateKeyHex && !!identity.pubkeyHex;
+}
+
 export function BackupProvider({ children }: { children: React.ReactNode }) {
-  const { privateKeyHex, pubkeyHex } = useNostrIdentity();
+  const { privateKeyHex, pubkeyHex, isLocalMode } = useNostrIdentity();
 
   useEffect(() => {
-    if (!privateKeyHex || !pubkeyHex) return;
+    if (!privateKeyHex || !pubkeyHex || !shouldScheduleBackups({ privateKeyHex, pubkeyHex, isLocalMode })) return;
 
     const currentPubkey = pubkeyHex;
     const currentPrivKey = privateKeyHex;
@@ -136,7 +150,7 @@ export function BackupProvider({ children }: { children: React.ReactNode }) {
       deactivate();
       scheduler.dispose();
     };
-  }, [privateKeyHex, pubkeyHex]);
+  }, [privateKeyHex, pubkeyHex, isLocalMode]);
 
   return (
     <BackupContext.Provider value={BACKUP_CONTEXT_VALUE}>

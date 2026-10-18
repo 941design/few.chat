@@ -96,7 +96,8 @@ status; a backup that keeps failing is not signalled to you.
 
 **Only with the app's own key:** automatic backups are made only when the app holds your key
 itself. If you sign in with an **external signer** (a browser extension or a remote signer), no
-relay backup is saved.
+relay backup is saved; Settings says so ("Automatic backup is off while an external signer is
+connected.").
 
 ---
 

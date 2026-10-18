@@ -76,6 +76,7 @@ export type Copy = {
     qrModalTitle: string;
     qrGenerationError: string;
     backupHeading: string;
+    externalSignerBackupOff: string;
     backupDescription: string;
     generatePhrase: string;
     backupWarning: string;
@@ -771,6 +772,7 @@ const copy: Record<LanguageCode, Copy> = {
       qrModalTitle: 'Npub QR Code',
       qrGenerationError: 'Failed to generate QR code.',
       backupHeading: 'Back Up Your Identity',
+      externalSignerBackupOff: 'Automatic backup is off while an external signer is connected.',
       backupDescription:
         'Generate a recovery phrase to restore your identity if you clear browser data.',
       generatePhrase: 'Generate Backup Phrase',
@@ -1357,6 +1359,7 @@ const copy: Record<LanguageCode, Copy> = {
       qrModalTitle: 'Npub-QR-Code',
       qrGenerationError: 'QR-Code konnte nicht erstellt werden.',
       backupHeading: 'Identität sichern',
+      externalSignerBackupOff: 'Automatische Sicherung ist aus, solange ein externer Signierer verbunden ist.',
       backupDescription:
         'Erstelle eine Wiederherstellungsphrase, um deine Identität bei gelöschten Browser-Daten zurückzugewinnen.',
       generatePhrase: 'Wiederherstellungsphrase erstellen',

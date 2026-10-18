@@ -776,6 +776,14 @@ export default function SettingsPage() {
           <Box>
             {identityHydrated && npub ? (
               <VStack align="stretch" spacing={5}>
+                {/* Without the app's own key no relay backup is scheduled (BackupContext). */}
+                {!isLocalMode && (
+                  <Alert status="info" borderRadius="md" size="sm" data-testid="external-signer-backup-off">
+                    <AlertIcon />
+                    <AlertDescription fontSize="sm">{copy.identity.externalSignerBackupOff}</AlertDescription>
+                  </Alert>
+                )}
+
                 {/* Backup Section — only shown in local signer mode */}
                 {isLocalMode && (
                   <Box>
