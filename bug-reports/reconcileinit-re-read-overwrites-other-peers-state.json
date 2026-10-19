@@ -1,0 +1,75 @@
+{
+  "bug_name": "reconcileinit-re-read-overwrites-other-peers",
+  "bug_report_file": "bug-reports/reconcileinit-re-read-overwrites-other-peers-report.md",
+  "created_at": "2026-10-19T06:02:10Z",
+  "updated_at": "2026-10-19T07:46:14Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "a337ee1",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "ACCEPTED (stale comments; clear counted ids at commit; pre>stored test; late-write overlap optional)",
+      "codex": "needs-attention (late held-write increment double-counts during a scan; read/clear during a scan resurrects)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "CHANGES_REQUESTED (initReadDuring shared across slices; entry-time last-read snapshot)",
+      "codex": "needs-attention (initReadDuring shared across slices)"
+    },
+    {
+      "round": 2,
+      "code_reviewer": "ACCEPTED",
+      "codex": "needs-attention (scan deleting counted ids loses live/stored distinction)"
+    },
+    {
+      "round": 3,
+      "code_reviewer": "ACCEPTED",
+      "codex": "needs-attention (late write before the scan read absorbed by max)"
+    },
+    {
+      "round": 4,
+      "code_reviewer": "ACCEPTED (sev2: snapshot known with pre)",
+      "codex": "needs-attention (failed read wipes counted ids)"
+    },
+    {
+      "round": 5,
+      "code_reviewer": "ACCEPTED",
+      "codex": "needs-attention (recount records ids after releasing the queue)"
+    },
+    {
+      "round": 6,
+      "code_reviewer": "ACCEPTED",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 6,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-19T06:02:10Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-19T06:28:17Z",
+      "trigger": "both reviewers accepted (round 6)"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-19T07:46:14Z",
+      "trigger": "full e2e gate green; unit suite green after test-isolation fix"
+    }
+  ],
+  "e2e_gate": "green: 72 + 353 passed, 0 failed, 19 skipped, no INVALID, no stall-probe report (/tmp/claude-501/e2e-gate/full-dmscan.log). The same run's unit suite showed 3 isolation failures in unreadStore-property.test.ts (peers' counts carried between cases, previously masked by the replacing merge); fixed with a per-case reset, product code unchanged, unit suite then 6482 passed."
+}

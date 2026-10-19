@@ -1,0 +1,56 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 6,
+  "root_cause": "reconcileInit re-read every key a live increment touched during a scan and let the stored count replace the live one. The DM watcher's incrementDirectMessage never stores the message, so the startup DM scan dropped DMs arriving during it, a confirm recount for one peer re-read and dropped other peers' live bumps, and the startup scan set counts without the confirm recount's counted-id record.",
+  "fix": "The DM slice merges additively: per scanned key, the stored count is combined with the pre-scan count (max, or pre + stored ids not yet counted when a counted-id record exists) plus live bumps during the scan; no re-read, keys outside the scan untouched; a read/clear during the scan drops that key's pre and stored part (per-slice guard). The startup scan reads last-read per key, records the stored ids it counted (kept unchanged on a failed read) and re-bases in-flight confirm recounts; the confirm recount settles its count and record inside the serialized commit. A late held write schedules a deduping recount instead of a live bump. Module and behaviour-doc wording corrected.",
+  "files_modified": [
+    "app/src/lib/unreadStore.ts",
+    "app/tests/unit/unreadStore.test.ts",
+    "app/tests/unit/unreadStore-property.test.ts",
+    "docs/behavior/notifications-and-unread.md",
+    "BACKLOG.json"
+  ],
+  "files_created": [
+    "bug-reports/reconcileinit-re-read-overwrites-other-peers-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/unreadStore.test.ts"
+    ],
+    "pre_fix_failures": 3,
+    "kinds": "Real-store scans and recounts: live DM during the startup scan; other peer kept through a recount; scan between recounts; pre > stored; read and clear during a scan; cross-slice scan during a DM scan; read before the scan's read; late held write during a scan; stored + live-only + late write around a scan (two orderings); failed scan and recount reads; scan queued behind a blocked recount. Each remediation test confirmed failing without its fix."
+  },
+  "final": {
+    "passed": 6482,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (unreadStore.ts reconcile, DM scan and recount regions; unreadStore.test.ts only)",
+    "killed": 196,
+    "timeout": 5,
+    "survived": 63,
+    "score": 72.04,
+    "survivors": "63 survived + 15 NoCoverage. Mostly outside this change and covered by other suites not in this run's include (shared re-read loop, initInProgress/slice literals, the boundary and case filters copied into the scan), map-cleanup deletion guards, unreachable fallbacks (`?? []`, the !committed branch that runs only when the import fails), and the late handler's id/last-read guards, which duplicate the dedupe the scheduled recount already does."
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-dmscan.log",
+    "result": "non-relay 72 passed; relay 353 passed, 0 failed, 19 skipped; no INVALID marker; no stall-probe report.",
+    "status": "green"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "unreadStore has three writers of the DM count (live bump, startup scan, confirm recount) plus late held writes, with no single written model of which message set each counts; each Codex round found the next interleaving. A per-peer ledger of counted message ids, shared by all writers, would have been the simpler design from the start.",
+    "surprised_by": "The module comment claimed every increment source persists first, which was false for DMs since the watcher was written; and the vitest same-tick dynamic-import mock race recurred and made a scan look like it read nothing.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/unreadStore.ts"
+  ]
+}

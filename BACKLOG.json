@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-19T06:00:52Z",
+  "updated_at": "2026-10-19T07:46:14Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -392,20 +392,6 @@
       "behavior": "inviteByNpub fetches kinds 443/30443 from the inviter's NDK pool (default relays plus added ones), with no relay set and no lookup of the invitee's kind 30051/10051 relay list, and reports no_key_package when that pool holds none.",
       "approach": "Resolve the invitee's KeyPackage relay list (30051, falling back to 10051) and fetch from those relays too; or always include the default relays in the KeyPackage publish targets.",
       "success_signal": "An invite succeeds for an invitee whose only relay is outside the inviter's configured relays."
-    },
-    {
-      "slug": "reconcileinit-re-read-overwrites-other-peers",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/lib/unreadStore.ts",
-        "line": 200
-      },
-      "text": "reconcileInit re-read overwrites other peers' unstored live DM bumps",
-      "created_at": "2026-10-19",
-      "motivation": "An unread badge can drop live DMs for a peer that has stored unread messages, so a user may miss messages.",
-      "behavior": "reconcileInitExclusive re-reads every key a live increment touched during the scan, including keys outside its own key list, and sets them to the stored count when above 0. Live DMs bumped by incrementDirectMessage are never stored by it, so a peer with stored unread DMs (e.g. held DMs from an earlier confirm) loses its live bumps when another reconcile runs. Pre-existing; found in review of pending-contact-confirm-badge-reads-1 (2026-10-19).",
-      "approach": "Re-read only keys inside the call's key list, or use the additive stored+live accounting of the confirm recount for the DM slice. Also: initDirectMessageCounts and the re-read loop set a peer's count from storage without updating confirmRecountCountedIds, so a later confirm recount for that peer could count those stored ids again; have them delete confirmRecountCountedIds for the keys they write (review of pending-contact-confirm-badge-reads-1, round 8).",
-      "success_signal": "A unit test where peer X has stored unread DMs plus a live bump during another peer's reconcile keeps X's full count."
     }
   ],
   "archive": [

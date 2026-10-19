@@ -841,7 +841,7 @@ describe('reconcileInit re-entrancy: overlapping directMessages reconciles must 
   // its own peer does not start until the batch scan's reconcileInit fully
   // completes).
 
-  it('a confirm-time reconcile that overlaps the startup batch scan does not lose the scan\'s live-increment re-read, and runs strictly after the scan completes', async () => {
+  it('a confirm-time reconcile that overlaps the startup batch scan does not lose the scan\'s live increment, and runs strictly after the scan completes', async () => {
     const { directConversationId } = await import('@/src/lib/directMessages');
     const { appendMessage } = await import('@/src/lib/marmot/chatPersistence');
     const {
@@ -886,12 +886,9 @@ describe('reconcileInit re-entrancy: overlapping directMessages reconciles must 
           await scanReadGate;
         }
         callOrder.push('scan-read-end');
-        // A live message arrives for SCAN_PEER while the scan's FIRST read
-        // for it is in flight — persisted (as a real DM would be once
-        // ContactChat has mounted) and live-bumped, exactly once, exactly as
-        // `reconcileInit`'s header comment describes. Only fired once (not
-        // on every re-read pass) so the re-read loop's bounded convergence
-        // is not itself what this test is exercising.
+        // A live DM arrives for SCAN_PEER while the scan's read for it is in
+        // flight: counted live and, like every watcher-counted DM, not stored
+        // (reconcileinit-re-read-overwrites-other-peers). Fired once.
         if (!liveBumpFired) {
           liveBumpFired = true;
           incrementDirectMessage(SCAN_PEER);
@@ -929,16 +926,14 @@ describe('reconcileInit re-entrancy: overlapping directMessages reconciles must 
     await confirmPromise;
 
     // Serialization proof: the confirm-time read only ran AFTER the scan's
-    // reconcileInit fully resolved — including its bounded re-read pass for
-    // the key the live increment touched (the scan reads scanKey twice: the
-    // initial pass, then once more because the live bump above marked it
-    // touched; the second read observes no NEW touch, so the re-read loop
-    // exits and the scan completes).
-    expect(callOrder).toEqual(['scan-read-start', 'scan-read-end', 'scan-read-start', 'scan-read-end', 'confirm-read']);
+    // reconcileInit fully resolved (the DM slice merges additively, so the
+    // scan reads scanKey once — no re-read pass).
+    expect(callOrder).toEqual(['scan-read-start', 'scan-read-end', 'confirm-read']);
 
     // Overlap-safety proof: the scan's own live increment for SCAN_PEER (the
-    // exact scenario this module's re-entrancy fix protects) survived intact.
-    expect(useUnreadCounts().directMessages[SCAN_PEER]).toBe(1);
+    // exact scenario this module's re-entrancy fix protects) survived intact,
+    // added to the one stored message.
+    expect(useUnreadCounts().directMessages[SCAN_PEER]).toBe(2);
     // The confirm-time reconcile for its own (unrelated) peer completed
     // correctly too — neither call corrupted the other's result.
     expect(useUnreadCounts().directMessages[CONFIRM_PEER]).toBe(1);
@@ -1580,5 +1575,388 @@ describe('reconcileConfirmedContactDirectMessageCount — held writes in flight 
     const s = await setup(OWN, PEER);
     await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
     expect(PEER in s.useUnreadCounts().directMessages).toBe(false);
+  });
+});
+
+// Bug reconcileinit-re-read-overwrites-other-peers: the DM watcher counts a DM
+// live without storing it, so a scan must add live bumps to the stored count,
+// never replace them, and never rewrite peers outside its own key list.
+describe('DM-count scans keep live DM bumps', () => {
+  async function seed(peer: string, id: string, createdAt: number) {
+    const { directConversationId } = await import('@/src/lib/directMessages');
+    const { appendMessage } = await import('@/src/lib/marmot/chatPersistence');
+    const threadId = directConversationId(peer);
+    await appendMessage(threadId, { id, content: id, senderPubkey: peer, groupId: threadId, createdAt });
+  }
+
+  async function bumpDuringReadOf(peerToRead: string, peerToBump: string) {
+    const store = await import('@/src/lib/unreadStore');
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    let fired = false;
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${peerToRead}` && !fired) {
+        fired = true;
+        store.incrementDirectMessage(peerToBump);
+      }
+      return prev ? prev(k) : undefined;
+    });
+    return () => getMock.mockImplementation(prev ?? (async () => undefined));
+  }
+
+  it('a live DM during the startup scan is added to the scanned peer\'s stored count', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '0a'.repeat(32);
+    const PEER = '0b'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    await seed(PEER, 's-1', 1000);
+
+    const restore = await bumpDuringReadOf(PEER, PEER);
+    try {
+      await s.initDirectMessageCounts([PEER], OWN);
+    } finally {
+      restore();
+    }
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('a confirm recount for one peer keeps another peer\'s stored and live count', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '0c'.repeat(32);
+    const PEER = '0d'.repeat(32);
+    const OTHER = '0e'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    s.clearDirectMessageContact(OTHER);
+    await seed(OTHER, 'o-1', 1000);
+    await s.initDirectMessageCounts([OTHER], OWN);
+    s.incrementDirectMessage(OTHER); // a live DM, not stored
+    expect(s.useUnreadCounts().directMessages[OTHER]).toBe(2);
+
+    const restore = await bumpDuringReadOf(PEER, OTHER);
+    try {
+      await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    } finally {
+      restore();
+    }
+    expect(s.useUnreadCounts().directMessages[OTHER]).toBe(3);
+  });
+
+  it('a startup scan keeps a pre-scan count larger than what is stored', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '1b'.repeat(32);
+    const PEER = '1c'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    s.incrementDirectMessage(PEER);
+    s.incrementDirectMessage(PEER); // two live DMs, not stored
+    await seed(PEER, 'p-1', 1000);
+    await s.initDirectMessageCounts([PEER], OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('a thread read during the startup scan is not re-lit by it; a later live DM still counts', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '1d'.repeat(32);
+    const PEER = '1e'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    s.incrementDirectMessage(PEER); // live-only unread before the scan
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${PEER}`) {
+        s.incrementDirectMessage(PEER);
+        s.markDirectMessagesRead(PEER);
+        s.incrementDirectMessage(PEER); // arrives after the read
+      }
+      return prev ? prev(k) : undefined;
+    });
+    try {
+      await s.initDirectMessageCounts([PEER], OWN);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+  });
+
+  it('a group-count scan running during the DM scan does not undo a read made during it', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '2d'.repeat(32);
+    const PEER = '2e'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    await seed(PEER, 'x-1', 1000);
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    let fired = false;
+    getMock.mockImplementation(async (k: string) => {
+      const v = prev ? await prev(k) : undefined; // read before the mark below
+      if (k === `few:messages:dm:${PEER}` && !fired) {
+        fired = true;
+        s.markDirectMessagesRead(PEER);
+        await s.initUnreadCounts(['some-group'], OWN); // another slice's scan, start to finish
+      }
+      return v;
+    });
+    try {
+      await s.initDirectMessageCounts([PEER], OWN);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+    expect(PEER in s.useUnreadCounts().directMessages).toBe(false);
+  });
+
+  it('a thread read between the startup scan\'s call and its read stays read', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '2f'.repeat(32);
+    const PEER = '3a'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    await seed(PEER, 'y-1', 1000);
+    const scan = s.initDirectMessageCounts([PEER], OWN);
+    s.markDirectMessagesRead(PEER); // before the scan's first await completes
+    await scan;
+    expect(PEER in s.useUnreadCounts().directMessages).toBe(false);
+  });
+
+  it('a contact cleared during the startup scan is not re-lit by it', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '1f'.repeat(32);
+    const PEER = '2a'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    s.incrementDirectMessage(PEER);
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${PEER}`) s.clearDirectMessageContact(PEER);
+      return prev ? prev(k) : undefined;
+    });
+    try {
+      await s.initDirectMessageCounts([PEER], OWN);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+    expect(PEER in s.useUnreadCounts().directMessages).toBe(false);
+  });
+
+  it('a late held write landing during a startup scan is counted once', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await import('@/src/lib/unreadStore');
+      const OWN = '2b'.repeat(32);
+      const PEER = '2c'.repeat(32);
+      s.clearDirectMessageContact(PEER);
+      const gate = (() => { let r!: () => void; const p = new Promise<void>((res) => { r = res; }); return { p, r }; })();
+      const held = gate.p.then(async () => {
+        await seed(PEER, 'late-q', 5000);
+        return { id: 'late-q', createdAtMs: 5000 };
+      });
+      s.trackHeldDirectMessageWrite(PEER, held);
+      const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(5000);
+      await confirm;
+      expect(s.useUnreadCounts().directMessages[PEER] ?? 0).toBe(0);
+
+      // The write lands while a startup scan of the peer is reading storage.
+      const idb = await import('idb-keyval');
+      const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+      const prev = getMock.getMockImplementation();
+      let fired = false;
+      getMock.mockImplementation(async (k: string) => {
+        // The write is stored and its late handler has run before this read
+        // returns (one-shot: the write's own read of the key passes through).
+        if (k === `few:messages:dm:${PEER}` && !fired) {
+          fired = true;
+          gate.r();
+          await held;
+          await Promise.resolve();
+          await Promise.resolve();
+        }
+        return prev ? prev(k) : undefined;
+      });
+      try {
+        await s.initDirectMessageCounts([PEER], OWN);
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        getMock.mockImplementation(prev ?? (async () => undefined));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stored + live-only, then a startup scan, then a late held write => 3 (Codex)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await import('@/src/lib/unreadStore');
+      const OWN = '3b'.repeat(32);
+      const PEER = '3c'.repeat(32);
+      s.clearDirectMessageContact(PEER);
+      await seed(PEER, 'A', 1000);
+      const gate = (() => { let r!: () => void; const p = new Promise<void>((res) => { r = res; }); return { p, r }; })();
+      const held = gate.p.then(async () => { await seed(PEER, 'C', 3000); return { id: 'C', createdAtMs: 3000 }; });
+      s.trackHeldDirectMessageWrite(PEER, held);
+      const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(5000);
+      await confirm;
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1); // A
+      s.incrementDirectMessage(PEER); // live-only B
+      await s.initDirectMessageCounts([PEER], OWN);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+      gate.r(); // C lands; its late handler schedules a recount
+      await held;
+      await vi.advanceTimersByTimeAsync(0);
+      await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN); // settles after the scheduled one
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stored + live-only, then a late held write landing while a startup scan reads => 3 (Codex)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await import('@/src/lib/unreadStore');
+      const OWN = '3d'.repeat(32);
+      const PEER = '3e'.repeat(32);
+      s.clearDirectMessageContact(PEER);
+      await seed(PEER, 'A', 1000);
+      const gate = (() => { let r!: () => void; const p = new Promise<void>((res) => { r = res; }); return { p, r }; })();
+      const held = gate.p.then(async () => { await seed(PEER, 'C', 3000); return { id: 'C', createdAtMs: 3000 }; });
+      s.trackHeldDirectMessageWrite(PEER, held);
+      const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(5000);
+      await confirm;
+      s.incrementDirectMessage(PEER); // live-only B
+      // C lands while the startup scan is reading this peer, so the scan (not
+      // C's late-handler recount, queued behind it) is the first to see C.
+      const idb = await import('idb-keyval');
+      const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+      const prev = getMock.getMockImplementation();
+      let fired = false;
+      getMock.mockImplementation(async (k: string) => {
+        if (k === `few:messages:dm:${PEER}` && !fired) {
+          fired = true;
+          gate.r();
+          await held;
+          await Promise.resolve();
+        }
+        return prev ? prev(k) : undefined;
+      });
+      try {
+        await s.initDirectMessageCounts([PEER], OWN); // reads A + C
+        expect(s.useUnreadCounts().directMessages[PEER]).toBe(3);
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        getMock.mockImplementation(prev ?? (async () => undefined));
+      }
+      await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed storage read during a startup scan keeps the count and its record (no inflation on retry)', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '3f'.repeat(32);
+    const PEER = '4a'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    await seed(PEER, 'f-1', 1000);
+    await s.initDirectMessageCounts([PEER], OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${PEER}`) throw new Error('idb read failed');
+      return prev ? prev(k) : undefined;
+    });
+    try {
+      await s.initDirectMessageCounts([PEER], OWN);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+
+    await s.initDirectMessageCounts([PEER], OWN);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+  });
+
+  it('a failed storage read during a confirm recount leaves no record behind (no inflation on retry)', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '4b'.repeat(32);
+    const PEER = '4c'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    s.incrementDirectMessage(PEER); // live-only
+    await seed(PEER, 'g-1', 1000);
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${PEER}`) throw new Error('idb read failed');
+      return prev ? prev(k) : undefined;
+    });
+    try {
+      await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN); // first real read: max(1, 1)
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+  });
+
+  it('a startup scan queued behind a blocked confirm recount does not count its new message twice (Codex)', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '4d'.repeat(32);
+    const PEER = '4e'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    await seed(PEER, 'A', 1000);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    await seed(PEER, 'C', 2000);
+
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => { release = r; });
+    let fired = false;
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${PEER}` && !fired) { fired = true; await blocked; }
+      return prev ? prev(k) : undefined;
+    });
+    try {
+      const recount = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await new Promise((r) => setTimeout(r, 0)); // its storage read is now blocked
+      const scan = s.initDirectMessageCounts([PEER], OWN);
+      await new Promise((r) => setTimeout(r, 0));
+      release();
+      await Promise.all([recount, scan]);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('a startup scan between two confirm recounts does not let the second count stored messages twice', async () => {
+    const s = await import('@/src/lib/unreadStore');
+    const OWN = '0f'.repeat(32);
+    const PEER = '1a'.repeat(32);
+    s.clearDirectMessageContact(PEER);
+    await seed(PEER, 'k-1', 1000);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+
+    await seed(PEER, 'k-2', 2000); // stored without either recount seeing it
+    await s.initDirectMessageCounts([PEER], OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
   });
 });

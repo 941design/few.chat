@@ -1,0 +1,15 @@
+{
+  "bug": "reconcileinit-re-read-overwrites-other-peers",
+  "scope": "DM unread counts survive scans: live bumps are added, not replaced by the stored count.",
+  "files_to_modify": [
+    "app/src/lib/unreadStore.ts (reconcileInit additive mode for the DM slice; initDirectMessageCounts clears confirm-recount counted ids; module comment)",
+    "app/tests/unit/unreadStore.test.ts"
+  ],
+  "behavior": {
+    "startup_scan": "count = max(pre-scan, stored) + live DMs during the scan, per scanned peer",
+    "other_keys": "a DM scan never rewrites a peer outside its key list",
+    "unchanged": "group, join-request and pending-contact slices keep the re-read"
+  },
+  "tests": ["Unit: startup scan + live DM; confirm recount + other peer's live DM; scan between recounts"],
+  "non_goals": ["Persisting live-counted DMs across reloads"]
+}

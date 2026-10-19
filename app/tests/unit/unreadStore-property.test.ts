@@ -860,6 +860,13 @@ describe('initDirectMessageCounts — NoCoverage baseline: IDB-backed DM counts'
   const PEER_A = 'aaaa'.repeat(16);
   const PEER_B = 'bbbb'.repeat(16);
 
+  // The DM scan keeps a peer's pre-scan count (live DMs are never stored), so
+  // each case starts both peers from zero.
+  beforeEach(() => {
+    clearDirectMessageContact(PEER_A);
+    clearDirectMessageContact(PEER_B);
+  });
+
   it('counts DMs from peer that are newer than lastRead', async () => {
     const peerKey = PEER_A.toLowerCase();
     const lastReadMs = 2_000_000;
@@ -910,12 +917,12 @@ describe('initDirectMessageCounts — NoCoverage baseline: IDB-backed DM counts'
     expect(useUnreadCounts().directMessages[peerMixed]).toBeUndefined();
   });
 
-  it('preserves existing live DM counts during merge (computed wins for re-evaluated peers)', async () => {
+  it('preserves existing live DM counts during merge (a scanned peer keeps the larger of live and stored)', async () => {
     // Live count for peer A already has 3 from real-time events
     const peerKeyA = PEER_A.toLowerCase();
     const peerKeyB = PEER_B.toLowerCase();
     incrementDirectMessage(PEER_A); // live count = 1
-    // IDB has 2 unread for PEER_A (computed replaces live)
+    // IDB has 2 unread for PEER_A
     idbStore.set(`few:messages:dm:${peerKeyA}`, [
       { createdAt: 1000, senderPubkey: PEER_A },
       { createdAt: 2000, senderPubkey: PEER_A },
@@ -923,7 +930,7 @@ describe('initDirectMessageCounts — NoCoverage baseline: IDB-backed DM counts'
     // PEER_B has a live count but is not in the init list — preserved
     incrementDirectMessage(PEER_B);
     await initDirectMessageCounts([PEER_A], OWN);
-    // computed for PEER_A (2) replaces live (1)
+    // max(live 1, stored 2) for PEER_A (no counted-id record yet)
     expect(useUnreadCounts().directMessages[peerKeyA]).toBe(2);
     // PEER_B live count preserved via state = { ...state.directMessages, ...computed }
     expect(useUnreadCounts().directMessages[peerKeyB]).toBe(1);

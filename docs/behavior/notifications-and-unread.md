@@ -144,8 +144,9 @@ once your groups list has loaded, expiry counts are kept only for groups in it, 
 indicator never shows an expiry with no group to clear it from. Nothing is pruned while the
 list is still loading, and the links themselves are left as stored.
 
-**A reload while counts are being rebuilt.** The rebuild re-reads to catch any message that
-arrived mid-rebuild, and never lowers a count below what is actually unread.
+**A reload while counts are being rebuilt.** A message that arrives mid-rebuild is still
+counted, once, and a rebuild never lowers a count below what is actually unread; a
+conversation read during the rebuild stays read.
 
 ---
 
