@@ -17,6 +17,7 @@ import { USER_A, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { createGroupAndInvite } from './helpers/group-setup';
+import { armRendererStallProbe, withRendererStallProbe } from './helpers/renderer-stall-probe';
 
 // USER_B is configured as the maintainer in the e2e environment
 // (NEXT_PUBLIC_MAINTAINER_NPUBS in run-e2e.mjs). Navigating to
@@ -50,6 +51,7 @@ async function bootUserOnGroups(
     { privateKeyHex: user.privateKeyHex, pubkeyHex: user.pubkeyHex, seedHex: user.seedHex, nickname },
   );
   const page = await context.newPage();
+  await armRendererStallProbe(page); // early: see renderer-stall-probe.ts
   await page.goto('/');
   await clearAppState(page);
   await page.evaluate(
@@ -121,6 +123,7 @@ async function bootUserWithContact(
   );
 
   const page = await context.newPage();
+  await armRendererStallProbe(page); // early: see renderer-stall-probe.ts
   // Wire the WS observer BEFORE page.goto so it fires for the NDK singleton's
   // initial connection (see comment on the onWebSocket parameter above).
   if (onWebSocket) {
@@ -183,7 +186,7 @@ async function sendDmViaComposer(page: Page, content: string): Promise<void> {
   const chatInput = page.getByTestId('chat-input');
   await chatInput.fill(content);
   try {
-    await chatInput.press('Enter');
+    await withRendererStallProbe(page, 'composer-enter', () => chatInput.press('Enter'));
   } catch (err) {
     const url = page.url();
     const inputs = await page.getByTestId('chat-input').count().catch(() => -1);

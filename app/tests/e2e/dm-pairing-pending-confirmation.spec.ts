@@ -37,6 +37,7 @@ import { test, expect, Page } from '@playwright/test';
 import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { bootIdentity, getShareCardLink, extractCardPayload } from './helpers/contact-card';
 import { waitForAdmission } from './helpers/pairing';
+import { armRendererStallProbe, withRendererStallProbe } from './helpers/renderer-stall-probe';
 
 /**
  * Read a contact's `lastSeenAt` from `lp_contacts_v1` (contacts.ts /
@@ -107,6 +108,7 @@ test.describe('Pending contact confirmation — message hold, notification-count
       const payload = extractCardPayload(cardLink);
 
       const b = await bootIdentity(browser, USER_B, 'Bob-Pending-List');
+      await armRendererStallProbe(b.page); // early: see renderer-stall-probe.ts
       await b.page.goto(`/add#c=${payload}`);
       await expect(b.page.getByTestId('contact-added-success')).toBeVisible({ timeout: 20_000 });
 
@@ -139,11 +141,11 @@ test.describe('Pending contact confirmation — message hold, notification-count
       await expect(b.page.getByTestId('contact-detail-page')).toBeVisible({ timeout: 15_000 });
       const msg1 = `held-1-${Date.now()}`;
       await b.page.getByTestId('chat-input').fill(msg1);
-      await b.page.getByTestId('chat-send-btn').click();
+      await withRendererStallProbe(b.page, 'send-click', () => b.page.getByTestId('chat-send-btn').click());
       await expect(b.page.locator('[data-testid^="msg-"]').filter({ hasText: msg1 })).toBeVisible({ timeout: 15_000 });
       const msg2 = `held-2-${Date.now()}`;
       await b.page.getByTestId('chat-input').fill(msg2);
-      await b.page.getByTestId('chat-send-btn').click();
+      await withRendererStallProbe(b.page, 'send-click', () => b.page.getByTestId('chat-send-btn').click());
       await expect(b.page.locator('[data-testid^="msg-"]').filter({ hasText: msg2 })).toBeVisible({ timeout: 15_000 });
 
       // ── 4. AC-OBS-1: wait until A's LIVE unread watcher has genuinely
@@ -208,6 +210,7 @@ test.describe('Pending contact confirmation — message hold, notification-count
       const payload = extractCardPayload(cardLink);
 
       const b = await bootIdentity(browser, USER_B, 'Bob-Pending-Detail');
+      await armRendererStallProbe(b.page); // early: see renderer-stall-probe.ts
       await b.page.goto(`/add#c=${payload}`);
       await expect(b.page.getByTestId('contact-added-success')).toBeVisible({ timeout: 20_000 });
 
@@ -220,7 +223,7 @@ test.describe('Pending contact confirmation — message hold, notification-count
       await expect(b.page.getByTestId('contact-detail-page')).toBeVisible({ timeout: 15_000 });
       const heldMsg = `detail-held-${Date.now()}`;
       await b.page.getByTestId('chat-input').fill(heldMsg);
-      await b.page.getByTestId('chat-send-btn').click();
+      await withRendererStallProbe(b.page, 'send-click', () => b.page.getByTestId('chat-send-btn').click());
       await expect(b.page.locator('[data-testid^="msg-"]').filter({ hasText: heldMsg })).toBeVisible({ timeout: 15_000 });
 
       // A direct /contacts?id=<pending> URL does NOT open the detail page — it

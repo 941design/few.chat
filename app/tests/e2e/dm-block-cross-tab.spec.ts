@@ -25,6 +25,7 @@ import { USER_A, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { createGroupAndInvite } from './helpers/group-setup';
+import { armRendererStallProbe, withRendererStallProbe } from './helpers/renderer-stall-probe';
 
 const USER_B = USER_C;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
@@ -37,6 +38,7 @@ async function bootUserOnGroups(
   const context = await browser.newContext({ baseURL: BASE_URL });
   await suppressErrorOverlay(context);
   const page = await context.newPage();
+  await armRendererStallProbe(page); // early: see renderer-stall-probe.ts
   await page.goto('/');
   await clearAppState(page);
   await page.evaluate(
@@ -98,7 +100,7 @@ test.describe.serial('Block reaches the other open tabs without a reload', () =>
     await expect(aliceTab1.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
     const text = `cross-tab-dm-${Date.now()}`;
     await aliceTab1.getByTestId('chat-input').fill(text);
-    await aliceTab1.getByTestId('chat-send-btn').click();
+    await withRendererStallProbe(aliceTab1, 'send-click', () => aliceTab1.getByTestId('chat-send-btn').click());
     await expect(aliceTab1.locator('[data-testid^="msg-"]').filter({ hasText: text })).toBeVisible({ timeout: 15_000 });
 
     await expect(tab3.locator('[data-testid^="msg-"]').filter({ hasText: text })).toBeVisible({ timeout: 15_000 });
