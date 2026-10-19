@@ -11,6 +11,8 @@ import {
   publishKeyPackages,
   countAvailableKeyPackages,
   replenishKeyPackagesIfNeeded,
+  ensureKeyPackagesOnRelays,
+  countBackedKeyPackageEvents,
   KEY_PACKAGE_COUNT,
   KEY_PACKAGE_REPLENISH_THRESHOLD,
 } from '@/src/lib/keyPackages';
@@ -78,10 +80,13 @@ describe('publishKeyPackages', () => {
 
   it('tolerates partial failure: a rejected create is skipped, the rest still count', async () => {
     // Reject the 2nd of 3 creates (index 1). Expect 2 successes, all 3 attempted.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const mgr = makeManager({ createRejectAt: [1] });
     const published = await publishKeyPackages(mgr, 3, ['wss://r']);
     expect(published).toBe(2);
     expect((mgr as unknown as { create: ReturnType<typeof vi.fn> }).create).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledWith('[keyPackages] Failed to publish key package 2:', expect.any(Error));
+    warn.mockRestore();
   });
 
   it('returns 0 and never calls create when count is 0', async () => {
@@ -143,5 +148,85 @@ describe('replenishKeyPackagesIfNeeded', () => {
     await replenishKeyPackagesIfNeeded(mgr, ['wss://custom']);
     const arg = (mgr as unknown as { create: ReturnType<typeof vi.fn> }).create.mock.calls[0][0];
     expect(arg.relays).toEqual(['wss://custom']);
+  });
+});
+
+// Bug invite-fresh-peer-fails-with-has: local KeyPackages whose publish no relay
+// accepted must be published again, or the account cannot be invited.
+describe('ensureKeyPackagesOnRelays', () => {
+  it('relays hold one of ours => no publish', async () => {
+    const publish = vi.fn(async () => 5);
+    await expect(ensureKeyPackagesOnRelays({ fetchOwn: async () => ({ count: 1, timedOut: false }), publish })).resolves.toBe('present');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('a complete fetch finds none => publishes again', async () => {
+    const publish = vi.fn(async () => 5);
+    await expect(ensureKeyPackagesOnRelays({ fetchOwn: async () => ({ count: 0, timedOut: false }), publish })).resolves.toBe('republished');
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('a timed-out fetch proves nothing => no publish', async () => {
+    const publish = vi.fn(async () => 5);
+    await expect(ensureKeyPackagesOnRelays({ fetchOwn: async () => ({ count: 0, timedOut: true }), publish })).resolves.toBe('unknown');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('a fetch that timed out but found one of ours => present, no publish', async () => {
+    const publish = vi.fn(async () => 5);
+    await expect(ensureKeyPackagesOnRelays({ fetchOwn: async () => ({ count: 2, timedOut: true }), publish })).resolves.toBe('present');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('a failing fetch => no publish, no throw', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const publish = vi.fn(async () => 5);
+    await expect(ensureKeyPackagesOnRelays({ fetchOwn: async () => { throw new Error('offline'); }, publish })).resolves.toBe('unknown');
+    expect(publish).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('[keyPackages] relay check failed:', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('a failing republish does not throw => failed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(ensureKeyPackagesOnRelays({
+      fetchOwn: async () => ({ count: 0, timedOut: false }),
+      publish: async () => { throw new Error('signer locked'); },
+    })).resolves.toBe('failed');
+    expect(warn).toHaveBeenCalledWith('[keyPackages] republish failed:', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('a republish that published nothing => failed', async () => {
+    await expect(ensureKeyPackagesOnRelays({
+      fetchOwn: async () => ({ count: 0, timedOut: false }),
+      publish: async () => 0,
+    })).resolves.toBe('failed');
+  });
+});
+
+describe('countBackedKeyPackageEvents', () => {
+  const local = [{ published: [{ id: 'a' }, { id: 'b' }] }, { published: undefined }, { published: [{ id: 'c' }] }];
+
+  it('an event no local KeyPackage backs does not count', () => {
+    expect(countBackedKeyPackageEvents([{ id: 'x' }], local)).toBe(0);
+  });
+
+  it('counts each backed event, across packages', () => {
+    expect(countBackedKeyPackageEvents([{ id: 'a' }, { id: 'x' }, { id: 'c' }], local)).toBe(2);
+  });
+
+  it('no local packages or an event without id => 0', () => {
+    expect(countBackedKeyPackageEvents([{ id: 'a' }], [])).toBe(0);
+    expect(countBackedKeyPackageEvents([{}], local)).toBe(0);
+  });
+});
+
+describe('publishKeyPackages with count 1', () => {
+  it('publishes one reusable last-resort KeyPackage (the startup republish relies on it)', async () => {
+    const m = makeManager();
+    await expect(publishKeyPackages(m as never, 1, ['wss://r'])).resolves.toBe(1);
+    expect(m.create).toHaveBeenCalledTimes(1);
+    expect(m.create).toHaveBeenCalledWith(expect.objectContaining({ isLastResort: true, relays: ['wss://r'] }));
   });
 });

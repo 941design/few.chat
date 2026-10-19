@@ -44,7 +44,9 @@ Being invitable to groups requires publishing small **cryptographic key packages
 relays. These are the one identity-related thing that *is* public — but they carry **no
 personal data**: they are pure cryptographic material that lets someone add you to a
 group, and reveal nothing about your name or avatar. They are consumed as people invite
-you, so the app keeps a supply published.
+you, so the app keeps a supply published. When the app starts and finds that the relays
+hold none of yours although the device has some (an earlier publish no relay accepted),
+it publishes one again, so the account becomes invitable again without any action.
 
 ---
 

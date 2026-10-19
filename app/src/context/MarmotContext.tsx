@@ -1286,10 +1286,10 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
 
         const { MarmotClient, GroupMediaStore, generateKeyPackageSlot } =
           await import('@internet-privacy/marmot-ts');
-        const { connectNdk } = await import('@/src/lib/ndkClient');
+        const { connectNdk, fetchEventsWithTimeout } = await import('@/src/lib/ndkClient');
         const { NdkNetworkAdapter } = await import('@/src/lib/marmot/NdkNetworkAdapter');
         const { createPrivateKeySigner, activeEventSignerOverride } = await import('@/src/lib/marmot/signerAdapter');
-        const { publishKeyPackages } = await import('@/src/lib/keyPackages');
+        const { publishKeyPackages, ensureKeyPackagesOnRelays, countBackedKeyPackageEvents } = await import('@/src/lib/keyPackages');
         const { createStore: idbCreateStore } = await import('idb-keyval');
         const { IdbKeyValueStoreBackend } = await import('@/src/lib/marmot/idbKeyValueStoreBackend');
 
@@ -1561,6 +1561,31 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
               } catch {
                 // Non-fatal: stale KP cleanup is best-effort
               }
+            }
+
+            // A local KeyPackage whose publish no relay accepted is still
+            // recorded as published, so the account would stay uninvitable
+            // (bug invite-fresh-peer-fails-with-has). After the cleanup above,
+            // only relay events backed by a local KeyPackage count; when a
+            // complete fetch finds none, publish one again. One suffices: the
+            // device's KeyPackages share one addressable slot, so relays keep
+            // only the newest, and it is the reusable last-resort one.
+            if (effectiveRelays.length > 0 && ndk && pubkeyHex) {
+              await ensureKeyPackagesOnRelays({
+                fetchOwn: async () => {
+                  const { NDKRelaySet } = await import('@nostr-dev-kit/ndk');
+                  const { events, timedOut } = await fetchEventsWithTimeout(
+                    ndk,
+                    { kinds: [443 as any, 30443 as any], authors: [pubkeyHex] },
+                    {},
+                    NDKRelaySet.fromRelayUrls(effectiveRelays, ndk),
+                  );
+                  const count = countBackedKeyPackageEvents(events, await client.keyPackages.list());
+                  return { count, timedOut };
+                },
+                publish: async () =>
+                  cancelled ? 0 : publishKeyPackages(client.keyPackages, 1, effectiveRelays),
+              });
             }
 
             // Publish kind 30051 relay list for key package discovery (addressable with d tag)

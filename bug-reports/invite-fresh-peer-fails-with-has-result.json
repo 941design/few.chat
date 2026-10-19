@@ -1,0 +1,59 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "marmot-ts KeyPackageManager.create stores a KeyPackage locally before publishing and records it as published whatever the relays answered (NdkNetworkAdapter.publish never throws). A first publish no relay accepted therefore left the local count > 0, the app never published again, and peers' invites failed with 'has no key package'.",
+  "fix": "After the startup stale-KeyPackage cleanup, the background KeyPackage task fetches our own kind 443/30443 events from the effective relays and counts only those a local KeyPackage backs (countBackedKeyPackageEvents). When a complete (not timed-out) fetch finds none, ensureKeyPackagesOnRelays publishes one last-resort KeyPackage again (the device's KeyPackages share one addressable slot, so one suffices), unless the init was cancelled. A timed-out or failed fetch never republishes.",
+  "files_modified": [
+    "app/src/lib/keyPackages.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/tests/unit/keyPackages.test.ts",
+    "docs/behavior/profiles-and-identity.md",
+    "BACKLOG.json"
+  ],
+  "files_created": [
+    "app/tests/unit/keyPackagesRelayCheckWiring.test.ts",
+    "bug-reports/invite-fresh-peer-fails-with-has-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/keyPackages.test.ts",
+      "app/tests/unit/keyPackagesRelayCheckWiring.test.ts"
+    ],
+    "pre_fix_failures": 6,
+    "kinds": "ensureKeyPackagesOnRelays decision cases (present / complete-empty republishes / timed-out / timed-out-with-hits / fetch throws / publish throws or publishes 0 => failed); countBackedKeyPackageEvents behavioural cases; publishKeyPackages count 1 is last-resort; source scan of the wiring (once, in the background task, after the cleanup, effective relays, no limit, cancelled guard). Gap (accepted, no-jsdom convention): no e2e for a rejected first publish (the relay would have to reject the app's own publish)."
+  },
+  "final": {
+    "passed": 6434,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (keyPackages.ts)",
+    "killed": 61,
+    "timeout": 1,
+    "survived": 0,
+    "score": 98.41,
+    "survivors": "1 NoCoverage, pre-existing: replenishKeyPackagesIfNeeded's DEFAULT_RELAYS default parameter (every caller passes relays)."
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-kprepub.log",
+    "result": "non-relay 72 passed; relay 350 passed, 1 failed, 2 did not run, 19 skipped; no INVALID marker. The failure is dm-block-cross-tab.spec.ts:84, the known renderer click stall (30 s in performing click action on chat-send-btn; backlog dm-composer-enter-press-hangs-30s, sighting recorded). It also stalls without this fix (1 of 13 isolated baseline runs, item-12 source stashed); with the fix 3 of 8 isolated runs stalled — not significant at these sizes, recorded on the finding.",
+    "status": "green-except-known-flake"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The first wiring sat beside, not after, an existing background cleanup that deletes relay KeyPackages no local one backs; only codex traced that interaction. The startup KeyPackage logic is spread over three create sites (init count===0, background readiness, and now the repair).",
+    "surprised_by": "network.request hides fetch timeouts as an empty result, so it cannot distinguish 'relays hold none' from 'relays did not answer'; the repair needed fetchEventsWithTimeout directly.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/keyPackages.ts",
+    "app/src/context/MarmotContext.tsx"
+  ]
+}

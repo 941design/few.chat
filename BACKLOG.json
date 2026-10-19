@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-18T23:03:09Z",
+  "updated_at": "2026-10-19T00:49:53Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -375,23 +375,9 @@
       "text": "DM composer Enter press hangs 30s under full-suite load in groups-dm-reactions",
       "created_at": "2026-10-18",
       "motivation": "Second sighting of an undiagnosed renderer stall that turns the full e2e gate red without a product signal; each red gate costs a 65-min rerun on the 1-CPU VM.",
-      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer). Same stall as a click: dm-pairing-pending-confirmation.spec.ts:214 timed out 30 s in 'performing click action' on chat-send-btn in gates full-pollpurge (2026-10-17) and full-dmswitch (2026-10-18) while the message had already reached the peer.",
+      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer). Same stall as a click: dm-pairing-pending-confirmation.spec.ts:214 timed out 30 s in 'performing click action' on chat-send-btn in gates full-pollpurge (2026-10-17) and full-dmswitch (2026-10-18) while the message had already reached the peer. Also dm-block-cross-tab.spec.ts:84 in gate full-kprepub (2026-10-19): 30 s in 'performing click action' on chat-send-btn (tab 1 of two open tabs of the same account). Isolated dm-block-cross-tab (2026-10-19): 1 stall in 13 runs on e8f361b, 3 in 8 with the KeyPackage startup check added (not significant, but the stall may be load-sensitive: that check adds one relay fetch per tab start).",
       "approach": "Capture an in-page long-task/performance trace around the thread-open history load under CPU throttling to find the main-thread blocker; consider a per-test relay wipe or unique keys between DM reaction tests.",
       "success_signal": "Three consecutive full gates without a composer key-press timeout."
-    },
-    {
-      "slug": "invite-fresh-peer-fails-with-has",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/e2e/helpers/group-setup.ts",
-        "line": 284
-      },
-      "text": "Invite of a fresh peer fails with 'has not set up their Few identity yet' on the cold first relay test",
-      "created_at": "2026-10-18",
-      "motivation": "Second sighting on the 1-CPU VM (2026-10-18, gate full-signer: dm-block-contact :146, first test of the relay bucket); it fails the setup step and skips the spec's 4 serial tests, turning a 65-min gate red.",
-      "behavior": "createGroupAndInvite waits 60 s for invite-success; Alice's invite instead shows 'This user has not set up their Few identity yet', i.e. Bob's KeyPackage was not found on the relay when Alice fetched it. Only seen on the first relay test (cold next dev compile, fresh relay).",
-      "approach": "Check whether the invitee's KeyPackage publish has completed before the inviter fetches (helper readiness wait on the invitee's published KeyPackage), and whether the app's KeyPackage fetch retries once on an empty result; decide between a test readiness gate and a product retry.",
-      "success_signal": "Three consecutive full gates without the 'not set up their Few identity' setup failure."
     },
     {
       "slug": "deleting-dm-image-while-still-uploading",
@@ -419,6 +405,20 @@
       "behavior": "The test waits until A's lastSeenAt for B advances (proof of at least one processed event), then confirms; after confirm the nav badge polled 15 s stayed at 1 instead of 2. B showed both messages.",
       "approach": "Check whether a held DM arriving during or just after confirm is counted; if it is, make the test wait for both held events (e.g. poll the stored held count) before confirming.",
       "success_signal": "The spec passes 10 consecutive isolated runs."
+    },
+    {
+      "slug": "invite-lookup-ignores-invitee-s-keypackage",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/context/MarmotContext.tsx",
+        "line": 2233
+      },
+      "text": "Invite lookup ignores the invitee's KeyPackage relay list",
+      "created_at": "2026-10-19",
+      "motivation": "A user whose relays do not overlap the inviter's NDK pool cannot be invited although their KeyPackage is published; the startup KeyPackage check only proves presence on the user's own relays.",
+      "behavior": "inviteByNpub fetches kinds 443/30443 from the inviter's NDK pool (default relays plus added ones), with no relay set and no lookup of the invitee's kind 30051/10051 relay list, and reports no_key_package when that pool holds none.",
+      "approach": "Resolve the invitee's KeyPackage relay list (30051, falling back to 10051) and fetch from those relays too; or always include the default relays in the KeyPackage publish targets.",
+      "success_signal": "An invite succeeds for an invitee whose only relay is outside the inviter's configured relays."
     }
   ],
   "archive": [

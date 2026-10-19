@@ -1,0 +1,21 @@
+{
+  "bug": "invite-fresh-peer-fails-with-has",
+  "scope": "Republish KeyPackages when the relays hold none of ours although the local store has some.",
+  "files_to_modify": [
+    "app/src/lib/keyPackages.ts (ensureKeyPackagesOnRelays: pure, deps injected)",
+    "app/src/context/MarmotContext.tsx (the background KeyPackage task, after the stale-KP cleanup; not delaying readiness)",
+    "app/tests/unit/keyPackages.test.ts or a new test file"
+  ],
+  "behavior": {
+    "startup": "Local count 0 → publish as before (awaited). In the background task, after the stale-KP cleanup, fetch own kind 443/30443 from the effective relays and count only events a local KeyPackage backs; a complete fetch with none → publish one last-resort KeyPackage again (the device has one addressable slot).",
+    "offline": "A timed-out or failed fetch never republishes.",
+    "privacy": "Only own public KeyPackages are fetched/published; no profile data."
+  },
+  "tests": [
+    "Unit: ensureKeyPackagesOnRelays decision table; countBackedKeyPackageEvents; source scan of the wiring and its ordering after the cleanup"
+  ],
+  "non_goals": [
+    "marmot-ts recording unaccepted publishes as published (upstream)",
+    "an inviter-side retry"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "bug_name": "invite-fresh-peer-fails-with-has",
+  "bug_report_file": "bug-reports/invite-fresh-peer-fails-with-has-report.md",
+  "created_at": "2026-10-18T21:57:44Z",
+  "updated_at": "2026-10-19T00:49:45Z",
+  "phase": "ACCEPTED",
+  "complexity": "low",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "113cdf9",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (sev5: unbounded republish growth; filter only source-scanned; cancellation window; sev4 EOSE heuristic undocumented; sev3 misleading return)",
+      "codex": "needs-attention (presence counted from relay events the startup cleanup then deletes)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "ACCEPTED (sev2 nits: in-flight create after logout, shared with existing create sites; count-1 last-resort untested -> test added)",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T21:57:44Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-18T23:12:27Z",
+      "trigger": "both reviewers accepted"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-19T00:49:45Z",
+      "trigger": "full e2e gate green except the known click stall"
+    }
+  ],
+  "e2e_gate": "green-except-known-flake: 72 + 350 passed, 1 failed (dm-block-cross-tab:84, 30 s in performing click action on chat-send-btn = dm-composer-enter-press-hangs-30s), 2 did not run (serial followers), 19 skipped (/tmp/claude-501/e2e-gate/full-kprepub.log). Isolated: with the fix 3 stalls in 8 runs; baseline without the fix (stashed) 1 stall in 13 runs — same stall pre-exists; the difference is not significant at these sizes."
+}
