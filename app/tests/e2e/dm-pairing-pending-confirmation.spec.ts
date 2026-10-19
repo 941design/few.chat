@@ -10,24 +10,13 @@
  * confirm/reject inline and assert the redirect, rather than exercising a
  * detail-view prompt (which was removed).
  *
- * AC-OBS-2 was amended 2026-07-15 (spec.md `## Amendments`,
- * acceptance-criteria.md AC-OBS-2), after a Stage-1 review found the
- * original wording unsatisfiable: this app only persists a contact's
- * message content once their conversation has been opened at least once (a
- * pre-existing, out-of-epic-scope DM-pipeline property), so the unread count
- * cannot reconcile held messages at `confirmContact` time — there is nothing
- * persisted yet to reconcile against. The amended AC instead requires the
- * held messages AND the unread count to both catch up correctly the next time
- * the user OPENS the contact's conversation, within the same session (no
- * leave-and-re-enter required). Both tests below assert this end-to-end
- * after confirming: they navigate to the contact's conversation and check
- * both that the held messages render (already-existing coverage) AND that
- * the notification count has cleared once the thread has been viewed — this
- * app's normal "opening a thread marks it read" behavior
- * (`ContactChat`'s `markDirectMessagesRead` mount effect), which is what
- * the amended AC-OBS-2 relies on rather than a special immediate-on-confirm
- * reconciliation. AC-OBS-1 (no unread count raised while still pending) is
- * covered separately, before confirm.
+ * AC-OBS-2 (amended 2026-07-15) requires the held messages and the unread
+ * count to catch up once the user opens the contact's conversation; since the
+ * pending-contact-notification epic the watcher also stores a pending peer's
+ * DMs, so the count already shows them on Confirm (AC-DM-3) and opening the
+ * thread clears it (`ContactChat`'s `markDirectMessagesRead` mount effect).
+ * AC-OBS-1 (no unread count raised while still pending) is covered
+ * separately, before confirm.
  *
  * Extends the contact-pairing-code epic's `dm-pairing-*.spec.ts` two-browser-
  * context pattern (`bootIdentity`, `getShareCardLink`, `waitForAdmission`).

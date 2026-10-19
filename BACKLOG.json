@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-19T02:09:31Z",
+  "updated_at": "2026-10-19T04:20:42Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -375,23 +375,9 @@
       "text": "DM composer Enter press hangs 30s under full-suite load in groups-dm-reactions",
       "created_at": "2026-10-18",
       "motivation": "Second sighting of an undiagnosed renderer stall that turns the full e2e gate red without a product signal; each red gate costs a 65-min rerun on the 1-CPU VM.",
-      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer). Same stall as a click: dm-pairing-pending-confirmation.spec.ts:214 timed out 30 s in 'performing click action' on chat-send-btn in gates full-pollpurge (2026-10-17) and full-dmswitch (2026-10-18) while the message had already reached the peer. Also dm-block-cross-tab.spec.ts:84 in gate full-kprepub (2026-10-19): 30 s in 'performing click action' on chat-send-btn (tab 1 of two open tabs of the same account). Isolated dm-block-cross-tab (2026-10-19): 1 stall in 13 runs on e8f361b, 3 in 8 with the KeyPackage startup check added (not significant, but the stall may be load-sensitive: that check adds one relay fetch per tab start).",
+      "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer). Same stall as a click: dm-pairing-pending-confirmation.spec.ts:214 timed out 30 s in 'performing click action' on chat-send-btn in gates full-pollpurge (2026-10-17) and full-dmswitch (2026-10-18) while the message had already reached the peer. Also dm-block-cross-tab.spec.ts:84 in gate full-kprepub (2026-10-19): 30 s in 'performing click action' on chat-send-btn (tab 1 of two open tabs of the same account). Isolated dm-block-cross-tab (2026-10-19): 1 stall in 13 runs on e8f361b, 3 in 8 with the KeyPackage startup check added (not significant, but the stall may be load-sensitive: that check adds one relay fetch per tab start). Gate full-confirmrace (2026-10-19): two sightings in one gate — dm-pairing-pending-confirmation.spec.ts:223 (30 s in 'performing click action' on chat-send-btn) and groups-dm-reactions.spec.ts:233 (30 s on press('Enter')); both specs then passed 5/5 in isolation.",
       "approach": "Capture an in-page long-task/performance trace around the thread-open history load under CPU throttling to find the main-thread blocker; consider a per-test relay wipe or unique keys between DM reaction tests.",
       "success_signal": "Three consecutive full gates without a composer key-press timeout."
-    },
-    {
-      "slug": "pending-contact-confirm-badge-reads-1",
-      "scope": "any",
-      "anchor": {
-        "path": "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
-        "line": 189
-      },
-      "text": "Pending-contact confirm badge reads 1 instead of 2 when the second held DM arrives late",
-      "created_at": "2026-10-18",
-      "motivation": "Intermittent red in the pairing spec (1 of 5 isolated runs, 2026-10-18) without a known product cause; either a test race or a held DM that is not counted when it lands around the confirm.",
-      "behavior": "The test waits until A's lastSeenAt for B advances (proof of at least one processed event), then confirms; after confirm the nav badge polled 15 s stayed at 1 instead of 2. B showed both messages.",
-      "approach": "Check whether a held DM arriving during or just after confirm is counted; if it is, make the test wait for both held events (e.g. poll the stored held count) before confirming.",
-      "success_signal": "The spec passes 10 consecutive isolated runs."
     },
     {
       "slug": "invite-lookup-ignores-invitee-s-keypackage",
@@ -406,6 +392,20 @@
       "behavior": "inviteByNpub fetches kinds 443/30443 from the inviter's NDK pool (default relays plus added ones), with no relay set and no lookup of the invitee's kind 30051/10051 relay list, and reports no_key_package when that pool holds none.",
       "approach": "Resolve the invitee's KeyPackage relay list (30051, falling back to 10051) and fetch from those relays too; or always include the default relays in the KeyPackage publish targets.",
       "success_signal": "An invite succeeds for an invitee whose only relay is outside the inviter's configured relays."
+    },
+    {
+      "slug": "reconcileinit-re-read-overwrites-other-peers",
+      "scope": "any",
+      "anchor": {
+        "path": "app/src/lib/unreadStore.ts",
+        "line": 200
+      },
+      "text": "reconcileInit re-read overwrites other peers' unstored live DM bumps",
+      "created_at": "2026-10-19",
+      "motivation": "An unread badge can drop live DMs for a peer that has stored unread messages, so a user may miss messages.",
+      "behavior": "reconcileInitExclusive re-reads every key a live increment touched during the scan, including keys outside its own key list, and sets them to the stored count when above 0. Live DMs bumped by incrementDirectMessage are never stored by it, so a peer with stored unread DMs (e.g. held DMs from an earlier confirm) loses its live bumps when another reconcile runs. Pre-existing; found in review of pending-contact-confirm-badge-reads-1 (2026-10-19).",
+      "approach": "Re-read only keys inside the call's key list, or use the additive stored+live accounting of the confirm recount for the DM slice. Also: initDirectMessageCounts and the re-read loop set a peer's count from storage without updating confirmRecountCountedIds, so a later confirm recount for that peer could count those stored ids again; have them delete confirmRecountCountedIds for the keys they write (review of pending-contact-confirm-badge-reads-1, round 8).",
+      "success_signal": "A unit test where peer X has stored unread DMs plus a live bump during another peer's reconcile keeps X's full count."
     }
   ],
   "archive": [

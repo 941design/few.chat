@@ -38,20 +38,11 @@ import type { UserProfile } from '@/src/types';
  * `reconcileConfirmedContactDirectMessageCount`'s doc comment in
  * unreadStore.ts for the full history.
  *
- * AC-OBS-2 was amended 2026-07-15 (spec.md `## Amendments`,
- * acceptance-criteria.md AC-OBS-2): for a contact whose conversation was
- * never opened while pending, this app has nothing persisted for
- * `reconcileConfirmedContactDirectMessageCount` to read yet — this repo's DM
- * pipeline only writes a contact's message content once their `ContactChat`
- * has mounted at least once (a pre-existing, out-of-epic-scope property) —
- * so this call resolves to a no-op here in the common case. The bell still
- * ends up correct: AC-OBS-1 already guarantees it was never incorrectly
- * bumped for messages received while pending, and the next time the user
- * opens the conversation, `ContactChat` loads the (now-fetchable) history
- * and marks it read via its own `markDirectMessagesRead` mount effect. This
- * call remains useful for any messages that happen to already be persisted
- * (e.g. a conversation opened before the contact went pending) and for the
- * `reconcileInit` live-increment race protection it gets "for free".
+ * Since the pending-contact-notification epic the DM watcher stores a pending
+ * peer's DMs (AC-DM-2), so this recount finds them and the unread pill shows
+ * them on Confirm (AC-DM-3), including a DM whose write is still in flight
+ * (the recount waits for it). Opening the conversation then marks them read
+ * via `ContactChat`'s `markDirectMessagesRead` mount effect.
  */
 export async function confirmPendingContact(peerPubkeyHex: string, ownPubkeyHex: string): Promise<void> {
   confirmContact(peerPubkeyHex);

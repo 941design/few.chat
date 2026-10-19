@@ -93,37 +93,73 @@ function noteLiveIncrement(slice: CountSlice, key: string) {
   if (initInProgress[slice]) initTouched[slice].add(key);
 }
 
-// --- Confirm-time single-peer reconcile floor ---
+// --- Confirm-time single-peer recount ---
 // `reconcileInit`'s "authoritative IDB count supersedes both the stale next
 // and the live bump" comment above is correct for slices where persistence
 // keeps pace with live events — the batch/startup DM scan and the non-DM
-// slices all persist BEFORE incrementing. But `incrementDirectMessage` (the
-// live bell bump fired by directMessageNotifications.ts) does NOT persist
-// message content — only `ContactChat` mounting does, via a historical relay
-// fetch. So for `reconcileConfirmedContactDirectMessageCount`'s single-peer
-// confirm-time call specifically, a DM that lands while its raw idb-keyval
-// read is in flight can never be "seen" by the recompute, and the recompute
-// must not be allowed to overwrite that live bump back down.
+// slices all persist BEFORE incrementing. The confirm-time recount
+// (`reconcileConfirmedContactDirectMessageCount`) counts two disjoint sets:
+// DMs the watcher stored while the contact was pending (never counted live),
+// and DMs that arrive once it is confirmed (counted live by
+// `incrementDirectMessage`, never stored by it). So its result is
+// `max(pre-call count, stored count) + live bumps during the call`: a `max`
+// alone would let a live bump stand in for a stored message it is not
+// (Codex, pending-contact-confirm-badge-reads-1). Only the first recount for a
+// peer takes that `max` (its pre-call count may already include stored
+// messages, e.g. a thread opened before); a later one knows which stored
+// messages were counted (`confirmRecountCountedIds`) and adds only the new
+// ones, so a live-only pre-call count is never mistaken for stored messages.
 //
-// Contract (corrected 2026-07-15 — the previous wording here claimed this
-// "tracks the highest live count observed... while that one call is in
-// flight", which does not match the code below): `reconcileFloor[key]` is
-// seeded with the PRE-CALL count (`state.directMessages[key] ?? 0`) at the
-// moment the reconcile starts — not with a live-observed increment — so the
-// actual rule is "the reconcile never lowers a peer's count below its
-// pre-call value". `noteLiveIncrementFloor` then raises that floor via
-// `Math.max` for any live bump that fires while this key is tracked, so a DM
-// landing mid-call is ALSO protected. Net effect: the `finally` block below
-// floors the post-recompute count at whichever is higher — the value the
-// peer already had when the reconcile started, or any live bump that
-// happened during it. Scoped to this one key/call, never touching
-// `reconcileInit` or its other callers.
-const reconcileFloor: Record<string, number> = {};
+// Each call keeps its own tracker, registered synchronously when the call
+// starts (both callers confirm the contact in the same tick), so overlapping
+// calls for one peer cannot clear each other's live bumps. Marking the thread
+// read during the call drops the pre-call and stored counts: what was unread
+// then has now been read.
+type ConfirmRecountTracker = { live: number; readDuring: boolean };
+const confirmRecountTrackers: Record<string, Set<ConfirmRecountTracker>> = {};
 
-function noteLiveIncrementFloor(key: string, value: number) {
-  if (key in reconcileFloor) {
-    reconcileFloor[key] = Math.max(reconcileFloor[key], value);
-  }
+function noteConfirmRecountLive(key: string) {
+  confirmRecountTrackers[key]?.forEach((t) => { t.live += 1; });
+}
+
+function noteConfirmRecountRead(key: string) {
+  confirmRecountTrackers[key]?.forEach((t) => { t.live = 0; t.readDuring = true; });
+  delete confirmRecountCountedIds[key];
+  bumpConfirmRecountEpoch(key);
+}
+
+/** Stored messages a confirm-time recount (or its late handler) has counted. */
+const confirmRecountCountedIds: Record<string, Set<string>> = {};
+
+// Bumped by a read, a clear and the start of a recount: a late held write (see
+// HELD_WRITE_WAIT_MS) is counted only if none of these happened since its
+// recount finished.
+const confirmRecountEpoch: Record<string, number> = {};
+
+function bumpConfirmRecountEpoch(key: string) {
+  confirmRecountEpoch[key] = (confirmRecountEpoch[key] ?? 0) + 1;
+}
+
+// A pending contact's DM is stored by the watcher with an awaited write. A
+// Confirm that lands while the write is in flight would read storage before
+// the message is there, and the message, having arrived while pending, is
+// never counted live either. The watcher registers each such write in the
+// same tick as its pending check; the confirm-time recount waits for the
+// peer's registered writes before it reads storage.
+/** Resolves to the stored message, or null when nothing was stored. */
+export type HeldDirectMessageWrite = Promise<{ id: string; createdAtMs: number } | null>;
+const heldDirectMessageWrites: Record<string, Set<HeldDirectMessageWrite>> = {};
+
+/** Register an in-flight write of a DM held while its sender was pending. */
+export function trackHeldDirectMessageWrite(peerPubkeyHex: string, write: HeldDirectMessageWrite) {
+  const key = dmKey(peerPubkeyHex);
+  const writes = (heldDirectMessageWrites[key] ??= new Set());
+  writes.add(write);
+  const done = () => {
+    writes.delete(write);
+    if (writes.size === 0 && heldDirectMessageWrites[key] === writes) delete heldDirectMessageWrites[key];
+  };
+  write.then(done, done);
 }
 
 // --- Serialize concurrent reconciles for the same slice ---
@@ -603,13 +639,14 @@ export function incrementDirectMessage(peerPubkeyHex: string) {
   const next = { ...state.directMessages };
   next[key] = (next[key] ?? 0) + 1;
   state = { ...state, directMessages: next };
-  noteLiveIncrementFloor(key, next[key]);
+  noteConfirmRecountLive(key);
   emit();
 }
 
 /** Mark a peer's DM thread as read — resets count and persists the timestamp. */
 export function markDirectMessagesRead(peerPubkeyHex: string) {
   const key = dmKey(peerPubkeyHex);
+  noteConfirmRecountRead(key);
   const timestamps = loadDirectMessageLastRead();
   timestamps[key] = Date.now();
   saveDirectMessageLastRead(timestamps);
@@ -631,6 +668,7 @@ export function getDirectMessageLastReadAt(peerPubkeyHex: string): number {
 /** Remove DM tracking for a peer (called on contact removal). */
 export function clearDirectMessageContact(peerPubkeyHex: string) {
   const key = dmKey(peerPubkeyHex);
+  noteConfirmRecountRead(key);
   const timestamps = loadDirectMessageLastRead();
   delete timestamps[key];
   saveDirectMessageLastRead(timestamps);
@@ -757,62 +795,117 @@ function dropDirectMessageCounters(keys: ReadonlySet<string>): void {
  * above), and for the identical reason: a reconciliation-only caller must
  * never be the first to trigger a one-time repair signal it cannot consume.
  *
- * AC-OBS-2 was amended 2026-07-15 (spec.md `## Amendments`): for a contact
- * whose conversation was never opened while pending, this read finds
- * nothing persisted yet (message content is only written once `ContactChat`
- * has mounted at least once) and resolves to 0 — a no-op in that common
- * case. The bell still ends up correct because AC-OBS-1 guarantees it was
- * never incorrectly bumped for those messages in the first place; the real
- * catch-up happens the next time the user opens the conversation, when
- * `ContactChat` loads the now-fetchable history and marks it read via its
- * own `markDirectMessagesRead` mount effect (not via this function).
- *
- * Gate-remediation (Codex P2, 2026-07-15, first round): `reconcileInit`'s
- * shared re-read loop assumes an authoritative recompute always supersedes a
- * live bump — true when persistence keeps pace with live events (the
- * batch/startup scan and the non-DM slices), false here, since
- * `incrementDirectMessage` never persists content. If the just-confirmed
- * peer's next DM lands while the raw read below is in flight, the live bell
- * bump fires but the recompute (reading only already-persisted history)
- * can't see it — so this floors the final count at the highest live value
- * observed during the call, ensuring that live bump is never silently
- * dropped. See `reconcileFloor`'s comment near `noteLiveIncrement` for why
- * this is scoped to this one key/call rather than changed in the shared
- * helper.
+ * What it counts: the DMs the watcher stored while the contact was pending
+ * (`directMessageNotifications.ts` retains them, AC-DM-2), which the pill then
+ * shows on Confirm (AC-DM-3). It first waits for any of those writes still in
+ * flight, and adds the live bumps that arrive during the call rather than
+ * taking the larger of the two — see "Confirm-time single-peer recount" near
+ * the top of this module.
  */
-export async function reconcileConfirmedContactDirectMessageCount(
+export function reconcileConfirmedContactDirectMessageCount(
   peerPubkeyHex: string,
   ownPubkeyHex: string,
 ): Promise<void> {
-  const own = ownPubkeyHex.toLowerCase();
-  const timestamps = loadDirectMessageLastRead();
-  const { get } = await import('idb-keyval');
   const key = dmKey(peerPubkeyHex);
+  // One recount per peer at a time: a second one starting while the first
+  // runs would take the first's live bumps as its pre-call count and then drop
+  // them. The first starts synchronously, so its tracker sees every bump.
+  const prior = confirmRecountInFlight[key];
+  const run: Promise<void> = prior
+    ? prior.then(() => recountConfirmedContact(key, ownPubkeyHex))
+    : recountConfirmedContact(key, ownPubkeyHex);
+  const tail = run.catch(() => undefined);
+  confirmRecountInFlight[key] = tail;
+  void tail.then(() => {
+    if (confirmRecountInFlight[key] === tail) delete confirmRecountInFlight[key];
+  });
+  return run;
+}
 
-  reconcileFloor[key] = state.directMessages[key] ?? 0;
+const confirmRecountInFlight: Record<string, Promise<void>> = {};
+
+/**
+ * A hung storage write must not keep Confirm waiting forever. A held write
+ * still running at the cap is counted when it lands instead, unless storage
+ * already counted it or the thread was read, cleared or recounted since.
+ */
+const HELD_WRITE_WAIT_MS = 5000;
+
+async function recountConfirmedContact(key: string, ownPubkeyHex: string): Promise<void> {
+  const own = ownPubkeyHex.toLowerCase();
+  bumpConfirmRecountEpoch(key);
+  const epoch = confirmRecountEpoch[key];
+  // Registered before the first await (see confirmRecountTrackers).
+  const pre = state.directMessages[key] ?? 0;
+  const tracker: ConfirmRecountTracker = { live: 0, readDuring: false };
+  const trackers = (confirmRecountTrackers[key] ??= new Set());
+  trackers.add(tracker);
+  let storedIds: string[] | undefined;
+  const held = [...(heldDirectMessageWrites[key] ?? [])];
+
   try {
+    if (held.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(held),
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, HELD_WRITE_WAIT_MS); }),
+      ]);
+      clearTimeout(timer);
+    }
+    const { get } = await import('idb-keyval');
     await reconcileInit('directMessages', [key], async (k) => {
-      const lastRead = timestamps[k] ?? 0;
+      // Read after the waits above, so a thread read meanwhile is not recounted.
+      const lastRead = loadDirectMessageLastRead()[k] ?? 0;
+      let unread: string[] = [];
       try {
-        const messages: Array<{ createdAt: number; senderPubkey: string }> | undefined = await get(
+        const messages: Array<{ id: string; createdAt: number; senderPubkey: string }> | undefined = await get(
           `few:messages:dm:${k}`,
         );
         if (messages && messages.length > 0) {
-          return messages.filter((m) => m.createdAt > lastRead && m.senderPubkey.toLowerCase() !== own).length;
+          unread = messages
+            .filter((m) => m.createdAt > lastRead && m.senderPubkey.toLowerCase() !== own)
+            .map((m) => m.id);
         }
       } catch {
         // Non-fatal — DM thread may not exist yet
       }
-      return 0;
+      // The re-read loop also recomputes other peers a live bump touched.
+      if (k === key) storedIds = unread;
+      return unread.length;
     });
   } finally {
-    const floor = reconcileFloor[key];
-    delete reconcileFloor[key];
-    if (floor > (state.directMessages[key] ?? 0)) {
-      const next = { ...state.directMessages, [key]: floor };
+    trackers.delete(tracker);
+    if (trackers.size === 0 && confirmRecountTrackers[key] === trackers) delete confirmRecountTrackers[key];
+    const known = confirmRecountCountedIds[key];
+    let base = 0;
+    if (!tracker.readDuring) {
+      const ids = storedIds ?? [];
+      base = known ? pre + ids.filter((id) => !known.has(id)).length : Math.max(pre, ids.length);
+      const counted = (confirmRecountCountedIds[key] ??= new Set());
+      ids.forEach((id) => counted.add(id));
+    }
+    const final = base + tracker.live;
+    if (final !== (state.directMessages[key] ?? 0)) {
+      const next = { ...state.directMessages };
+      if (final > 0) next[key] = final;
+      else delete next[key];
       state = { ...state, directMessages: next };
       emit();
     }
+    // Any captured held write whose message the storage read did not see —
+    // one still running at the cap, or one that landed after the read — is
+    // counted when it lands — unless it is already read, or the thread was
+    // read, cleared or recounted since this call started.
+    held.forEach((w) => {
+      w.then((m) => {
+        if (!m || confirmRecountEpoch[key] !== epoch) return;
+        const counted = (confirmRecountCountedIds[key] ??= new Set());
+        if (counted.has(m.id)) return; // e.g. a redelivery's write of the same message
+        if (m.createdAtMs <= (loadDirectMessageLastRead()[key] ?? 0)) return;
+        counted.add(m.id);
+        incrementDirectMessage(key);
+      }, () => {});
+    });
   }
 }
 

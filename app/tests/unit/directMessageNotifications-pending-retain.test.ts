@@ -88,6 +88,7 @@ vi.mock('@/src/lib/unreadStore', async () => {
     ...mod,
     getDirectMessageLastReadAt: vi.fn(() => 0),
     incrementDirectMessage: vi.fn(),
+    trackHeldDirectMessageWrite: vi.fn(),
   };
 });
 
@@ -100,7 +101,7 @@ vi.mock('@/src/lib/marmot/chatPersistence', async () => {
 });
 
 const { unwrapAndOpen, decryptDirectPayload, directConversationId } = await import('@/src/lib/directMessages');
-const { incrementDirectMessage } = await import('@/src/lib/unreadStore');
+const { incrementDirectMessage, trackHeldDirectMessageWrite } = await import('@/src/lib/unreadStore');
 const { appendMessage } = await import('@/src/lib/marmot/chatPersistence');
 const { subscribeDirectMessageNotifications } = await import('@/src/lib/directMessageNotifications');
 const { rememberContact, rememberPendingContact, confirmContact } = await import('@/src/lib/contacts');
@@ -223,5 +224,94 @@ describe('kind-4 — retain while pending (AC-DM-1/2)', () => {
     expect(incrementDirectMessage).toHaveBeenCalledTimes(1);
     expect(decryptDirectPayload).not.toHaveBeenCalled();
     expect(appendMessage).not.toHaveBeenCalled();
+  });
+});
+
+
+// Bug pending-contact-confirm-badge-reads-1: a Confirm that lands while a held
+// DM's write is in flight must wait for it before recounting, so the watcher
+// registers the write in the same tick as its pending check — before any
+// await (unreadStore.test.ts covers the recount's side).
+describe('held DM writes are registered for the confirm-time recount', () => {
+  const rumor = {
+    id: 'rumor-race', pubkey: PEER, kind: 14,
+    content: JSON.stringify({ type: 'text', text: 'held' }),
+    tags: [['p', OWN_PUB]], created_at: 1_800_000_000,
+  };
+
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  beforeEach(() => vi.mocked(trackHeldDirectMessageWrite).mockReset());
+
+  it('kind-1059: registered before the write lands; the registered promise settles once it has', async () => {
+    rememberPendingContact(PEER, '2021-01-01T00:00:00.000Z');
+    vi.mocked(unwrapAndOpen).mockResolvedValue(rumor);
+    const write = deferred();
+    vi.mocked(appendMessage).mockImplementation(() => write.promise);
+
+    const ndk = makeFakeNdk();
+    subscribe(ndk);
+    const handled = emitEvent(kind1059Sub(ndk), { id: 'wrap-race', kind: 1059, pubkey: 'ephemeral' });
+    await vi.waitFor(() => expect(appendMessage).toHaveBeenCalledTimes(1));
+
+    expect(trackHeldDirectMessageWrite).toHaveBeenCalledTimes(1);
+    const [peer, registered] = vi.mocked(trackHeldDirectMessageWrite).mock.calls[0];
+    expect(peer).toBe(PEER);
+    let settled = false;
+    void registered.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    write.resolve();
+    await handled;
+    expect(settled).toBe(true);
+    await expect(registered).resolves.toEqual({ id: 'rumor-race', createdAtMs: 1_800_000_000 * 1000 });
+    expect(incrementDirectMessage).not.toHaveBeenCalled();
+  });
+
+  it('kind-4: registered before the decrypt resolves (same tick as the pending check)', async () => {
+    rememberPendingContact(PEER, '2021-01-01T00:00:00.000Z');
+    const decrypt = deferred();
+    vi.mocked(decryptDirectPayload).mockImplementation(async () => { await decrypt.promise; return { content: 'held-4' }; });
+
+    const ndk = makeFakeNdk();
+    subscribe(ndk);
+    const handled = emitEvent(kind4Sub(ndk), { id: 'evt-4-race', pubkey: PEER, created_at: 1_800_000_000, content: 'ciphertext' });
+
+    expect(trackHeldDirectMessageWrite).toHaveBeenCalledTimes(1);
+    expect(appendMessage).not.toHaveBeenCalled();
+
+    decrypt.resolve();
+    await handled;
+    expect(appendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed write still settles the registered promise (a recount never waits forever)', async () => {
+    rememberPendingContact(PEER, '2021-01-01T00:00:00.000Z');
+    vi.mocked(unwrapAndOpen).mockResolvedValue(rumor);
+    vi.mocked(appendMessage).mockRejectedValue(new Error('idb'));
+
+    const ndk = makeFakeNdk();
+    subscribe(ndk);
+    await emitEvent(kind1059Sub(ndk), { id: 'wrap-race-3', kind: 1059, pubkey: 'ephemeral' });
+
+    const [, registered] = vi.mocked(trackHeldDirectMessageWrite).mock.calls[0];
+    await expect(registered).resolves.toBeNull();
+  });
+
+  it('a confirmed peer\'s DM registers no held write', async () => {
+    rememberContact(PEER, '2021-01-01T00:00:00.000Z');
+    vi.mocked(unwrapAndOpen).mockResolvedValue(rumor);
+
+    const ndk = makeFakeNdk();
+    subscribe(ndk);
+    await emitEvent(kind1059Sub(ndk), { id: 'wrap-race-4', kind: 1059, pubkey: 'ephemeral' });
+
+    expect(trackHeldDirectMessageWrite).not.toHaveBeenCalled();
+    expect(incrementDirectMessage).toHaveBeenCalledTimes(1);
   });
 });

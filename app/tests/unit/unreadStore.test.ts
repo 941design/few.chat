@@ -398,18 +398,9 @@ describe('reconcileConfirmedContactDirectMessageCount — raw idb-keyval read pa
     clearDirectMessageContact(PEER);
 
     const threadId = directConversationId(PEER);
-    // This seeds persisted messages directly, which exercises
-    // reconcileConfirmedContactDirectMessageCount's counting mechanics in
-    // isolation — `confirmPendingContact` (PendingConfirmationPrompt.tsx)
-    // calls this exact function. It is NOT a simulation of the real
-    // pending-contact timeline: per AC-OBS-2 (amended 2026-07-15, spec.md
-    // `## Amendments`), a contact's messages are only persisted once their
-    // `ContactChat` has mounted at least once, which never happens while
-    // still pending — so at real confirm time this read typically finds
-    // nothing yet and resolves to 0. The real catch-up for a genuinely-
-    // never-opened conversation happens on first open instead, via
-    // `ContactChat`'s own history load + `markDirectMessagesRead` (see the
-    // e2e coverage in dm-pairing-pending-confirmation.spec.ts).
+    // Seeds the messages the DM watcher stores while the contact is pending
+    // (AC-DM-2) — `confirmPendingContact` (PendingConfirmationPrompt.tsx)
+    // calls this exact function, and the count shows them on Confirm (AC-DM-3).
     for (let i = 0; i < 3; i++) {
       await appendMessage(threadId, { id: `held-${i}`, content: `msg ${i}`, senderPubkey: PEER, groupId: threadId, createdAt: 1000 + i * 100 });
     }
@@ -1151,5 +1142,443 @@ describe('unreadStore mutation-gate: a join request arriving during the startup 
     expect(unread.useUnreadCounts().joinRequests['race-jr1']).toBe(2);
 
     entriesMock.mockImplementation(prev ?? (async () => []));
+  });
+});
+
+// Bug pending-contact-confirm-badge-reads-1: Confirm's recount must count the
+// held DMs (stored, never live-counted) plus the confirmed DMs that arrive
+// during it (live-counted, never stored), however these interleave.
+describe('reconcileConfirmedContactDirectMessageCount — held writes in flight and live arrivals', () => {
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  async function setup(own: string, peer: string) {
+    const { directConversationId } = await import('@/src/lib/directMessages');
+    const { appendMessage } = await import('@/src/lib/marmot/chatPersistence');
+    const store = await import('@/src/lib/unreadStore');
+    store.clearDirectMessageContact(peer);
+    const threadId = directConversationId(peer);
+    const hold = (id: string, createdAt: number) =>
+      appendMessage(threadId, { id, content: id, senderPubkey: peer, groupId: threadId, createdAt });
+    return { ...store, hold };
+  }
+
+  it('Confirm, then a live DM, then the held write lands => 2 (Codex interleaving)', async () => {
+    const OWN = 'd1'.repeat(32);
+    const PEER = 'd2'.repeat(32);
+    const s = await setup(OWN, PEER);
+
+    const gate = deferred();
+    s.trackHeldDirectMessageWrite(PEER, gate.promise.then(async () => { await s.hold('held-a', 1000); return { id: 'held-a', createdAtMs: 1000 }; }));
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    s.incrementDirectMessage(PEER); // confirmed DM B, counted live, not stored
+    gate.resolve();
+    await confirm;
+
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('waits for a registered held write before reading storage', async () => {
+    const OWN = 'd3'.repeat(32);
+    const PEER = 'd4'.repeat(32);
+    const s = await setup(OWN, PEER);
+
+    const gate = deferred();
+    s.trackHeldDirectMessageWrite(PEER, gate.promise.then(async () => { await s.hold('held-b', 1000); return { id: 'held-b', createdAtMs: 1000 }; }));
+    let done = false;
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN).then(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(done).toBe(false);
+
+    gate.resolve();
+    await confirm;
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+  });
+
+  it('a held write that fails does not block the recount', async () => {
+    const OWN = 'd5'.repeat(32);
+    const PEER = 'd6'.repeat(32);
+    const s = await setup(OWN, PEER);
+    await s.hold('held-c', 1000);
+
+    const failed = Promise.reject(new Error('idb'));
+    failed.catch(() => {});
+    s.trackHeldDirectMessageWrite(PEER, failed);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+  });
+
+  it('two overlapping recounts for one peer keep a live DM that arrives between them', async () => {
+    const OWN = 'd7'.repeat(32);
+    const PEER = 'd8'.repeat(32);
+    const s = await setup(OWN, PEER);
+    await s.hold('held-d', 1000);
+    let firstDone = false;
+    const first = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN).then(() => { firstDone = true; });
+    const second = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    expect(firstDone).toBe(false);
+    s.incrementDirectMessage(PEER);
+    await Promise.all([first, second]);
+
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('the thread read during the recount => only later live DMs count', async () => {
+    const OWN = 'd9'.repeat(32);
+    const PEER = 'da'.repeat(32);
+    const s = await setup(OWN, PEER);
+    await s.hold('held-e', 1000);
+
+    const gate = deferred();
+    s.trackHeldDirectMessageWrite(PEER, gate.promise);
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    s.incrementDirectMessage(PEER);
+    s.markDirectMessagesRead(PEER);
+    gate.resolve();
+    await confirm;
+    expect(s.useUnreadCounts().directMessages[PEER] ?? 0).toBe(0);
+  });
+
+  it('a live DM from another peer during the storage read does not replace this peer\'s stored count', async () => {
+    const OWN = 'dd'.repeat(32);
+    const PEER = 'de'.repeat(32);
+    const OTHER = 'df'.repeat(32);
+    const s = await setup(OWN, PEER);
+    s.clearDirectMessageContact(OTHER);
+    await s.hold('held-f', 1000);
+
+    const idb = await import('idb-keyval');
+    const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+    const prev = getMock.getMockImplementation();
+    let fired = false;
+    getMock.mockImplementation(async (k: string) => {
+      if (k === `few:messages:dm:${PEER}` && !fired) {
+        fired = true;
+        s.incrementDirectMessage(OTHER); // touches OTHER mid-scan; OTHER has nothing stored
+      }
+      return prev ? prev(k) : undefined;
+    });
+    try {
+      await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    } finally {
+      getMock.mockImplementation(prev ?? (async () => undefined));
+    }
+
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    expect(s.useUnreadCounts().directMessages[OTHER]).toBe(1);
+  });
+
+  it('a live DM between the starts of two recounts for one peer is kept', async () => {
+    const OWN = 'e1'.repeat(32);
+    const PEER = 'e2'.repeat(32);
+    const s = await setup(OWN, PEER);
+    await s.hold('held-g', 1000);
+
+    const first = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    s.incrementDirectMessage(PEER);
+    const second = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    await Promise.all([first, second]);
+
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('a held write that never settles delays the recount by at most the cap', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'e3'.repeat(32);
+      const PEER = 'e4'.repeat(32);
+      const s = await setup(OWN, PEER);
+      await s.hold('held-h', 1000);
+      s.trackHeldDirectMessageWrite(PEER, new Promise(() => {}));
+
+      let done = false;
+      const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN).then(() => { done = true; });
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await confirm;
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  async function lateHeldWrite(s: Awaited<ReturnType<typeof setup>>, peer: string, own: string, id: string, createdAtMs = 5000) {
+    const gate = deferred();
+    s.trackHeldDirectMessageWrite(peer, gate.promise.then(async () => {
+      await s.hold(id, createdAtMs);
+      return { id, createdAtMs };
+    }));
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(peer, own);
+    await vi.advanceTimersByTimeAsync(5000);
+    await confirm;
+    return gate;
+  }
+
+  it('a held write that lands after the cap is counted once when it lands', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'e5'.repeat(32);
+      const PEER = 'e6'.repeat(32);
+      const s = await setup(OWN, PEER);
+      await s.hold('held-i', 1000);
+
+      const gate = await lateHeldWrite(s, PEER, OWN, 'late-i');
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a held write that lands after the cap is not counted if the thread was read meanwhile', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'e7'.repeat(32);
+      const PEER = 'e8'.repeat(32);
+      const s = await setup(OWN, PEER);
+
+      vi.setSystemTime(1000);
+      // The late message is newer than the last-read mark, so only the epoch stops it.
+      const gate = await lateHeldWrite(s, PEER, OWN, 'late-j', 1_000_000);
+      s.markDirectMessagesRead(PEER);
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER] ?? 0).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a late held write that a later recount counts from storage is not counted twice', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'e9'.repeat(32);
+      const PEER = 'ea'.repeat(32);
+      const s = await setup(OWN, PEER);
+
+      const gate = await lateHeldWrite(s, PEER, OWN, 'late-k');
+      gate.resolve();
+      await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a held write that lands after the cap but before the recount finishes is counted', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'eb'.repeat(32);
+      const PEER = 'ec'.repeat(32);
+      const s = await setup(OWN, PEER);
+      const gate = deferred();
+      s.trackHeldDirectMessageWrite(PEER, gate.promise.then(async () => {
+        await s.hold('late-l', 5000);
+        return { id: 'late-l', createdAtMs: 5000 };
+      }));
+
+      const idb = await import('idb-keyval');
+      const getMock = idb.get as unknown as ReturnType<typeof vi.fn>;
+      const prev = getMock.getMockImplementation();
+      getMock.mockImplementation(async (k: string) => {
+        const v = prev ? await prev(k) : undefined; // snapshot first, then the write lands
+        if (k === `few:messages:dm:${PEER}`) { gate.resolve(); await gate.promise; }
+        return v;
+      });
+      try {
+        const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+        await vi.advanceTimersByTimeAsync(5000);
+        await confirm;
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        getMock.mockImplementation(prev ?? (async () => undefined));
+      }
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a contact cleared during the capped wait is not re-lit by a late held write', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'ed'.repeat(32);
+      const PEER = 'ee'.repeat(32);
+      const s = await setup(OWN, PEER);
+      const gate = deferred();
+      s.trackHeldDirectMessageWrite(PEER, gate.promise.then(async () => {
+        await s.hold('late-m', 5000);
+        return { id: 'late-m', createdAtMs: 5000 };
+      }));
+
+      const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(1000);
+      s.clearDirectMessageContact(PEER);
+      await vi.advanceTimersByTimeAsync(4000);
+      await confirm;
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(PEER in s.useUnreadCounts().directMessages).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('two late held writes of the same message count it once', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'ef'.repeat(32);
+      const PEER = 'f0'.repeat(32);
+      const s = await setup(OWN, PEER);
+      const gate = deferred();
+      const write = () => gate.promise.then(async () => {
+        await s.hold('late-n', 5000);
+        return { id: 'late-n', createdAtMs: 5000 };
+      });
+      s.trackHeldDirectMessageWrite(PEER, write());
+      s.trackHeldDirectMessageWrite(PEER, write()); // e.g. a redelivery after a watcher restart
+
+      const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(5000);
+      await confirm;
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a read during the recount clears a count the peer already had', async () => {
+    const OWN = 'f1'.repeat(32);
+    const PEER = 'f2'.repeat(32);
+    const s = await setup(OWN, PEER);
+    s.incrementDirectMessage(PEER);
+    s.incrementDirectMessage(PEER);
+
+    const gate = deferred();
+    s.trackHeldDirectMessageWrite(PEER, gate.promise.then(() => null));
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    s.markDirectMessagesRead(PEER);
+    gate.resolve();
+    await confirm;
+    expect(s.useUnreadCounts().directMessages[PEER] ?? 0).toBe(0);
+  });
+
+  it('a recount still waits for a held write when another one of the peer\'s has settled', async () => {
+    const OWN = 'f3'.repeat(32);
+    const PEER = 'f4'.repeat(32);
+    const s = await setup(OWN, PEER);
+    const first = deferred();
+    const second = deferred();
+    s.trackHeldDirectMessageWrite(PEER, first.promise.then(async () => { await s.hold('w1', 1000); return { id: 'w1', createdAtMs: 1000 }; }));
+    s.trackHeldDirectMessageWrite(PEER, second.promise.then(async () => { await s.hold('w2', 2000); return { id: 'w2', createdAtMs: 2000 }; }));
+    first.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+
+    let done = false;
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN).then(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(done).toBe(false);
+    second.resolve();
+    await confirm;
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('a recount queued behind another for the peer still runs and sees what landed meanwhile', async () => {
+    const OWN = 'f5'.repeat(32);
+    const PEER = 'f6'.repeat(32);
+    const s = await setup(OWN, PEER);
+    await s.hold('q1', 1000);
+
+    const first = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    // Registered after the first recount captured its held writes.
+    const gate = deferred();
+    s.trackHeldDirectMessageWrite(PEER, gate.promise.then(async () => { await s.hold('q2', 2000); return { id: 'q2', createdAtMs: 2000 }; }));
+    const second = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    await first;
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+    gate.resolve();
+    await second;
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+  });
+
+  it('a recount leaves other peers\' counts alone', async () => {
+    const OWN = 'f7'.repeat(32);
+    const PEER = 'f8'.repeat(32);
+    const OTHER = 'f9'.repeat(32);
+    const s = await setup(OWN, PEER);
+    s.clearDirectMessageContact(OTHER);
+    s.incrementDirectMessage(OTHER);
+    await s.hold('o1', 1000);
+    const confirm = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    s.incrementDirectMessage(PEER);
+    await confirm;
+    expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+    expect(s.useUnreadCounts().directMessages[OTHER]).toBe(1);
+  });
+
+  it('a late held write at or before a read made before the recount is not counted', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'fa'.repeat(32);
+      const PEER = 'fb'.repeat(32);
+      const s = await setup(OWN, PEER);
+      vi.setSystemTime(10_000);
+      s.markDirectMessagesRead(PEER);
+
+      const gate = await lateHeldWrite(s, PEER, OWN, 'late-o', 10_000); // exactly at the mark
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER] ?? 0).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('queued recounts: a live DM during the first and a held write landing after its cap count 2 (Codex)', async () => {
+    vi.useFakeTimers();
+    try {
+      const OWN = 'fc'.repeat(32);
+      const PEER = 'fd'.repeat(32);
+      const s = await setup(OWN, PEER);
+      const gate = deferred();
+      s.trackHeldDirectMessageWrite(PEER, gate.promise.then(async () => {
+        await s.hold('held-p', 5000);
+        return { id: 'held-p', createdAtMs: 5000 };
+      }));
+
+      const first = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      s.incrementDirectMessage(PEER); // confirmed DM B, live only
+      const second = s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+      await vi.advanceTimersByTimeAsync(5000);
+      await first;
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(1);
+
+      gate.resolve(); // lands during the second recount's wait
+      await vi.advanceTimersByTimeAsync(0);
+      await second;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.useUnreadCounts().directMessages[PEER]).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a recount with nothing held, stored or live leaves no entry', async () => {
+    const OWN = 'db'.repeat(32);
+    const PEER = 'dc'.repeat(32);
+    const s = await setup(OWN, PEER);
+    await s.reconcileConfirmedContactDirectMessageCount(PEER, OWN);
+    expect(PEER in s.useUnreadCounts().directMessages).toBe(false);
   });
 });

@@ -1,0 +1,80 @@
+{
+  "bug_name": "pending-contact-confirm-badge-reads-1",
+  "bug_report_file": "bug-reports/pending-contact-confirm-badge-reads-1-report.md",
+  "created_at": "2026-10-19T01:04:54Z",
+  "updated_at": "2026-10-19T04:20:42Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "5dd7206",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (post-write recount: shared reconcileFloor slot loses live bumps across two recounts; stale lastRead; purged-contact recount; comment rot)",
+      "codex": "needs-attention (max(stored, live) loses a message when a live DM arrives between Confirm and the held write)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "ACCEPTED (redesign: held-write registry + additive recount; sev3 overlapping recounts)",
+      "codex": "needs-attention (stored overwritten by another peer's re-read)"
+    },
+    {
+      "round": 2,
+      "code_reviewer": "ACCEPTED",
+      "codex": "model at capacity, then needs-attention (held write after the 5 s cap never counted)"
+    },
+    {
+      "round": 3,
+      "code_reviewer": "ACCEPTED",
+      "codex": "needs-attention (write settling between snapshot and finish; clear during wait re-lit)"
+    },
+    {
+      "round": 4,
+      "code_reviewer": "ACCEPTED (no findings)",
+      "codex": "needs-attention (two late writes of one message counted twice)"
+    },
+    {
+      "round": 5,
+      "code_reviewer": "(not re-run)",
+      "codex": "approve"
+    },
+    {
+      "round": 6,
+      "code_reviewer": "ACCEPTED (post-mutation simplifications)",
+      "codex": "needs-attention (queued recounts: live-only pre mistaken for stored messages)"
+    },
+    {
+      "round": 7,
+      "code_reviewer": "ACCEPTED (sev2 inference recorded on backlog)",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 7,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-19T01:04:54Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-19T02:55:09Z",
+      "trigger": "both reviewers accepted (round 7)"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-19T04:20:42Z",
+      "trigger": "full e2e gate green except the known composer stall; both failing specs 5/5 in isolation"
+    }
+  ],
+  "e2e_gate": "green-except-known-flake: 72 + 351 passed, 2 failed, 19 skipped, no INVALID (/tmp/claude-501/e2e-gate/full-confirmrace.log). Both failures are the known composer stall (dm-composer-enter-press-hangs-30s): dm-pairing-pending-confirmation:223 (30 s in performing click action on chat-send-btn, before any confirm) and groups-dm-reactions:233 (30 s on press Enter). Isolated on a fresh relay: dm-pairing-pending-confirmation 5/5 and groups-dm-reactions 5/5 passed."
+}

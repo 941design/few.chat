@@ -68,9 +68,8 @@ itself:
 - **A message from a blocked person** — vetoed at the same gate; blocking silences them
   everywhere, including the indicator.
 - **A message from a still-pending contact** — a contact you have not yet confirmed is held
-  quietly: their messages are received but raise nothing while they are pending. Nothing is
-  lost — the messages that arrived while they waited appear when you next open the
-  conversation — but they arrive **already read**, so the indicator never reflects them.
+  quietly: their messages are received and kept but raise nothing while they are pending.
+  Nothing is lost — once you confirm the contact, those messages count as unread (below).
 - **A join request that gets dropped** — a request through a muted or expired invite link,
   from someone already a member, or one that fails its authenticity check is silently
   discarded and never raises anything (see the Groups document).
@@ -119,10 +118,10 @@ raises nothing; the gate is re-checked per message against the live block state.
 
 **A contact is both pending and blocked.** Blocked wins — silent either way.
 
-**A pending contact you then confirm.** Confirming does not itself resurface a count for what
-arrived while they were pending; instead, the held messages become visible — and are marked
-read — the next time you open the conversation. Nothing is lost; it simply appears as
-already-read history rather than as a fresh notification.
+**A pending contact you then confirm.** The messages that arrived while they were pending
+now count as unread for that conversation, as if they had just arrived. A message that
+arrives at the very moment you confirm is counted too, exactly once. Opening the
+conversation marks them read as usual.
 
 **A message arrives for a conversation you have open.** No notification; the view updates and
 the conversation stays marked read (rule two).

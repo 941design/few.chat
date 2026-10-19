@@ -95,11 +95,13 @@ opening a card or a bare-identity link — is confirmed at once.
 While a contact is pending, they are **accepted but held at arm's length**: their
 conversation is not opened, their messages are neither shown nor counted, they raise no
 notification, and you cannot message them either — the relationship is inert until you act
-on it. **Confirming** the contact makes the conversation active and the person messageable,
-and settles the unread count (in practice there is nothing to catch up, because nothing was
-surfaced while they waited). **Declining** an unwanted pending contact is the same action
-as blocking them (§5) — there is no separate "reject". Confirming only clears the pending
-state; it never un-blocks a contact who is also blocked — blocking always wins (§5, §8.3).
+on it. Their messages are kept, though, so nothing they sent is lost. **Confirming** the
+contact makes the conversation active and the person messageable, and the messages that
+arrived while they waited then count as unread, like any other unread conversation —
+however close the confirmation comes to a message's arrival. **Declining** an unwanted
+pending contact is the same action as blocking them (§5) — there is no separate "reject".
+Confirming only clears the pending state; it never un-blocks a contact who is also blocked
+— blocking always wins (§5, §8.3).
 
 ---
 

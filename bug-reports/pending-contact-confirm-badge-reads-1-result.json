@@ -1,0 +1,62 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 7,
+  "root_cause": "The inbound-DM watcher stores a pending contact's DM with an awaited IndexedDB write and never counts it live; Confirm recounts the peer from storage. A Confirm landing while that write was in flight read storage before the message was there, so the DM was counted by neither path. The recount also took max(stored, live) although held (stored, never live-counted) and confirmed (live-counted, never stored) DMs are disjoint, so a live DM during the recount could stand in for a stored one.",
+  "fix": "The watcher registers each held DM's write (unreadStore.trackHeldDirectMessageWrite) in the tick of its pending check. reconcileConfirmedContactDirectMessageCount is serialised per peer and starts a per-call tracker before its first await; it waits up to 5 s for the peer's held writes, reads storage and last-read after that, and sets max(pre, stored) + live bumps during the call for the first recount (pre + stored ids not yet counted for later ones, via a per-peer counted-id set). A held write still running at the cap is counted when it lands, unless already counted, already read, or the thread was read, cleared or recounted since. Behaviour docs corrected: held messages count as unread on Confirm (they had claimed already-read).",
+  "files_modified": [
+    "app/src/lib/directMessageNotifications.ts",
+    "app/src/lib/unreadStore.ts",
+    "app/src/components/contacts/PendingConfirmationPrompt.tsx",
+    "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts",
+    "app/tests/unit/directMessageNotifications-pending-retain.test.ts",
+    "app/tests/unit/unreadStore.test.ts",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/notifications-and-unread.md",
+    "BACKLOG.json"
+  ],
+  "files_created": [
+    "bug-reports/pending-contact-confirm-badge-reads-1-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/directMessageNotifications-pending-retain.test.ts",
+      "app/tests/unit/unreadStore.test.ts"
+    ],
+    "pre_fix_failures": 7,
+    "kinds": "Watcher: registration in the tick of the pending check (both kinds), resolves to the stored message or null, confirmed peer registers none. Real-store recount: Codex interleaving (Confirm, live DM, held write) = 2; waits for held writes; failed write; overlapping and queued recounts; read/clear during the recount; other peers preserved; held write after the cap counted once, not after a read/clear/recount, deduped across redelivery; queued recounts with a live DM and a late write = 2. Round-1+ tests were written with each remediation, each confirmed failing without its fix."
+  },
+  "final": {
+    "passed": 6468,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (unreadStore.ts changed regions)",
+    "killed": 95,
+    "timeout": 0,
+    "survived": 26,
+    "score": 77.87,
+    "survivors": "All equivalent or memory-cleanup only: map-entry deletion guards (heldDirectMessageWrites, confirmRecountInFlight, confirmRecountTrackers \u2014 recounts are serialised per peer), epoch +1/-1, empty-array guards, a no-op state write guard, an unreachable `storedIds ?? []` fallback (NoCoverage)."
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-confirmrace.log",
+    "result": "non-relay 72 passed; relay 351 passed, 2 failed, 19 skipped; no INVALID marker. Both failures are the known composer stall (backlog dm-composer-enter-press-hangs-30s, sightings recorded): dm-pairing-pending-confirmation.spec.ts:223 stalled 30 s in performing click action on chat-send-btn before any confirm; groups-dm-reactions.spec.ts:233 stalled 30 s on press Enter. Isolated on a fresh relay: 5/5 and 5/5 passed.",
+    "status": "green-except-known-flake"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "The confirm-time recount mixed two disjoint message sets (stored held DMs, live-only confirmed DMs) under a max(); every narrow fix exposed another interleaving. Seven Codex rounds; a written model of which set each counter source belongs to would have shortened it.",
+    "surprised_by": "Two behaviour docs claimed held messages arrive already-read on Confirm, contradicting AC-DM-3 and the e2e spec; and two concurrent first-time dynamic imports of a vi.mock'ed module race in vitest (the second can resolve the real module).",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/directMessageNotifications.ts",
+    "app/src/lib/unreadStore.ts"
+  ]
+}

@@ -32,6 +32,7 @@ import { createLogger } from '@/src/lib/logger';
 import {
   getDirectMessageLastReadAt,
   incrementDirectMessage,
+  trackHeldDirectMessageWrite,
 } from '@/src/lib/unreadStore';
 import { isPendingConfirmation, rememberContact } from '@/src/lib/contacts';
 import { isActiveView } from '@/src/lib/activeViewStore';
@@ -55,13 +56,17 @@ export type IncomingDmEvent = {
  * a later `ContactChat` mount re-appending the same id is a safe no-op — no
  * double-count (AC-DM-4). Best-effort: any failure is swallowed so retention
  * never breaks the bell watcher.
+ *
+ * Callers register the write with `trackHeldDirectMessageWrite` in the same
+ * tick as their `isPendingConfirmation` check, so a Confirm that overtakes the
+ * write waits for it before recounting.
  */
 async function retainPendingInboundDm(
   peer: string,
   meta: { id: string; senderPubkey: string; createdAtMs: number },
   parsed: ReturnType<typeof parseDirectPayload>,
-): Promise<void> {
-  if (!parsed) return;
+): Promise<{ id: string; createdAtMs: number } | null> {
+  if (!parsed) return null;
   const threadId = directConversationId(peer);
   await appendMessage(threadId, {
     id: meta.id,
@@ -71,6 +76,7 @@ async function retainPendingInboundDm(
     createdAt: meta.createdAtMs,
     ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
   });
+  return { id: meta.id, createdAtMs: meta.createdAtMs };
 }
 
 /**
@@ -145,13 +151,19 @@ export function subscribeDirectMessageNotifications(params: {
     // active view, ContactChat renders + marks it read live, so the bell must
     // not also ring. Any other view rings it (INV-1).
     if (isPendingConfirmation(peer)) {
-      if (event.id && event.content) {
-        try {
-          const parsed = await decryptDirectPayload(event.content, privateKeyHex, peer);
-          await retainPendingInboundDm(peer, { id: event.id, senderPubkey: peer, createdAtMs: createdMs }, parsed);
-        } catch (err) {
-          logger.info('dm:retain-pending-failed', { pubkey: peer.slice(0, 8), kind: 4 });
-        }
+      const { id, content } = event;
+      if (id && content) {
+        const held = (async () => {
+          try {
+            const parsed = await decryptDirectPayload(content, privateKeyHex, peer);
+            return await retainPendingInboundDm(peer, { id, senderPubkey: peer, createdAtMs: createdMs }, parsed);
+          } catch (err) {
+            logger.info('dm:retain-pending-failed', { pubkey: peer.slice(0, 8), kind: 4 });
+            return null;
+          }
+        })();
+        trackHeldDirectMessageWrite(peer, held);
+        await held;
       }
     } else if (!isActiveView('dm', peer)) {
       incrementDirectMessage(peer);
@@ -209,16 +221,21 @@ export function subscribeDirectMessageNotifications(params: {
         // Retain the pending peer's DM (still no pill/bell) so Confirm can
         // reveal the unread pill immediately (AC-DM-2/3). The rumor is already
         // the decrypted kind-14 content here.
-        try {
-          const parsed = parseDirectPayload(rumor.content);
-          await retainPendingInboundDm(
-            peer,
-            { id: rumor.id, senderPubkey: peer, createdAtMs: createdMs },
-            parsed,
-          );
-        } catch {
-          logger.info('dm:retain-pending-failed', { pubkey: peer.slice(0, 8), kind: 1059 });
-        }
+        const held = (async () => {
+          try {
+            const parsed = parseDirectPayload(rumor.content);
+            return await retainPendingInboundDm(
+              peer,
+              { id: rumor.id, senderPubkey: peer, createdAtMs: createdMs },
+              parsed,
+            );
+          } catch {
+            logger.info('dm:retain-pending-failed', { pubkey: peer.slice(0, 8), kind: 1059 });
+            return null;
+          }
+        })();
+        trackHeldDirectMessageWrite(peer, held);
+        await held;
       } else if (!isActiveView('dm', peer)) {
         incrementDirectMessage(peer);
       }

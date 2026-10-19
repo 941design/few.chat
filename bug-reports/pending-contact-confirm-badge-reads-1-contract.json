@@ -1,0 +1,23 @@
+{
+  "bug": "pending-contact-confirm-badge-reads-1",
+  "scope": "A DM held while its sender was pending is counted after Confirm even when Confirm interleaves with its retain write.",
+  "files_to_modify": [
+    "app/src/lib/directMessageNotifications.ts (register each held DM's write in the tick of the pending check)",
+    "app/src/lib/unreadStore.ts (trackHeldDirectMessageWrite; the confirm recount waits for held writes and adds live bumps during the call to max(pre, stored), with per-call trackers)",
+    "app/src/components/contacts/PendingConfirmationPrompt.tsx (stale comment only)",
+    "app/tests/e2e/dm-pairing-pending-confirmation.spec.ts (stale header comment only)",
+    "app/tests/unit/directMessageNotifications-pending-retain.test.ts",
+    "app/tests/unit/unreadStore.test.ts",
+    "docs/behavior/contacts-and-direct-messages.md, docs/behavior/notifications-and-unread.md (stale: held DMs count on Confirm)"
+  ],
+  "behavior": {
+    "race": "Confirm during a held DM's write \u2192 the recount waits for the write; DMs arriving live during the recount are added, not maxed; no double count.",
+    "unchanged": "While still pending: retained, not counted. Confirmed before arrival: counted live, not retained."
+  },
+  "tests": [
+    "Unit: watcher registration timing (both kinds), failed write settles, confirmed peer registers none; real-store recount interleavings (Codex scenario, overlapping recounts, read during recount)"
+  ],
+  "non_goals": [
+    "Changing the e2e spec's wait (the race is fixed in product code)"
+  ]
+}
