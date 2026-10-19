@@ -1,0 +1,50 @@
+{
+  "bug_name": "deleting-dm-image-while-still-uploading",
+  "bug_report_file": "bug-reports/deleting-dm-image-while-still-uploading-report.md",
+  "created_at": "2026-10-18T23:13:28Z",
+  "updated_at": "2026-10-19T02:09:31Z",
+  "phase": "ACCEPTED",
+  "complexity": "low",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "e8f361b",
+  "models": {
+    "lead": "opus",
+    "examiner": "unknown",
+    "implementer": "opus"
+  },
+  "baseline": null,
+  "review_rounds": [
+    {
+      "round": 0,
+      "code_reviewer": "CHANGES_REQUESTED (sev6 reactions still offered/sent on uploading rows; sev3 stale comment; sev2 undefined key doc; sev2 test strength)",
+      "codex": "needs-attention (reactions against temporary ids)"
+    },
+    {
+      "round": 1,
+      "code_reviewer": "ACCEPTED (no findings)",
+      "codex": "approve"
+    }
+  ],
+  "remediation_round": 1,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-10-18T23:13:28Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "REVIEWED",
+      "timestamp": "2026-10-19T01:03:37Z",
+      "trigger": "both reviewers accepted"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-10-19T02:09:31Z",
+      "trigger": "full e2e gate green"
+    }
+  ],
+  "e2e_gate": "green: 72 + 353 passed, 0 failed, 19 skipped, no INVALID marker (/tmp/claude-501/e2e-gate/full-uploading.log)"
+}

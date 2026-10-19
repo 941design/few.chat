@@ -857,6 +857,18 @@ describe('group delete/edit send orchestration (S5 gate-remediation, finding 3: 
     expect(messages.find((m) => m.id === target.id)?.tombstoned).toBeFalsy();
   });
 
+  it('an image still uploading (temporary id) is neither deleted nor edited: no send, view unchanged (bug deleting-dm-image-while-still-uploading)', async () => {
+    const target = { ...makeGroupTarget({ id: 'send-uploading' }), uploading: true as const };
+    const harness = makeHarness([target]);
+    const group = { sendApplicationRumor: vi.fn(async () => {}) };
+
+    await performGroupDeleteMessage('send-uploading', makeDeps(harness, 'send-uploading', group));
+    await performGroupEditMessage('send-uploading', 'changed', makeDeps(harness, 'send-uploading', group));
+
+    expect(group.sendApplicationRumor).not.toHaveBeenCalled();
+    expect(harness.getView()).toEqual([target]);
+  });
+
   it('S5 gate-remediation (finding 3): own-message auth guard — a non-author messageId is a no-op (no send, no state change)', async () => {
     const target = makeGroupTarget({ id: 'send-del-guard', senderPubkey: malloryPubHex });
     await appendMessage(GROUP_ID, target);

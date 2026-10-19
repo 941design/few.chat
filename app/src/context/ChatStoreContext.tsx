@@ -233,7 +233,8 @@ export interface GroupSendDeps {
 export async function performGroupDeleteMessage(messageId: string, deps: GroupSendDeps): Promise<void> {
   const { group, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
   const snapshot = getSnapshot();
-  if (!snapshot) return;
+  // An image still uploading has a temporary id no peer ever sees.
+  if (!snapshot || snapshot.uploading) return;
 
   const isOwnMessage = snapshot.senderPubkey.toLowerCase() === pubkey.toLowerCase();
   const isAdminModerationDelete =
@@ -308,7 +309,8 @@ export async function performGroupEditMessage(
 ): Promise<void> {
   const { group, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
   const snapshot = getSnapshot();
-  if (!snapshot) return;
+  // An image still uploading has a temporary id no peer ever sees.
+  if (!snapshot || snapshot.uploading) return;
 
   if (snapshot.senderPubkey.toLowerCase() !== pubkey.toLowerCase()) return;
 
@@ -649,6 +651,7 @@ export function ChatStoreProvider({
         createdAt: now * 1000,
         attachments: { full: null, thumb: null },
         localMediaRefs: [],
+        uploading: true,
       };
       setMessages((prev) => [...prev, optimistic]);
 
@@ -664,6 +667,7 @@ export function ChatStoreProvider({
 
         const finalMsg: ChatMessage = {
           ...optimistic,
+          uploading: undefined,
           id: rumorId,
           createdAt: createdAt * 1000,
           attachments: { full: fullAttachment, thumb: thumbAttachment },
@@ -713,6 +717,7 @@ export function ChatStoreProvider({
   const sendReaction = useCallback(
     async (emoji: string, targetMessage: ChatMessage, isRemoval?: boolean) => {
       if (!groupId || !group || !privateKeyHex) return;
+      if (targetMessage.uploading) return; // temporary id, see canReactToMessage
 
       const thread = { kind: 'group' as const, groupId };
 

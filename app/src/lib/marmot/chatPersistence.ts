@@ -37,6 +37,12 @@ export interface ChatMessage {
    * text and image-shaped rows (AC-IMG-1).
    */
   tombstoned?: boolean;
+  /**
+   * True on an own image row while it is still uploading: its id is a
+   * temporary one no peer ever sees, so it offers no message actions (a
+   * delete of it could not stick). Never true on a stored row.
+   */
+  uploading?: true;
   /** True once this slot's content has been replaced by an edit. */
   edited?: boolean;
   /**

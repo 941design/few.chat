@@ -1,0 +1,22 @@
+{
+  "bug": "deleting-dm-image-while-still-uploading",
+  "scope": "No message actions on an image row that is still uploading (DM and group).",
+  "files_to_modify": [
+    "app/src/lib/marmot/chatPersistence.ts (ChatMessage.uploading?: true)",
+    "app/src/lib/messageEdits/messageActionUi.ts (canShowMessageActions: false while uploading)",
+    "app/src/components/contacts/ContactChat.tsx (optimistic image row flagged; final row unflagged; handlers refuse)",
+    "app/src/context/ChatStoreContext.tsx (same for the group image send)",
+    "docs/behavior/message-editing-and-deletion.md (§8: replace the limitation)",
+    "app/src/components/chat/ChatBox.tsx (reaction affordances gated on canReactToMessage)"
+  ],
+  "behavior": {
+    "uploading": "No delete/edit/react affordance on the row until it has its final id.",
+    "after_upload": "Unchanged: delete and reactions work on the final row."
+  },
+  "tests": [
+    "Unit: canShowMessageActions; source scans of both send paths and handlers"
+  ],
+  "non_goals": [
+    "Cancelling an upload in progress"
+  ]
+}

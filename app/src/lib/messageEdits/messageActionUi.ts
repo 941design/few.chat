@@ -98,8 +98,18 @@ export function canShowMessageActions(
   isGroupContext: boolean = false,
 ): boolean {
   if (!allowMessageActions) return false;
+  if (message.uploading) return false;
   if (isGroupContext && isInformativeAnnouncement(message)) return isCurrentUserAdmin;
   return message.senderPubkey.toLowerCase() === currentUserPubkey.toLowerCase();
+}
+
+/**
+ * Reactions (picker, long-press, badge toggles) are offered on any message
+ * except an own image still uploading: its temporary id is one no peer ever
+ * sees, and the reaction would not follow the row to its final id.
+ */
+export function canReactToMessage(message: ChatMessage): boolean {
+  return !message.uploading;
 }
 
 /**

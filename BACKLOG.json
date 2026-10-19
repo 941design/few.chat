@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-19T00:49:53Z",
+  "updated_at": "2026-10-19T02:09:31Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -378,19 +378,6 @@
       "behavior": "In gate full-backup-react (2026-10-18) AC-60 timed out on locator.press('Enter') for 30 s while the composer was visible with text, the thread having just loaded the previous test's history (same keys, same relay). The spec passed 5/5 in isolation; the first sighting was AC-46 (comment in sendDmViaComposer). Same stall as a click: dm-pairing-pending-confirmation.spec.ts:214 timed out 30 s in 'performing click action' on chat-send-btn in gates full-pollpurge (2026-10-17) and full-dmswitch (2026-10-18) while the message had already reached the peer. Also dm-block-cross-tab.spec.ts:84 in gate full-kprepub (2026-10-19): 30 s in 'performing click action' on chat-send-btn (tab 1 of two open tabs of the same account). Isolated dm-block-cross-tab (2026-10-19): 1 stall in 13 runs on e8f361b, 3 in 8 with the KeyPackage startup check added (not significant, but the stall may be load-sensitive: that check adds one relay fetch per tab start).",
       "approach": "Capture an in-page long-task/performance trace around the thread-open history load under CPU throttling to find the main-thread blocker; consider a per-test relay wipe or unique keys between DM reaction tests.",
       "success_signal": "Three consecutive full gates without a composer key-press timeout."
-    },
-    {
-      "slug": "deleting-dm-image-while-still-uploading",
-      "scope": "any",
-      "anchor": {
-        "path": "app/src/components/contacts/ContactChat.tsx"
-      },
-      "text": "Deleting a DM image while it is still uploading does not stick",
-      "created_at": "2026-10-18",
-      "motivation": "The delete action is offered on an uploading image, but the delete targets its temporary id, so the image comes back when the upload finishes and the peer receives a delete for an id that never exists; the behaviour doc now states this limitation.",
-      "behavior": "handleDeleteMessage publishes and buffers a delete for the random temp id; sendImageMessage then re-adds the final row under the event id and persistOwnSend stores it untombstoned, since nothing maps the temp-id signal to the event id.",
-      "approach": "Either hide delete/edit actions on temp-id (uploading) rows, or, after the upload, check the pending registry's hidden flag and issue the delete against the event id instead of re-adding the row.",
-      "success_signal": "Deleting an uploading image keeps it deleted after the upload finishes and after reopening the conversation."
     },
     {
       "slug": "pending-contact-confirm-badge-reads-1",

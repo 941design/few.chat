@@ -93,9 +93,8 @@ export function replacePendingOwnSend(owner: string, previousId: string, message
   const entry: Entry = {
     owner: owner.toLowerCase(),
     message,
-    // Not carried over: a delete aimed at the temp id cannot reach the event-id row
-    // (backlog deleting-dm-image-while-still-uploading), so every view shows it again,
-    // like the sending view does.
+    // Not carried over: an uploading row offers no delete (ChatMessage.uploading), so
+    // nothing hidden can carry over; reset defensively, like the sending view does.
     hidden: false,
     replacedIds: [...(previous?.replacedIds ?? []), previousId],
     actions: previous?.actions ?? 0,

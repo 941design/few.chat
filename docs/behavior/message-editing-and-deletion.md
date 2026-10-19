@@ -145,8 +145,12 @@ arrives (§6) — not dropped.
 
 **You edit or delete a direct text message that is still waiting for its acknowledgement.**
 The change shows at once and is stored once the message is acknowledged, so it still holds
-after reopening the conversation. This does not yet hold for an image that is still
-uploading: deleting it then does not stick, and the image comes back once the upload finishes.
+after reopening the conversation.
+
+**An image you send is still uploading.** In a direct message or a group, it offers no
+delete and no reactions until it is sent: until then it has no identity the other side
+could match a delete or reaction against. Once sent, it can be deleted and reacted to like
+any other message.
 
 **A held edit/delete whose message never arrives.** Its effect is still preserved: a delete
 leaves a lasting suppression marker; an edit becomes the message's content (§6).

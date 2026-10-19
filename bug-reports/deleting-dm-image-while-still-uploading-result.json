@@ -1,0 +1,65 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 1,
+  "root_cause": "An own image row has a random temporary id until its upload finishes (DM ContactChat.sendImageMessage and the group image send in ChatStoreContext), but it offered the same message actions and reactions as a sent message. A delete or reaction then targeted an id no peer ever sees, and the final row under the real id came back untombstoned (and without the reaction) once the upload finished.",
+  "fix": "ChatMessage.uploading (true only on the optimistic image row; the final row sets it undefined, so no stored row has it true). canShowMessageActions hides delete/edit for it; the new canReactToMessage gates ChatBox's reaction picker, long-press and badge row; the DM and group delete, edit and reaction handlers return early for an uploading row (covering the e2e bridges too).",
+  "files_modified": [
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/messageEdits/messageActionUi.ts",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/src/context/ChatStoreContext.tsx",
+    "app/src/lib/pendingOwnSends.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "docs/behavior/message-editing-and-deletion.md",
+    "BACKLOG.json"
+  ],
+  "files_created": [
+    "app/tests/unit/chat/uploadingImageActions.test.ts",
+    "bug-reports/deleting-dm-image-while-still-uploading-result.json"
+  ],
+  "tests_added": {
+    "files": [
+      "app/tests/unit/chat/uploadingImageActions.test.ts",
+      "app/tests/unit/marmot/groupMessageEdits.test.ts"
+    ],
+    "pre_fix_failures": 4,
+    "kinds": "canShowMessageActions / canReactToMessage for uploading rows; behavioural group delete+edit refusal (no send, view unchanged); pendingOwnSends round trip (remounted view keeps the flag, final row drops it); source scans of both image sends, the DM handlers, the ChatBox reaction gates and both reaction handlers. (The round-1 reaction tests were written with the remediation, not before it.)"
+  },
+  "final": {
+    "passed": 6443,
+    "skipped": 1,
+    "failed": 0,
+    "tsc": "clean"
+  },
+  "mutation": {
+    "tool": "stryker concurrency 1, scratch config (messageActionUi.ts)",
+    "killed": 145,
+    "timeout": 0,
+    "survived": 1,
+    "score": 99.32,
+    "survivors": "1 pre-existing, outside this change: latest-message tie-break `>` vs `>=` at messageActionUi.ts:184 (equal createdAt)."
+  },
+  "e2e": {
+    "command": "make test-e2e-all > /tmp/claude-501/e2e-gate/full-uploading.log",
+    "result": "non-relay 72 passed; relay 353 passed, 0 failed, 19 skipped; no INVALID marker.",
+    "status": "green"
+  },
+  "retrospective": {
+    "skipped": false,
+    "reason": "",
+    "scope": "project_specific",
+    "harder_than_needed": "Message-level affordances are gated in two independent places in ChatBox (canShowMessageActions for edit/delete, bare onReact for reactions); the first fix covered only one, which both reviewers caught.",
+    "surprised_by": "The group image send had the same temporary-id defect as the DM one, though the finding named only DMs.",
+    "absorbed_from": [],
+    "lead_clarifications": [],
+    "outcome": "merged"
+  },
+  "modules_touched": [
+    "app/src/lib/messageEdits/messageActionUi.ts",
+    "app/src/components/chat/ChatBox.tsx",
+    "app/src/components/contacts/ContactChat.tsx",
+    "app/src/context/ChatStoreContext.tsx"
+  ]
+}

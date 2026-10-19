@@ -1067,13 +1067,17 @@ export default function ContactChat({
   const sendImageMessage = useCallback(async (file: File, caption: string) => {
     const now = Math.floor(Date.now() / 1000);
     const tempId = crypto.randomUUID();
-    const optimistic = toMessage(threadId, {
-      id: tempId,
-      pubkey: pubkeyHex,
-      created_at: now,
-      content: JSON.stringify({ type: 'image', version: 1, caption }),
-      attachments: { full: null, thumb: null },
-    });
+    // Flagged uploading until it has its final id (no message actions).
+    const optimistic: ChatMessage = {
+      ...toMessage(threadId, {
+        id: tempId,
+        pubkey: pubkeyHex,
+        created_at: now,
+        content: JSON.stringify({ type: 'image', version: 1, caption }),
+        attachments: { full: null, thumb: null },
+      }),
+      uploading: true,
+    };
     upsertMessages([optimistic]);
     registerPendingOwnSend(pubkeyHex, optimistic);
     let pendingId = tempId;
@@ -1090,8 +1094,9 @@ export default function ContactChat({
         file,
         onProgress: () => {},
       });
-      const finalMsg = {
+      const finalMsg: ChatMessage = {
         ...optimistic,
+        uploading: undefined,
         id: result.eventId,
         attachments: result.attachments,
       };
@@ -1130,6 +1135,7 @@ export default function ContactChat({
    * published event id are always identical.
    */
   const handleReact = useCallback(async (emoji: string, message: ChatMessage, op: 'add' | 'remove') => {
+    if (message.uploading) return; // temporary id, see canReactToMessage
     const ndk = await connectNdk(privateKeyHex);
 
     // Build the rumor exactly once so the optimistic row id == published event id (AC-43).
@@ -1207,7 +1213,7 @@ export default function ContactChat({
    */
   const handleDeleteMessage = useCallback(async (messageId: string): Promise<void> => {
     const snapshot = messagesRef.current.find((m) => m.id === messageId);
-    if (!snapshot) return;
+    if (!snapshot || snapshot.uploading) return;
 
     // S4 gate-remediation (finding 6): own-message auth guard at the handler seam —
     // handleDeleteMessage acts on any messageId found in local state, so a bypass at
@@ -1259,7 +1265,7 @@ export default function ContactChat({
    */
   const handleEditMessage = useCallback(async (messageId: string, newContent: string): Promise<void> => {
     const snapshot = messagesRef.current.find((m) => m.id === messageId);
-    if (!snapshot) return;
+    if (!snapshot || snapshot.uploading) return;
 
     // S4 gate-remediation (finding 6): own-message auth guard — see
     // handleDeleteMessage's matching comment.

@@ -22,6 +22,7 @@ import { filterVisibleMessages, type ChatMessage } from '@/src/lib/marmot/chatPe
 import {
   canEditMessage,
   canShowMessageActions,
+  canReactToMessage,
   computeDeleteConfirmTransition,
   isEditSubmitBlocked,
   mergeFailedSendIntoDraft,
@@ -747,6 +748,7 @@ export default function ChatBox({
               // checks), which all `.toLowerCase()` both sides before comparing.
               const isSelf = msg.senderPubkey.toLowerCase() === pubkey.toLowerCase();
               const showActions = canShowMessageActions(msg, pubkey, allowMessageActions, isCurrentUserAdmin, isGroupContext);
+              const reactable = !!onReact && canReactToMessage(msg);
               const displayName = getDisplayName(msg.senderPubkey);
               const avatarImage = profileMap[msg.senderPubkey]?.avatar?.imageUrl;
               const avatarInitial = getAvatarInitial(msg.senderPubkey);
@@ -833,7 +835,7 @@ export default function ChatBox({
                       // Touch long-press: detect touch/pen to open reaction picker (spec §1.2).
                       // 500ms threshold per story brief. No new dependency.
                       onPointerDown={(e: React.PointerEvent) => {
-                        if (!onReact) return;
+                        if (!reactable) return;
                         if (e.pointerType === 'touch' || e.pointerType === 'pen') {
                           longPressMessageIdRef.current = msg.id;
                           longPressTimerRef.current = setTimeout(() => {
@@ -872,7 +874,7 @@ export default function ChatBox({
                       </Box>
 
                       {/* Reaction trigger — revealed on hover via _groupHover (AC-47) */}
-                      {onReact && (
+                      {onReact && reactable && (
                         <Box alignSelf="center" flexShrink={0}>
                           <EmojiReactionPicker
                             messageId={msg.id}
@@ -952,7 +954,7 @@ export default function ChatBox({
                     </Flex>
 
                     {/* Reaction badge row — real implementation (AC-49, story-08) */}
-                    {aggregates.length > 0 && onReact && (
+                    {aggregates.length > 0 && onReact && reactable && (
                       <ReactionBadgeRow
                         messageId={msg.id}
                         message={msg}
