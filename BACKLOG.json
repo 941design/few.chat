@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-10-19T07:46:14Z",
+  "updated_at": "2026-11-10T00:12:12Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -380,18 +380,43 @@
       "success_signal": "Three consecutive full gates without a composer key-press timeout."
     },
     {
-      "slug": "invite-lookup-ignores-invitee-s-keypackage",
+      "slug": "disjoint-relay-lists-cannot-invite",
       "scope": "any",
       "anchor": {
-        "path": "app/src/context/MarmotContext.tsx",
-        "line": 2233
+        "path": "app/src/lib/marmot/inviteeKeyPackageLookup.ts"
       },
-      "text": "Invite lookup ignores the invitee's KeyPackage relay list",
-      "created_at": "2026-10-19",
-      "motivation": "A user whose relays do not overlap the inviter's NDK pool cannot be invited although their KeyPackage is published; the startup KeyPackage check only proves presence on the user's own relays.",
-      "behavior": "inviteByNpub fetches kinds 443/30443 from the inviter's NDK pool (default relays plus added ones), with no relay set and no lookup of the invitee's kind 30051/10051 relay list, and reports no_key_package when that pool holds none.",
-      "approach": "Resolve the invitee's KeyPackage relay list (30051, falling back to 10051) and fetch from those relays too; or always include the default relays in the KeyPackage publish targets.",
-      "success_signal": "An invite succeeds for an invitee whose only relay is outside the inviter's configured relays."
+      "text": "OWNER: two Few users with fully disjoint relay lists cannot invite each other",
+      "created_at": "2026-11-10",
+      "motivation": "The invitee's relay list (kind 30051) is published only on the invitee's own relays, so an inviter who shares none of them can find neither the list nor a KeyPackage. The lookup fix of 2026-11-10 cannot bridge this; it needs a new publication or a hint, which is a product decision.",
+      "behavior": "inviteByNpub reports no_key_package when inviter and invitee share no relay; docs/behavior/groups.md 4.1 states the limit.",
+      "approach": "Recommended: publish a relay-list-only pointer (relay URLs only, no profile data; 30051 plus 10051) to the default relays even after the user removed them, on by default with an Advanced-settings opt-out. Alternative: carry relay hints in the invite or pairing code.",
+      "success_signal": "Owner decision recorded; if yes, an invite between two users with disjoint relay lists succeeds."
+    },
+    {
+      "slug": "advanced-settings-spec-relay-list-kind-mismatch",
+      "scope": "any",
+      "anchor": {
+        "path": "specs/advanced-settings.md"
+      },
+      "text": "specs/advanced-settings.md names kind 10051 for the relay list; AC-RELAY-9 and the code use 30051",
+      "created_at": "2026-11-10",
+      "motivation": "The spec contradicts its own acceptance criterion and the code, and the kind matters now that invites read both 30051 and 10051.",
+      "behavior": "The app publishes kind 30051 with d=marmot and never 10051; the spec prose says 10051.",
+      "approach": "Correct the spec prose to 30051 d=marmot, or decide to publish 10051 too (see disjoint-relay-lists-cannot-invite)."
+    },
+    {
+      "slug": "groups-cancel-pending-announcement-flake",
+      "scope": "any",
+      "anchor": {
+        "path": "app/tests/e2e/groups-cancel-pending.spec.ts",
+        "line": 144
+      },
+      "text": "e2e flake: groups-cancel-pending:144 cancel announcement missing under full-suite load",
+      "created_at": "2026-11-10",
+      "motivation": "It turned a full gate red on 2026-11-09 and is not yet explained; it may be a product race, not only a test race.",
+      "behavior": "Seen once in two full gates: invite-cancelled-announcement not visible within 15 s after the cancel modal closed and the test before it navigated away and back. 8 of 8 isolated reruns passed; the second full gate passed.",
+      "approach": "Check whether the page.goto in the :131 test unloads the page while the announcement send or its echo is in flight (same class as the groups-contacts :93 unload race, bug-reports/profile-propagation-flake-diagnosis.md).",
+      "success_signal": "Cause identified; spec or product fixed; no recurrence in 3 gates."
     }
   ],
   "archive": [

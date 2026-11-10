@@ -1,0 +1,36 @@
+{
+  "bug": "invite-lookup-ignores-invitee-s-keypackage",
+  "scope": "Resolve the invitee's relay list (kind 30051 d=marmot, else 10051) and use it for the KeyPackage lookup and the Welcome routing. Lookup and routing only, no new publication.",
+  "files_to_modify": [
+    "app/src/lib/marmot/inviteeKeyPackageLookup.ts (pure parser + DI lookup; no pool side effects; verifies every event)",
+    "app/src/lib/marmot/relayRequest.ts (new: one-shot raw-WebSocket REQ with injected ctor; verifyRelayEvent)",
+    "app/src/context/MarmotContext.tsx (inviteByNpub delegates; real verifier; raw-socket listed requests)",
+    "app/src/lib/marmot/NdkNetworkAdapter.ts (getUserInboxRelays uses the verified parser; listed + effective)",
+    "app/tests/unit/marmot/inviteeKeyPackageLookup.test.ts, relayRequest.test.ts, NdkNetworkAdapter.test.ts, app/tests/unit/inviteLookupWiring.test.ts (reduced)",
+    "docs/behavior/groups.md"
+  ],
+  "behavior": {
+    "relay_list": "30051 with d=marmot preferred over 10051; only events authored by the invitee; newest created_at; URLs from ['relay', url] tags; wss:// only (ws:// only for localhost/127.0.0.1/[::1]); trimmed, scheme+host lowercased, trailing slash dropped, deduped, at most 3 in list order.",
+    "lookup": "KeyPackages (443/30443) from the pool (started concurrently with the relay-list fetch) and from listed relays not covered by the pool/effective relays, each over its own raw WebSocket (REQ, collect until EOSE or 5 s, CLOSE, close; error = nothing, non-fatal; bound hit with nothing received = timedOut). NO NDK pool side effect. Every used event (relay lists and KeyPackages, pool and listed) is signature-verified through an injected verifier; listed-relay events must also be kind 443/30443 by the invitee. no_key_package only when nothing is found; timeout only when nothing found and a fetch timed out. Saved relay setting never written.",
+    "welcome_routing": "getUserInboxRelays returns listed \u222a effective relays (listed first, deduped); effective relays alone on no list/timeout/error; never empty."
+  },
+  "constraints": [
+    "Only the KeyPackage REQ goes to listed relays; the relay-list REQ goes to the pool only",
+    "No profile data published or fetched (privacy invariant)",
+    "All other inviteByNpub steps and error codes unchanged",
+    "keyPackagesRelayCheckWiring.test.ts source scan stays valid",
+    "No UI text change expected (otherwise en + de in i18n.ts)",
+    "Parser is total (non-array tags, null elements, non-string values skipped)",
+    "Worst-case time to timeout with no listed relays is one pool timeout",
+    "No new dependency (nostr-tools already a direct dependency)"
+  ],
+  "non_goals": [
+    "Publishing kind 10051 or a relay-list pointer to default relays",
+    "Relay hints in the invite/pairing code (fully disjoint relay lists still cannot invite each other; OWNER question)",
+    "Changing what the app publishes (30051 to effective relays)",
+    "E2E specs (one-relay stack cannot produce the state)"
+  ],
+  "remediation_round_1": "Replaced NDKRelaySet + pool snapshot/cleanup by raw sockets (findings A, C), added signature verification and author/kind filtering (B), total parser (D), test and docs corrections (E, F).",
+  "remediation_round_2": "covered relays = ndk.pool.permanentAndConnectedRelays() only; getUserInboxRelays keeps a verified list received before a timeout; normalised relay URLs keep the query (fragment dropped); lookup returns a usable pool KeyPackage without awaiting listed relays (abandoned flow never rejects); real-NDKEvent verifier test; docs corrected.",
+  "remediation_round_3": "Coverage snapshot taken before the pool KeyPackage request; poolKey() tolerates NDK's slash after a query; docs wording (a)-(c)."
+}

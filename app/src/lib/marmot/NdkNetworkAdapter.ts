@@ -18,6 +18,12 @@ import type { NostrEvent } from 'applesauce-core/helpers/event';
 import type { Filter } from 'applesauce-core/helpers/filter';
 import { getEffectiveRelays } from '@/src/lib/relay';
 import { PUBLISH_TIMEOUT_MS } from '@/src/lib/ndkClient';
+import {
+  normaliseListedRelayUrl,
+  parseInviteeRelayList,
+  relayListFilter,
+} from '@/src/lib/marmot/inviteeKeyPackageLookup';
+import { verifyRelayEvent } from '@/src/lib/marmot/relayRequest';
 
 // applesauce Filter -> NDK Filter shape is compatible, cast directly
 function toNdkFilter(filter: Filter | Filter[]): NDKFilter {
@@ -161,29 +167,31 @@ export class NdkNetworkAdapter implements NostrNetworkInterface {
     };
   }
 
+  /**
+   * Where marmot-ts publishes the Welcome gift wrap for `pubkey`: the relays the
+   * peer advertises (kind 30051 d=marmot, else 10051; filtered and capped by
+   * parseInviteeRelayList) plus our own effective relays. Never empty — an empty
+   * result makes marmot-ts throw "No relays available to send Welcome", and a
+   * list we could not read (none / error) must not lose the Welcome.
+   * Our own relays stay in the set because the advertised ones are untrusted
+   * hints, not a reason to stop publishing where we know we are connected.
+   */
   async getUserInboxRelays(pubkey: string): Promise<string[]> {
-    // Fetch kind 10051 (relay list for KeyPackage discovery)
     try {
       const { fetchEventsWithTimeout } = await import('@/src/lib/ndkClient');
-      const { events, timedOut } = await fetchEventsWithTimeout(
-        this.ndk,
-        // 10051 is the KeyPackage relay list kind — cast to NDKKind
-        { kinds: [10051 as import('@nostr-dev-kit/ndk').NDKKind], authors: [pubkey], limit: 1 },
-      );
-      // On timeout, fall back to DEFAULT_RELAYS rather than trusting an
-      // incomplete relay list that may be missing entries.
-      if (timedOut) return getEffectiveRelays();
-      const event = Array.from(events)[0];
-      // Fallback to effective relays: most users never publish kind 10051.
-      // Returning [] would cause marmot-ts to throw "No relays available
-      // to send Welcome" — the invite succeeds but the new member never
-      // receives the Welcome gift wrap and can't join.
-      if (!event) return getEffectiveRelays();
-
-      const relays = event.tags
-        .filter((t) => t[0] === 'relay' && typeof t[1] === 'string')
-        .map((t) => t[1]);
-      return relays.length > 0 ? relays : getEffectiveRelays();
+      const { events } = await fetchEventsWithTimeout(this.ndk, relayListFilter(pubkey) as never);
+      // Events received before a timeout are kept (the KeyPackage lookup uses them too);
+      // our own relays are always included, so a partial list cannot narrow the Welcome.
+      const listed = parseInviteeRelayList(events, pubkey, verifyRelayEvent);
+      const merged: string[] = [];
+      const seen = new Set<string>();
+      for (const url of [...listed, ...getEffectiveRelays()]) {
+        const key = normaliseListedRelayUrl(url) ?? url;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(url);
+      }
+      return merged.length > 0 ? merged : getEffectiveRelays();
     } catch {
       return getEffectiveRelays();
     }

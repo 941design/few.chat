@@ -28,6 +28,10 @@ vi.mock('@/src/lib/ndkClient', () => ({
   fetchEventsWithTimeout: (...args: unknown[]) => mockFetchEventsWithTimeout(...args),
 }));
 
+vi.mock('@/src/lib/marmot/relayRequest', () => ({
+  verifyRelayEvent: (e: { sig?: string }) => e.sig !== 'bad',
+}));
+
 import { NdkNetworkAdapter } from '@/src/lib/marmot/NdkNetworkAdapter';
 import { NDKRelaySet } from '@nostr-dev-kit/ndk';
 
@@ -180,6 +184,17 @@ describe('NdkNetworkAdapter — request relay scoping', () => {
 
 describe('NdkNetworkAdapter — getUserInboxRelays', () => {
   let adapter: NdkNetworkAdapter;
+  const PEER = 'c'.repeat(64);
+  const EFFECTIVE = ['wss://relay.damus.io', 'wss://nos.lol'];
+  const list = (urls: string[], o: { kind?: number; d?: string | null; pubkey?: string; created_at?: number; sig?: string } = {}) => ({
+    sig: o.sig ?? 'ok',
+    pubkey: o.pubkey ?? PEER,
+    kind: o.kind ?? 30051,
+    created_at: o.created_at ?? 1,
+    tags: [...(o.d === null ? [] : [['d', o.d ?? 'marmot']]), ...urls.map((u) => ['relay', u]), ['other', 'ignored']],
+  });
+  const found = (...events: object[]) =>
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(events), timedOut: false });
 
   beforeEach(() => {
     mockFetchEventsWithTimeout.mockReset();
@@ -187,46 +202,72 @@ describe('NdkNetworkAdapter — getUserInboxRelays', () => {
     adapter = new NdkNetworkAdapter(mockNdk as never);
   });
 
-  it('returns DEFAULT_RELAYS when no kind 10051 event found', async () => {
-    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(), timedOut: false });
-
-    const relays = await adapter.getUserInboxRelays('somepubkey');
-    expect(relays).toEqual(['wss://relay.damus.io', 'wss://nos.lol']);
+  it('returns the effective relays when the peer lists none', async () => {
+    found();
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
   });
 
-  it('returns DEFAULT_RELAYS when event has no relay tags', async () => {
-    const event = { tags: [['other', 'value']] };
-    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set([event]), timedOut: false });
-
-    const relays = await adapter.getUserInboxRelays('somepubkey');
-    expect(relays).toEqual(['wss://relay.damus.io', 'wss://nos.lol']);
+  it('returns the effective relays when the list has no relay tags', async () => {
+    found({ pubkey: PEER, kind: 30051, sig: 'ok', created_at: 1, tags: [['d', 'marmot'], ['other', 'value']] });
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
   });
 
-  it('returns DEFAULT_RELAYS on fetch error', async () => {
+  it('returns the effective relays on fetch error', async () => {
     mockFetchEventsWithTimeout.mockRejectedValue(new Error('network error'));
-
-    const relays = await adapter.getUserInboxRelays('somepubkey');
-    expect(relays).toEqual(['wss://relay.damus.io', 'wss://nos.lol']);
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
   });
 
-  it('returns relay tags when event has relay tags', async () => {
-    const event = {
-      tags: [
-        ['relay', 'wss://inbox.relay.one'],
-        ['relay', 'wss://inbox.relay.two'],
-        ['other', 'ignored'],
-      ],
-    };
-    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set([event]), timedOut: false });
-
-    const relays = await adapter.getUserInboxRelays('somepubkey');
-    expect(relays).toEqual(['wss://inbox.relay.one', 'wss://inbox.relay.two']);
+  it('still uses a verified list that arrived before the timeout: listed first, then effective', async () => {
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set([list(['wss://inbox.one'])]), timedOut: true });
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(['wss://inbox.one', ...EFFECTIVE]);
   });
 
-  it('returns DEFAULT_RELAYS on timeout instead of trusting partial results', async () => {
+  it('returns the effective relays alone on timeout when no valid list arrived', async () => {
     mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set(), timedOut: true });
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
+    mockFetchEventsWithTimeout.mockResolvedValue({ events: new Set([list(['wss://f.example'], { sig: 'bad' })]), timedOut: true });
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
+  });
 
-    const relays = await adapter.getUserInboxRelays('somepubkey');
-    expect(relays).toEqual(['wss://relay.damus.io', 'wss://nos.lol']);
+  it('keeps relays that differ only in their query distinct', async () => {
+    found(list(['wss://r.example/?token=a', 'wss://r.example/?token=b']));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(['wss://r.example?token=a', 'wss://r.example?token=b', ...EFFECTIVE]);
+  });
+
+  it('returns the peer\'s listed relays first, then our effective relays (Welcome is not sent to the listed relays alone)', async () => {
+    found(list(['wss://inbox.one', 'wss://inbox.two']));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(['wss://inbox.one', 'wss://inbox.two', ...EFFECTIVE]);
+  });
+
+  it('reads kind 10051 when the peer has no 30051 d=marmot, and prefers 30051 when both exist', async () => {
+    found(list(['wss://inbox.one'], { kind: 10051, d: null }));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(['wss://inbox.one', ...EFFECTIVE]);
+    found(list(['wss://inbox.one'], { kind: 10051, d: null, created_at: 9 }), list(['wss://marmot.one']));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(['wss://marmot.one', ...EFFECTIVE]);
+  });
+
+  it('dedupes a listed relay that is also one of ours, keeping it in the listed position', async () => {
+    found(list(['wss://NOS.lol/', 'wss://inbox.one']));
+    const relays = await adapter.getUserInboxRelays(PEER);
+    expect(relays).toEqual(['wss://nos.lol', 'wss://inbox.one', 'wss://relay.damus.io']);
+  });
+
+  it('ignores a list authored by someone else and filters unsafe URLs', async () => {
+    found(list(['wss://evil.example'], { pubkey: 'd'.repeat(64) }));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
+    found(list(['ws://remote.example', 'https://x.example', 'wss://ok.example']));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(['wss://ok.example', ...EFFECTIVE]);
+  });
+
+  it('ignores a relay list whose signature does not verify', async () => {
+    found(list(['wss://forged.example'], { sig: 'bad' }));
+    expect(await adapter.getUserInboxRelays(PEER)).toEqual(EFFECTIVE);
+  });
+
+  it('never returns an empty array', async () => {
+    for (const setup of [() => found(), () => mockFetchEventsWithTimeout.mockRejectedValue(new Error('x'))]) {
+      setup();
+      expect((await adapter.getUserInboxRelays(PEER)).length).toBeGreaterThan(0);
+    }
   });
 });

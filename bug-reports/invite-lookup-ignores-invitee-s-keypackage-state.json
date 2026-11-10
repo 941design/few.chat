@@ -1,0 +1,108 @@
+{
+  "bug_name": "invite-lookup-ignores-invitee-s-keypackage",
+  "bug_report_file": "bug-reports/invite-lookup-ignores-invitee-s-keypackage-report.md",
+  "created_at": "2026-11-09T19:45:00Z",
+  "updated_at": "2026-11-10T02:00:00Z",
+  "phase": "ACCEPTED",
+  "complexity": "medium",
+  "verification_questions": [
+    {
+      "id": "VQ1",
+      "category": "TEST",
+      "question": "Is there a unit test in which the pool holds the invitee's relay list but no KeyPackage and a listed relay outside the pool holds one, and did it fail before the fix (returning no_key_package) and pass after?"
+    },
+    {
+      "id": "VQ2",
+      "category": "SPEC",
+      "question": "Does the lookup prefer kind 30051 with d=marmot over kind 10051, ignore a 30051 with another d tag, use only an event whose pubkey is the invitee, and take the newest event?"
+    },
+    {
+      "id": "VQ3",
+      "category": "SECURITY",
+      "question": "Are listed relay URLs filtered (valid URL, wss:// or ws:// on localhost only, normalised, deduped, capped at 3 in list order), and is each rule covered by a test?"
+    },
+    {
+      "id": "VQ4",
+      "category": "SPEC",
+      "question": "Are no_key_package and timeout reported correctly across pool and listed relays (found anywhere = success; nothing found and any fetch timed out = timeout; a failing or throwing listed-relay fetch is not fatal)?"
+    },
+    {
+      "id": "VQ5",
+      "category": "ARCHITECTURE",
+      "question": "After the lookup, is every listed relay that was not in the NDK pool beforehand removed again, are relays that were already pooled left untouched, and is the saved relay setting never written?"
+    },
+    {
+      "id": "VQ6",
+      "category": "SPEC",
+      "question": "Does getUserInboxRelays return the invitee's listed relays plus the inviter's effective relays (deduped) when a list exists, and the inviter's effective relays alone on no list, timeout or error, so the Welcome is never sent to nothing?"
+    },
+    {
+      "id": "VQ7",
+      "category": "QUALITY",
+      "question": "Is the change minimal: no change to what the app publishes (30051 only, to effective relays, no 10051), no profile data published or fetched, the other inviteByNpub steps and its error codes unchanged, and existing source-scan tests still valid?"
+    },
+    {
+      "id": "VQ8",
+      "category": "SPEC",
+      "question": "Does docs/behavior/groups.md describe the new lookup and state honestly that fully disjoint relay lists still yield no_key_package?"
+    }
+  ],
+  "pre_existing_dirty_files": [
+    ".clauded.yaml"
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "9b8425825279340698ca65eeb9938ee482b7f4a2",
+  "models": {
+    "lead": "fable",
+    "examiner": "unknown",
+    "implementer": "unknown"
+  },
+  "scope_ruling": "Fable 2026-11-09: S1 (lookup and Welcome routing only) is AGENT-DECIDES; publishing a relay-list pointer to default relays, or kind 10051, is OWNER.",
+  "baseline": null,
+  "fix": {
+    "summary": "Invite lookup reads the invitee's advertised relay list (30051 d=marmot, else 10051), queries up to 3 advertised relays outside the NDK pool, verifies every event; the Welcome goes to advertised plus own relays.",
+    "modules": [
+      "app/src/lib/marmot/inviteeKeyPackageLookup.ts",
+      "app/src/lib/marmot/relayRequest.ts",
+      "app/src/lib/marmot/NdkNetworkAdapter.ts",
+      "app/src/context/MarmotContext.tsx"
+    ]
+  },
+  "review_rounds": [
+    {
+      "round": 1,
+      "reviewer": "lead + examiners",
+      "verdict": "REJECT",
+      "note": "NDKRelaySet pool side effects; unverified events"
+    },
+    {
+      "round": 2,
+      "reviewer": "base:code-reviewer + Codex",
+      "verdict": "REJECT / needs-attention",
+      "note": "covered set too wide; verified list dropped on timeout; query string dropped; waited on listed relays despite a usable pool KeyPackage"
+    },
+    {
+      "round": 3,
+      "reviewer": "base:code-reviewer + Codex",
+      "verdict": "ACCEPT / approve",
+      "note": "lows fixed: coverage snapshot before the pool request, trailing slash after a query, docs wording"
+    }
+  ],
+  "remediation_round": 3,
+  "phase_history": [
+    {
+      "phase": "INITIALIZED",
+      "timestamp": "2026-11-09T19:45:00Z",
+      "trigger": "workflow_start"
+    },
+    {
+      "phase": "ACCEPTED",
+      "timestamp": "2026-11-10T02:00:00Z",
+      "trigger": "reviewer_accept_and_green_gate"
+    }
+  ],
+  "tests_only_pass": "After acceptance: tests added for Stryker survivors, no source change (83.45% -> 90.88%).",
+  "unit": "6566 passed, 1 skipped, 286 files",
+  "e2e_gate": "Run 1 red: 72 + 349 passed, 3 failed (known composer stall; known groups-contacts :93 flake; groups-cancel-pending:144, 8/8 isolated passes). Run 2 green: 72 + 353 passed.",
+  "notes": "Decider never consulted (agent type unavailable mid-run); retro synthesizer not run (no stub for this run)."
+}

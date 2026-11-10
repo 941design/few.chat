@@ -2235,25 +2235,29 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
         const ndk = getNdk();
         if (!ndk) return { ok: false, error: 'offline' };
 
+        // The KeyPackage is looked up on the pool and on the relays the invitee
+        // advertises (kind 30051 d=marmot / 10051). Advertised relays are asked
+        // over their own one-shot socket, never added to the NDK pool; every
+        // event used is signature-verified. marmot-ts 0.5.x peers publish kind
+        // 30443 (addressable); older peers may still have kind 443 events — the
+        // helper accepts both.
         const { fetchEventsWithTimeout } = await import('@/src/lib/ndkClient');
-        const { events: kpEvents, timedOut } = await fetchEventsWithTimeout(
-          ndk,
-          // marmot-ts 0.5.x peers publish kind 30443 (addressable). Older
-          // peers may still have kind 443 events on relays — accept both.
+        const { lookupInviteeKeyPackages } = await import('@/src/lib/marmot/inviteeKeyPackageLookup');
+        const { requestRelayOnce, verifyRelayEvent } = await import('@/src/lib/marmot/relayRequest');
+        const lookup = await lookupInviteeKeyPackages(
           {
-            kinds: [
-              443 as import('@nostr-dev-kit/ndk').NDKKind,
-              30443 as import('@nostr-dev-kit/ndk').NDKKind,
-            ],
-            authors: [inviteePubkey],
-            limit: 5,
+            fetchPool: (filter, timeoutMs) =>
+              fetchEventsWithTimeout(ndk, filter as any, undefined, undefined, timeoutMs),
+            fetchListed: (url, filter, timeoutMs) => requestRelayOnce<any>(url, filter, timeoutMs),
+            verifyEvent: verifyRelayEvent,
+            // Exactly the relays a pool request asks (NDK: permanent and connected). Saved
+            // custom relays outside the pool, temporary and disconnected relays are not covered.
+            coveredRelayUrls: () => ndk.pool.permanentAndConnectedRelays().map((r) => r.url),
           },
+          inviteePubkey,
         );
-
-        const kpArray = Array.from(kpEvents);
-        if (kpArray.length === 0) {
-          return { ok: false, error: timedOut ? 'timeout' : 'no_key_package' };
-        }
+        if (!lookup.ok) return { ok: false, error: lookup.error };
+        const kpArray = lookup.events;
 
         const mlsGroup = await client.groups.get(groupId).catch(() => null);
         if (!mlsGroup) return { ok: false, error: 'group_not_found' };

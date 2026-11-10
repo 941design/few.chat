@@ -189,6 +189,37 @@ identity). If they have not, the invitation fails with an explanation that the p
 hasn't set up their identity yet. Other failures — the invitee being unreachable, or
 the lookup timing out — surface as distinct errors; the invite is not silently lost.
 
+**Where the invitee's keys are looked for.** The inviter first reads the relay list the
+invitee advertises (the list Few itself publishes, or the generic Marmot key-package
+relay list that other clients publish). Only a list signed by the invitee counts: the
+signature is checked. Few's own list is preferred over the generic one, and the newest
+valid list of the preferred kind wins. Of the relays it names, at most
+three are used: secure (`wss://`) addresses only — plain `ws://` only for a relay on the
+inviter's own machine — with duplicates dropped. The invitee's keys are then requested
+from the inviter's own relays and from those advertised relays together; finding them in
+either place is enough. When the inviter's own relays already hold them, that copy is
+used, the advertised relays are not compared, and the invitation does not wait for them.
+An advertised relay that is down or slow never fails an invitation whose keys were found
+elsewhere; when no keys are found anywhere, a slow advertised relay turns the error into
+a time-out instead of "not set up". Every key package that is used is signature-checked, and one from an
+advertised relay must also be the invitee's own. Advertised relays are asked for this one
+request over a separate short-lived connection: they never join the inviter's relay
+connections and never change the inviter's saved relay settings. Only the key request is read
+from them, and nothing but that request and the Welcome is sent to them — no profile data
+is sent or fetched.
+
+**Where the Welcome goes.** When the inviter could read the invitee's relay list, the
+Welcome is delivered to the invitee's advertised relays **and** the inviter's own relays.
+When it could not — the list is not visible from the inviter's relays, is empty, or the
+read timed out before any valid list arrived — the Welcome goes to the inviter's own relays alone.
+
+**Limit: fully separate relays still cannot be bridged.** A Few user publishes the
+relay list only on their own relays. If the inviter and the invitee share no relay at
+all, the inviter cannot find that list, finds no keys, and the invitation fails as if
+the person had not set up their identity. Closing this would need a new publication
+(a pointer to the list on well-known relays) or relay hints carried in the invite; both
+are open product decisions.
+
 A successful invitation adds the person to the group and delivers them a Welcome; it
 does **not** make them an admin (§3.1). Inviting from the contact's own profile
 confirms success there even when that was the last group they could be invited to —
