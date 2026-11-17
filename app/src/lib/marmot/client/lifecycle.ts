@@ -1,7 +1,8 @@
 /**
  * Teardown of one account client.
  *
- * Order is part of the contract: group/event listeners are released, then
+ * Order is part of the contract: queue disposed, group/event listeners released,
+ * the history sink disposed and AWAITED (stops its recovery and drains its in-flight jobs, bounded, before the client goes away), then
  * `client.dispose()` (sync; later client calls throw `disposed`), then
  * `await stores.close()` (waits for an in-flight commit, releases the lease),
  * then the transport pool is closed. Every step runs even when an earlier one
@@ -17,6 +18,8 @@ export interface TeardownParts {
   stores: Pick<WritableStores, 'close'>;
   closePool: () => void;
   queue: Pick<JobQueue, 'dispose'>;
+  /** The app history sink; structural port (client/ does not import history/). */
+  history: { dispose: () => void | Promise<void> };
   /** Unsubscribe functions of every listener this module attached. */
   unsubscribers: Array<() => void>;
 }
@@ -41,6 +44,7 @@ export function createTeardown(parts: TeardownParts): () => Promise<void> {
       for (const unsubscribe of parts.unsubscribers.splice(0)) {
         await attempt(unsubscribe);
       }
+      await attempt(() => parts.history.dispose());
       await attempt(() => parts.client.dispose());
       await attempt(() => parts.stores.close());
       await attempt(() => parts.closePool());

@@ -16,7 +16,7 @@ The top level is a modular monolith (Next.js 14 static-export client app).
 | Module | Purpose | Location | Owned data |
 |---|---|---|---|
 | `client` (bootstrap) | Builds and owns the one `MarmotClient` per account: signer adapter, SimplePool transport, IndexedDB stores, lease and multi-tab handling, listeners, `groups.list()`, `inbox.start()`, key-package presence, kind-10050 publish, `storeIncompatible` wipe, startup reconciliation, teardown | `app/src/lib/marmot/client/` | the library's account DB `marmot:<pubkey>` (opaque, library-owned) |
-| `history` (inbound sink) | App `HistoryBackend`: persists entries `{entry, seq, dispatched}`, dispatches to handlers, withdraw/retract, startup re-dispatch sweep | `app/src/lib/marmot/history/` | idb store `few-group-history` |
+| `history` (inbound sink) | App `HistoryBackend`: persists entries `{entry, seq, dispatched}`, dispatches to handlers, withdraw/retract, startup re-dispatch sweep | `app/src/lib/marmot/history/` | idb store `few-group-history:<pubkey>` (per account) |
 | `handlers` (app domain, inbound) | Chat, reaction, delete/edit, poll, profile, profile-request, announcement handlers over `{groupId, eventId, rumor, sender}`, with a retract path for withdraw | `app/src/lib/marmot/handlers/` (existing; re-pointed) | chat/poll/reaction/profile stores (existing) |
 | `send` (outbound) | `sendGroupRumor` canonical rumor builder plus `group.send`; optimistic-row confirmation and failure detection (D6 triggers) | `app/src/lib/marmot/send/` | none (writes through chat/poll persistence) |
 | `invitations` | Invite (key-package lookup D10, single-candidate invite), invite-context rumor (D3, holding store), pending-invitation view over `invitations.pending()`, accept/decline, deny layer and caps (D14), auto-accept correlation (D8), decline durability (D7) | `app/src/lib/marmot/invitations/` | invite-context holding store, pending-direct-invite markers (existing, extended with `inviteeRef` and `declined`) |
@@ -66,8 +66,15 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
 - Invariants:
   - sender === HistoryEntry.orderingKey.account, never rumor.pubkey
   - dispatch is idempotent per (groupId,eventId) and throws on durable failure
+  - the sink is at-least-once (a crash between handler completion and the `dispatched:true` write re-runs the handler on recovery), so idempotency per (groupId,eventId) is the HANDLER's obligation, not the sink's
+  - the sink's store is per account (`few-group-history:<pubkey>`); `dispose()` returns a promise (drain of the per-group jobs, bounded by one settle bound) that the client teardown awaits before `client.dispose()`; late retracts pending at dispose are dropped (a withdrawn message whose dispatch completes after dispose keeps its effects; accepted: the account's stores are closing)
+  - a live library append of an `abandoned` row re-runs the handlers (a legitimate retry); only recovery skips abandoned rows
   - dispatch/retract never await account-scope client calls
   - retract of an unseen eventId is a no-op
+  - the sink keeps one in-flight dispatch per (groupId,eventId): a re-append, recovery or sweep of an id still running (after a 10 s timeout) awaits it, so a handler is never running twice concurrently for one id. Residual overlap: after a timeout a LATER entry's dispatch of the same group may overlap a still-running earlier one, so handlers for dependent kinds (5/7/10-12) MUST tolerate a missing target
+  - entries of kinds outside `APP_RUMOR_KINDS` are stored `dispatched:true` permanently and never reach the handlers; they are not replayed if the kind is registered later
+  - handlers (S4/S5) obtain group handles through an injected `groupOf(groupId)` backed by `client.groups.get` (AC-HIST-11): `undefined` fails closed (gated effect not applied, no throw, row marked dispatched), a rejection rejects the handler (row stays `dispatched:false`); the sink itself needs no `groupOf`
+  - recovery of `dispatched:false` rows is per-group first-touch inside the sink (plus `sweep()` for untouched groups); a row is abandoned after 5 failed recoveries (AC-HIST-7)
 
 ### `AccountClientHandle` — The per-account MarmotClient handle injected into feature modules
 - Producer: S1 `app/src/lib/marmot/client/index.ts` -> Consumer: S13 `app/src/lib/marmot/membership/index.ts`
@@ -209,7 +216,7 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
    - Modules: `history` (`app/src/lib/marmot/history/`), `handlers` (`app/src/lib/marmot/handlers/`), chat/poll persistence (`app/src/lib/marmot/chatPersistence.ts`, `pollPersistence.ts`).
    - Guarantees across orderings, interleavings and crash/redelivery:
      - (a) each kind-445 event's handler effects are applied exactly once in effect, whatever the redelivery count;
-     - (b) a crash between persist and dispatch is re-dispatched (dispatched-flag sweep);
+     - (b) a crash between persist and dispatch is re-dispatched (dispatched-flag recovery: per-group first touch in the sink, plus a startup sweep after `groups.list()` for untouched groups; recovered rows precede newer entries of the same group; a row is abandoned after 5 failed recoveries);
      - (c) `withdraw` after `append` leaves no trace of other members' content; `withdraw` before or without `append` is a no-op;
      - (d) `list` returns per-group delivery (`seq`) order;
      - (e) own-send echo and optimistic row converge to one row by `rumor.id`, whatever the arrival order versus the `send()` resolution.

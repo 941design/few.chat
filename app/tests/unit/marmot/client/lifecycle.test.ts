@@ -8,15 +8,38 @@ function parts(log: string[], opts: { disposeThrows?: boolean } = {}) {
     stores: { close: async () => { log.push('stores.close'); } },
     closePool: () => { log.push('pool.close'); },
     queue: { dispose: () => { log.push('queue.dispose'); } },
+    history: { dispose: () => { log.push('history.dispose'); } },
     unsubscribers: [() => log.push('unsub1'), () => log.push('unsub2')],
   };
 }
 
 describe('createTeardown', () => {
+  it('awaits an async history.dispose (drain) before client.dispose, keeping the contract order', async () => {
+    const log: string[] = [];
+    const p = parts(log);
+    p.history = {
+      dispose: async () => {
+        log.push('history.dispose:start');
+        await new Promise((r) => setTimeout(r, 20));
+        log.push('history.dispose:end');
+      },
+    } as never;
+    await createTeardown(p)();
+    expect(log).toEqual(['queue.dispose', 'unsub1', 'unsub2', 'history.dispose:start', 'history.dispose:end', 'client.dispose', 'stores.close', 'pool.close']);
+  });
+
+  it('still runs client.dispose, stores.close and pool when history.dispose rejects, and rethrows', async () => {
+    const log: string[] = [];
+    const p = parts(log);
+    p.history = { dispose: async () => { throw new Error('drain failed'); } } as never;
+    await expect(createTeardown(p)()).rejects.toThrow('drain failed');
+    expect(log).toEqual(['queue.dispose', 'unsub1', 'unsub2', 'client.dispose', 'stores.close', 'pool.close']);
+  });
+
   it('disposes the client strictly before closing the stores, then the pool', async () => {
     const log: string[] = [];
     await createTeardown(parts(log))();
-    expect(log).toEqual(['queue.dispose', 'unsub1', 'unsub2', 'client.dispose', 'stores.close', 'pool.close']);
+    expect(log).toEqual(['queue.dispose', 'unsub1', 'unsub2', 'history.dispose', 'client.dispose', 'stores.close', 'pool.close']);
     expect(log.indexOf('client.dispose')).toBeLessThan(log.indexOf('stores.close'));
   });
 

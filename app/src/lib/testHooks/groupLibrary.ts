@@ -142,7 +142,8 @@ export function createGroupLibraryHook(seams?: {
         eventSigner: createPrivateKeySigner(privateKeyHex),
         signerKind: 'local',
         relays,
-        history: sink,
+        // The recording sink holds no persisted rows: its sweep has nothing to recover.
+        history: Object.assign(sink, { sweep: async () => undefined, dispose: () => undefined }),
         clientEvents: {
           groupRemoved: () => undefined,
           inboxDisposition: () => undefined,

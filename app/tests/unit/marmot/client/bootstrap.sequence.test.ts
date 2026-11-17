@@ -4,11 +4,12 @@
  * AC-SIGN-5 secure-context gate, AC-SIGN-2 "no client constructed", plus the
  * loud-failure contract for missing collaborators).
  */
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { MarmotError } from '@941design/marmot';
 import {
   bootstrapAccountClient,
   CLIENT_EVENT_NAMES,
+  HISTORY_SWEEP_WAIT_MS,
   type AccountClientHandle,
   type BootstrapInput,
 } from '@/src/lib/marmot/client';
@@ -17,7 +18,7 @@ import { APP_INBOX_KINDS } from '@/src/lib/marmot/kinds';
 
 const PUBKEY_SECRET = '55'.repeat(32);
 
-function makeRig(opts: { keyPackageCount?: number; groups?: Array<{ id: string }>; failStep?: string } = {}) {
+function makeRig(opts: { keyPackageCount?: number; groups?: Array<{ id: string }>; failStep?: string; sweep?: () => Promise<unknown> } = {}) {
   const log: string[] = [];
   const listeners = new Map<string, (p: unknown) => void>();
   const groupListeners = new Map<string, (n: unknown) => void>();
@@ -73,7 +74,18 @@ function makeRig(opts: { keyPackageCount?: number; groups?: Array<{ id: string }
     eventSigner: createPrivateKeySigner(PUBKEY_SECRET),
     signerKind: 'local',
     relays: ['wss://relay.example'],
-    history: { append: () => undefined, withdraw: () => undefined, list: () => [], purge: () => undefined },
+    history: {
+      append: () => undefined,
+      withdraw: () => undefined,
+      list: () => [],
+      purge: () => undefined,
+      dispose: () => { log.push('history.dispose'); },
+      sweep: async () => {
+        log.push('history.sweep');
+        await (opts.sweep ?? (() => Promise.resolve()))();
+        log.push('history.sweep.settled');
+      },
+    },
     clientEvents: Object.fromEntries(
       CLIENT_EVENT_NAMES.map((n) => [n, (p: unknown) => log.push(`handler:${n}:${JSON.stringify(p)}`)]),
     ) as BootstrapInput['clientEvents'],
@@ -100,7 +112,7 @@ function makeRig(opts: { keyPackageCount?: number; groups?: Array<{ id: string }
 }
 
 describe('startup order (AC-BOOT-1)', () => {
-  it('runs openForWrite -> createMarmotClient -> listeners -> inbox handlers -> groups.list -> group listeners -> inbox.start -> key package -> 10050', async () => {
+  it('runs openForWrite -> createMarmotClient -> listeners -> inbox handlers -> groups.list -> group listeners -> history sweep -> inbox.start -> key package -> 10050', async () => {
     const rig = makeRig({ groups: [{ id: 'g1' }, { id: 'g2' }] });
     const result = await bootstrapAccountClient(rig.input);
     expect(result.status).toBe('ready');
@@ -117,6 +129,8 @@ describe('startup order (AC-BOOT-1)', () => {
       'groups.list.resolved',
       'group.onNotification:g1',
       'group.onNotification:g2',
+      'history.sweep',
+      'history.sweep.settled',
       'inbox.start',
       'keyPackages.count',
       'keyPackages.create:{"lastResort":true}',
@@ -129,6 +143,93 @@ describe('startup order (AC-BOOT-1)', () => {
     const rig = makeRig();
     await bootstrapAccountClient(rig.input);
     expect(rig.log.indexOf('inbox.start')).toBeGreaterThan(rig.log.indexOf('groups.list.resolved'));
+  });
+
+  it('the sweep runs after groups.list has resolved and inbox.start waits for it to settle', async () => {
+    let release!: () => void;
+    const rig = makeRig({ sweep: () => new Promise<void>((r) => (release = r)) });
+    const run = bootstrapAccountClient(rig.input);
+    await vi.waitFor(() => expect(rig.log).toContain('history.sweep'));
+    expect(rig.log.indexOf('history.sweep')).toBeGreaterThan(rig.log.indexOf('groups.list.resolved'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(rig.log).not.toContain('inbox.start');
+    release();
+    expect((await run).status).toBe('ready');
+    expect(rig.log.indexOf('inbox.start')).toBeGreaterThan(rig.log.indexOf('history.sweep.settled'));
+  });
+
+  it('a rejected sweep is reported (step historySweep) and does not abort the bootstrap', async () => {
+    const rig = makeRig({ sweep: async () => { throw new Error('sweep boom'); } });
+    const result = await bootstrapAccountClient(rig.input);
+    expect(result.status).toBe('ready');
+    expect(rig.log).toContain('onError:historySweep:sweep boom');
+    expect(rig.log.indexOf('inbox.start')).toBeGreaterThan(rig.log.indexOf('onError:historySweep:sweep boom'));
+    expect(rig.log).toContain('inboxRelayList.ensure:wss://relay.example');
+  });
+
+  it('a sweep() that throws synchronously is a non-fatal historySweep report, not a bootstrap failure', async () => {
+    const rig = makeRig();
+    rig.input.history.sweep = (() => { throw new Error('sync sweep boom'); }) as never;
+    const result = await bootstrapAccountClient(rig.input);
+    expect(result.status).toBe('ready');
+    expect(rig.log).toContain('onError:historySweep:sync sweep boom');
+    expect(rig.log).toContain('inbox.start');
+  });
+
+  it('an abort that happens while the sweep runs tears down and never starts the inbox', async () => {
+    const ac = new AbortController();
+    const rig = makeRig({ sweep: async () => { ac.abort(); } });
+    rig.input.signal = ac.signal;
+    const result = await bootstrapAccountClient(rig.input);
+    expect(result.status).toBe('aborted');
+    expect(rig.log).not.toContain('inbox.start');
+    expect(rig.log).toContain('client.dispose');
+  });
+
+  it('a never-settling sweep is waited for at most HISTORY_SWEEP_WAIT_MS: reported as historySweep, then the inbox starts while the sweep keeps running', async () => {
+    vi.useFakeTimers();
+    try {
+      const rig = makeRig({ sweep: () => new Promise<void>(() => undefined) });
+      const run = bootstrapAccountClient(rig.input);
+      await vi.advanceTimersByTimeAsync(HISTORY_SWEEP_WAIT_MS - 1);
+      expect(rig.log).toContain('history.sweep');
+      expect(rig.log).not.toContain('inbox.start');
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await run;
+      expect(result.status).toBe('ready');
+      expect(rig.log.some((l) => l.startsWith('onError:historySweep:'))).toBe(true);
+      expect(rig.log.indexOf('inbox.start')).toBeGreaterThan(rig.log.findIndex((l) => l.startsWith('onError:historySweep:')));
+      expect(rig.log).not.toContain('history.sweep.settled');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an abort while the sweep never settles ends the wait: aborted, torn down, no inbox.start', async () => {
+    vi.useFakeTimers();
+    try {
+      const ac = new AbortController();
+      const rig = makeRig({ sweep: () => new Promise<void>(() => undefined) });
+      rig.input.signal = ac.signal;
+      const run = bootstrapAccountClient(rig.input);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(rig.log).toContain('history.sweep');
+      ac.abort();
+      const result = await run;
+      expect(result.status).toBe('aborted');
+      expect(rig.log).toContain('client.dispose');
+      await vi.advanceTimersByTimeAsync(HISTORY_SWEEP_WAIT_MS * 2);
+      expect(rig.log).not.toContain('inbox.start');
+      expect(rig.log.some((l) => l.startsWith('onError:historySweep:'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a history sink without sweep() fails loudly', async () => {
+    const rig = makeRig();
+    delete (rig.input.history as { sweep?: unknown }).sweep;
+    await expect(bootstrapAccountClient(rig.input)).rejects.toThrow(/history\.sweep/);
   });
 
   it('the 10050 ensure is called exactly once, after the key-package ensure', async () => {
@@ -314,6 +415,9 @@ describe('teardown (AC-BOOT-3)', () => {
     await r.account.teardown();
     expect(rig.log.indexOf('client.dispose')).toBeGreaterThanOrEqual(0);
     expect(rig.log.indexOf('client.dispose')).toBeLessThan(rig.log.indexOf('stores.close'));
+    // the history sink is disposed before the client (recovery must not call handlers into a disposed client)
+    expect(rig.log.indexOf('history.dispose')).toBeGreaterThanOrEqual(0);
+    expect(rig.log.indexOf('history.dispose')).toBeLessThan(rig.log.indexOf('client.dispose'));
 
     const failing = makeRig({ failStep: 'inbox.start' });
     await expect(bootstrapAccountClient(failing.input)).rejects.toThrow('inbox boom');
@@ -321,6 +425,7 @@ describe('teardown (AC-BOOT-3)', () => {
     expect(failing.log).toContain('stores.close');
     expect(failing.log).toContain('pool.close');
     expect(failing.log.indexOf('client.dispose')).toBeLessThan(failing.log.indexOf('stores.close'));
+    expect(failing.log.indexOf('history.dispose')).toBeLessThan(failing.log.indexOf('client.dispose'));
   });
 });
 

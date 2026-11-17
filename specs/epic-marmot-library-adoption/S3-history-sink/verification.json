@@ -129,6 +129,41 @@
       "category": "SPEC",
       "ac_id": "AC-WDR-5",
       "question": "AC-WDR-5: Harness: a fork rewind in the library that abandons another member's message causes the sink's `withdraw` to remove its chat row from the app store (A2). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness (smoke spec covers the real-relay equivalent)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-020",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-7",
+      "question": "The startup sweep (sweep.ts) continues past a failing row within the same group (it does not stop the group at the first failure) and reports it through onError; it runs the handlers before the client handle may exist. Does S18 call AppHistoryBackend.sweep() before groups.list(), handle a rejection (store unreadable), and wire handlers whose follow-up enqueue target exists when the sweep runs?"
+    },
+    {
+      "question_id": "VQ-S3-021",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "ac_id": "AC-HIST-9",
+      "question": "historyBackend.ts gates dispatch/retract on APP_RUMOR_KINDS (AppKinds seam): an unregistered kind is stored dispatched:true with no handler call. Do S4/S5 handlers handle only kinds present in APP_RUMOR_KINDS (a handler kind missing from the registry would silently never run), and is the router's own unregistered-kind path (AC-HIST-9) still tested independently of the sink gate?"
+    },
+    {
+      "question_id": "VQ-S3-022",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WDR-5",
+      "question": "The harness (historyWithdraw.harness.test.ts) stages a 2-member same-epoch fork; the abandoned message is the loser's OWN confirmed message (the winner never appends it). A withdrawal of ANOTHER member's already-appended message needs a third observer on the losing branch and is covered only at unit level through the fixture handlers. Does S5/S19 assert AC-WDR-1 against the real chat/reaction/poll handlers, and is a 3-member harness fork warranted?"
+    },
+    {
+      "question_id": "VQ-S3-023",
+      "phase": "post-impl",
+      "category": "BEST_PRACTICES",
+      "ac_id": "AC-HIST-3",
+      "question": "The harness test documents that the library's re-entrancy guard rejects only group WRITES (group.send/rename) from a live frame, while reads (groups.list/get, synced, keyPackages.count) are not guarded. Do S4/S5 handlers enqueue every follow-up send (profile-request response, announcement) as the LAST action after their own awaits, and is there a test per such handler?"
+    },
+    {
+      "question_id": "VQ-S3-024",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "ac_id": "AC-IDEM-2",
+      "question": "The per-group seq counter is a get-then-set row (`#seq:<groupId>`) serialised by an in-process per-group queue, relying on the single-writer account lease (no idb transaction). Is a second writer (lease steal, two tabs) possible between S17/S18 wiring, and does the lease guarantee make duplicate seq values unreachable?"
     }
   ]
 }

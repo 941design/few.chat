@@ -247,6 +247,7 @@ signer (adapter)
   → registerInboxHandler(joinRequestKind 21059, …), registerInboxHandler(inviteContextKind 21064, …)
   → await client.groups.list()
   → per group: group.onNotification(...)
+  → await appHistoryBackend.sweep()   (non-fatal; untouched groups only)
   → await client.inbox.start()
   → ensure key package (count() === 0 → create({lastResort:true}))
   → ensure kind-10050 published
@@ -254,13 +255,13 @@ signer (adapter)
 
 On `storeIncompatible`, run `stores.account.wipe({reason:'incompatible'})`, then the app's `clearAllGroupData` (overlay, member profiles, group chat and poll rows, `few-group-history`, join requests, invite links, pending-direct-invite markers), then reinitialise. This happens at most once per page load; a second occurrence sets `unsupported`.
 
-At every startup, overlay groups absent from `groups.list()` are purged through the same path. This standing reconciliation is also what removes pre-adoption groups. Before `groups.list()`, a sweep re-dispatches history rows still marked `dispatched:false` (see Inbound).
+At every startup, overlay groups absent from `groups.list()` are purged through the same path. This standing reconciliation is also what removes pre-adoption groups. After `groups.list()` and before `inbox.start()`, a sweep re-dispatches history rows still marked `dispatched:false` for groups not yet touched; the sink also recovers a group's undispatched rows on its first touch of that group, so recovered rows always precede newer entries (see Inbound, AC-HIST-7).
 
 Teardown is `client.dispose()` followed by `stores.close()`.
 
 ### Inbound
 The app `HistoryBackend` is backed by one idb store
-(`few-group-history`, keyed `${groupId}:${eventId}`), honouring the repo's
+(`few-group-history:<pubkey>`, one IndexedDB database per account, keyed `${groupId}:${eventId}`), honouring the repo's
 `idb-keyval update()` ban.
 
 - **`append`** writes `{entry, seq, dispatched:false}` (a no-op if the row exists), runs the handlers, then sets `dispatched:true`. A repeated `append` for a row with `dispatched:false` re-runs the handlers; with `dispatched:true` it returns. Handlers receive `{groupId, eventId, rumor, sender: orderingKey.account}`, must be idempotent, and throw on durable failure so the library retries. The whole call must settle within 10 s. After the library's 5 attempts, the row stays `dispatched:false` for the startup sweep.
@@ -379,6 +380,10 @@ The planner splits these. Expected seams:
 No manual-validation rows are claimed; all ACs are automated (unit, library-backed two-client harness, or e2e).
 
 ## Amendments
+
+- 2026-11-17 (S3 examiners): the history store is per account (`few-group-history:<pubkey>`), matching the per-account library store and lease; a device-wide store would let one account's dispatched rows suppress another's. AC-HIST-4 bounds the entry's own dispatch (first-touch recovery may precede it once per group); AC-HIST-5 retracts registered kinds only.
+
+- 2026-11-17 (S3 review + Fable decider): history sweep moved after `groups.list()` (before `inbox.start()`); ordering of recovered rows enforced in the sink by per-group first-touch recovery, because the library starts history drain and sync for each group during `groups.list()` (group-runtime.js:1221,1302,1308). Poisoned rows abandoned after 5 failed recoveries. Handlers reach group handles via injected `groupOf` (fail closed when the group is no longer held). AC-HIST-7, AC-BOOT-1, AC-HIST-11, AC-WDR-4 amended.
 
 - 2026-11-17 (S1 review): A3/D6 reconciled with observed library behaviour: confirmed own messages on a losing fork branch are withdrawn; detection triggers never downgrade a confirmed row, an explicit own withdraw moves it to failed/retry (AC-WDR-2).
 

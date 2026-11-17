@@ -45,7 +45,7 @@ function baseInput(secret: string, persistence = createMemoryPersistence(), call
     eventSigner: createAppSigner(secret),
     signerKind: 'local',
     relays: [relayUrl],
-    history: createMemoryHistoryBackend(),
+    history: Object.assign(createMemoryHistoryBackend(), { sweep: async () => undefined, dispose: () => undefined }),
     clientEvents: {
       groupRemoved: () => calls.push('groupRemoved'),
       inboxDisposition: () => calls.push('inboxDisposition'),

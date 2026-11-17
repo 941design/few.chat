@@ -15,10 +15,17 @@
  *                 joined later are attached structurally: the `groupCreated` /
  *                 `groupJoined` listeners (step 4) enqueue a job that fetches the
  *                 group handle and attaches it
- *   8. inbox      `await client.inbox.start()` (after groups: removals that
- *                 settled offline are announced on first group load)
- *   9. kp         key-package ensure (count 0 -> create last-resort, else none)
- *  10. 10050      the injected inbox-relay-list ensure, exactly once, after (9)
+ *   8. history    `await history.sweep()`: recovers the history rows no live call has
+ *                 touched yet (the library starts each group's history drain during
+ *                 step 6, so a recovered row is ordered ahead of live entries by the
+ *                 sink's per-group first-touch recovery; this pass covers the rest).
+ *                 A rejected sweep is reported (step `historySweep`) and does not abort; the wait is
+ *                 capped at HISTORY_SWEEP_WAIT_MS (reported as a timeout, the sweep goes on in the
+ *                 background) and ends on abort
+ *   9. inbox      `await client.inbox.start()` (after groups and after the sweep settles:
+ *                 removals that settled offline are announced on first group load)
+ *  10. kp         key-package ensure (count 0 -> create last-resort, else none)
+ *  11. 10050      the injected inbox-relay-list ensure, exactly once, after (10)
  *
  * Abort: `input.signal` is checked after every await; on abort the contract-order
  * teardown runs (lease released) and the result is `{ status: 'aborted' }`.
@@ -98,6 +105,7 @@ export type BootstrapStep =
   | 'inboxHandlers'
   | 'groups.list'
   | 'groupNotifications'
+  | 'historySweep'
   | 'inbox.start'
   | 'keyPackageEnsure'
   | 'inboxRelayListEnsure'
@@ -120,8 +128,13 @@ export interface BootstrapInput {
   signerKind: SignerKind;
   /** The user's configured relays: library defaults, and the 10050 list. */
   relays: readonly string[];
-  /** The app sink (S3); the library retains accepted group messages through it. */
-  history: HistoryBackend;
+  /**
+   * The app sink (S3); the library retains accepted group messages through it. Its `sweep()` (structural
+   * port: client/ does not import history/) runs after `groups.list()` and before `inbox.start()`; its
+   * `dispose()` runs in teardown before `client.dispose()`. One backend instance per bootstrap: a disposed
+   * backend rejects every call, so a re-bootstrap needs a fresh instance.
+   */
+  history: HistoryBackend & { sweep: () => Promise<unknown>; dispose: () => void | Promise<void> };
   clientEvents: ClientEventHandlers;
   inboxHandlers: { joinRequest: InboxRumorHandler; inviteContext: InboxRumorHandler };
   onGroupNotification: (group: MarmotGroup, notification: GroupNotification) => void;
@@ -172,6 +185,8 @@ function assertInput(input: BootstrapInput): void {
     throw new TypeError('bootstrapAccountClient: "relays" must list at least one relay');
   }
   if (!input.history) throw new TypeError('bootstrapAccountClient: required dependency "history" is missing');
+  requireFn(input.history.sweep, 'history.sweep');
+  requireFn(input.history.dispose, 'history.dispose');
   for (const name of CLIENT_EVENT_NAMES) requireFn(input.clientEvents?.[name], `clientEvents.${name}`);
   requireFn(input.inboxHandlers?.joinRequest, 'inboxHandlers.joinRequest');
   requireFn(input.inboxHandlers?.inviteContext, 'inboxHandlers.inviteContext');
@@ -198,6 +213,34 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
         clearTimeout(timer);
         reject(e);
       },
+    );
+  });
+}
+
+/** Longest the bootstrap waits for `history.sweep()` before it starts the inbox anyway (AC-BOOT-1). */
+export const HISTORY_SWEEP_WAIT_MS = 15_000;
+
+type SweepOutcome = { kind: 'settled' } | { kind: 'failed'; error: unknown } | { kind: 'timeout' } | { kind: 'aborted' };
+
+/** Races the sweep against the cap and the abort signal; the sweep itself is never cancelled. */
+function waitForSweep(sweep: Promise<unknown>, signal: AbortSignal | undefined, capMs: number): Promise<SweepOutcome> {
+  return new Promise<SweepOutcome>((resolve) => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => finish({ kind: 'aborted' });
+    const finish = (outcome: SweepOutcome) => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(outcome);
+    };
+    timer = setTimeout(() => finish({ kind: 'timeout' }), capMs);
+    if (signal?.aborted) return finish({ kind: 'aborted' });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(sweep).then(
+      () => finish({ kind: 'settled' }),
+      (error: unknown) => finish({ kind: 'failed', error }),
     );
   });
 }
@@ -260,6 +303,7 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
       stores,
       closePool: () => transport?.closePool(),
       queue,
+      history: input.history,
       unsubscribers,
     })();
   };
@@ -350,11 +394,21 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
     // 7. per-group notification listeners
     for (const group of groups) attachGroup(group);
 
-    // 8. inbox
+    // 8. history sweep (non-fatal: a failed sweep leaves rows undispatched for the next first-touch / startup)
+    // Bounded: waits for the sweep at most HISTORY_SWEEP_WAIT_MS and stops waiting on abort. Past the cap the
+    // sweep keeps running in the background (its per-group serialisation still orders recovered rows).
+    const sweepOutcome = await waitForSweep(Promise.resolve().then(() => input.history.sweep()), signal, HISTORY_SWEEP_WAIT_MS);
+    if (sweepOutcome.kind === 'failed') reportError('historySweep', sweepOutcome.error);
+    else if (sweepOutcome.kind === 'timeout') {
+      reportError('historySweep', new Error(`history sweep did not settle within ${HISTORY_SWEEP_WAIT_MS} ms; continuing`));
+    }
+    if (aborted()) return await abortNow();
+
+    // 9. inbox
     await liveClient.inbox.start();
     if (aborted()) return await abortNow();
 
-    // 9. key package, 10. kind-10050 (both non-fatal: the client stays usable for receiving)
+    // 10. key package, 11. kind-10050 (both non-fatal: the client stays usable for receiving)
     const ensure: AccountClient['ensure'] = { keyPackage: 'failed', inboxRelayList: 'failed' };
     try {
       ensure.keyPackage = await (seams.ensureKeyPackage ?? ensureKeyPackage)(liveClient);
@@ -375,6 +429,7 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
       stores,
       closePool: () => transport?.closePool(),
       queue,
+      history: input.history,
       unsubscribers,
     });
     const account: AccountClient = {

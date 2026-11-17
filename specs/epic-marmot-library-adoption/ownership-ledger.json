@@ -156,6 +156,64 @@
       "owning_module": "nip46Perms",
       "type": "validation_rule",
       "added_by_story": "S2"
+    },
+    {
+      "id": "history.GroupHistoryHandlers",
+      "name": "{dispatch, retract}({groupId,eventId,rumor,sender}); sender=orderingKey.account; dispatch idempotent, throws on durable failure; retract of unseen id no-op; only APP_RUMOR_KINDS reach handlers",
+      "owning_module": "history",
+      "type": "public_contract",
+      "added_by_story": "S3",
+      "consumers": [
+        "S4",
+        "S5",
+        "S6"
+      ]
+    },
+    {
+      "id": "history.no-tombstone",
+      "name": "withdraw of unknown id is a no-op; later append of a withdrawn id is applied (re-canonicalised branch)",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S3"
+    },
+    {
+      "id": "history.seq-single-writer",
+      "name": "seq get-then-set safe only with one backend instance per account under the lease",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S3"
+    },
+    {
+      "id": "history.first-touch-recovery",
+      "name": "Before a group first append/withdraw per instance, its dispatched:false rows are re-dispatched in seq order in the same serialised job; abandoned after 5 persisted failures",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S3"
+    },
+    {
+      "id": "handlers.groupOf",
+      "name": "Injected groupOf(groupId) via client.groups.get for live roster/admin gates; safe inside append (drain starts after runtime cached, group-runtime.js:1196-1217)",
+      "owning_module": "handlers",
+      "type": "public_contract",
+      "added_by_story": "S3 (decider)",
+      "consumers": [
+        "S4",
+        "S5"
+      ]
+    },
+    {
+      "id": "history.lifecycle",
+      "name": "Sink single-use per bootstrap, per-account DB few-group-history:<pubkey>; dispose() drains serialiser (≤10 s) and is awaited in teardown before client.dispose; writes are no-ops after dispose",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S3"
+    },
+    {
+      "id": "history.late-retract",
+      "name": "withdraw/purge of an id whose dispatch outlives 10 s retracts once on completion via the per-group serialiser, skipped if the row exists again, ≤3 bounded retries",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S3"
     }
   ],
   "stories": [
@@ -203,10 +261,33 @@
         "S22/S23": "replace PAIRING_ACK_KIND, DM_PROFILE_*_KIND, JOIN_REQUEST_KIND, JOIN_REQUEST_RUMOR_KIND literals with APP_INBOX_KINDS; CALL_GIFT_WRAP_KIND=21059 is a WRAP kind on the calls plane — keep separate and comment it",
         "S9/S10/S12": "consume APP_INBOX_KINDS from kinds.ts; never re-declare 21059/21064"
       }
+    },
+    {
+      "id": "S3",
+      "surfaces_touched": [
+        "app/src/lib/marmot/history/{index,historyBackend,historyStore,sweep}.ts"
+      ],
+      "concepts_owned": [
+        "history",
+        "history.GroupHistoryHandlers",
+        "history.store",
+        "history.sweep"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S1/S18": "exactly one sink per account (single writer for seq); sweep placed inside bootstrap under the lease (slot per decider ruling)",
+        "S4/S5": "handlers get groupOf(groupId) backed by client.groups.get; undefined -> fail closed (row marked dispatched), reject -> row stays undispatched; dependent kinds (5/7/10-12) must tolerate a missing target; enqueue follow-up WRITES last",
+        "S6": "own withdrawn row -> failed/retry driven from retract (AC-WDR-2)",
+        "S13": "purgeLocalGroup must remove history rows (sink.purge or rely on library purge call)",
+        "S17": "clearAllGroupData and storeIncompatible wipe must call clearAllGroupHistory; test the wipe leaves history empty",
+        "S18": "one sink per account passed as bootstrap history; sweep wait capped (HISTORY_SWEEP_WAIT_MS)",
+        "S5/S6/S13": "purge now late-retracts stragglers after a group is left; with AC-WDR-2 an own message could leave a failed/retry row for a left group — when real handlers land add case: own msg, hung dispatch, leave, release → no chat row for the left group (give retract a reason withdrawn|purged or order leave cleanup after purge settles)",
+        "S17/S18": "one history backend instance per bootstrap (disposed sink rejects all calls); teardown order queue > unsubscribe > history.dispose > client.dispose > stores.close > pool.destroy; clearAllGroupHistory only after dispose"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S2",
+    "last_story_reviewed": "S3",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

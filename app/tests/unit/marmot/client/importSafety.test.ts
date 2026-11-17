@@ -39,7 +39,7 @@ describe('client module import safety', () => {
       eventSigner: createPrivateKeySigner('66'.repeat(32)),
       signerKind: 'local',
       relays: ['wss://r.example'],
-      history: { append: () => undefined, withdraw: () => undefined, list: () => [], purge: () => undefined },
+      history: { append: () => undefined, withdraw: () => undefined, list: () => [], purge: () => undefined, sweep: async () => undefined, dispose: () => undefined },
       clientEvents: {
         groupRemoved: () => undefined, inboxDisposition: () => undefined, welcomeDeclined: () => undefined,
         intentFailed: () => undefined, storeIncompatible: () => undefined, groupBranchSwitched: () => undefined,

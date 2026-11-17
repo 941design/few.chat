@@ -6,6 +6,7 @@ export {
   bootstrapAccountClient,
   CLIENT_EVENT_NAMES,
   CLIENT_TIMING_OPTIONS,
+  HISTORY_SWEEP_WAIT_MS,
   type AccountClient,
   type AccountClientHandle,
   type BootstrapInput,

@@ -1,0 +1,70 @@
+{
+  "story_id": "S3",
+  "status": "done",
+  "remediation_rounds": 0,
+  "files_created": [
+    "app/src/lib/marmot/history/index.ts",
+    "app/src/lib/marmot/history/historyBackend.ts",
+    "app/src/lib/marmot/history/historyStore.ts",
+    "app/src/lib/marmot/history/sweep.ts",
+    "app/tests/unit/marmot/history/historyBackend.test.ts",
+    "app/tests/unit/marmot/history/historyBackend.model.test.ts",
+    "app/tests/unit/marmot/history/historyStore.realIdb.test.ts",
+    "app/tests/unit/marmot/history/history.structural.test.ts",
+    "app/tests/unit/marmot/history/historyWithdraw.harness.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/client/createClient.ts",
+    "app/src/lib/testHooks/groupLibrary.ts",
+    "app/tests/unit/marmot/client/bootstrap.sequence.test.ts",
+    "app/tests/unit/marmot/client/bootstrap.harness.test.ts",
+    "app/tests/unit/marmot/client/importSafety.test.ts"
+  ],
+  "tests_added": {
+    "unit": "historyBackend.test.ts (44: AC-HIST-1..7, AC-IDEM-1/2, AC-WDR-4, kind gate, fail-loud port)",
+    "property": "historyBackend.model.test.ts (1 test, 150 seeded random op sequences vs a model)",
+    "real_idb": "historyStore.realIdb.test.ts (7, fake-indexeddb: key order vs seq order, reload sweep)",
+    "structural": "history.structural.test.ts (5: no update(), no rumor.pubkey, import boundary)",
+    "harness": "historyWithdraw.harness.test.ts (4: AC-WDR-5 fork withdraw, A1 retry, re-entrancy enqueue-last documentation)"
+  },
+  "test_counts": {
+    "baseline": 6709,
+    "final": 6785
+  },
+  "mocks": [],
+  "implementation_summary": "history/ module: createHistoryBackend({handlers, store?, settleTimeoutMs?, onError?}) returns the library HistoryBackend plus sweep(). Rows {entry, seq, dispatched} live in idb store few-group-history (get/set/del/delMany/keys/entries/createStore only, lazy creation) with per-group counter rows; append writes the row undispatched, dispatches via the injected GroupHistoryHandlers port with sender=orderingKey.account, then rewrites dispatched:true. Every call is serialised per group and bounded to 10 s (timed-out call is abandoned and writes nothing). withdraw retracts then deletes per existing row (unknown id no-op, no tombstone); purge deletes the group's rows and counter; list sorts by seq; sweep re-dispatches undispatched rows per group in seq order, continuing past failures. Rumor kinds outside APP_RUMOR_KINDS are stored dispatched:true without handler calls (AppKinds seam). Gate remediation (2026-11-17): per-group first-touch recovery inside the serialised job (touched set per instance), sweep() recovers untouched groups, persisted recoveryFailures with abandonment at 5, per-(groupId,eventId) in-flight dispatch map; bootstrap runs history.sweep() after groups.list() and before inbox.start() (rejection reported as step historySweep, non-fatal).",
+  "verification": {
+    "unit_full": "make test-unit: 306 files, 6785 passed, 1 skipped, 0 failed",
+    "typecheck": "tsc --noEmit clean",
+    "lint": "NO_LINT"
+  },
+  "decisions": [
+    "Recovery continues past a failing row within a group and across groups; failures go to onError and SweepResult.failed; a row is abandoned after 5 persisted failed recoveries.",
+    "withdraw retracts BEFORE deleting the row, so a failed retract is retried with the row still present; withdraw of an unknown id keeps no tombstone (AC-WDR-4).",
+    "Sink gates dispatch/retract on APP_RUMOR_KINDS: unregistered kinds are stored dispatched:true with no handler call.",
+    "Store is injectable (createIdbHistoryStore(dbName)) so harness peers in one process get isolated databases; default is the lazy few-group-history singleton.",
+    "Added clearAllGroupHistory() for clearAllGroupData / storeIncompatible wipe.",
+    "Harness keeps its own partitionable() copy instead of importing testHooks/groupLibrary, which S27 deletes."
+  ],
+  "limitations": [
+    "AC-WDR-5 harness uses 2 members: the abandoned message is the loser's own confirmed message (spec A3 amendment); withdrawal of another member's message is covered at unit level only (a 3-member fork would be needed).",
+    "seq counter is get-then-set serialised in-process; relies on the single-writer account lease.",
+    "Sink wiring into the app (concrete handlers S4/S5, call sites S18); bootstrap already runs history.sweep() after groups.list().",
+    "After a dispatch timeout a LATER entry's dispatch may overlap a still-running earlier one; handlers for dependent kinds (5/7/10-12) must tolerate a missing target.",
+    "Entries of unregistered kinds are stored dispatched:true permanently and are not replayed if the kind is registered later."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The ledger note said a handler-enqueued job shows up as a queuedJob reentrant error, but the library guard only rejects group writes (send/rename); reads from the job succeed, so the first harness attempt using keyPackages.count() silently passed. Needed a probe to find the right call.",
+    "surprised_by": "",
+    "scope": "project_specific",
+    "outcome": "planning_only",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "modules_touched": [
+    "history"
+  ]
+}

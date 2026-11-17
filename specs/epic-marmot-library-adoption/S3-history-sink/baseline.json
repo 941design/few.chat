@@ -1,0 +1,15 @@
+{
+  "module": "history",
+  "captured_at": "2026-11-17T12:36:00Z",
+  "tests": {
+    "command": "cd app && npx vitest run",
+    "status": "PASS",
+    "files": 301,
+    "passed": 6709,
+    "skipped": 1,
+    "failed": 0
+  },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "note": "HEAD 4bb0f23 (S2). `next lint` has no eslint config in this repo (ban tests live in vitest); tsc --noEmit clean."
+}

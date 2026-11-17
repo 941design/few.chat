@@ -1,0 +1,50 @@
+{
+  "module_name": "history",
+  "purpose": "App HistoryBackend over the few-group-history idb store: durable, per-group seq-ordered, at-least-once sink that persists {entry, seq, dispatched}, dispatches accepted group rumors to injected app handlers (sender = orderingKey.account), retracts on withdraw, purges on teardown and re-dispatches undispatched rows in a startup sweep.",
+  "public_api": [
+    {"name": "createHistoryBackend", "signature": "(options: { handlers: GroupHistoryHandlers; store?: HistoryStore; settleTimeoutMs?: number; onError?: (error: unknown, ctx: {groupId: string; eventId: string}) => void }) => AppHistoryBackend", "description": "Builds the sink. Throws TypeError when handlers (dispatch + retract) are missing."},
+    {"name": "AppHistoryBackend", "signature": "HistoryBackend & { sweep(): Promise<SweepResult> }", "description": "append/withdraw/list/purge per library contract plus the startup sweep (call before groups.list())."},
+    {"name": "GroupHistoryHandlers", "signature": "{ dispatch(input: GroupRumorInput): Promise<void>; retract(input: GroupRumorInput): Promise<void> }", "description": "Seam port. dispatch idempotent per (groupId,eventId) and throws on durable failure; retract of an unseen eventId is a no-op; neither awaits an account-scope client call."},
+    {"name": "GroupRumorInput", "signature": "{ groupId: string; eventId: string; rumor: Rumor; sender: string }", "description": "sender === HistoryEntry.orderingKey.account, never rumor.pubkey."},
+    {"name": "HISTORY_SETTLE_TIMEOUT_MS", "signature": "10_000", "description": "Per-call settle bound (matches the library's historyTimeoutMs default)."},
+    {"name": "createIdbHistoryStore / getDefaultHistoryStore / HISTORY_DB_NAME", "signature": "(dbName?: string) => HistoryStore", "description": "idb-keyval row store (get/set/del/delMany/keys/entries/createStore, no update()); lazy creation."},
+    {"name": "clearAllGroupHistory", "signature": "() => Promise<void>", "description": "Empties the default few-group-history store (clearAllGroupData / storeIncompatible wipe)."},
+    {"name": "SweepResult", "signature": "{ redispatched: number; failed: number }", "description": "Outcome of sweep()."}
+  ],
+  "private_files": [
+    "app/src/lib/marmot/history/historyBackend.ts",
+    "app/src/lib/marmot/history/historyStore.ts",
+    "app/src/lib/marmot/history/sweep.ts"
+  ],
+  "owned_data": [
+    "idb database few-group-history (object store 'rows'): rows `${groupId}:${eventId}` -> {entry, seq, dispatched}; counters `#seq:${groupId}` -> number"
+  ],
+  "dependencies_allowed": [
+    "@941design/marmot (HistoryBackend/HistoryEntry types)",
+    "@941design/nostr-events/event (Rumor type)",
+    "idb-keyval (get/set/del/delMany/keys/entries/createStore)",
+    "app/src/lib/marmot/kinds.ts (AppKinds seam: APP_RUMOR_KINDS)"
+  ],
+  "dependencies_forbidden": [
+    "app/src/context/**",
+    "react",
+    "ts-mls",
+    "@internet-privacy/marmot-ts",
+    "@nostr-dev-kit/*",
+    "idb-keyval update()",
+    "client construction (createMarmotClient / openForWrite)",
+    "concrete handlers (S4/S5)"
+  ],
+  "external_ports": ["GroupHistoryHandlers (injected)"],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/history/historyBackend.test.ts",
+    "app/tests/unit/marmot/history/historyBackend.model.test.ts",
+    "app/tests/unit/marmot/history/historyStore.realIdb.test.ts",
+    "app/tests/unit/marmot/history/history.structural.test.ts",
+    "app/tests/unit/marmot/history/historyWithdraw.harness.test.ts"
+  ],
+  "seam": {"name": "GroupHistoryHandlers", "cross_story": true, "consumed_by": ["S4", "S5", "S18"]},
+  "consumed_seams": [{"name": "AppKinds", "producer": "S2", "cross_story": true}]
+}
