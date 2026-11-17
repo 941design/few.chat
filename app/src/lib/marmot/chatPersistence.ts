@@ -31,6 +31,14 @@ export interface ChatMessage {
   attachments?: RoledAttachments;
   localMediaRefs?: string[];
   /**
+   * Group-history sink only: the kind-445 event ids that delivered this row
+   * (the sink's unit of delivery/withdrawal is `(groupId, eventId)`, but the
+   * same `rumor.id` can arrive under two event ids — a retried send reuses it).
+   * Withdrawing one carrier keeps the row while another remains. Absent on
+   * legacy rows, which count as ONE unknown carrier (removed by any retract).
+   */
+  carrierEventIds?: string[];
+  /**
    * True once this slot has been deleted (edit/delete epic). The row is
    * retained physically (never physically purged — AC-DEL-5); render paths
    * must filter it out via `filterVisibleMessages`. Applies identically to
@@ -393,45 +401,132 @@ export async function loadMessages(
  * count "new messages" (chatHandler's version bump / unread) gate on it.
  */
 export function appendMessage(groupId: string, message: ChatMessage): Promise<boolean> {
+  return serialised(groupId, () => insertIfAbsentLocked(groupId, message));
+}
+
+/**
+ * The insert-if-absent step of `appendMessage`; MUST run inside a `serialised`
+ * task for the group (it read-modify-writes the whole thread).
+ */
+async function insertIfAbsentLocked(groupId: string, message: ChatMessage): Promise<boolean> {
   const key = storageKey(groupId);
-  const prev = appendQueues.get(key) ?? Promise.resolve();
-  // Resolves true iff a row was inserted, or a materialized placeholder was
-  // superseded by the real announcement; false for an insert-if-absent no-op.
-  const next = prev.then(async (): Promise<boolean> => {
-    const existing = (await get<ChatMessage[]>(key)) ?? [];
-    const existingIndex = existing.findIndex((m) => m.id === message.id);
-    if (existingIndex !== -1) {
-      // Only a real group announcement supersedes a materialized-from-edit
-      // placeholder; an ordinary arrival never clobbers it (see doc comment).
-      if (
-        !existing[existingIndex].materializedFromEdit ||
-        !isInformativeAnnouncementContent(message.content)
-      ) {
-        return false; // real row already present, or arrival isn't an announcement — never clobber
-      }
-      const replaced = existing.slice();
-      replaced[existingIndex] = message;
-      await set(key, replaced);
-      postStoreChanged('chat', groupId);
-      if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
-        (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
-      }
-      return true;
+  const existing = (await get<ChatMessage[]>(key)) ?? [];
+  const existingIndex = existing.findIndex((m) => m.id === message.id);
+  if (existingIndex !== -1) {
+    // Only a real group announcement supersedes a materialized-from-edit
+    // placeholder; an ordinary arrival never clobbers it (see doc comment).
+    if (
+      !existing[existingIndex].materializedFromEdit ||
+      !isInformativeAnnouncementContent(message.content)
+    ) {
+      return false; // real row already present, or arrival isn't an announcement — never clobber
     }
-    await set(key, [...existing, message]);
+    const replaced = existing.slice();
+    replaced[existingIndex] = message;
+    await set(key, replaced);
     postStoreChanged('chat', groupId);
-    // Dev-only hook: notify E2E tests when a message is written to IDB.
     if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
       (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
     }
     return true;
-  });
+  }
+  await set(key, [...existing, message]);
+  postStoreChanged('chat', groupId);
+  // Dev-only hook: notify E2E tests when a message is written to IDB.
+  if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
+    (window as any).__fewTest?.onChatIdbWrite?.({ groupId, messageId: message.id });
+  }
+  return true;
+}
+
+/** Runs `task` on the per-group queue shared with appendMessage / removeMessages. */
+function serialised<T>(groupId: string, task: () => Promise<T>): Promise<T> {
+  const key = storageKey(groupId);
+  const prev = appendQueues.get(key) ?? Promise.resolve();
+  const next = prev.then(task);
   const settled: Promise<void> = next.then(() => {}, () => {});
   appendQueues.set(key, settled);
   settled.then(() => {
     if (appendQueues.get(key) === settled) appendQueues.delete(key);
   });
   return next;
+}
+
+/** True iff a row with this id is stored for the group. */
+export async function hasMessage(groupId: string, id: string): Promise<boolean> {
+  return serialised(groupId, async () => ((await get<ChatMessage[]>(storageKey(groupId))) ?? []).some((m) => m.id === id));
+}
+
+/** Adds `eventId` to the carriers of stored row `rumorId`; MUST run inside a `serialised` task. */
+async function addCarrierLocked(groupId: string, rumorId: string, eventId: string): Promise<void> {
+  const key = storageKey(groupId);
+  const existing = (await get<ChatMessage[]>(key)) ?? [];
+  const idx = existing.findIndex((m) => m.id === rumorId);
+  const carriers = idx === -1 ? undefined : existing[idx].carrierEventIds;
+  if (!carriers || carriers.includes(eventId)) return;
+  const next = existing.slice();
+  next[idx] = { ...existing[idx], carrierEventIds: [...carriers, eventId] };
+  await set(key, next);
+}
+
+/**
+ * Records `eventId` as another carrier of the stored row `rumorId` (a duplicate
+ * delivery under a different event id). Idempotent; a no-op for a missing row
+ * and for a legacy row (no carrier field: it already counts as one unknown carrier).
+ * Prefer `appendOrAddCarrier` on a delivery path: a separate insert and
+ * add-carrier is not atomic against a concurrent `retractMessageCarrier`.
+ */
+export function addMessageCarrier(groupId: string, rumorId: string, eventId: string): Promise<void> {
+  return serialised(groupId, () => addCarrierLocked(groupId, rumorId, eventId));
+}
+
+/**
+ * The sink's delivery write: insert-if-absent of `message` (which should carry
+ * `carrierEventIds: [eventId]`) OR, when the row already exists, add `eventId`
+ * as another carrier — both inside ONE per-group queue task, so a concurrent
+ * `retractMessageCarrier` of another carrier cannot interleave between the
+ * existence check and the carrier registration (it would drop a row this
+ * delivery is about to depend on).
+ *
+ * Resolves 'inserted' iff a row was inserted (or a materialized placeholder
+ * superseded), 'duplicate' otherwise.
+ */
+export function appendOrAddCarrier(groupId: string, message: ChatMessage, eventId: string): Promise<'inserted' | 'duplicate'> {
+  return serialised(groupId, async () => {
+    if (await insertIfAbsentLocked(groupId, message)) return 'inserted';
+    await addCarrierLocked(groupId, message.id, eventId);
+    return 'duplicate';
+  });
+}
+
+/**
+ * Withdraws carrier `eventId` of the stored row `rumorId`. The row is removed
+ * only when no carrier remains (a legacy row: removed by any retract), and only
+ * if its stored sender equals `sender` (case-insensitive). Resolves the number
+ * of rows removed; a retract for a carrier the row never had changes nothing.
+ */
+export function retractMessageCarrier(groupId: string, rumorId: string, eventId: string, sender: string): Promise<number> {
+  const key = storageKey(groupId);
+  return serialised(groupId, async () => {
+    const existing = (await get<ChatMessage[]>(key)) ?? [];
+    const idx = existing.findIndex((m) => m.id === rumorId);
+    if (idx === -1) return 0;
+    const row = existing[idx];
+    if (row.senderPubkey.toLowerCase() !== sender.toLowerCase()) return 0;
+    if (row.carrierEventIds) {
+      if (!row.carrierEventIds.includes(eventId)) return 0;
+      const remaining = row.carrierEventIds.filter((c) => c !== eventId);
+      if (remaining.length > 0) {
+        const next = existing.slice();
+        next[idx] = { ...row, carrierEventIds: remaining };
+        await set(key, next);
+        return 0;
+      }
+    }
+    await set(key, existing.filter((_, i) => i !== idx));
+    postStoreChanged('chat', groupId);
+    return 1;
+  });
 }
 
 // ─── Edit/delete storage foundation (epic-feature-request-message-edit-and-delete, S1) ──
@@ -723,20 +818,23 @@ export function filterVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
  * Remove specific messages from a group's persisted log by id.
  * No-ops for ids that aren't present. Serialised on the same per-key queue as
  * appendMessage so a remove cannot race a concurrent append on the same key.
+ * Resolves the number of rows actually removed (0 when none was present), so a
+ * caller can tell a real removal from a no-op.
  */
-export function removeMessages(groupId: string, ids: readonly string[]): Promise<void> {
-  if (ids.length === 0) return Promise.resolve();
+export function removeMessages(groupId: string, ids: readonly string[]): Promise<number> {
+  if (ids.length === 0) return Promise.resolve(0);
   const key = storageKey(groupId);
   const dropSet = new Set(ids);
   const prev = appendQueues.get(key) ?? Promise.resolve();
-  const next = prev.then(async () => {
+  const next = prev.then(async (): Promise<number> => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
     const filtered = existing.filter((m) => !dropSet.has(m.id));
-    if (filtered.length === existing.length) return;
+    if (filtered.length === existing.length) return 0;
     await set(key, filtered);
     postStoreChanged('chat', groupId);
+    return existing.length - filtered.length;
   });
-  const settled = next.catch(() => {});
+  const settled = next.then(() => {}, () => {});
   appendQueues.set(key, settled);
   settled.then(() => {
     if (appendQueues.get(key) === settled) appendQueues.delete(key);

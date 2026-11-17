@@ -13,7 +13,9 @@
 
 import { CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/handlers/types';
+import { assertPorts, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
+import type { GroupRumorInput } from '@/src/lib/marmot/history';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
 import { hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
 import { parseStructured } from '@/src/lib/marmot/parseStructured';
@@ -240,7 +242,48 @@ async function gateAnnouncement(
   }
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ChatHandlerDeps): Promise<void> {
+/** What `handle` did with a kind-9 rumor (the sink path acts on it: own echo, known peers). */
+export type ChatHandleOutcome =
+  /** An edit-marked replacement, routed to the reconciliation core. */
+  | 'edit-signal'
+  /** An announcement the actor rules rejected; nothing was written. */
+  | 'rejected'
+  /** A row was inserted (or a materialized placeholder superseded). */
+  | 'inserted'
+  /** The row already existed (a redelivery, or an optimistic own row). */
+  | 'duplicate';
+
+/** Case-insensitive pubkey equality: the ONE "is this mine" comparison (shared core and sink wrapper). */
+const sameKey = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+/** Atomic delivery write of the sink path (chatPersistence.appendOrAddCarrier). */
+type AppendOrAddCarrier = (groupId: string, message: ChatMessage, eventId: string) => Promise<'inserted' | 'duplicate'>;
+
+/**
+ * The sink path's carrier registration: the carrier event id and the port that
+ * registers it, ALWAYS together (one object, so "eventId without a port" and
+ * "port without an eventId" are unrepresentable). Present = sink path; absent =
+ * legacy path.
+ */
+interface SinkCarrier {
+  eventId: string;
+  appendOrAddCarrier: AppendOrAddCarrier;
+}
+
+/**
+ * `sink` (sink path only) carries the event id and the carrier port: the row
+ * is inserted with `eventId` as its carrier, or `eventId` is added to the
+ * existing row, in ONE atomic store task (so a concurrent retract of another
+ * carrier cannot drop the row in between). Unread / bell are AT-MOST-ONCE by
+ * design: a retry after a committed insert sees 'duplicate' and does not
+ * re-raise them (a missed bell beats a double count).
+ *
+ * Failure policy for `resolvePendingSignalsForSlot`: on the sink path a
+ * failure rejects (the sink keeps the row undispatched and retries, so a
+ * buffered delete/edit signal is never silently left unresolved); the legacy
+ * path keeps its best-effort warning.
+ */
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ChatHandlerDeps, sink?: SinkCarrier): Promise<ChatHandleOutcome> {
   const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
 
   // S5 dispatch-routing check (mirrors ContactChat.tsx's isEditMarkedReplacement
@@ -263,7 +306,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
       // way); a spurious bump is a cheap, idempotent re-read.
       deps.setChatVersion((v) => v + 1);
     }
-    return;
+    return 'edit-signal';
   }
 
   // S6 (epic: group-message-author-auth-app-layer, AC-ANNOUNCE-1..5) —
@@ -275,7 +318,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   const structured = parseStructured(content);
   if (structured) {
     const gated = await gateAnnouncement(structured, content, rumor, ctx, sender, deps);
-    if (gated === null) return;
+    if (gated === null) return 'rejected';
     content = gated;
   }
 
@@ -293,21 +336,42 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
     groupId: ctx.groupId,
     createdAt: rumor.created_at * 1000,
     ...(hasAttachment ? { attachments } : {}),
+    ...(sink ? { carrierEventIds: [sink.eventId] } : {}),
   };
 
-  const inserted = await deps.appendMessage(ctx.groupId, msg);
+  // Sink path: insert-or-add-carrier atomically (a duplicate under another
+  // event id adds that carrier, so a later withdraw of one carrier does not
+  // drop a row the other still backs).
+  const inserted = sink
+    ? (await sink.appendOrAddCarrier(ctx.groupId, msg, sink.eventId)) === 'inserted'
+    : await deps.appendMessage(ctx.groupId, msg);
 
   // S5: resolve-after-append (see ChatHandlerDeps.resolvePendingSignalsForSlot
   // doc comment above). appendMessage is insert-if-absent with no signal for
   // "actually inserted" vs "dedup no-op" — resolvePendingSignalsForSlot is
   // itself idempotent, so calling it unconditionally on every kind-9 original
   // (including a re-delivered one) is always safe.
-  await deps.resolvePendingSignalsForSlot(thread, msg.id, msg.senderPubkey).catch((err: unknown) => {
-    console.warn('[dispatcher.9] resolvePendingSignalsForSlot failed:', err);
-  });
+  // Sink path: a resolve failure is rethrown so the sink retries, but only
+  // AFTER this delivery's insert side effects (version bump, unread/bell)
+  // have run — the retry sees a duplicate and would otherwise skip them.
+  let resolveError: { err: unknown } | undefined;
+  if (sink) {
+    try {
+      await deps.resolvePendingSignalsForSlot(thread, msg.id, msg.senderPubkey);
+    } catch (err) {
+      resolveError = { err };
+    }
+  } else {
+    await deps.resolvePendingSignalsForSlot(thread, msg.id, msg.senderPubkey).catch((err: unknown) => {
+      console.warn('[dispatcher.9] resolvePendingSignalsForSlot failed:', err);
+    });
+  }
 
   // Nothing new landed (a duplicate id): no version bump, no unread.
-  if (!inserted) return;
+  if (!inserted) {
+    if (resolveError) throw resolveError.err;
+    return 'duplicate';
+  }
 
   deps.setChatVersion((v) => v + 1);
 
@@ -320,7 +384,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // (empty allow-list). Under the stub sender.pubkey === rumor.pubkey, so this
   // is behavior-preserving today; under the backbone it prevents an attacker
   // from suppressing the victim's notification by forging rumor.pubkey.
-  if (sender.pubkey !== ctx.selfPubkeyHex) {
+  if (!sameKey(sender.pubkey, ctx.selfPubkeyHex)) {
     // Epic: notification-domain-invariants. If THIS group is the one currently
     // open in the detail view (getActiveGroupId — the DispatcherContext seam
     // wired to activeViewStore), the open chat already renders the message via
@@ -333,12 +397,148 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
       deps.incrementUnread(ctx.groupId);
     }
   }
+  if (resolveError) throw resolveError.err;
+  return 'inserted';
 }
 
+/**
+ * Old-dispatcher-path handler (`applicationRumorDispatcher`).
+ * TEMPORARY: kept only so the existing suites and the old `buildDispatcher`
+ * stay green until the context cut-over (S18); removed by S22 together with
+ * the old dispatcher. New code uses `createChatGroupHandler`.
+ */
 export function createChatHandler(deps: ChatHandlerDeps): RumorHandler {
   return {
     kind: CHAT_MESSAGE_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
+    handle: async (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => {
+      await handle(rumor, ctx, sender, deps);
+    },
+  };
+}
+
+/**
+ * Deps of the history-sink path: everything the old handler took, plus what
+ * retract and own echo need. All REQUIRED: an unwired port must fail at
+ * construction, not degrade into silence.
+ */
+const CHAT_GROUP_PORTS = [
+  'appendMessage', 'incrementUnread', 'markAsRead', 'setChatVersion', 'applyDeleteEditSignal',
+  'resolvePendingSignalsForSlot', 'isGroupAdmin', 'isGroupMember', 'getPoll', 'loadVotes', 'saveVoteIfNewer',
+  'loadPendingVotes', 'removePendingVotes', 'queuePendingCloseAnnouncement', 'loadPendingCloseAnnouncements',
+  'removePendingCloseAnnouncements', 'appendOrAddCarrier', 'retractMessageCarrier', 'hasMessage',
+  'recomputeUnread', 'rememberKnownPeer', 'onOwnEcho', 'onOwnWithdrawn', 'retractDeleteEditSignal',
+] as const;
+
+export interface ChatGroupHandlerDeps extends ChatHandlerDeps {
+  /**
+   * Insert-if-absent of the message OR add `eventId` as another carrier of the
+   * stored row, atomically (chatPersistence.appendOrAddCarrier). Idempotent.
+   */
+  appendOrAddCarrier: AppendOrAddCarrier;
+  /**
+   * Withdraws carrier `eventId`; the row goes only when no carrier remains and
+   * its stored sender equals `sender` (chatPersistence.retractMessageCarrier).
+   * Resolves the rows removed.
+   */
+  retractMessageCarrier: (groupId: string, rumorId: string, eventId: string, sender: string) => Promise<number>;
+  /** Whether a row with this id is stored (chatPersistence.hasMessage). */
+  hasMessage: (groupId: string, id: string) => Promise<boolean>;
+  /** Recomputes the group's unread count over the remaining rows (withdraw changed them). */
+  recomputeUnread: (groupId: string) => void | Promise<void>;
+  /** Adds a (non-self) sender to the known-peers set. Never undone by retract (AC-WDR-6). */
+  rememberKnownPeer: (peerHex: string) => void;
+  /**
+   * The sink delivered an OWN message: the optimistic row `rumorId` is
+   * confirmed (D13). Raises no unread and no bell. Called on every own
+   * delivery, first or repeated, so it must be idempotent.
+   */
+  onOwnEcho: (groupId: string, rumorId: string) => void;
+  /**
+   * An OWN message was withdrawn from the sink: its row must end failed/retry,
+   * not be deleted, and is never auto-resent (AC-WDR-2; wired by the own-send lifecycle).
+   */
+  onOwnWithdrawn: (groupId: string, rumorId: string) => void;
+  /** Withdrawn delete/edit signal (a kind-5 rumor or an edit-marked kind-9): drop its effect from the stores. */
+  retractDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<void>;
+}
+
+/**
+ * Kind-9 handler on the history-sink path.
+ *
+ * dispatch: the old handler's semantics with `sender` = the MLS-authenticated
+ * account, plus (D13) own echo: the sink delivery of an own message is the
+ * confirmation of its optimistic row (same `rumor.id`): one row, chat version
+ * bumped so the row re-reads as confirmed, never an unread or bell. A peer's
+ * message also remembers the sender as a known peer. Idempotent per rumor id
+ * (insert-if-absent); a redelivery re-bumps nothing but an own echo.
+ *
+ * retract: removes nothing for an unapplied rumor but ALWAYS runs the
+ * idempotent recompute-and-bump tail (so a retry after a partial failure
+ * converges). A row goes only when its last carrier is withdrawn and the stored
+ * sender matches the withdrawing sender; an OWN row is handed to
+ * `onOwnWithdrawn` (failed/retry), never deleted. A withdrawn poll_close
+ * announcement also drops the copy held for its not-yet-known poll. Effects
+ * already emitted (bell, known peers) stay (AC-WDR-6).
+ *
+ * Every required port is checked at construction (TypeError naming the port).
+ */
+export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHandler & RumorHandler {
+  assertPorts('createChatGroupHandler', deps, CHAT_GROUP_PORTS);
+  const legacy = createChatHandler(deps);
+  return {
+    ...legacy,
+    async dispatch(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      const outcome = await handle(input.rumor as ApplicationRumor, ctx, sender, deps, {
+        eventId: input.eventId,
+        appendOrAddCarrier: deps.appendOrAddCarrier,
+      });
+      if (sameKey(sender.pubkey, env.selfPubkeyHex)) {
+        // Own echo: confirm the optimistic row for EVERY own delivery whatever
+        // the outcome (onOwnEcho is idempotent). A duplicate (the row was
+        // already stored) skipped the version bump in handle(); the UI still
+        // has to re-read the row as confirmed.
+        if (outcome === 'duplicate') deps.setChatVersion((v) => v + 1);
+        deps.onOwnEcho(ctx.groupId, input.rumor.id);
+        return;
+      }
+      if (outcome === 'rejected' || outcome === 'edit-signal') return;
+      deps.rememberKnownPeer(sender.pubkey);
+    },
+    async retract(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      const rumor = input.rumor as ApplicationRumor;
+      const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
+      if (hasEditMarkerTag(rumor.tags)) {
+        try {
+          await deps.retractDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender);
+        } finally {
+          deps.setChatVersion((v) => v + 1);
+        }
+        return;
+      }
+      // A withdrawn poll_close announcement must not be revived by a later
+      // poll-open: drop the copy held for its not-yet-known poll (own or peer).
+      const structured = parseStructured(typeof rumor.content === 'string' ? rumor.content : '');
+      if (structured?.type === 'poll_close') {
+        await deps.removePendingCloseAnnouncements(ctx.groupId, [
+          { groupId: ctx.groupId, pollId: structured.pollId, senderPubkey: sender.pubkey, rumorId: rumor.id, createdAt: rumor.created_at, receivedAt: 0 },
+        ]);
+      }
+      if (sameKey(sender.pubkey, env.selfPubkeyHex)) {
+        // Never applied (no own row): nothing to hand back, nothing to bump.
+        if (!(await deps.hasMessage(ctx.groupId, rumor.id))) return;
+        deps.onOwnWithdrawn(ctx.groupId, rumor.id);
+        deps.setChatVersion((v) => v + 1);
+        return;
+      }
+      // The removal count only says whether THIS carrier changed rows; the
+      // tail always runs so a retry after a partial failure (removal committed,
+      // recompute threw) still recomputes and bumps. Both are idempotent.
+      await deps.retractMessageCarrier(ctx.groupId, rumor.id, input.eventId, sender.pubkey);
+      await deps.recomputeUnread(ctx.groupId);
+      deps.setChatVersion((v) => v + 1);
+    },
   };
 }
 

@@ -214,6 +214,33 @@
       "owning_module": "history",
       "type": "invariant",
       "added_by_story": "S3"
+    },
+    {
+      "id": "handlers.own-echo",
+      "name": "Sink delivery from self confirms optimistic row by rumor.id (onOwnEcho), never unread/bell; own withdraw → onOwnWithdrawn (failed/retry), never deleted",
+      "owning_module": "handlers",
+      "type": "invariant",
+      "added_by_story": "S4",
+      "consumers": [
+        "S6"
+      ]
+    },
+    {
+      "id": "handlers.notification-router",
+      "name": "onGroupNotification drives members/admins/name/disband only, never message stores",
+      "owning_module": "handlers",
+      "type": "public_contract",
+      "added_by_story": "S4",
+      "consumers": [
+        "S18"
+      ]
+    },
+    {
+      "id": "knownPeers.sender-add",
+      "name": "Peer senders added to known peers on sink dispatch (subset of roster seeding); never undone by retract",
+      "owning_module": "handlers",
+      "type": "invariant",
+      "added_by_story": "S4"
     }
   ],
   "stories": [
@@ -284,10 +311,30 @@
         "S5/S6/S13": "purge now late-retracts stragglers after a group is left; with AC-WDR-2 an own message could leave a failed/retry row for a left group — when real handlers land add case: own msg, hung dispatch, leave, release → no chat row for the left group (give retract a reason withdrawn|purged or order leave cleanup after purge settles)",
         "S17/S18": "one history backend instance per bootstrap (disposed sink rejects all calls); teardown order queue > unsubscribe > history.dispose > client.dispose > stores.close > pool.destroy; clearAllGroupHistory only after dispose"
       }
+    },
+    {
+      "id": "S4",
+      "surfaces_touched": [
+        "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+        "app/src/lib/marmot/handlers/{chatHandler,reactionHandler,deleteEditHandler}.ts",
+        "app/src/lib/marmot/chatPersistence.ts"
+      ],
+      "concepts_owned": [
+        "handlers",
+        "handlers.notification-router"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S5": "reaction to an unknown target must be held back (like applyDeleteEditSignal pending signals) and applied when the target lands — not dropped; implement recomputeUnread in unreadStore (count of non-own rows after lastRead, as initUnreadCounts) with AC-WDR-1 concrete counts; implement retractReaction / retractDeleteEditSignal store APIs; move announcement gates to groupOf (AC-HIST-11)",
+        "S6": "onOwnEcho is called for EVERY own delivery incl. rejected/edit-signal outcomes — must tolerate a missing row; own retract ignores carriers (low-likelihood) — onOwnWithdrawn should ignore a row confirmed by a different eventId",
+        "S18": "wire every required port; rememberKnownPeer = rememberKnownPeers([hex]) + bumpKnownPeersRevision when changed; wire createGroupNotificationRouter into onGroupNotification; selfPubkeyHex lowercase",
+        "S22": "delete legacy factories createChatHandler/createReactionHandler/createDeleteEditHandler and old dispatcher; shared handle() cores stay",
+        "S5+": "add each new test dir to app/tsconfig.tests-marmot.json (typechecked by make test-unit); handler factories validate ports via assertPorts; held poll_close removal keyed by rumor id (not carrier) — accepted residual"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S3",
+    "last_story_reviewed": "S4",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

@@ -1,0 +1,127 @@
+{
+  "module_name": "handlers",
+  "purpose": "Per-kind app handlers on the history-sink path: kind-9 chat, kind-7 reaction and kind-5 delete/edit take {groupId,eventId,rumor,sender} (sender = MLS-authenticated account, never rumor.pubkey), dispatch idempotently with store bumps driven from handler completion, confirm own echoes by rumor.id without unread/bell, and retract withdrawn rumors while keeping effects already emitted. groupRumorDispatch.ts composes them into the sink's GroupHistoryHandlers and routes group notifications to member/admin/name/disband resync only.",
+  "public_api": [
+    {
+      "name": "createGroupRumorDispatch",
+      "signature": "(options: { handlers: readonly GroupKindHandler[]; env: GroupHandlerEnv }) => GroupHistoryHandlers",
+      "description": "dispatch/retract routed by rumor.kind; throws at construction for a handler kind outside APP_RUMOR_KINDS; handler failures propagate (sink keeps the row undispatched)."
+    },
+    {
+      "name": "GroupKindHandler",
+      "signature": "{ kind: number; dispatch(input: GroupRumorInput, env: GroupHandlerEnv): Promise<void>; retract(input: GroupRumorInput, env: GroupHandlerEnv): Promise<void> }",
+      "description": "One app kind on the sink path."
+    },
+    {
+      "name": "GroupHandlerEnv",
+      "signature": "{ selfPubkeyHex: string; getActiveGroupId: () => string | null }",
+      "description": "Account-level facts injected once."
+    },
+    {
+      "name": "toHandlerArgs",
+      "signature": "(input: GroupRumorInput, env: GroupHandlerEnv) => { ctx: DispatcherContext; sender: AuthenticatedSender }",
+      "description": "Binds sender to input.sender."
+    },
+    {
+      "name": "createGroupNotificationRouter",
+      "signature": "(targets: GroupResyncTargets) => (groupId: string, notification: GroupNotification) => void",
+      "description": "onGroupNotification routing: members/admins/name/disband only; message and message-withdrawn are ignored (D13)."
+    },
+    {
+      "name": "createChatGroupHandler",
+      "signature": "(deps: ChatGroupHandlerDeps) => GroupKindHandler & RumorHandler",
+      "description": "kind 9 incl. edit-marked replacements and announcements; own echo confirm; known-peer remember; retract removes another member's row + recompute unread, hands own row to onOwnWithdrawn."
+    },
+    {
+      "name": "createReactionGroupHandler",
+      "signature": "(deps: ReactionGroupHandlerDeps) => GroupKindHandler & RumorHandler",
+      "description": "kind 7; tolerates a missing target; retract via retractReaction port."
+    },
+    {
+      "name": "createDeleteEditGroupHandler",
+      "signature": "(deps: DeleteEditGroupHandlerDeps) => GroupKindHandler & RumorHandler<5>",
+      "description": "kind 5; retract via retractDeleteEditSignal port."
+    },
+    {
+      "name": "chatPersistence.removeMessages",
+      "signature": "(groupId: string, ids: readonly string[]) => Promise<number>",
+      "description": "Now resolves the number of rows removed (no longer called by the S4 handlers; retract goes through retractMessageCarrier)."
+    },
+    {
+      "name": "chatPersistence.appendOrAddCarrier",
+      "signature": "(groupId: string, message: ChatMessage, eventId: string) => Promise<'inserted' | 'duplicate'>",
+      "description": "Sink-path delivery write: insert-if-absent OR add eventId as a carrier of the existing row, inside ONE serialised per-group queue task (atomic against a concurrent retractMessageCarrier)."
+    },
+    {
+      "name": "chatPersistence.retractMessageCarrier / hasMessage",
+      "signature": "(groupId, rumorId, eventId, sender) => Promise<number>; (groupId, id) => Promise<boolean>",
+      "description": "Withdraw one carrier; the row goes only when its last carrier is withdrawn and the stored sender matches. hasMessage backs the own-retract 'never applied' check."
+    },
+    {
+      "name": "handlers/types.ts",
+      "signature": "ApplicationRumor, DispatcherContext, AuthenticatedSender, RumorHandler, DispatchMeta",
+      "description": "Handler contract types, moved out of applicationRumorDispatcher (re-exported there for legacy users) so S22 can delete that module without touching handlers."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/src/lib/marmot/handlers/types.ts"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/history (GroupHistoryHandlers/GroupRumorInput types)",
+    "app/src/lib/marmot/kinds.ts (APP_RUMOR_KINDS)",
+    "app/src/lib/marmot/chatPersistence.ts, messageEdits, reactions (via injected deps)",
+    "@941design/marmot (GroupNotification type)"
+  ],
+  "dependencies_forbidden": [
+    "app/src/context/**",
+    "react",
+    "ts-mls",
+    "@internet-privacy/marmot-ts",
+    "idb-keyval update()",
+    "rumor.pubkey reads"
+  ],
+  "external_ports": [
+    "ChatGroupHandlerDeps (appendOrAddCarrier, retractMessageCarrier, hasMessage, recomputeUnread, rememberKnownPeer, onOwnEcho, onOwnWithdrawn, retractDeleteEditSignal; every required port is checked at construction, TypeError naming it)",
+    "ReactionGroupHandlerDeps.retractReaction",
+    "DeleteEditGroupHandlerDeps.retractDeleteEditSignal",
+    "GroupResyncTargets"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "GroupHistoryHandlers.dispatch/retract",
+    "GroupNotification"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts",
+    "app/tests/unit/marmot/forgery.harness.test.ts",
+    "app/tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts",
+    "app/tsconfig.tests-marmot.json (type-checks the epic's test files; run by make test-unit)"
+  ],
+  "seam": {
+    "name": "GroupHistoryHandlers",
+    "cross_story": true,
+    "consumed_by": [
+      "S5",
+      "S6",
+      "S18"
+    ],
+    "role": "consumer"
+  },
+  "consumed_seams": [
+    {
+      "name": "GroupHistoryHandlers",
+      "producer": "S3",
+      "cross_story": true
+    },
+    {
+      "name": "AppKinds",
+      "producer": "S2",
+      "cross_story": true
+    }
+  ]
+}

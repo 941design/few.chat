@@ -1,0 +1,62 @@
+{
+  "story_id": "S4",
+  "status": "done",
+  "remediation_rounds": 0,
+  "files_created": [
+    "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+    "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts",
+    "app/tests/unit/marmot/forgery.harness.test.ts",
+    "app/src/lib/marmot/handlers/types.ts",
+    "app/tsconfig.tests-marmot.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/marmot/applicationRumorDispatcher.ts",
+    "app/src/lib/marmot/history/historyBackend.ts",
+    "Makefile",
+    "app/tests/unit/marmot/client/bootstrap.sequence.test.ts",
+    "app/tests/unit/marmot/history/historyBackend.test.ts",
+    "app/tests/unit/marmot/history/historyStore.realIdb.test.ts"
+  ],
+  "tests_added": {
+    "unit": "groupRumorDispatch.test.ts (69: AC-HIST-10 bumps from handler completion + notification router, sender binding, idempotency/redelivery/failure retry, missing-target tolerance, kind gate, own echo, AC-WDR-6 retract, AC-WDR-1 carriers incl. the atomic duplicate-vs-retract interleaving, withdrawn poll_close dropped from the hold queue, sink-vs-legacy resolvePendingSignalsForSlot failure policy, 38 parameterised required-port construction checks)",
+    "harness": "forgery.harness.test.ts (2: AC-FORGE-1 two real clients Alice/Mallory over FakeRelay + createMemoryStorage; AC-FORGE-2 sender attribution)"
+  },
+  "test_counts": {
+    "baseline": 6834,
+    "final": 6905
+  },
+  "mocks": [],
+  "implementation_summary": "groupRumorDispatch.ts (new): GroupKindHandler {kind,dispatch,retract}, createGroupRumorDispatch({handlers, env}) -> GroupHistoryHandlers (routes by rumor.kind, throws at construction for a kind outside APP_RUMOR_KINDS, handler failures propagate so the sink keeps the row undispatched), toHandlerArgs (sender := input.sender, MLS-authenticated), createGroupNotificationRouter (onGroupNotification drives only members/admins/name/disband resync; message and message-withdrawn ignored, D13). chat/reaction/deleteEdit handlers each gain a sink-path factory (createChatGroupHandler, createReactionGroupHandler, createDeleteEditGroupHandler) sharing the existing core handle(); chatHandler core now returns an outcome (edit-signal|rejected|inserted|duplicate). Chat dispatch: own echo (sender == self) confirms the optimistic row by rumor.id (insert-if-absent, version re-bump on duplicate, onOwnEcho, never unread/bell); a peer sender is remembered as a known peer. Chat retract: another member's row removed + unread recomputed + version bump (only when a row was actually removed); own row handed to onOwnWithdrawn (failed/retry, not deleted); edit-marked kind-9 and kind-5 retract via retractDeleteEditSignal port; reaction retract via retractReaction port. Effects already emitted (bell, known peers) are never undone. Carrier persistence in chatPersistence: appendOrAddCarrier (atomic insert-or-add-carrier in one per-group queue task, used by the sink path), retractMessageCarrier, hasMessage. Retract of a withdrawn poll_close announcement also drops the copy held for its not-yet-known poll. Required ports are checked at construction (TypeError naming the port). On the sink path a failing resolvePendingSignalsForSlot rejects. Handler contract types live in handlers/types.ts. chatPersistence.removeMessages resolves the removed-row count (no S4 caller). Old RumorHandler surface (createChatHandler etc.) left untouched and marked TEMPORARY (removed by S22), so no adapter in registerHandlers was needed and the existing suites pass unchanged.",
+  "verification": {
+    "unit_full": "make test-unit: tsc -p tsconfig.tests-marmot.json clean, then 308 files, 6905 passed, 1 skipped, 0 failed",
+    "typecheck": "tsc --noEmit clean; tsc -p tsconfig.tests-marmot.json --noEmit clean",
+    "lint": "NO_LINT"
+  },
+  "decisions": [
+    "Sink-path handlers are added beside the legacy RumorHandler on the same object (GroupKindHandler & RumorHandler) sharing one core, instead of a rewrite plus adapter in registerHandlers: legacy suites and the old dispatcher stay untouched until S18/S22.",
+    "New retract/own-lifecycle ports are REQUIRED deps of the new factories (no optional deps that degrade silently): appendOrAddCarrier, retractMessageCarrier, hasMessage, recomputeUnread, rememberKnownPeer, onOwnEcho, onOwnWithdrawn, retractDeleteEditSignal (chat); retractReaction (reaction); retractDeleteEditSignal (delete/edit).",
+    "AC-WDR-6 requires known-peers additions to exist at append: chat dispatch now calls rememberKnownPeer(sender) for a non-self sender (MLS-authenticated group member) after a completed append.",
+    "Own echo on a duplicate row re-bumps the chat version so the optimistic row re-reads as confirmed; no own echo ever reaches incrementUnread/markAsRead.",
+    "AC-FORGE-1 harness: the library drops Mallory's forged rumor before the sink (verified: send does not throw, Alice's sink handlers never see it); Mallory's own device keeps its own forged send, attributed to Mallory (sender binding), which is asserted.",
+    "removeMessages returns the removed-row count (was void; no S4 caller after the carrier model).",
+    "Notification routing is a pure function in groupRumorDispatch.ts for S18 to wire into createClient's onGroupNotification; own-change-* notifications are not routed here (S13/S14)."
+  ],
+  "limitations": [
+    "Reaction and delete/edit retract are only port-contract tested here: the real stores need new APIs (reactions/api.ts: drop a reaction by rumor id; messageEdits/api.ts: undo a signal), outside S4 scope.includes; S5 owns them and the retract assertions for reactions/votes/polls. A withdrawn edit-marked kind-9 / kind-5 goes through retractDeleteEditSignal.",
+    "AC-FORGE-2 e2e (groups-identity) is not run here (no e2e in this story); the harness covers attribution.",
+    "announcement gate deps (isGroupAdmin/isGroupMember/getPoll...) in chatHandler still use the old injected callbacks; moving them to the injected groupOf live accessors (AC-HIST-11) is S5.",
+    "onOwnEcho/onOwnWithdrawn/recomputeUnread have no production wiring until S6/S18 (the composition root)."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "clean_run"
+  },
+  "modules_touched": [
+    "handlers"
+  ]
+}

@@ -56,7 +56,7 @@ const ALICE = 'aa'.repeat(32);
 const BOB = 'bb'.repeat(32);
 const db = () => mapOf(`${HISTORY_DB_NAME}:${ALICE}`);
 const rowKey = (g: string, e: string) => `${g}:${e}`;
-const row = (g: string, e: string) => db().get(rowKey(g, e)) as { entry: HistoryEntry; seq: number; dispatched: boolean } | undefined;
+const row = (g: string, e: string) => db().get(rowKey(g, e)) as { entry: HistoryEntry; seq: number; dispatched: boolean; recoveryFailures?: number; abandoned?: boolean } | undefined;
 
 function entry(over: { groupId?: string; eventId: string; kind?: number; rumorId?: string; pubkey?: string; account?: string; content?: string }): HistoryEntry {
   const eventId = over.eventId;

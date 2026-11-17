@@ -12,8 +12,10 @@
  */
 
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/handlers/types';
 import type { ReactionThreadKey } from '@/src/lib/reactions/types';
+import { assertPorts, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
+import type { GroupRumorInput } from '@/src/lib/marmot/history';
 
 /** Named constant for the reaction rumor kind. */
 export const REACTION_RUMOR_KIND = 7;
@@ -60,9 +62,48 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   }
 }
 
+/**
+ * Old-dispatcher-path handler. TEMPORARY: kept so the existing suites and the
+ * old `buildDispatcher` stay green until the context cut-over (S18); removed by
+ * S22. New code uses `createReactionGroupHandler`.
+ */
 export function createReactionHandler(deps: ReactionHandlerDeps): RumorHandler {
   return {
     kind: REACTION_RUMOR_KIND,
     handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
+  };
+}
+
+/** Deps of the history-sink path; the retract port is REQUIRED (an unwired port must fail at construction). */
+export interface ReactionGroupHandlerDeps extends ReactionHandlerDeps {
+  /**
+   * Drops the reaction row the withdrawn rumor produced (own or another
+   * member's; a removal rumor's effect is undone the same way). Resolves true
+   * iff a stored row was dropped.
+   */
+  retractReaction: (thread: ReactionThreadKey, rumor: ApplicationRumor, sender: AuthenticatedSender) => Promise<boolean>;
+}
+
+/**
+ * Kind-7 handler on the history-sink path (sender = the MLS-authenticated
+ * account). dispatch is idempotent (the store dedups by rumor id) and tolerates
+ * a target that has not arrived yet or was never stored: it completes without
+ * writing, never throws (a later entry may overlap an earlier still-running
+ * dispatch after a sink timeout). retract bumps the reactions version only when
+ * a stored row was dropped.
+ */
+export function createReactionGroupHandler(deps: ReactionGroupHandlerDeps): GroupKindHandler & RumorHandler {
+  assertPorts('createReactionGroupHandler', deps, ['loadMessages', 'applyInboundRumor', 'setReactionsVersion', 'retractReaction']);
+  return {
+    ...createReactionHandler(deps),
+    async dispatch(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      await handle(input.rumor as ApplicationRumor, ctx, sender, deps);
+    },
+    async retract(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      const dropped = await deps.retractReaction({ kind: 'group', groupId: ctx.groupId }, input.rumor as ApplicationRumor, sender);
+      if (dropped) deps.setReactionsVersion((v) => v + 1);
+    },
   };
 }

@@ -145,7 +145,7 @@ describe('per-group key-range reads (real IndexedDB)', () => {
     const fetched: number[] = [];
     const ranges: IDBKeyRange[] = [];
     const getAll = IDBObjectStore.prototype.getAll;
-    vi.spyOn(IDBObjectStore.prototype, 'getAll').mockImplementation(function (this: IDBObjectStore, query?: IDBKeyRange | null) {
+    vi.spyOn(IDBObjectStore.prototype, 'getAll').mockImplementation(function (this: IDBObjectStore, query?: IDBValidKey | IDBKeyRange | null) {
       ranges.push(query as IDBKeyRange);
       const request = getAll.call(this, query);
       request.addEventListener('success', () => fetched.push((request.result as unknown[]).length));
@@ -169,7 +169,7 @@ describe('per-group key-range reads (real IndexedDB)', () => {
     }
     const getAllKeys = IDBObjectStore.prototype.getAllKeys;
     const seen: unknown[][] = [];
-    vi.spyOn(IDBObjectStore.prototype, 'getAllKeys').mockImplementation(function (this: IDBObjectStore, query?: IDBKeyRange | null) {
+    vi.spyOn(IDBObjectStore.prototype, 'getAllKeys').mockImplementation(function (this: IDBObjectStore, query?: IDBValidKey | IDBKeyRange | null) {
       const request = getAllKeys.call(this, query);
       request.addEventListener('success', () => seen.push(request.result));
       return request;

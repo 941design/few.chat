@@ -88,7 +88,7 @@ function makeRig(opts: { keyPackageCount?: number; groups?: Array<{ id: string }
     },
     clientEvents: Object.fromEntries(
       CLIENT_EVENT_NAMES.map((n) => [n, (p: unknown) => log.push(`handler:${n}:${JSON.stringify(p)}`)]),
-    ) as BootstrapInput['clientEvents'],
+    ) as unknown as BootstrapInput['clientEvents'],
     inboxHandlers: { joinRequest: () => undefined, inviteContext: () => undefined },
     onGroupNotification: (g, n) => log.push(`appGroupNotification:${g.id}:${(n as { type: string }).type}`),
     inboxRelayList: { ensure: async (ctx) => { log.push(`inboxRelayList.ensure:${ctx.relays.join(',')}`); if (opts.failStep === '10050') throw new Error('10050 boom'); } },

@@ -116,8 +116,8 @@ test-install-stamps: ## Verify setup failure/retry behavior in isolated temporar
 	python3 scripts/test-install-stamps.py
 
 ## Run unit tests (Vitest)
-test-unit: ensure-deps ## Run unit tests (Vitest)
-	cd $(APP_DIR) && npx vitest run
+test-unit: ensure-deps ## Type-check the marmot-epic test files, then run unit tests (Vitest)
+	cd $(APP_DIR) && npx tsc -p tsconfig.tests-marmot.json --noEmit && npx vitest run
 
 test-coverage: ensure-deps ## Run unit tests with v8 line/branch coverage (reports/coverage)
 	cd $(APP_DIR) && npx vitest run --coverage

@@ -1,0 +1,25 @@
+{
+  // Type-checks the marmot-library-adoption epic's test files, which the main
+  // tsconfig.json excludes (`tests`), so type errors in them would otherwise go
+  // unnoticed. Run by `make test-unit` (npx tsc -p tsconfig.tests-marmot.json --noEmit).
+  // LATER STORIES: add each new test directory / file of this epic to "include" below.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "target": "ES2020",
+    "types": ["node"]
+  },
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/unit/marmot/client/**/*.ts",
+    "tests/unit/marmot/history/**/*.ts",
+    "tests/unit/marmot/handlers/**/*.ts",
+    "tests/unit/marmot/kinds.test.ts",
+    "tests/unit/marmot/forgery.harness.test.ts",
+    "tests/unit/nip46Perms.test.ts",
+    "tests/unit/depsResolve.test.ts"
+  ],
+  "exclude": ["node_modules"]
+}

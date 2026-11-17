@@ -146,6 +146,11 @@ export interface HistoryBackendOptions {
 }
 
 export interface AppHistoryBackend extends HistoryBackend {
+  // The app backend always returns promises (narrowing the library's `void | Promise<void>`).
+  append(entry: HistoryEntry): Promise<void>;
+  withdraw(groupId: string, eventIds: readonly string[]): Promise<void>;
+  list(groupId: string): Promise<readonly HistoryEntry[]>;
+  purge(groupId: string): Promise<void>;
   /** Startup recovery of groups no live call touched yet (call after `groups.list()`, before `inbox.start()`). */
   sweep(): Promise<SweepResult>;
   /**

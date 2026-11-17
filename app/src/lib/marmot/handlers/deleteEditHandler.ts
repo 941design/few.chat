@@ -55,9 +55,11 @@
  * DMs remain independently seal-signature bound.
  */
 
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/handlers/types';
 import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
 import { DELETE_EDIT_RUMOR_KIND } from '@/src/lib/messageEdits/rumor';
+import { assertPorts, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
+import type { GroupRumorInput } from '@/src/lib/marmot/history';
 
 /** Kind-5 rumor kind, narrowed to its literal type for `RumorHandler<5>`. */
 const KIND: 5 = DELETE_EDIT_RUMOR_KIND as 5;
@@ -100,9 +102,47 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   }
 }
 
+/**
+ * Old-dispatcher-path handler. TEMPORARY: kept so the existing suites and the
+ * old `buildDispatcher` stay green until the context cut-over (S18); removed by
+ * S22. New code uses `createDeleteEditGroupHandler`.
+ */
 export function createDeleteEditHandler(deps: DeleteEditHandlerDeps): RumorHandler<5> {
   return {
     kind: KIND,
     handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
+  };
+}
+
+/** Deps of the history-sink path; the retract port is REQUIRED (an unwired port must fail at construction). */
+export interface DeleteEditGroupHandlerDeps extends DeleteEditHandlerDeps {
+  /** Drops the stored effect of a withdrawn delete/edit signal (own or another member's). */
+  retractDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<void>;
+}
+
+/**
+ * Kind-5 handler on the history-sink path (sender = the MLS-authenticated
+ * account). dispatch routes every rumor to `applyDeleteEditSignal`
+ * unconditionally: a signal whose target has not arrived (or is gone) is
+ * buffered or discarded there, never an error — the tolerance a dependent kind
+ * needs when a later entry overlaps an earlier still-running dispatch. Both
+ * directions bump the chat version unconditionally (see `handle`).
+ */
+export function createDeleteEditGroupHandler(deps: DeleteEditGroupHandlerDeps): GroupKindHandler & RumorHandler<5> {
+  assertPorts('createDeleteEditGroupHandler', deps, ['applyDeleteEditSignal', 'setChatVersion', 'retractDeleteEditSignal']);
+  return {
+    ...createDeleteEditHandler(deps),
+    async dispatch(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      await handle(input.rumor as ApplicationRumor, ctx, sender, deps);
+    },
+    async retract(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      try {
+        await deps.retractDeleteEditSignal({ kind: 'group', groupId: ctx.groupId }, input.rumor as InboundDeleteEditRumor, sender);
+      } finally {
+        deps.setChatVersion((v) => v + 1);
+      }
+    },
   };
 }
