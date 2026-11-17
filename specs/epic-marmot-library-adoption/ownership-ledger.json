@@ -509,10 +509,27 @@
         "S17": "the account wipe (clearAllGroupData / storeIncompatible) deletes the account few-invite-contexts entry",
         "S18/S28": "pre-join card name is a sponsor claim — show sponsor identity next to it or label it; optional notice when joined MLS name differs"
       }
+    },
+    {
+      "id": "S11",
+      "concepts_owned": [
+        "invitations.declineDurability",
+        "pendingDirectInvite.marker"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S14": "cancel-invitation clears through clearPendingDirectInvite (compare-and-clear); consider listing orphan declines",
+        "S17": "wipe calls clearAllPendingDirectInvites (incl. orphan declines)",
+        "S18": "wrap inviter createMarkerRecordingInviter(createContextSendingInviter(...)); clientEvents.welcomeDeclined -> onWelcomeDeclined; startupRetry() after bootstrap; retryDeclined on transportConnected and after a group sync; announce = S6 sender kind 9 with dedup id; getGroup = client.groups.get; dispose with the handle; receivers dedupe declined announcements by id",
+        "S22": "delete legacy markPendingDirectInvite and its callers",
+        "S13": "leave purge calls clearPendingDirectInvitesForGroup",
+        "S18/S19": "declined announcements now carry id groupId:inviteeRef (at-least-once); parseStructured currently DROPS the extra id field — receivers must keep it and dedupe declined announcements by id. Pass onRecordedDeclined: durability.replayMarker to the inviter; retryDeclined() on reconnect/group sync.",
+        "library": "MarmotGroup exposes no removeLeaf; multi-leaf decline resolves as superseded (nothing removed, onError)"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S10",
+    "last_story_reviewed": "S11",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

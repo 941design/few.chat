@@ -1,0 +1,86 @@
+{
+  "module_name": "invitations",
+  "purpose": "S11 adds decline durability (D7) to the invitations module: the sponsor persists inviteeRef -> pubkey in the pending-direct-invite marker at invite time; welcomeDeclined durably marks it declined before any removal work; the removal runs outside the listener (client job queue), through the GroupOpQueue after a bounded synced(), is retried for every declined marker at startup, and only after removeMember resolved the marker is cleared and one declined announcement is sent as an MLS group message.",
+  "public_api": [
+    {
+      "name": "createDeclineDurability",
+      "signature": "(deps: { store: DeclineMarkerStore; getGroup: (groupId) => Promise<DeclineGroup | undefined>; queue: Pick<GroupOpQueue,'runCommit'>; announce: (group, content) => Promise<unknown>; enqueue: ClientJobQueue['enqueue']; onError?; syncTimeoutMs?; retryDelaysMs?: readonly number[]; maxAgeMs?: number; now?: () => number }) => DeclineDurability",
+      "description": "Every port validated at construction. { onWelcomeDeclined(payload), startupRetry(), retryDeclined(): Promise<DeclineOutcome[]>, replayMarker(groupId, pubkey), idle(), dispose() }. onWelcomeDeclined is the client-event listener: synchronous, no client call, starts the durable declined write at once and enqueues the removal as its last action. DeclineOutcome: removed | already-removed | superseded | no-marker | group-missing | retry-later | terminal | expired. A terminal removal rejection (isTerminalRemovalError: not-a-member, invalid-options/not-admin, group disbanded/abandoned) compare-and-clears the marker, is reported once and is never retried; a declined marker older than DECLINED_MARKER_MAX_AGE_MS (30 days) is dropped on replay (expired). In-session backoff (DEFAULT_RETRY_DELAYS_MS 30 s, 2 min, 10 min) follows retry-later / group-missing."
+    },
+    {
+      "name": "createMarkerRecordingInviter",
+      "signature": "(deps: { inviter: Pick<KeyPackageInviter,'inviteByPubkey'>; store: Pick<DeclineMarkerStore,'record'>; onRecordedDeclined: (groupId, pubkey) => void; onError?; now?: () => number }) => Pick<KeyPackageInviter,'inviteByPubkey'>",
+      "description": "Persists inviteeRef -> pubkey (declined:false, plus leafKey when exactly one leaf was added) after an accepted invite, best-effort (a failing write is reported, the invite result is returned unchanged). invitedAt = now() is read BEFORE the invite runs and passed to record(): an orphan decline older than it is stale and not adopted. onRecordedDeclined is REQUIRED (validated at construction): called when the record adopted an orphan decline; wire it to DeclineDurability.replayMarker."
+    },
+    {
+      "name": "buildDeclinedAnnouncementContent",
+      "signature": "(pubkey: string, dedupId: string) => string",
+      "description": "{type:'invite_lifecycle',event:'declined',pubkey,id:dedupId}: the parseStructured shape plus the stable dedup id (declinedDedupId(groupId, inviteeRef)); no profile data."
+    },
+    {
+      "name": "PendingDirectInviteMarker (pendingDirectInviteStorage.ts)",
+      "signature": "{ inviteeRef: string; pubkey: string; declined: boolean; leafKey?: string; phase?: 'declined' | 'removing' | 'announce-pending'; declinedAt?: number }",
+      "description": "Seam consumed by S14 (cancel invitation) and S17 (wipe). recordPendingDirectInvite(groupId,pubkey,inviteeRef,leafKey?,invitedAt?) (an orphan decline is adopted only when orphan.receivedAt >= invitedAt; absent invitedAt adopts any live orphan), getPendingDirectInviteMarker, markPendingDirectInviteDeclined(groupId,inviteeRef) (stamps declinedAt), setPendingDirectInvitePhase, clearPendingDirectInviteIfRef, loadDeclinedPendingDirectInvites(onInvalid?), pendingDirectInviteMarkerStore; legacy (bare true / no inviteeRef) values and records whose phase is outside PHASES are invalid: ignored without throwing (an invalid phase is reported through onInvalid), never coerced; existing clear/consume/bulk-clear exports unchanged."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/invitations/declineDurability.ts"
+  ],
+  "owned_data": [
+    "few-pending-invite-markers IndexedDB store (marker value shape now {inviteeRef,pubkey,declined}; key ${groupId}:${pubkey}; access only through pendingDirectInviteStorage.ts)"
+  ],
+  "dependencies_allowed": [
+    "@941design/marmot (types only: MarmotGroup)",
+    "client/ (types only: ClientJobQueue)",
+    "send/ (types only: GroupOpQueue; runCommit injected)",
+    "invitations/invite (types, S8)",
+    "pendingDirectInviteStorage.ts (types only; the store is injected, idb-keyval stays outside invitations/)"
+  ],
+  "dependencies_forbidden": [
+    "client/ construction or any account-scope MarmotClient call from the listener frame",
+    "idb-keyval inside app/src/lib/marmot/invitations/ (S9 structural scan)",
+    "idb-keyval update() (per-key serialisation instead)",
+    "any React context under src/context",
+    "@internet-privacy/marmot-ts",
+    "ts-mls",
+    "publishing the declined announcement or any profile data outside an MLS group message (privacy invariant)"
+  ],
+  "external_ports": [
+    "group.removeMember / group.synced / group.leaves (library, via the injected getGroup and GroupOpQueue.runCommit; account/group scope: queued job only, never the listener)",
+    "announce(group, content) (production: the S6 GroupRumorSender, kind 9 group rumor)",
+    "handle.enqueue (ClientJobQueue)"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "client event welcomeDeclined {groupId, inviteeRef} (via onWelcomeDeclined)"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/invitations/declineDurability.store.test.ts",
+    "app/tests/unit/marmot/invitations/declineDurability.test.ts",
+    "app/tests/unit/marmot/invitations/declineDurability.harness.test.ts"
+  ],
+  "seam": {
+    "name": "PendingDirectInviteMarker",
+    "cross_story": true,
+    "consumed_by": [
+      "S14",
+      "S17"
+    ]
+  },
+  "consumes_seams": [
+    {
+      "name": "ClientJobQueue",
+      "cross_story": true,
+      "consumed_by": [
+        "S11"
+      ]
+    },
+    {
+      "name": "GroupOpQueue",
+      "cross_story": true,
+      "consumed_by": [
+        "S11"
+      ]
+    }
+  ]
+}

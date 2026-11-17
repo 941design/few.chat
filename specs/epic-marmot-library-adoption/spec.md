@@ -381,6 +381,8 @@ No manual-validation rows are claimed; all ACs are automated (unit, library-back
 
 ## Amendments
 
+- 2026-11-17 (S11 reviews): decline removal is leaf-bound and re-checked in the commit; the declined announcement is phased (survives reload) and carries a dedup id; unknown-ref declines are kept as orphans and adopted only by an earlier-or-equal invite record; terminal failures and >30-day markers are dropped. AC-DECL-1/2 amended.
+
 - 2026-11-17 (S9 review + Fable decider): invitation caps are trust-ordered (trusted = own account or ever-known peer, incl. contacts) with a 14-day stranger TTL, so a stranger flood cannot lock out invitations from people the user knows; all cap/expiry declines stay silent. AC-CAP-1 and D14 amended.
 
 - 2026-11-17 (S8 reviews): invite falls through only on per-candidate rejections, throws group-level errors, caps candidates at 6, and refuses an invitee who already holds a leaf (`already-member`); invitee-advertised relays are restricted to public wss hosts (max 3 per list). AC-KP-1 and AC-KP-2 amended.

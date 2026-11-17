@@ -1,0 +1,20 @@
+{
+  "story_id": "S11",
+  "baseline_commit": "fc1845d",
+  "captured_at": "2026-11-17",
+  "tests": {
+    "status": "PASS",
+    "command": "make test-unit",
+    "passed": 7908,
+    "skipped": 1,
+    "failed": 0,
+    "files": 359,
+    "note": "Derived, not separately run: the final run (7949 passed, 362 files) minus the 41 tests / 3 files S11 added. S10's recorded final was 7907; the one-test difference is unexplained and not investigated. The only pre-existing uncommitted changes are .clauded.yaml and package.json.copy (not source)."
+  },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": [
+    "cd app && npx tsc --noEmit",
+    "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"
+  ]
+}

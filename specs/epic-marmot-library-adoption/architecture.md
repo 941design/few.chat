@@ -177,10 +177,15 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
   - `inviteeRef`: `string`
   - `pubkey`: `string`
   - `declined`: `boolean`
+  - `leafKey?`: `string` — signature key of the leaf the invite added (recorded only when exactly one new leaf is derivable); the decline is bound to this leaf, not to the account
+  - `phase?`: `'declined' | 'removing' | 'announce-pending'` — absent = `'declined'`; written `removing` before the Remove commit and `announce-pending` after it resolved
 - Invariants:
-  - inviteeRef persisted at invite time
+  - inviteeRef (and leafKey when derivable) persisted at invite time
   - declined set durably before any removal work
-  - marker cleared only after removeMember resolves
+  - the marker is re-read inside the queued op; a replaced (other inviteeRef) or cleared marker aborts the removal
+  - only the declined leaf is removed: other leaves of the account are never evicted (`superseded`)
+  - marker cleared only by compare-and-clear on inviteeRef, after the Remove resolved and the announcement was sent (at-least-once, stable dedup id `groupId:inviteeRef`)
+  - an unknown inviteeRef is kept as an orphan decline (max 50, 7-day TTL) and adopted by a later record of that ref
   - legacy markers without inviteeRef are ignored without throwing
 
 ### `GroupDataPurger` — Local group purge (abandon) path
