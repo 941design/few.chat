@@ -1,0 +1,10 @@
+{
+  "story_id": "S1",
+  "captured_at": "2026-11-17T09:25:00Z",
+  "commit": "65a08054cf7375279eb30ecb056a338b0b4f3dc2",
+  "tests": { "command": "cd app && npx vitest run", "status": "PASS", "files": 286, "passed": 6566, "skipped": 1, "failed": 0 },
+  "lint": "NO_LINT",
+  "lint_note": "app has no ESLint config; `next lint` prompts interactively for setup (not configured)",
+  "typecheck": "clean",
+  "typecheck_command": "cd app && npx tsc --noEmit"
+}

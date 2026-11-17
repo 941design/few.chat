@@ -1,0 +1,92 @@
+{
+  "story_id": "S17",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S17-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S17 (Lease/multi-tab, storeIncompatible wipe and startup reconciliation), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/client/lease.ts; app/src/lib/marmot/client/wipe.ts; app/src/lib/marmot/client/reconcile.ts; app/src/lib/marmot/client/clearAllGroupData.ts; app/src/lib/i18n.ts (another-tab string en+de); app/src/lib/walledGarden.ts (membership read) and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S17-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `client` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S17-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S17 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S17-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S17's scope (app/src/lib/marmot/client/lease.ts; app/src/lib/marmot/client/wipe.ts; app/src/lib/marmot/client/reconcile.ts; app/src/lib/marmot/client/clearAllGroupData.ts; app/src/lib/i18n.ts (another-tab string en+de); app/src/lib/walledGarden.ts (membership read))? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S17-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S17 implementation match the intent of its scope (Multi-tab: lease-less tab reports ready:false / 'active in another tab' (i18n en+de), no group write or membership sweep, whenReady resolves on lease outcome, overlay read-only groups, automatic takeover via openForWrite retry; storeIncompatible wipe once per page load then unsupported; clearAllGrou) and respect its exclusions (Removing cross-tab group store sync (S18); Context wiring (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S17-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S17 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S17-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MT-1",
+      "question": "Seam contract LeaseState (consumed beyond S17; consumers: S18): does the delivered artifact at app/src/lib/marmot/client/lease.ts expose exactly the declared shape (fields: state: 'held'|'waiting'|'unsupported'; whenReady: () => Promise<void>) and uphold each invariant (whenReady resolves as soon as the lease outcome is known; state is 'held' on at most one tab per account; membership-derived sweeps run only when state==='held')? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S17-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WIPE-1",
+      "question": "AC-WIPE-1: On `storeIncompatible` the app MUST call `stores.account.wipe({reason:'incompatible'})`, then `clearAllGroupData` (overlay, member profiles, group chat and poll rows, `few-group-history`, join requests, invite links, pending-direct-invite markers — each asserted empty afterward), then reinitialise the client. A second `storeIncompatible` in the same page load MUST NOT wipe again and MUST set state `unsupported`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S17-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WIPE-2",
+      "question": "AC-WIPE-2: At startup, overlay groups absent from `groups.list()` MUST be purged via the same path as AC-MEM-4's purge; groups present in `groups.list()` MUST be untouched. A seeded pre-adoption overlay group MUST be removed after bootstrap. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S17-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WIPE-3",
+      "question": "AC-WIPE-3: Wipe MUST never loop: a stub that raises `storeIncompatible` on every client build MUST cause at most one wipe and then `unsupported`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S17-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MT-1",
+      "question": "AC-MT-1: With two `useMarmot` instances sharing a Web-Lock mock, the second (without the lease) MUST report `ready:false`, state \"active in another tab\" (new i18n string, en+de), perform no `group.*` write, and run none of the membership-derived sweeps (walled-garden purge, known-peers maintenance, invite-expiry sweep, profile-request sweep): spies on each MUST show zero calls. Its `whenReady()` MUST resolve once the lease outcome is known (lease-held), and `groups` MUST be exposed read-only from the overlay store. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (lease mock) + e2e:groups-multi-tab] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S17-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MT-2",
+      "question": "AC-MT-2: When the lease holder closes (lock released), the waiting tab MUST acquire the lease automatically (retrying `openForWrite` on `lease-held`), build the client, and flip to `ready:true` with no reload; thereafter sweeps run. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (lease mock with release) + e2e:groups-multi-tab] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S17-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MT-4",
+      "question": "AC-MT-4: DM gating and known-peers reads MUST work in a tab without the lease: a unit test with the lease-held state evaluating the walled-garden predicate over the overlay MUST return the same decision as in the lease-holder tab. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

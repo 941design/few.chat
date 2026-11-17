@@ -1,0 +1,1609 @@
+{
+  "epic_name": "marmot-library-adoption",
+  "created_at": "2026-11-17T08:15:32Z",
+  "total_stories": 29,
+  "stories": [
+    {
+      "id": "S1",
+      "name": "deps-bootstrap-smoke",
+      "title": "Dependencies, client bootstrap module and bundling proof",
+      "description": "Adds the pinned @941design/* deps (old forks stay installed, nothing old deleted), swc-loader include update, and the new client/ module: signer adapter (fromForeignSigner, budgets, nip44 gate, secure-context gate), SimplePool transport, IndexedDB storage + lease open, createMarmotClient with timing options, listener attach, inbox-handler registration port, groups.list, per-group onNotification, inbox.start, key-package ensure, a port for the kind-10050 ensure step, owned setTimeout(0) FIFO, teardown. Ends with the bundling proof: make build green plus temporary groups-library-smoke.spec.ts via a dev-only __fewTest hook (a throwaway HistoryBackend recording appends/withdraws) exercising A1-A3. A failed proof aborts the run with the old flow intact.",
+      "acceptance_criteria": [
+        "AC-DEP-1",
+        "AC-DEP-3",
+        "AC-DEP-4",
+        "AC-TRANS-1",
+        "AC-SIGN-1",
+        "AC-SIGN-2",
+        "AC-SIGN-5",
+        "AC-BOUND-1",
+        "AC-BOOT-1",
+        "AC-BOOT-2",
+        "AC-BOOT-3",
+        "AC-BOOT-4",
+        "AC-BOOT-5",
+        "AC-BOOT-6",
+        "AC-BOOT-7",
+        "AC-TEST-7",
+        "AC-GATE-1",
+        "AC-GATE-4"
+      ],
+      "scope": {
+        "includes": [
+          "app/package.json (+ lockfile via make deps)",
+          "app/next.config.mjs",
+          "app/src/lib/marmot/client/index.ts",
+          "app/src/lib/marmot/client/createClient.ts",
+          "app/src/lib/marmot/client/signerAdapter.ts",
+          "app/src/lib/marmot/client/transport.ts",
+          "app/src/lib/marmot/client/storage.ts",
+          "app/src/lib/marmot/client/lifecycle.ts",
+          "app/src/lib/marmot/client/fifo.ts",
+          "app/src/lib/marmot/client/keyPackageEnsure.ts",
+          "app/src/lib/i18n.ts (unsupported-nip44 string en+de)",
+          "app/src/lib/testHooks (dev-only __fewTest group-library hook)",
+          "app/tests/unit/marmot/client/*.test.ts",
+          "app/tests/unit/depsResolve.test.ts",
+          "app/tests/e2e/groups-library-smoke.spec.ts",
+          "git tag pre-marmot-library-adoption (before first change)"
+        ],
+        "excludes": [
+          "Removing @internet-privacy/marmot-ts / ts-mls (S22)",
+          "Wiring MarmotContext (S18)",
+          "Lease-loss/wipe/reconciliation (S17)",
+          "10050 publish policy (S16): only the injected ensure port and its call order here",
+          "Any deletion of old code"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "completed",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Existing src/lib/marmot/signerAdapter.ts is the OLD adapter; the new adapter lives under client/ beside it (coexistence allowed between stories). Module name 'client' is shared with S16, S17, S20 (sequential, different files). Install via make deps and run a resolve check (npm drops random .js files). Smoke hook is dev-only and removed in S27. DEP-2 / DEL-1 are deferred to S22 because the old flow still imports the forks.",
+      "owning_module": "client",
+      "story_dir": "S1-deps-bootstrap-smoke"
+    },
+    {
+      "id": "S2",
+      "name": "kinds-registry-nip46-perms",
+      "title": "Kind registry with collision check and NIP-46 permission set",
+      "description": "kinds.ts exporting app rumor kinds, app inbox kinds (incl. 21064 invite context), retired kinds (13, 21063) and RUMOR_KINDS-derived reserved kinds, throwing at import on any collision. Pure NIP-46 requested-permission builder (union of permissions.toNip46Perms() and sign_event:0/20602/30078/10050) and stored-session discard check.",
+      "acceptance_criteria": [
+        "AC-KIND-1",
+        "AC-KIND-2",
+        "AC-KIND-3",
+        "AC-SIGN-3",
+        "AC-SIGN-4"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/kinds.ts",
+          "app/src/lib/nostrPermissions or existing NIP-46 perms module (pure builder + discard predicate)",
+          "app/tests/unit/marmot/kinds.test.ts",
+          "app/tests/unit/nip46Perms.test.ts"
+        ],
+        "excludes": [
+          "Wiring the permission set into NostrIdentityContext (S18)"
+        ]
+      },
+      "complexity": "low",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Old kinds literals are not removed here; the 4460-4462 literal ban applies to the new registry and is finally enforced by S23.",
+      "owning_module": "kinds",
+      "story_dir": "S2-kinds-registry-nip46-perms"
+    },
+    {
+      "id": "S3",
+      "name": "history-sink",
+      "title": "App HistoryBackend over few-group-history",
+      "description": "history/ module: idb-keyval-backed (get/set/del/createStore, no update()) HistoryBackend with append {entry, seq, dispatched}, per-group monotonic seq, handler dispatch via an injected GroupHistoryHandlers port with sender=orderingKey.account, 10 s settle bound, throw-to-retry, withdraw with retract, purge, list in seq order, startup re-dispatch sweep. Unit tests use idb Map mocks seeded out of key order. Library-harness test for withdraw on rewind.",
+      "acceptance_criteria": [
+        "AC-HIST-1",
+        "AC-HIST-2",
+        "AC-HIST-3",
+        "AC-HIST-4",
+        "AC-HIST-5",
+        "AC-HIST-6",
+        "AC-HIST-7",
+        "AC-HIST-8",
+        "AC-IDEM-1",
+        "AC-IDEM-2",
+        "AC-WDR-4",
+        "AC-WDR-5"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/history/index.ts",
+          "app/src/lib/marmot/history/historyBackend.ts",
+          "app/src/lib/marmot/history/historyStore.ts",
+          "app/src/lib/marmot/history/sweep.ts",
+          "app/tests/unit/marmot/history/*.test.ts",
+          "app/tests/unit/marmot/history/historyWithdraw.harness.test.ts"
+        ],
+        "excludes": [
+          "Concrete handlers (S4, S5)",
+          "Wiring into the client (S18)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "AppKinds"
+      ],
+      "notes": "Handlers are injected (port GroupHistoryHandlers); tests use test fixtures, not production stubs. Retract path is part of the port contract. AC-IDEM-1 'app store' assertions run against the fixture handlers here; real-handler idempotency is exercised again in S19 (AC-OBS-1).",
+      "owning_module": "history",
+      "story_dir": "S3-history-sink"
+    },
+    {
+      "id": "S4",
+      "name": "handlers-chat-core",
+      "title": "Handlers: new signature, chat/reaction/delete-edit re-pointing and sender binding",
+      "description": "Define the handler input {groupId,eventId,rumor,sender}, implement GroupHistoryHandlers dispatch/retract for the chat, reaction and delete/edit handlers (re-pointed beside the old registerHandlers path), idempotent by event id, message-store bumps driven from handler completion, own-echo confirmation of optimistic rows by rumor.id with no unread/bell, retract keeps already-emitted effects. Library-harness two-client forgery test (Alice/Mallory).",
+      "acceptance_criteria": [
+        "AC-HIST-10",
+        "AC-FORGE-1",
+        "AC-FORGE-2",
+        "AC-WDR-6"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/handlers/chatHandler.ts",
+          "app/src/lib/marmot/handlers/reactionHandler.ts",
+          "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+          "app/src/lib/marmot/handlers/groupRumorDispatch.ts (new)",
+          "app/src/lib/marmot/chatPersistence.ts",
+          "app/tests/unit/marmot/handlers/*.test.ts",
+          "app/tests/unit/marmot/forgery.harness.test.ts"
+        ],
+        "excludes": [
+          "Poll/profile/profile-request/announcement handlers (S5)",
+          "Retract unit assertions for polls/reactions/votes (S5)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupHistoryHandlers",
+        "AppKinds"
+      ],
+      "notes": "Old handlers are modified in place to take the new input; the old dispatcher path is not yet deleted, so keep a thin adapter in the OLD registerHandlers only if needed to keep the existing unit suites green until S18 (removed in S22).",
+      "owning_module": "handlers",
+      "story_dir": "S4-handlers-chat-core"
+    },
+    {
+      "id": "S5",
+      "name": "handlers-domain-completion",
+      "title": "Handlers: poll, profile, profile-request, announcement and retract coverage",
+      "description": "Re-point poll, profile, profile-request, announcement (+ leave-announcement) handlers to the new signature, live-accessor roster/admin gates (group.members()/group.admins), unregistered-kind pass-through, retract for every kind (other members' content removed and unread recomputed; own chat to failed/retry; own reactions/votes/edit/delete dropped), and re-point behavioural suites incl. handlersRumorPubkeyBoundary.",
+      "acceptance_criteria": [
+        "AC-HIST-9",
+        "AC-HIST-11",
+        "AC-HIST-12",
+        "AC-WDR-1",
+        "AC-WDR-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/handlers/pollHandler.ts",
+          "app/src/lib/marmot/handlers/profileHandler.ts",
+          "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+          "app/src/lib/marmot/handlers/leaveHandler.ts",
+          "app/src/lib/marmot/announcementFamily.ts",
+          "app/src/lib/marmot/pollPersistence.ts",
+          "app/src/lib/marmot/pollReplay.ts",
+          "app/src/lib/marmot/profileRequestStorage.ts",
+          "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+          "app/tests/unit/** handler/poll/profile/roster-gate suites (re-pointed)"
+        ],
+        "excludes": [
+          "Chat/reaction/delete-edit (S4)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupHistoryHandlers",
+        "ClientJobQueue",
+        "AppKinds"
+      ],
+      "notes": "Follow-up sends (profile-request responses, announcements) are queued on the owned FIFO (seam ClientJobQueue), never awaited inside the handler.",
+      "owning_module": "handlers",
+      "story_dir": "S5-handlers-domain-completion"
+    },
+    {
+      "id": "S6",
+      "name": "send-helper-own-lifecycle",
+      "title": "sendGroupRumor helper and own-send lifecycle",
+      "description": "send/ module: sendGroupRumor(group, kind, content, tags) (getEventHash id, own pubkey, group.send), serialised group.invite with group.synced() before commits and commit-pending retry, optimistic-row confirmation by rumor.id for either arrival order, and the four failure triggers (send reject, intentFailed, groupBranchSwitched, 60 s timeout) with confirmed-never-downgraded and no auto-resend.",
+      "acceptance_criteria": [
+        "AC-SEND-1",
+        "AC-SEND-2",
+        "AC-SEND-5",
+        "AC-OWN-1",
+        "AC-OWN-2",
+        "AC-WDR-3"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/send/index.ts",
+          "app/src/lib/marmot/send/sendGroupRumor.ts",
+          "app/src/lib/marmot/send/ownRowTracker.ts",
+          "app/src/lib/marmot/send/groupOpQueue.ts",
+          "app/src/lib/pendingOwnSends.ts (re-pointed)",
+          "app/tests/unit/marmot/send/*.test.ts",
+          "app/tests/unit/marmot/send/send.harness.test.ts"
+        ],
+        "excludes": [
+          "Migrating call sites (S18)",
+          "Deleting sendRumorSafe copies (S22)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupHistoryHandlers",
+        "ClientJobQueue"
+      ],
+      "notes": "Own-row tracking replaces dispatcher-level own-send suppression (D13). Preserve the module-scope pendingOwnSends/overlayPendingSends semantics (contactchat remount memory). Owns the deterministic test for A3 second half (own send abandoned before publish ack: no sink append, no withdraw, row -> failed/retry) via an outbound publish hold in send.harness.test.ts.",
+      "owning_module": "send",
+      "story_dir": "S6-send-helper-own-lifecycle"
+    },
+    {
+      "id": "S7",
+      "name": "media-encrypted",
+      "title": "Group media encrypt/decrypt over the library",
+      "description": "Image send via group.encryptMedia + Blossom upload with library imeta metadata; receive via group.decryptMedia; decrypted cache keeps serving after reload without re-decrypting. Built beside the old media path.",
+      "acceptance_criteria": [
+        "AC-MEDIA-1",
+        "AC-MEDIA-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/mediaPersistence.ts",
+          "app/src/lib/media/imageMessage.ts",
+          "app/src/lib/media/imetaTag.ts",
+          "app/src/lib/media/blossomClient.ts",
+          "app/tests/unit/media/*.test.ts",
+          "app/tests/unit/marmot/media.harness.test.ts"
+        ],
+        "excludes": [
+          "useImageSend/useDecryptedImage hook wiring (S18)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "SendGroupRumor"
+      ],
+      "notes": "Uses sendGroupRumor from S6 for the kind-9 imeta message.",
+      "owning_module": "media",
+      "story_dir": "S7-media-encrypted"
+    },
+    {
+      "id": "S8",
+      "name": "invite-keypackage-lookup",
+      "title": "Invite flow with single-candidate key-package lookup",
+      "description": "invitations/ module: kind-30443 lookup via transport.requestWithDeadline over union of invitee 10050 relays, 10002 write relays and defaults; order by created_at desc, tie lower id; one-event group.invite with invalid-options fall-through; 'no usable key package'; harness invite/accept round trip. keyPackages.observe unused.",
+      "acceptance_criteria": [
+        "AC-KP-1",
+        "AC-KP-2",
+        "AC-KP-3",
+        "AC-INV-1"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/invitations/index.ts",
+          "app/src/lib/marmot/invitations/keyPackageLookup.ts",
+          "app/src/lib/marmot/invitations/invite.ts",
+          "app/tests/unit/marmot/invitations/keyPackageLookup.test.ts",
+          "app/tests/unit/marmot/invitations/invite.harness.test.ts"
+        ],
+        "excludes": [
+          "Pending view / deny / caps (S9)",
+          "Invite-context send (S10)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupOpQueue"
+      ],
+      "notes": "Preserves commit aa39de3 (invitee-advertised relays found). Uses the serialised invite queue from S6.",
+      "owning_module": "invitations",
+      "story_dir": "S8-invite-keypackage-lookup"
+    },
+    {
+      "id": "S9",
+      "name": "pending-deny-caps-accept-decline",
+      "title": "Pending-invitation view, deny layer, caps, accept/decline",
+      "description": "invitations.pending() as the only pending store (lp_pendingInvitations_v1 not read/written by new code), ADR-002 pull-only behaviour, native accept/decline (no 21063), blocked-sender drop with decline(id,{declineRumor:false}), 256/8 caps with silent declines, pending view model feeding InvitationCard.",
+      "acceptance_criteria": [
+        "AC-INV-2",
+        "AC-INV-3",
+        "AC-INV-4",
+        "AC-BLK-1",
+        "AC-CAP-1"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/invitations/pendingView.ts",
+          "app/src/lib/marmot/invitations/denyLayer.ts",
+          "app/src/lib/marmot/invitations/caps.ts",
+          "app/src/lib/marmot/invitations/acceptDecline.ts",
+          "app/src/lib/pendingInvitations.ts (caps constants reused)",
+          "app/src/lib/blockedPeers.ts (read-only use)",
+          "app/tests/unit/marmot/invitations/*.test.ts"
+        ],
+        "excludes": [
+          "Invite-context rumor handler and join-request handler internals (S10, S12) — they consume the deny predicate",
+          "UI wiring (S18)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "AppKinds"
+      ],
+      "notes": "BLK-1's invite-context and join-request legs are asserted via the DenyLayer predicate here; the handlers adopt it in S10/S12.",
+      "owning_module": "invitations",
+      "story_dir": "S9-pending-deny-caps-accept-decline"
+    },
+    {
+      "id": "S10",
+      "name": "invite-context",
+      "title": "Invite-context rumor (D3): send, hold, validate, view model",
+      "description": "Sponsor sends kind-21064 {groupId,name} via sendInboxRumor after delivered/retryable; invitee inbox handler (registerInboxHandler) dedupes by rumor.id, holds contexts under 8/sender, 64 total, 7 days, validates against sponsorAccount/sponsors, deletes on accept/decline/expiry; pure card view model (untrusted text, length cap, generic label, no description/admins).",
+      "acceptance_criteria": [
+        "AC-CTX-1",
+        "AC-CTX-2",
+        "AC-CTX-3",
+        "AC-CTX-4",
+        "AC-CTX-5"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/invitations/inviteContext.ts",
+          "app/src/lib/marmot/invitations/inviteContextStore.ts",
+          "app/src/lib/marmot/invitations/inviteContextHandler.ts",
+          "app/src/lib/marmot/invitations/invitationCardViewModel.ts",
+          "app/src/components/groups/InvitationCard.tsx (view-model consumption only)",
+          "app/src/lib/i18n.ts (generic label en+de)",
+          "app/tests/unit/marmot/invitations/inviteContext*.test.ts"
+        ],
+        "excludes": [
+          "groups-invitation-preview e2e rewrite (S26)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "AppKinds",
+        "DenyLayer",
+        "PendingInvitationView"
+      ],
+      "notes": "Handler never calls account-scope client ops. Uses DenyLayer from S9. e2e portions of AC-CTX-2/5 are executed in S26.",
+      "owning_module": "invitations",
+      "story_dir": "S10-invite-context"
+    },
+    {
+      "id": "S11",
+      "name": "decline-durability",
+      "title": "Decline durability (D7)",
+      "description": "pending-direct-invite marker extended with inviteeRef and declined flag (legacy ignored), welcomeDeclined marks declined durably, removal after await group.synced() outside the listener, startup retry of every declined marker, clear marker and send exactly one declined announcement only after removeMember resolves, unknown inviteeRef ignored.",
+      "acceptance_criteria": [
+        "AC-DECL-1",
+        "AC-DECL-2",
+        "AC-DEL-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/pendingDirectInviteStorage.ts",
+          "app/src/lib/marmot/invitations/declineDurability.ts",
+          "app/tests/unit/marmot/invitations/declineDurability*.test.ts",
+          "app/tests/unit/marmot/invitations/declineDurability.harness.test.ts"
+        ],
+        "excludes": [
+          "Cancel-invitation UI path (S14)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "ClientJobQueue",
+        "GroupOpQueue"
+      ],
+      "notes": "Marker shape is a shared seam with S14 (cancel invitation clears it) and S17 (wipe clears it).",
+      "owning_module": "invitations",
+      "story_dir": "S11-decline-durability"
+    },
+    {
+      "id": "S12",
+      "name": "join-requests-inbox-split",
+      "title": "Join requests on the library inbox, auto-accept, pairing-ack split",
+      "description": "joinRequests: sendInboxRumor(21059) with send-failure state on retryable/failed, registerInboxHandler(21059) handler (rumor.pubkey, dedupe by rumor.id, deny layer, mute), approval via key-package lookup + single invite or no-op when a leaf exists, auto-accept correlation on inboxDisposition pending (once, via FIFO), pairing-ack moved to the NDK DM listener skipping 444/4460-4462/21059/21064, no kind 21063, no keyPackages.offer/expectWelcome.",
+      "acceptance_criteria": [
+        "AC-JOIN-1",
+        "AC-JOIN-2",
+        "AC-JOIN-3",
+        "AC-JOIN-4",
+        "AC-JOIN-5",
+        "AC-AUTO-1",
+        "AC-AUTO-2",
+        "AC-INBOX-1",
+        "AC-INBOX-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/joinRequestHandler.ts",
+          "app/src/lib/marmot/joinRequestSender.ts",
+          "app/src/lib/marmot/joinRequestStorage.ts",
+          "app/src/lib/marmot/outboundJoinRequests.ts",
+          "app/src/lib/marmot/joinRequestApproval.ts (new)",
+          "app/src/lib/marmot/invitations/autoAccept.ts (new)",
+          "app/src/lib/directMessages.ts (DM listener skip-set + pairing-ack)",
+          "app/tests/unit/marmot/joinRequest*.test.ts",
+          "app/tests/unit/directMessages*.test.ts"
+        ],
+        "excludes": [
+          "MarmotContext wiring (S18)",
+          "welcomeSubscription.ts deletion (S22)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "AppKinds",
+        "DenyLayer",
+        "PendingInvitationView",
+        "ClientJobQueue",
+        "KeyPackageInvite"
+      ],
+      "notes": "Existing AC-AUTO rules apply unchanged. Auto-accept lives here (not in invitations) because it correlates outbound join requests. Remove the React import from outboundJoinRequests.ts and delete its LEGACY_REACT_IMPORTERS exemption in app/tests/unit/marmot/client/importBoundary.test.ts (AC-BOUND-1).",
+      "owning_module": "joinRequests",
+      "story_dir": "S12-join-requests-inbox-split"
+    },
+    {
+      "id": "S13",
+      "name": "membership-leave-purge",
+      "title": "Leave with eligibility, local purge (abandon) and disband surfacing",
+      "description": "membership/: pure leave eligibility with twin-read discipline on library accessors, immediate UI removal + background group.leave() with kind-9 left announcement (bounded, soft-fail), failure restore with leave-failed toast, no durable leaving marker; purgeLocalGroup (group.abandon + overlay/member profiles/chat/poll/history/invite links/markers) on groupRemoved and startup check (idempotent); disband notification marks overlay.",
+      "acceptance_criteria": [
+        "AC-LEAVE-1",
+        "AC-LEAVE-2",
+        "AC-LEAVE-3",
+        "AC-MEM-4",
+        "AC-MEM-5"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/membership/index.ts",
+          "app/src/lib/marmot/membership/leaveEligibility.ts",
+          "app/src/lib/marmot/membership/leaveGroup.ts",
+          "app/src/lib/marmot/membership/purgeLocalGroup.ts",
+          "app/src/lib/marmot/membership/groupNotifications.ts",
+          "app/tests/unit/marmot/membership/*.test.ts",
+          "app/tests/unit/marmot/membership/leave.harness.test.ts"
+        ],
+        "excludes": [
+          "Deleting old leave impls/tombstones (S22)",
+          "e2e leave rewrites (S25)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupOpQueue",
+        "GroupDataPurger"
+      ],
+      "notes": "Replaces getLeaveGuard twin-read: both reads need try/catch with opposite fail-closed directions (do not unify).",
+      "owning_module": "membership",
+      "story_dir": "S13-membership-leave-purge"
+    },
+    {
+      "id": "S14",
+      "name": "membership-admin-ops",
+      "title": "Remove member, cancel invitation, grant admin, rename",
+      "description": "removeMember (admin-only, library error surfaced), cancel pending invitation via removeMember + marker clear, setAdmins(previous+target), rename(name), own-change-lost logged with view refresh and no toast, each awaiting group.synced().",
+      "acceptance_criteria": [
+        "AC-MEM-1",
+        "AC-MEM-2",
+        "AC-MEM-3"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/membership/removeMember.ts",
+          "app/src/lib/marmot/membership/cancelInvitation.ts",
+          "app/src/lib/marmot/membership/setAdmins.ts",
+          "app/src/lib/marmot/membership/renameGroup.ts",
+          "app/tests/unit/marmot/membership/adminOps*.test.ts",
+          "app/tests/unit/marmot/membership/adminOps.harness.test.ts"
+        ],
+        "excludes": [
+          "Deleting grantAdminImpl/renameGroupImpl/cancelInvitationImpl (S22)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupOpQueue",
+        "PendingDirectInviteMarker"
+      ],
+      "notes": "Thin calls with app policy only.",
+      "owning_module": "membership",
+      "story_dir": "S14-membership-admin-ops"
+    },
+    {
+      "id": "S15",
+      "name": "backup-d5",
+      "title": "Relay backup without group sections (D5)",
+      "description": "Backup payload carries settings and own profile only; restore ignores legacy group sections (and the group restore code is not carried to the new path); no groups.restore; NIP-44 encrypted kind 30078 with no cleartext profile; getBackupRelays uses configured relays and never reads kind 30051.",
+      "acceptance_criteria": [
+        "AC-BKP-1",
+        "AC-BKP-2",
+        "AC-BKP-4",
+        "AC-BKP-5",
+        "AC-REL-3"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/backup/relayBackup.ts",
+          "app/src/lib/backup/dirtyMark.ts",
+          "app/src/context/BackupContext.tsx",
+          "app/tests/unit/backup/*.test.ts"
+        ],
+        "excludes": [
+          "e2e seed-phrase/recovery rewrites (S26)",
+          "Kind-10050 publish (S16)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Old group restore code is physically deleted here because the payload contract changes now; this is the only old code removed before S22.",
+      "owning_module": "backup",
+      "story_dir": "S15-backup-d5"
+    },
+    {
+      "id": "S16",
+      "name": "relay-list-d17",
+      "title": "Kind-10050 inbox relay list and relay-settings rebuild (D17)",
+      "description": "Implements the ensure-10050 port from S1: publish exactly configured relays only when absent or app-tagged (foreign respected, its relays used); relay-settings save republishes where allowed, disposes/rebuilds the client with new defaults and rotates key packages; no kind 30051, no republishDiscoverability.",
+      "acceptance_criteria": [
+        "AC-REL-1",
+        "AC-REL-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/client/inboxRelayList.ts",
+          "app/src/lib/marmot/client/relaySettingsRebuild.ts",
+          "app/tests/unit/marmot/client/inboxRelayList*.test.ts",
+          "app/tests/unit/marmot/client/relayRebuild.harness.test.ts"
+        ],
+        "excludes": [
+          "Deleting republishDiscoverability (S22)",
+          "Settings page wiring (S18)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "AccountClientHandle",
+        "InboxRelayListEnsure"
+      ],
+      "notes": "No profile data in 10050/30443.",
+      "owning_module": "client",
+      "story_dir": "S16-relay-list-d17"
+    },
+    {
+      "id": "S17",
+      "name": "client-lifecycle-lease-wipe",
+      "title": "Lease/multi-tab, storeIncompatible wipe and startup reconciliation",
+      "description": "Multi-tab: lease-less tab reports ready:false / 'active in another tab' (i18n en+de), no group write or membership sweep, whenReady resolves on lease outcome, overlay read-only groups, automatic takeover via openForWrite retry; storeIncompatible wipe once per page load then unsupported; clearAllGroupData over all app group stores; startup overlay-vs-groups.list() purge; lease-held walled-garden predicate over overlay.",
+      "acceptance_criteria": [
+        "AC-WIPE-1",
+        "AC-WIPE-2",
+        "AC-WIPE-3",
+        "AC-MT-1",
+        "AC-MT-2",
+        "AC-MT-4"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/client/lease.ts",
+          "app/src/lib/marmot/client/wipe.ts",
+          "app/src/lib/marmot/client/reconcile.ts",
+          "app/src/lib/marmot/client/clearAllGroupData.ts",
+          "app/src/lib/i18n.ts (another-tab string en+de)",
+          "app/src/lib/walledGarden.ts (membership read)",
+          "app/tests/unit/marmot/client/*.test.ts"
+        ],
+        "excludes": [
+          "Removing cross-tab group store sync (S18)",
+          "Context wiring (S18)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": true,
+      "lighter_path": false,
+      "consumes_seams": [
+        "GroupDataPurger",
+        "AccountClientHandle",
+        "LeaseState"
+      ],
+      "notes": "Purges through purgeLocalGroup (S13). 'client' ownership is shared with S1/S16/S20. A failed key-package ensure at bootstrap is never retried by S1 (snapshot ensure.keyPackage=failed); S17 owns a retry (e.g. on next lease acquisition/visibility) so the account does not stay un-invitable.",
+      "owning_module": "client",
+      "story_dir": "S17-client-lifecycle-lease-wipe"
+    },
+    {
+      "id": "S18",
+      "name": "marmot-context-cutover",
+      "title": "Cut-over: MarmotContext and consumers onto the new stack",
+      "description": "Rewrite MarmotContext as a thin provider over client/, keeping the useMarmot() surface minus dead fields; switch ChatStore/PollStore sends, IncomingCallWatcher, useImageSend/useDecryptedImage, NostrIdentityContext perms (S2 builder + discard), settings relay save, pages and walled-garden reads to the new modules; remove cross-tab group store sync; migrate every send call site to sendGroupRumor. Ends by running the checkpoint subset (dev aid, never reported as a pass) plus typecheck and unit tests.",
+      "acceptance_criteria": [
+        "AC-CTXT-1",
+        "AC-CTXT-2",
+        "AC-CTXT-3",
+        "AC-CTXT-4",
+        "AC-SEND-3",
+        "AC-INV-5",
+        "AC-MT-3",
+        "AC-GATE-2",
+        "AC-SIGN-2b",
+        "AC-BOOT-3b"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/context/MarmotContext.tsx",
+          "app/src/context/ChatStoreContext.tsx",
+          "app/src/context/PollStoreContext.tsx",
+          "app/src/context/NostrIdentityContext.tsx",
+          "app/src/components/** IncomingCallWatcher, groups/*",
+          "app/src/hooks/useImageSend.ts, useDecryptedImage.ts",
+          "app/src/pages/groups.tsx and related pages",
+          "app/src/lib/crossTab.ts, crossTabReceiver.ts",
+          "app/tests/e2e/helpers/group-setup.ts (minimum to run the checkpoint subset)",
+          "app/tests/unit consumer-surface/structure tests"
+        ],
+        "excludes": [
+          "Deleting old modules (S22)",
+          "e2e spec rewrites (S24-S26)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [
+        "AccountClientHandle",
+        "LeaseState",
+        "GroupHistoryHandlers",
+        "SendGroupRumor",
+        "KeyPackageInvite",
+        "PendingInvitationView",
+        "DenyLayer",
+        "GroupDataPurger",
+        "InboxRelayListEnsure",
+        "PendingDirectInviteMarker",
+        "AppKinds",
+        "ClientJobQueue",
+        "GroupOpQueue"
+      ],
+      "notes": "Single largest story by design (D15). Subset: groups-lifecycle, groups-welcome, groups-pull-only-invitation-accept/-decline, groups-leave-intent, groups-remove-member, groups-dispatch-isolation, dm-walled-garden-group-member-allowed. Reconnects the S16 ensure port and S17 lifecycle. Some subset specs fail until S25 rewrites; report, do not gate. Keep the dev-only groupLibrary smoke-hook effect in MarmotContext.tsx (variable-guarded) until S27. Pass an AbortSignal from effect cleanup to bootstrapAccountClient; handle aborted / signer-timeout / unsupported(storage) results; treat lease-held right after a same-tab abort as retryable.",
+      "owning_module": "MarmotContext",
+      "story_dir": "S18-marmot-context-cutover"
+    },
+    {
+      "id": "S19",
+      "name": "cross-flow-properties",
+      "title": "Integration: whole-flow property tests (FR-A7)",
+      "description": "Property tests (fast-check, >=200 seeded runs) and library-harness properties over the REAL new modules (no mocks): inbound convergence, own-send lifecycle, invitation flow, decline durability, lifecycle/lease, privacy across flows, sender binding. Depends on every spanned story and on the cut-over.",
+      "acceptance_criteria": [
+        "AC-OBS-1",
+        "AC-OBS-2",
+        "AC-OBS-3",
+        "AC-OBS-4",
+        "AC-OBS-5",
+        "AC-OBS-6",
+        "AC-OBS-7"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/unit/marmot/properties/inboundConvergence.property.test.ts",
+          "app/tests/unit/marmot/properties/ownSendLifecycle.property.test.ts",
+          "app/tests/unit/marmot/properties/invitationFlow.property.test.ts",
+          "app/tests/unit/marmot/properties/declineDurability.property.test.ts",
+          "app/tests/unit/marmot/properties/lifecycleLease.property.test.ts",
+          "app/tests/unit/marmot/properties/privacy.harness.property.test.ts",
+          "app/tests/unit/marmot/properties/senderBinding.harness.property.test.ts"
+        ],
+        "excludes": [
+          "Production code changes (fixes route back to the owning story)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Depends on: S1, S3, S4, S5, S6, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18. Verified against real, already-implemented producers; no mocks-registry entries.",
+      "is_integration_story": true,
+      "story_dir": "S19-cross-flow-properties"
+    },
+    {
+      "id": "S20",
+      "name": "privacy-harness",
+      "title": "Privacy invariant harness across flows",
+      "description": "Recording-transport library harness across create, invite, accept, send, join request and profile exchange: no kind 0, no profile strings outside 1059/445, 30443/10050/30078 clean, invite-context only as a gift wrap.",
+      "acceptance_criteria": [
+        "AC-PRIV-1",
+        "AC-PRIV-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/unit/marmot/privacy.harness.test.ts",
+          "app/tests/unit/marmot/helpers/recordingTransport.ts"
+        ],
+        "excludes": [
+          "Production changes"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Runs on the cut-over tree.",
+      "owning_module": "client",
+      "story_dir": "S20-privacy-harness"
+    },
+    {
+      "id": "S21",
+      "name": "unit-test-rewrites",
+      "title": "Unit-test rewrite/removal and mutation gate",
+      "description": "Rewrite or delete (with decision justification recorded) source-scan and unit tests coupled to deleted internals while keeping behavioural suites; run Stryker (concurrency 1, scratch config, app/reports untouched) on the new pure modules and close or record survivors. Run report lists every deleted test file with its decision.",
+      "acceptance_criteria": [
+        "AC-TEST-5",
+        "AC-TEST-6",
+        "AC-MUT-1"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/unit/** (161 files referencing marmot-ts/ts-mls/MarmotContext, triaged)",
+          "scratch Stryker config in the scratchpad (not committed)",
+          "run report listing deleted tests"
+        ],
+        "excludes": [
+          "Deleting production modules (S22)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Done BEFORE module deletion so deletion leaves a clean collection. Scratch vitest config must be plain .mjs and exclude source-scan suites of mutated modules (Stryker dry-run trap).",
+      "owning_module": "MarmotContext",
+      "story_dir": "S21-unit-test-rewrites"
+    },
+    {
+      "id": "S22",
+      "name": "sweep-old-modules",
+      "title": "Delete superseded modules and drop the forks",
+      "description": "Delete NdkNetworkAdapter, welcomeSubscription, epochResolver, rumorJournal, applicationRumorDispatcher, keyPackages, state/key-package backends in groupStorage, pendingRemovalStorage, leftGroupTombstones, staleLocalGroup, staleReplaceMarker, replaceTeardown, membersChangedSync, inviteeKeyPackageLookup, relayRequest (if no other importer), the standalone *Impl files, sendRumorSafe copies and old signerAdapter; remove @internet-privacy/marmot-ts and ts-mls (and @hpke/@noble/post-quantum if unused) via make deps; zero fork imports; make build.",
+      "acceptance_criteria": [
+        "AC-DEP-2",
+        "AC-DEL-1",
+        "AC-DEL-3",
+        "AC-DEL-5",
+        "AC-SEND-4",
+        "AC-LEAVE-4"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/lib/marmot/* (listed deletions)",
+          "app/package.json + lockfile (make deps)",
+          "app/next.config.mjs (keeps ts-mls include)",
+          "remaining importers of deleted modules"
+        ],
+        "excludes": [
+          "Storage keys/stores grep and dead exports (S23)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Run make build and typecheck after deletion. app/src/lib/testHooks/groupLibrary.ts imports the OLD @/src/lib/marmot/signerAdapter (createPrivateKeySigner); repoint or note S27 deletes the hook first.",
+      "owning_module": "MarmotContext",
+      "story_dir": "S22-sweep-old-modules"
+    },
+    {
+      "id": "S23",
+      "name": "sweep-keys-stores-deadcode",
+      "title": "Legacy keys/stores and dead-export sweep",
+      "description": "Remove localStorage lp_processedGiftWraps/lp_keyPackageSlot_v1/lp_pendingInvitations_v1 and creators of few-groups-state/few-keypackages/few-rumor-journal/few-pending-removals/few-left-groups; unused-export script over app/src/lib/marmot/**; confirm no feature flag/adapter coexistence layer; remove dead pairing-digest/discoverable code.",
+      "acceptance_criteria": [
+        "AC-DEL-4",
+        "AC-DEL-7",
+        "AC-GATE-5"
+      ],
+      "scope": {
+        "includes": [
+          "app/src/** (key/store references)",
+          "scripts/unused-exports check (added to gate)",
+          "app/src/context/MarmotContext.tsx (dead state)"
+        ],
+        "excludes": [
+          "Legacy store cleanup code for existing devices (explicitly not shipped)"
+        ]
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "",
+      "owning_module": "MarmotContext",
+      "story_dir": "S23-sweep-keys-stores-deadcode"
+    },
+    {
+      "id": "S24",
+      "name": "e2e-helpers-kept-specs",
+      "title": "E2E helpers, hooks and kept-spec upkeep",
+      "description": "Update helpers (group-setup.ts etc.), __fewTest hooks and store names so every kept spec keeps its titles/assertions; delete groups-blackout-guard.spec.ts; title-set diff against the pre-run tag; verify abandon/ever-known/poll-after-leave specs.",
+      "acceptance_criteria": [
+        "AC-TEST-1",
+        "AC-TEST-4",
+        "AC-LEAVE-6"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/e2e/helpers/*.ts",
+          "app/tests/e2e/groups-blackout-guard.spec.ts (delete)",
+          "app/tests/e2e/*.spec.ts (helper-only changes)",
+          "app/src/lib/testHooks (__fewTest hooks)"
+        ],
+        "excludes": [
+          "Rewritten specs (S25, S26)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "Run relay buckets with a wiped relay (down -v) and never edit app/ during a run. Specs named groups-*/dm-* only.",
+      "owning_module": "MarmotContext",
+      "story_dir": "S24-e2e-helpers-kept-specs"
+    },
+    {
+      "id": "S25",
+      "name": "e2e-rewrite-lifecycle",
+      "title": "E2E rewrites: leave, reinvite, reload-atomic, dispatch-isolation",
+      "description": "Rewrite groups-leave-intent, groups-leave-purges-mls-state, groups-reinvite-after-leave, groups-reinvite-after-removal, groups-rumor-reload-atomic, groups-accept-reload-atomic, groups-dispatch-isolation against new behaviour, and add the new groups-multi-tab spec (wait for library group absence via groups.list() hook; sink startup sweep; own echo reconciles without unread/bell); drop pending-removal assertions from groups-admin.",
+      "acceptance_criteria": [
+        "AC-OWN-3",
+        "AC-LEAVE-5",
+        "AC-MEM-6",
+        "AC-TEST-3",
+        "AC-MT-5"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/e2e/groups-leave-intent.spec.ts",
+          "app/tests/e2e/groups-leave-purges-mls-state.spec.ts",
+          "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+          "app/tests/e2e/groups-reinvite-after-removal.spec.ts",
+          "app/tests/e2e/groups-rumor-reload-atomic.spec.ts",
+          "app/tests/e2e/groups-accept-reload-atomic.spec.ts",
+          "app/tests/e2e/groups-dispatch-isolation.spec.ts",
+          "app/tests/e2e/groups-admin.spec.ts",
+          "app/tests/e2e/groups-multi-tab.spec.ts (new; two pages, one context, real Web Locks)",
+          "app/tests/e2e/helpers/*"
+        ],
+        "excludes": [
+          "Backup and preview specs (S26)"
+        ]
+      },
+      "complexity": "high",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "",
+      "owning_module": "MarmotContext",
+      "story_dir": "S25-e2e-rewrite-lifecycle"
+    },
+    {
+      "id": "S26",
+      "name": "e2e-rewrite-backup-preview",
+      "title": "E2E rewrites: seed-phrase, recovery, backup outcomes, invitation preview",
+      "description": "Rewrite groups-seed-phrase, groups-seed-recovery, groups-backup-restore-outcomes (settings+profile restored, no groups, rejoin by invitation) and groups-invitation-preview (generic label / sponsor context) and verify all 11 rewritten specs differ from the pre-run tag and assert their named behaviour.",
+      "acceptance_criteria": [
+        "AC-BKP-3",
+        "AC-TEST-2"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/e2e/groups-seed-phrase.spec.ts",
+          "app/tests/e2e/groups-seed-recovery.spec.ts",
+          "app/tests/e2e/groups-backup-restore-outcomes.spec.ts",
+          "app/tests/e2e/groups-invitation-preview.spec.ts"
+        ],
+        "excludes": []
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "",
+      "owning_module": "MarmotContext",
+      "story_dir": "S26-e2e-rewrite-backup-preview"
+    },
+    {
+      "id": "S27",
+      "name": "smoke-removal",
+      "title": "Remove the temporary smoke spec and hook",
+      "description": "Delete groups-library-smoke.spec.ts and its dev-only __fewTest hook; ensure each remaining hook has an e2e consumer and none references deleted internals.",
+      "acceptance_criteria": [
+        "AC-DEL-6"
+      ],
+      "scope": {
+        "includes": [
+          "app/tests/e2e/groups-library-smoke.spec.ts (delete)",
+          "app/src/lib/testHooks (smoke hook removal)",
+          "app/src/context/MarmotContext.tsx (remove only the groupLibrary smoke-hook effect)",
+          "app/tests/e2e/helpers/relay-query.ts (keep #h/ids/since filter fields if any remaining spec uses them, else remove)"
+        ],
+        "excludes": []
+      },
+      "complexity": "low",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "",
+      "owning_module": "MarmotContext",
+      "story_dir": "S27-smoke-removal"
+    },
+    {
+      "id": "S28",
+      "name": "docs-behavior",
+      "title": "Update behaviour docs",
+      "description": "Update docs/behavior/groups.md (single tab per account, leave, withdrawal), backup-and-recovery.md (groups not restored), profiles-and-identity.md, notifications-and-unread.md, contacts-and-direct-messages.md (inbox split) and the README index.",
+      "acceptance_criteria": [
+        "AC-DOC-1"
+      ],
+      "scope": {
+        "includes": [
+          "docs/behavior/groups.md",
+          "docs/behavior/backup-and-recovery.md",
+          "docs/behavior/profiles-and-identity.md",
+          "docs/behavior/notifications-and-unread.md",
+          "docs/behavior/contacts-and-direct-messages.md",
+          "docs/behavior/README.md"
+        ],
+        "excludes": [
+          "New topic documents"
+        ]
+      },
+      "complexity": "low",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": true,
+      "consumes_seams": [],
+      "notes": "Pure markdown, all targets exist: eligible for lighter_path.",
+      "owning_module": "MarmotContext",
+      "story_dir": "S28-docs-behavior"
+    },
+    {
+      "id": "S29",
+      "name": "adr-claude-counts-gate",
+      "title": "ADR, CLAUDE.md counts and end gate",
+      "description": "New ADR superseding ADR-012's fork mechanism (keeps handler rule, reaffirms ADR-003 app-level, records own-change-lost) with ADR-012/ADR-003 header references; CLAUDE.md e2e counts match playwright --list; run-report lists uncovered topic changes; end gate make build + make test with e2e not INVALID.",
+      "acceptance_criteria": [
+        "AC-DOC-2",
+        "AC-DOC-3",
+        "AC-DOC-4",
+        "AC-GATE-3",
+        "AC-GATE-6"
+      ],
+      "scope": {
+        "includes": [
+          "docs/adr/ADR-013-*.md (new)",
+          "docs/adr/ADR-012-*.md",
+          "docs/adr/ADR-003-*.md",
+          "CLAUDE.md",
+          "run report",
+          "production-bundle runtime proof against app/out (AC-GATE-6)"
+        ],
+        "excludes": []
+      },
+      "complexity": "medium",
+      "mock_dependencies": [],
+      "introduces_mocks": [],
+      "status": "pending",
+      "creates_seam": false,
+      "lighter_path": false,
+      "consumes_seams": [],
+      "notes": "New ADR file means no lighter_path. Final gate: on failure after remediation budget, stop, revert nothing, report failing specs. E2E counts in CLAUDE.md/Makefile are stale: 2026-11-17 relay bucket alone ran 375 tests (356 pass, 19 skip) vs documented 48 — recount both buckets on the final tree.",
+      "owning_module": "MarmotContext",
+      "story_dir": "S29-adr-claude-counts-gate"
+    }
+  ],
+  "story_order": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9",
+    "S10",
+    "S11",
+    "S12",
+    "S13",
+    "S14",
+    "S15",
+    "S16",
+    "S17",
+    "S18",
+    "S19",
+    "S20",
+    "S21",
+    "S22",
+    "S23",
+    "S24",
+    "S25",
+    "S26",
+    "S27",
+    "S28",
+    "S29"
+  ],
+  "dependency_notes": "Sequencing per spec D15. S1 (deps + client bootstrap + smoke proof) gates the run. S2-S17 build the new modules beside the old flow, unwired (each gated by typecheck + unit tests; harness tests where named). S18 is the single cut-over. S19 (FR-A7 integration story, owning AC-OBS-1..7, no owning_module) runs right after the cut-over and depends on every spanned story: S1, S3, S4, S5, S6, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17, S18. S20-S23 verify privacy, rewrite unit tests, then delete old code. S24-S26 e2e; S27 removes smoke spec/hook; S28-S29 docs/ADR/counts/end gate. Dependencies: S3<-S2; S4,S5<-S3; S6<-S4; S7<-S6; S8<-S6; S9<-S2; S10<-S9; S11<-S8,S9; S12<-S8,S9,S10; S13<-S6; S14<-S11,S13; S15 independent; S16<-S1; S17<-S13,S16; S18<-S1..S17; S21-S23 after S18; S24-S26 after S23. Module ownership is intentionally shared across sequential stories for client (S1,S16,S17,S20), invitations (S8-S11), handlers (S4,S5), membership (S13,S14) and MarmotContext (S18,S21-S29 composition root and cleanup); the spec allows no parallel implementation, so there is no collision. INV-1 and others with e2e halves: e2e halves run in S24-S26. DEP-2/DEL-1 are deferred to S22 because old code imports the forks until then.",
+  "mock_resolution_plan": "No temporary mocks. Cross-story dependencies are injected ports with permanent test fixtures (fake handlers, fake client, FakeRelay). mocks-registry.json stays empty.",
+  "seams": [
+    {
+      "data": "App/inbox/retired kind constants",
+      "source": {
+        "story": "S2",
+        "artifact": "app/src/lib/marmot/kinds.ts"
+      },
+      "destination": {
+        "story": "S3",
+        "artifact": "app/src/lib/marmot/history/historyBackend.ts"
+      },
+      "contract": {
+        "type_name": "AppKinds",
+        "fields": [
+          {
+            "name": "APP_RUMOR_KINDS",
+            "type": "readonly [0,5,7,9,10,11,12,30]"
+          },
+          {
+            "name": "APP_INBOX_KINDS",
+            "type": "{joinRequest:21059,pairingAck:21060,dmProfile:[21061,21062],inviteContext:21064}"
+          },
+          {
+            "name": "RETIRED_KINDS",
+            "type": "readonly [13,21063]"
+          },
+          {
+            "name": "RESERVED_KINDS",
+            "type": "values of RUMOR_KINDS"
+          }
+        ],
+        "invariants": [
+          "no two app kinds equal; none equals a RUMOR_KINDS value or retired kind (module throws at import)",
+          "inviteContext === 21064"
+        ]
+      }
+    },
+    {
+      "data": "Accepted group rumor and its retraction from the history sink to app handlers",
+      "source": {
+        "story": "S3",
+        "artifact": "app/src/lib/marmot/history/historyBackend.ts"
+      },
+      "destination": {
+        "story": "S4",
+        "artifact": "app/src/lib/marmot/handlers/groupRumorDispatch.ts"
+      },
+      "intermediaries": [
+        {
+          "story": "S5",
+          "artifact": "app/src/lib/marmot/handlers/*.ts"
+        }
+      ],
+      "contract": {
+        "type_name": "GroupHistoryHandlers",
+        "fields": [
+          {
+            "name": "dispatch",
+            "type": "(input: GroupRumorInput) => Promise<void>"
+          },
+          {
+            "name": "retract",
+            "type": "(input: GroupRumorInput) => Promise<void>"
+          },
+          {
+            "name": "GroupRumorInput",
+            "type": "{groupId: string; eventId: string; rumor: Rumor; sender: string}"
+          }
+        ],
+        "invariants": [
+          "sender === HistoryEntry.orderingKey.account, never rumor.pubkey",
+          "dispatch is idempotent per (groupId,eventId) and throws on durable failure",
+          "dispatch/retract never await account-scope client calls",
+          "retract of an unseen eventId is a no-op"
+        ]
+      }
+    },
+    {
+      "data": "The per-account MarmotClient handle injected into feature modules",
+      "source": {
+        "story": "S1",
+        "artifact": "app/src/lib/marmot/client/index.ts"
+      },
+      "destination": {
+        "story": "S13",
+        "artifact": "app/src/lib/marmot/membership/index.ts"
+      },
+      "contract": {
+        "type_name": "AccountClientHandle",
+        "fields": [
+          {
+            "name": "client",
+            "type": "MarmotClient"
+          },
+          {
+            "name": "pubkey",
+            "type": "string"
+          },
+          {
+            "name": "leaseHeld",
+            "type": "() => boolean"
+          },
+          {
+            "name": "enqueue",
+            "type": "ClientJobQueue['enqueue']"
+          }
+        ],
+        "invariants": [
+          "only client/ constructs or disposes the MarmotClient",
+          "modules receive the handle by injection and never import React contexts",
+          "no group write while leaseHeld() is false"
+        ]
+      }
+    },
+    {
+      "data": "Owned FIFO for follow-up client work scheduled from listener/handler frames",
+      "source": {
+        "story": "S1",
+        "artifact": "app/src/lib/marmot/client/fifo.ts"
+      },
+      "destination": {
+        "story": "S5",
+        "artifact": "app/src/lib/marmot/handlers/*.ts"
+      },
+      "contract": {
+        "type_name": "ClientJobQueue",
+        "fields": [
+          {
+            "name": "enqueue",
+            "type": "(job: () => Promise<void>) => void"
+          }
+        ],
+        "invariants": [
+          "a job never runs before the enqueuing frame returns (setTimeout(0), not a microtask)",
+          "jobs run strictly one at a time in enqueue order",
+          "a rejecting job does not stall the queue"
+        ]
+      }
+    },
+    {
+      "data": "Port for ensuring the kind-10050 list during bootstrap",
+      "source": {
+        "story": "S1",
+        "artifact": "app/src/lib/marmot/client/createClient.ts"
+      },
+      "destination": {
+        "story": "S16",
+        "artifact": "app/src/lib/marmot/client/inboxRelayList.ts"
+      },
+      "contract": {
+        "type_name": "InboxRelayListEnsure",
+        "fields": [
+          {
+            "name": "ensure",
+            "type": "(ctx:{pubkey:string; relays:string[]}) => Promise<void>"
+          }
+        ],
+        "invariants": [
+          "called exactly once, after key-package ensure",
+          "publishes only when no 10050 exists or the existing one carries the app client tag"
+        ]
+      }
+    },
+    {
+      "data": "Lease outcome of this tab",
+      "source": {
+        "story": "S17",
+        "artifact": "app/src/lib/marmot/client/lease.ts"
+      },
+      "destination": {
+        "story": "S18",
+        "artifact": "app/src/lib/marmot/../../context/MarmotContext.tsx"
+      },
+      "contract": {
+        "type_name": "LeaseState",
+        "fields": [
+          {
+            "name": "state",
+            "type": "'held'|'waiting'|'unsupported'"
+          },
+          {
+            "name": "whenReady",
+            "type": "() => Promise<void>"
+          }
+        ],
+        "invariants": [
+          "whenReady resolves as soon as the lease outcome is known",
+          "state is 'held' on at most one tab per account",
+          "membership-derived sweeps run only when state==='held'"
+        ]
+      }
+    },
+    {
+      "data": "Canonical outbound rumor helper",
+      "source": {
+        "story": "S6",
+        "artifact": "app/src/lib/marmot/send/sendGroupRumor.ts"
+      },
+      "destination": {
+        "story": "S18",
+        "artifact": "app/src/lib/marmot/../../context/ChatStoreContext.tsx"
+      },
+      "contract": {
+        "type_name": "SendGroupRumor",
+        "fields": [
+          {
+            "name": "sendGroupRumor",
+            "type": "(group: MarmotGroup, kind: number, content: string, tags: string[][]) => Promise<{id: string; result: unknown}>"
+          }
+        ],
+        "invariants": [
+          "rumor id === getEventHash(rumor) and equals the id seen in the sink echo",
+          "pubkey is the own account",
+          "group.send called exactly once per call; no retry in the helper"
+        ]
+      }
+    },
+    {
+      "data": "Serialised commit-producing group operations",
+      "source": {
+        "story": "S6",
+        "artifact": "app/src/lib/marmot/send/groupOpQueue.ts"
+      },
+      "destination": {
+        "story": "S8",
+        "artifact": "app/src/lib/marmot/invitations/invite.ts"
+      },
+      "contract": {
+        "type_name": "GroupOpQueue",
+        "fields": [
+          {
+            "name": "run",
+            "type": "<T>(groupId: string, op: () => Promise<T>) => Promise<T>"
+          }
+        ],
+        "invariants": [
+          "at most one invite in flight per group",
+          "group.synced() awaited before invite/removeMember/setAdmins/rename/leave",
+          "commit-pending is retried after synced()"
+        ]
+      }
+    },
+    {
+      "data": "Single-candidate invite via key-package lookup",
+      "source": {
+        "story": "S8",
+        "artifact": "app/src/lib/marmot/invitations/invite.ts"
+      },
+      "destination": {
+        "story": "S12",
+        "artifact": "app/src/lib/marmot/joinRequestApproval.ts"
+      },
+      "contract": {
+        "type_name": "KeyPackageInvite",
+        "fields": [
+          {
+            "name": "inviteByPubkey",
+            "type": "(group: MarmotGroup, pubkey: string) => Promise<InviteOutcome | {error:'no usable key package'}>"
+          }
+        ],
+        "invariants": [
+          "group.invite receives exactly one key-package event",
+          "candidates ordered created_at desc, tie lower event id",
+          "invalid-options falls through to next candidate; exhaustion yields 'no usable key package'"
+        ]
+      }
+    },
+    {
+      "data": "Pending invitations as the single pending store",
+      "source": {
+        "story": "S9",
+        "artifact": "app/src/lib/marmot/invitations/pendingView.ts"
+      },
+      "destination": {
+        "story": "S10",
+        "artifact": "app/src/lib/marmot/invitations/invitationCardViewModel.ts"
+      },
+      "contract": {
+        "type_name": "PendingInvitationView",
+        "fields": [
+          {
+            "name": "pending",
+            "type": "() => PendingInvitation[] (groupId, sponsorAccount, sponsors, id)"
+          },
+          {
+            "name": "onChange",
+            "type": "(cb) => unsubscribe"
+          }
+        ],
+        "invariants": [
+          "invitations.pending() is the only source; lp_pendingInvitations_v1 never read",
+          "blocked-sender entries never appear",
+          "retained set respects 256 total / 8 per inviter"
+        ]
+      }
+    },
+    {
+      "data": "Block predicate for invitations, contexts and join requests",
+      "source": {
+        "story": "S9",
+        "artifact": "app/src/lib/marmot/invitations/denyLayer.ts"
+      },
+      "destination": {
+        "story": "S10",
+        "artifact": "app/src/lib/marmot/invitations/inviteContextHandler.ts"
+      },
+      "contract": {
+        "type_name": "DenyLayer",
+        "fields": [
+          {
+            "name": "isBlocked",
+            "type": "(pubkey: string) => boolean"
+          }
+        ],
+        "invariants": [
+          "blocked sender: nothing stored, no bell",
+          "invitation from blocked sender is declined with {declineRumor:false}"
+        ]
+      }
+    },
+    {
+      "data": "Pending-direct-invite marker extended for decline durability",
+      "source": {
+        "story": "S11",
+        "artifact": "app/src/lib/marmot/pendingDirectInviteStorage.ts"
+      },
+      "destination": {
+        "story": "S14",
+        "artifact": "app/src/lib/marmot/membership/cancelInvitation.ts"
+      },
+      "contract": {
+        "type_name": "PendingDirectInviteMarker",
+        "fields": [
+          {
+            "name": "inviteeRef",
+            "type": "string"
+          },
+          {
+            "name": "pubkey",
+            "type": "string"
+          },
+          {
+            "name": "declined",
+            "type": "boolean"
+          }
+        ],
+        "invariants": [
+          "inviteeRef persisted at invite time",
+          "declined set durably before any removal work",
+          "marker cleared only after removeMember resolves",
+          "legacy markers without inviteeRef are ignored without throwing"
+        ]
+      }
+    },
+    {
+      "data": "Local group purge (abandon) path",
+      "source": {
+        "story": "S13",
+        "artifact": "app/src/lib/marmot/membership/purgeLocalGroup.ts"
+      },
+      "destination": {
+        "story": "S17",
+        "artifact": "app/src/lib/marmot/client/reconcile.ts"
+      },
+      "contract": {
+        "type_name": "GroupDataPurger",
+        "fields": [
+          {
+            "name": "purgeLocalGroup",
+            "type": "(groupId: string) => Promise<void>"
+          }
+        ],
+        "invariants": [
+          "calls group.abandon() and removes overlay, member profiles, chat/poll rows, history rows, invite links, markers",
+          "idempotent on second call"
+        ]
+      }
+    }
+  ],
+  "cross_cutting_acs": [
+    {
+      "ac_id": "AC-OBS-1",
+      "spanned_by": [
+        "S3",
+        "S4",
+        "S5"
+      ]
+    },
+    {
+      "ac_id": "AC-OBS-2",
+      "spanned_by": [
+        "S3",
+        "S6"
+      ]
+    },
+    {
+      "ac_id": "AC-OBS-3",
+      "spanned_by": [
+        "S8",
+        "S9",
+        "S10",
+        "S11",
+        "S12"
+      ]
+    },
+    {
+      "ac_id": "AC-OBS-4",
+      "spanned_by": [
+        "S8",
+        "S9",
+        "S10",
+        "S11",
+        "S13",
+        "S14"
+      ]
+    },
+    {
+      "ac_id": "AC-OBS-5",
+      "spanned_by": [
+        "S1",
+        "S13",
+        "S14",
+        "S16",
+        "S17"
+      ]
+    },
+    {
+      "ac_id": "AC-OBS-6",
+      "spanned_by": [
+        "S1",
+        "S6",
+        "S8",
+        "S9",
+        "S10",
+        "S11",
+        "S12",
+        "S15",
+        "S16",
+        "S17"
+      ]
+    },
+    {
+      "ac_id": "AC-OBS-7",
+      "spanned_by": [
+        "S3",
+        "S4",
+        "S5",
+        "S6"
+      ]
+    }
+  ]
+}

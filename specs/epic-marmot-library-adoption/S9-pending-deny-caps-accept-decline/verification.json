@@ -1,0 +1,92 @@
+{
+  "story_id": "S9",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S9-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S9 (Pending-invitation view, deny layer, caps, accept/decline), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/invitations/pendingView.ts; app/src/lib/marmot/invitations/denyLayer.ts; app/src/lib/marmot/invitations/caps.ts; app/src/lib/marmot/invitations/acceptDecline.ts; app/src/lib/pendingInvitations.ts (caps constants reused); app/src/lib/blockedPeers.ts (read-only use) and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S9-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `invitations` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S9-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S9 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S9-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S9's scope (app/src/lib/marmot/invitations/pendingView.ts; app/src/lib/marmot/invitations/denyLayer.ts; app/src/lib/marmot/invitations/caps.ts; app/src/lib/marmot/invitations/acceptDecline.ts; app/src/lib/pendingInvitations.ts (caps constants reused); app/src/lib/blockedPeers.ts (read-only use))? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S9-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S9 implementation match the intent of its scope (invitations.pending() as the only pending store (lp_pendingInvitations_v1 not read/written by new code), ADR-002 pull-only behaviour, native accept/decline (no 21063), blocked-sender drop with decline(id,{declineRumor:false}), 256/8 caps with silent declines, pending view model feeding InvitationCar) and respect its exclusions (Invite-context rumor handler and join-request handler internals (S10, S12) — they consume the deny predicate; UI wiring (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S9-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S9 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S9-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-INV-2",
+      "question": "Seam contract PendingInvitationView (consumed beyond S9; consumers: S10): does the delivered artifact at app/src/lib/marmot/invitations/pendingView.ts expose exactly the declared shape (fields: pending: () => PendingInvitation[] (groupId, sponsorAccount, sponsors, id); onChange: (cb) => unsubscribe) and uphold each invariant (invitations.pending() is the only source; lp_pendingInvitations_v1 never read; blocked-sender entries never appear; retained set respects 256 total / 8 per inviter)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S9-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BLK-1",
+      "question": "Seam contract DenyLayer (consumed beyond S9; consumers: S10): does the delivered artifact at app/src/lib/marmot/invitations/denyLayer.ts expose exactly the declared shape (fields: isBlocked: (pubkey: string) => boolean) and uphold each invariant (blocked sender: nothing stored, no bell; invitation from blocked sender is declined with {declineRumor:false})? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S9-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-INV-2",
+      "question": "AC-INV-2: ADR-002 pull-only: a Welcome from an unrelated sponsor MUST land in `invitations.pending()` and MUST NOT auto-join; the invitee's group list stays unchanged until `accept`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness; e2e:groups-pull-only-invitation-accept (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S9-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-INV-3",
+      "question": "AC-INV-3: Decline: `invitations.decline(id)` MUST remove the invitation from `pending()`, the sponsor's client MUST emit `welcomeDeclined` carrying `inviteeRef`, and the kind-21063 DM MUST NOT be published (recording transport sees no kind-21063). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness; e2e:groups-pull-only-invitation-decline (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S9-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-INV-4",
+      "question": "AC-INV-4: The invitation card MUST render from `invitations.pending()` only; `lp_pendingInvitations_v1` MUST NOT be read or written. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S9-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BLK-1",
+      "question": "AC-BLK-1: For a blocked sponsor: an `inboxDisposition: pending` invitation MUST result in no entry in the app pending view, no bell increment, and a call `invitations.decline(id, {declineRumor:false})`; an invite-context rumor and a join request from the same blocked peer MUST each be dropped (nothing stored, no bell). A non-blocked sender MUST be processed normally. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S9-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-CAP-1",
+      "question": "AC-CAP-1: With 257 pending invitations the 257th MUST be declined (retained total = 256); with 9 from one inviter the 9th MUST be declined (retained per inviter = 8). Declines are silent (no bell, no toast) and made with the library decline. The caps MUST equal the constants of `lib/pendingInvitations.ts` (256 / 8). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (stubbed pending list)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

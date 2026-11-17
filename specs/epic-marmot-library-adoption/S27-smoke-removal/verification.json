@@ -1,0 +1,50 @@
+{
+  "story_id": "S27",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S27-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S27 (Remove the temporary smoke spec and hook), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/tests/e2e/groups-library-smoke.spec.ts (delete); app/src/lib/testHooks (smoke hook removal) and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S27-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `MarmotContext` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S27-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S27 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S27-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S27's scope (app/tests/e2e/groups-library-smoke.spec.ts (delete); app/src/lib/testHooks (smoke hook removal))? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S27-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S27 implementation match the intent of its scope (Delete groups-library-smoke.spec.ts and its dev-only __fewTest hook; ensure each remaining hook has an e2e consumer and none references deleted internals.) and respect its exclusions ()? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S27-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S27 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S27-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEL-6",
+      "question": "AC-DEL-6: No `__fewTest` hook referring to deleted internals remains; each remaining hook has a consumer in `app/tests/e2e`. The smoke-spec-only hook and `groups-library-smoke.spec.ts` MUST be deleted. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    }
+  ]
+}

@@ -7,6 +7,9 @@ type NostrFilter = {
   '#t'?: string[];
   '#p'?: string[];
   '#e'?: string[];
+  '#h'?: string[];
+  ids?: string[];
+  since?: number;
 };
 
 type NostrEvent = {

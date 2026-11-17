@@ -1,0 +1,92 @@
+{
+  "story_id": "S19",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S19-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S19 (Integration: whole-flow property tests (FR-A7)), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/tests/unit/marmot/properties/inboundConvergence.property.test.ts; app/tests/unit/marmot/properties/ownSendLifecycle.property.test.ts; app/tests/unit/marmot/properties/invitationFlow.property.test.ts; app/tests/unit/marmot/properties/declineDurability.property.test.ts; app/tests/unit/marmot/properties/lifecycleLease.property.test.ts; app/tests/unit/marmot/properties/privacy.harness.property.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S19-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could this integration story's verification surface be deleted and rewritten without modifying any file outside its dependencies_allowed list (the union of its owned ACs' Spans modules set: history, handlers, send, invitations, joinRequests, membership, client)? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md?"
+    },
+    {
+      "question_id": "VQ-S19-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S19 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S19-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S19's scope (app/tests/unit/marmot/properties/inboundConvergence.property.test.ts; app/tests/unit/marmot/properties/ownSendLifecycle.property.test.ts; app/tests/unit/marmot/properties/invitationFlow.property.test.ts; app/tests/unit/marmot/properties/declineDurability.property.test.ts; app/tests/unit/marmot/properties/lifecycleLease.property.test.ts; app/tests/unit/marmot/properties/privacy.harness.property.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S19-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S19 implementation match the intent of its scope (Property tests (fast-check, >=200 seeded runs) and library-harness properties over the REAL new modules (no mocks): inbound convergence, own-send lifecycle, invitation flow, decline durability, lifecycle/lease, privacy across flows, sender binding. Depends on every spanned story and on the cut-over.) and respect its exclusions (Production code changes (fixes route back to the owning story))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S19-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S19 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S19-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-1",
+      "question": "AC-OBS-1: Inbound delivery convergence (property): for every sequence over a generator of {`append(e)`, redelivered `append(e)` (0–5 times), `append` that throws on attempt k then succeeds, crash-and-restart (reload of the sink from idb followed by the startup sweep) at any point, `withdraw(e)` for appended or never-appended e} over a finite set of kind-445 entries, the final app-store state MUST equal the state of the canonical run in which each non-withdrawn entry was dispatched exactly once in `seq` order and each withdrawn entry left no trace; `list` MUST always be `seq`-ordered. Assertion fails on any duplicate row, missing row, trace of a withdrawn entry, or order violation (fast-check, ≥200 runs, seeded for replay). A `withdraw` that precedes its `append` MUST be a no-op on the withdrawn id. [L: unit (property)] Spans modules: history, handlers Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (property)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S19-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-2",
+      "question": "AC-OBS-2: Own-send lifecycle (property): for every interleaving over a generator of {echo arrival, `send()` resolve, `send()` reject, `intentFailed`, `groupBranchSwitched`, 60 s timer expiry, re-echo} applied to one optimistic own row, the final state MUST satisfy: (i) exactly one row with that `rumor.id`; (ii) if an echo occurred at any point and no `withdraw` of it followed, status is confirmed and never downgraded by a later trigger; (iii) if no echo occurred and any failure trigger occurred, status is failed/retry; (iv) no auto-resend (send spy count ≤ 1). Assertion fails on any violated clause. [L: unit (property, fake timers)] Spans modules: send, history Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (property, fake timers)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S19-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-3",
+      "question": "AC-OBS-3: Invitation flow (property): for every ordering over a generator of {invitation arrival (`inboxDisposition: pending`), invite-context arrival from sponsor, invite-context arrival from non-sponsor, context redelivery, accept, decline, expiry, restart} the resulting card label MUST be the context name if and only if a sponsor-sent context exists and the invitation is pending; the held-context sets MUST obey the 8/64 caps; no context survives accept/decline/expiry; and for an outbound join request matching the invitation, `accept` is called at most once. Assertion fails on any violated clause. [L: unit (property)] Spans modules: invitations, joinRequests Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (property)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S19-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-4",
+      "question": "AC-OBS-4: Decline durability (property): for every interleaving over a generator of {`welcomeDeclined` fires, group `synced()` resolves, `removeMember` rejects n times, process restart (marker reloaded from idb), sponsor offline for k startups}, the invitee is eventually removed (`removeMember` resolves for it) once the sponsor is online and synced, the `declined` announcement is sent exactly once and only after that resolution, and the marker is cleared only after it. Assertion fails if a decline is lost, the announcement precedes removal, or the marker clears early. [L: unit (property over a fake client)] Spans modules: invitations, membership Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (property over a fake client)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S19-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-5",
+      "question": "AC-OBS-5: Lifecycle / lease (property): for every interleaving over a generator of {lease acquired, lease held by other tab, lease released, `storeIncompatible` (0–3 times), sign-out, signer change, relay-settings save} the app MUST (i) issue no `group.*` write and run no membership-derived sweep at any instant at which the lease is not held by this tab, (ii) perform at most one wipe per page load and never loop, (iii) end with a disposed-then-closed client after teardown. Assertion fails on any violation of (i)–(iii). [L: unit (property over fake lease + fake client)] Spans modules: client, membership Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (property over fake lease + fake client)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S19-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-6",
+      "question": "AC-OBS-6: Privacy across flows (property): for every sequence over a generator of {create, invite, accept, decline, send chat/reaction/poll/image, join request, profile exchange, relay-settings save, backup publish} with random nicknames and avatar strings, the multiset of all published events satisfies: none of kind 0; none other than kinds 1059/445 contains a nickname or avatar string (kind 30078 excluded only because its payload is NIP-44 ciphertext, asserted by ciphertext shape). Assertion fails on any leaking event. [L: harness (property)] Spans modules: client, invitations, joinRequests, send, backup Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness (property)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S19-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OBS-7",
+      "question": "AC-OBS-7: Sender-binding (property): for every group message produced by a generator of {genuine rumor, rumor with forged `pubkey`, rumor re-sent by a different member} sent by real library clients over the harness, the set of rows rendered in the chat store equals exactly the genuine rumors attributed to their MLS sender. Assertion fails on any rendered forged or misattributed row. [L: harness (property)] Spans modules: history, handlers, send Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness (property)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

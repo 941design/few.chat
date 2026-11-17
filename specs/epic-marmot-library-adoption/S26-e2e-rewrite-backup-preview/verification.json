@@ -1,0 +1,57 @@
+{
+  "story_id": "S26",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S26-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S26 (E2E rewrites: seed-phrase, recovery, backup outcomes, invitation preview), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/tests/e2e/groups-seed-phrase.spec.ts; app/tests/e2e/groups-seed-recovery.spec.ts; app/tests/e2e/groups-backup-restore-outcomes.spec.ts; app/tests/e2e/groups-invitation-preview.spec.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S26-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `MarmotContext` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S26-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S26 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S26-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S26's scope (app/tests/e2e/groups-seed-phrase.spec.ts; app/tests/e2e/groups-seed-recovery.spec.ts; app/tests/e2e/groups-backup-restore-outcomes.spec.ts; app/tests/e2e/groups-invitation-preview.spec.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S26-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S26 implementation match the intent of its scope (Rewrite groups-seed-phrase, groups-seed-recovery, groups-backup-restore-outcomes (settings+profile restored, no groups, rejoin by invitation) and groups-invitation-preview (generic label / sponsor context) and verify all 11 rewritten specs differ from the pre-run tag and assert their named behaviour) and respect its exclusions ()? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S26-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S26 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S26-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BKP-3",
+      "question": "AC-BKP-3: `groups-seed-phrase`, `groups-seed-recovery`, `groups-backup-restore-outcomes` MUST be rewritten to assert: after recovery the account has settings and profile restored and no groups; rejoining by invitation works. They MUST NOT be deleted. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-seed-phrase, groups-seed-recovery, groups-backup-restore-outcomes (rewritten)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S26-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-TEST-2",
+      "question": "AC-TEST-2: The 11 specs `groups-leave-intent`, `groups-leave-purges-mls-state`, `groups-rumor-reload-atomic`, `groups-accept-reload-atomic`, `groups-invitation-preview`, `groups-dispatch-isolation`, `groups-seed-phrase`, `groups-seed-recovery`, `groups-backup-restore-outcomes`, `groups-reinvite-after-leave`, `groups-reinvite-after-removal` MUST exist and each MUST differ from its pre-run tag content (rewritten against the new behaviour) and still contain at least one `test(` with an assertion on the behaviour named in its filename. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    }
+  ]
+}

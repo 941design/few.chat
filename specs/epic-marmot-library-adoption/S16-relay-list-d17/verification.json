@@ -1,0 +1,57 @@
+{
+  "story_id": "S16",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S16-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S16 (Kind-10050 inbox relay list and relay-settings rebuild (D17)), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/client/inboxRelayList.ts; app/src/lib/marmot/client/relaySettingsRebuild.ts; app/tests/unit/marmot/client/inboxRelayList*.test.ts; app/tests/unit/marmot/client/relayRebuild.harness.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S16-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `client` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S16-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S16 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S16-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S16's scope (app/src/lib/marmot/client/inboxRelayList.ts; app/src/lib/marmot/client/relaySettingsRebuild.ts; app/tests/unit/marmot/client/inboxRelayList*.test.ts; app/tests/unit/marmot/client/relayRebuild.harness.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S16-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S16 implementation match the intent of its scope (Implements the ensure-10050 port from S1: publish exactly configured relays only when absent or app-tagged (foreign respected, its relays used); relay-settings save republishes where allowed, disposes/rebuilds the client with new defaults and rotates key packages; no kind 30051, no republishDiscover) and respect its exclusions (Deleting republishDiscoverability (S22); Settings page wiring (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S16-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S16 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S16-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REL-1",
+      "question": "AC-REL-1: Kind 10050 MUST be published listing exactly the configured relays only when the account has no kind-10050 or the existing one carries the app's `client` tag; when a foreign (untagged) 10050 exists, nothing MUST be published and its relays MUST be used for the client. Asserted with a recording transport for three cases: absent, app-tagged, foreign. The published 10050 MUST carry no profile data. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S16-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REL-2",
+      "question": "AC-REL-2: A relay-settings save MUST (a) republish 10050 where permitted per AC-REL-1, (b) dispose and rebuild the client with the new defaults (recording shows `dispose` then a new `createMarmotClient` with the new relay list), and (c) rotate each listed key package so a kind-30443 exists on the new relays (harness: event present on the new FakeRelay). `republishDiscoverability` MUST NOT exist. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

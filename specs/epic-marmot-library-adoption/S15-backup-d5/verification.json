@@ -1,0 +1,78 @@
+{
+  "story_id": "S15",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S15-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S15 (Relay backup without group sections (D5)), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/backup/relayBackup.ts; app/src/lib/backup/dirtyMark.ts; app/src/context/BackupContext.tsx; app/tests/unit/backup/*.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S15-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `backup` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S15-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S15 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S15-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S15's scope (app/src/lib/backup/relayBackup.ts; app/src/lib/backup/dirtyMark.ts; app/src/context/BackupContext.tsx; app/tests/unit/backup/*.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S15-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S15 implementation match the intent of its scope (Backup payload carries settings and own profile only; restore ignores legacy group sections (and the group restore code is not carried to the new path); no groups.restore; NIP-44 encrypted kind 30078 with no cleartext profile; getBackupRelays uses configured relays and never reads kind 30051.) and respect its exclusions (e2e seed-phrase/recovery rewrites (S26); Kind-10050 publish (S16))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S15-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S15 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S15-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BKP-1",
+      "question": "AC-BKP-1: The kind-30078 backup payload built by the app MUST contain settings and own profile only: the serialized payload MUST NOT contain keys `groupStates`, `groups`, `memberProfiles`, `chatMessages` or `inviteLinks`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S15-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BKP-2",
+      "question": "AC-BKP-2: Restoring a backup payload that still contains those sections MUST restore settings and profile and MUST ignore the group sections (stores for groups, chats, member profiles, invite links remain empty; no throw). The group restore code MUST NOT exist. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S15-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BKP-4",
+      "question": "AC-BKP-4: No `groups.restore` snapshot seam MUST be used (`grep -rn \"groups.restore\" app/src` empty). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S15-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BKP-5",
+      "question": "AC-BKP-5: Backup publish MUST remain NIP-44 encrypted to the own key (kind 30078) and MUST carry no cleartext profile content (privacy invariant preserved). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S15-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-REL-3",
+      "question": "AC-REL-3: `getBackupRelays` MUST return the configured relays and MUST NOT query kind 30051 (recording transport sees no filter with kind 30051). The kind-30051 publish MUST NOT exist anywhere in `app/src`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "story_id": "S28",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S28-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S28 (Update behaviour docs), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in docs/behavior/groups.md; docs/behavior/backup-and-recovery.md; docs/behavior/profiles-and-identity.md; docs/behavior/notifications-and-unread.md; docs/behavior/contacts-and-direct-messages.md; docs/behavior/README.md and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S28-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `MarmotContext` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S28-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S28 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S28-004",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S28 implementation match the intent of its scope (Update docs/behavior/groups.md (single tab per account, leave, withdrawal), backup-and-recovery.md (groups not restored), profiles-and-identity.md, notifications-and-unread.md, contacts-and-direct-messages.md (inbox split) and the README index.) and respect its exclusions (New topic documents)? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S28-005",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S28 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S28-006",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DOC-1",
+      "question": "AC-DOC-1: `docs/behavior/groups.md`, `profiles-and-identity.md`, `backup-and-recovery.md`, `notifications-and-unread.md` and (where the inbox split shows) `contacts-and-direct-messages.md` MUST be updated: `backup-and-recovery.md` states groups are not restored by recovery (D5); `groups.md` states single-tab-per-account (D4), leave semantics (D9), withdrawal (D6); the `docs/behavior/README.md` index stays in sync. Grep checks: `backup-and-recovery.md` no longer claims group restore; `groups.md` contains the \"another tab\" behaviour. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (doc grep)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    }
+  ]
+}

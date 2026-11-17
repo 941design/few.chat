@@ -1,0 +1,57 @@
+{
+  "story_id": "S7",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S7-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S7 (Group media encrypt/decrypt over the library), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/mediaPersistence.ts; app/src/lib/media/imageMessage.ts; app/src/lib/media/imetaTag.ts; app/src/lib/media/blossomClient.ts; app/tests/unit/media/*.test.ts; app/tests/unit/marmot/media.harness.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S7-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `media` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S7-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S7 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S7-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S7's scope (app/src/lib/marmot/mediaPersistence.ts; app/src/lib/media/imageMessage.ts; app/src/lib/media/imetaTag.ts; app/src/lib/media/blossomClient.ts; app/tests/unit/media/*.test.ts; app/tests/unit/marmot/media.harness.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S7-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S7 implementation match the intent of its scope (Image send via group.encryptMedia + Blossom upload with library imeta metadata; receive via group.decryptMedia; decrypted cache keeps serving after reload without re-decrypting. Built beside the old media path.) and respect its exclusions (useImageSend/useDecryptedImage hook wiring (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S7-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S7 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S7-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MEDIA-1",
+      "question": "AC-MEDIA-1: Image send MUST call `group.encryptMedia` and upload the ciphertext to Blossom; the published imeta tags MUST carry the library's media metadata and MUST NOT contain the plaintext bytes. Receive MUST call `group.decryptMedia` and render a blob equal to the sent bytes. Harness round trip with a fake Blossom: bytes in = bytes out, uploaded blob ≠ plaintext. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness + unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S7-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MEDIA-2",
+      "question": "AC-MEDIA-2: The decrypted-media cache (`few-media-blobs`, `few-media-meta`) MUST keep serving an already-decrypted image after reload without re-calling `decryptMedia`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit; e2e:groups-image-sharing (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

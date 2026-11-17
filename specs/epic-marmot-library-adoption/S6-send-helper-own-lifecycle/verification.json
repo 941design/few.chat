@@ -1,0 +1,99 @@
+{
+  "story_id": "S6",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S6-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S6 (sendGroupRumor helper and own-send lifecycle), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/send/index.ts; app/src/lib/marmot/send/sendGroupRumor.ts; app/src/lib/marmot/send/ownRowTracker.ts; app/src/lib/marmot/send/groupOpQueue.ts; app/src/lib/pendingOwnSends.ts (re-pointed); app/tests/unit/marmot/send/*.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S6-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `send` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S6-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S6 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S6-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S6's scope (app/src/lib/marmot/send/index.ts; app/src/lib/marmot/send/sendGroupRumor.ts; app/src/lib/marmot/send/ownRowTracker.ts; app/src/lib/marmot/send/groupOpQueue.ts; app/src/lib/pendingOwnSends.ts (re-pointed); app/tests/unit/marmot/send/*.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S6-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S6 implementation match the intent of its scope (send/ module: sendGroupRumor(group, kind, content, tags) (getEventHash id, own pubkey, group.send), serialised group.invite with group.synced() before commits and commit-pending retry, optimistic-row confirmation by rumor.id for either arrival order, and the four failure triggers (send reject, inten) and respect its exclusions (Migrating call sites (S18); Deleting sendRumorSafe copies (S22))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S6-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S6 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S6-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEND-1",
+      "question": "Seam contract SendGroupRumor (consumed beyond S6; consumers: S18): does the delivered artifact at app/src/lib/marmot/send/sendGroupRumor.ts expose exactly the declared shape (fields: sendGroupRumor: (group: MarmotGroup, kind: number, content: string, tags: string[][]) => Promise<{id: string; result: unknown}>) and uphold each invariant (rumor id === getEventHash(rumor) and equals the id seen in the sink echo; pubkey is the own account; group.send called exactly once per call; no retry in the helper)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S6-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEND-2",
+      "question": "Seam contract GroupOpQueue (consumed beyond S6; consumers: S8): does the delivered artifact at app/src/lib/marmot/send/groupOpQueue.ts expose exactly the declared shape (fields: run: <T>(groupId: string, op: () => Promise<T>) => Promise<T>) and uphold each invariant (at most one invite in flight per group; group.synced() awaited before invite/removeMember/setAdmins/rename/leave; commit-pending is retried after synced())? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S6-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEND-1",
+      "question": "AC-SEND-1: `sendGroupRumor(group, kind, content, tags)` MUST compute the rumor `id` with nostr-tools `getEventHash`, set `pubkey` to the own account, and call `group.send({type:'application', rumor})` exactly once with that rumor; the returned/optimistic id MUST equal the rumor id. For chat, the precomputed canonical id (AC-AR-21) MUST equal the id seen in the echoed sink entry. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S6-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEND-2",
+      "question": "AC-SEND-2: A harness send while a staged proposal is pending MUST deliver after the proposal commits with no app-side retry code; the second member receives the rumor with the identical id. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S6-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SEND-5",
+      "question": "AC-SEND-5: At most one `group.invite` is in flight per group, and `group.synced()` is awaited before invite, removeMember, setAdmins, rename and leave. A test issuing two concurrent invites on one group MUST show serialisation (second call starts after first settles); a commit-pending rejection from a stub MUST be retried after `synced()`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S6-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OWN-1",
+      "question": "AC-OWN-1: Harness/unit: after a member sends a chat message through the send helper and the sink echo arrives, the chat store MUST contain exactly one row with that `rumor.id`, and the group's unread count and the bell counter MUST be unchanged from before the send. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness + unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S6-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OWN-2",
+      "question": "AC-OWN-2: The own-echo path MUST hold for either arrival order: echo before `send()` resolves, and echo after. Both orders yield one row, status confirmed. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S6-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WDR-3",
+      "question": "AC-WDR-3: Failure detection, one test per trigger: (a) `send()` rejects → row failed/retry; (b) `intentFailed` naming the row's group while unconfirmed → failed/retry; (c) `groupBranchSwitched` for the group while unconfirmed → failed/retry; (d) still unconfirmed 60 s (fake-time) after `send()` resolved → failed/retry. For a row already confirmed through the sink, none of (a)–(d) MUST change its status. A later sink arrival with the same `rumor.id` for a failed row MUST flip it to confirmed. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (fake timers)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

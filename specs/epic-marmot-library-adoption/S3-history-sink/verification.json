@@ -1,0 +1,134 @@
+{
+  "story_id": "S3",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S3-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S3 (App HistoryBackend over few-group-history), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/history/index.ts; app/src/lib/marmot/history/historyBackend.ts; app/src/lib/marmot/history/historyStore.ts; app/src/lib/marmot/history/sweep.ts; app/tests/unit/marmot/history/*.test.ts; app/tests/unit/marmot/history/historyWithdraw.harness.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S3-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `history` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S3-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S3 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S3-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S3's scope (app/src/lib/marmot/history/index.ts; app/src/lib/marmot/history/historyBackend.ts; app/src/lib/marmot/history/historyStore.ts; app/src/lib/marmot/history/sweep.ts; app/tests/unit/marmot/history/*.test.ts; app/tests/unit/marmot/history/historyWithdraw.harness.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S3-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S3 implementation match the intent of its scope (history/ module: idb-keyval-backed (get/set/del/createStore, no update()) HistoryBackend with append {entry, seq, dispatched}, per-group monotonic seq, handler dispatch via an injected GroupHistoryHandlers port with sender=orderingKey.account, 10 s settle bound, throw-to-retry, withdraw with retract) and respect its exclusions (Concrete handlers (S4, S5); Wiring into the client (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S3-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S3 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S3-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-1",
+      "question": "Seam contract GroupHistoryHandlers (consumed beyond S3; consumers: S4): does the delivered artifact at app/src/lib/marmot/history/historyBackend.ts expose exactly the declared shape (fields: dispatch: (input: GroupRumorInput) => Promise<void>; retract: (input: GroupRumorInput) => Promise<void>; GroupRumorInput: {groupId: string; eventId: string; rumor: Rumor; sender: string}) and uphold each invariant (sender === HistoryEntry.orderingKey.account, never rumor.pubkey; dispatch is idempotent per (groupId,eventId) and throws on durable failure; dispatch/retract never await account-scope client calls; retract of an unseen eventId is a no-op)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S3-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-1",
+      "question": "AC-HIST-1: `append(entry)` on a fresh `(groupId,eventId)` MUST persist a row `{entry, seq, dispatched:false}` in `few-group-history`, call the app handlers once with `{groupId, eventId, rumor, sender}`, then rewrite the row with `dispatched:true`. Asserted by reading the idb mock after append (row present, `dispatched:true`) and by a handler spy called once. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-2",
+      "question": "AC-HIST-2: `sender` passed to every group handler MUST equal `entry.orderingKey.account`, never `rumor.pubkey`. A test feeding an entry whose `orderingKey.account` differs from `rumor.pubkey` MUST observe the handler receive the `orderingKey.account` value. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-3",
+      "question": "AC-HIST-3: If a handler throws, `append` MUST reject (so the library retries), the row MUST remain `dispatched:false`, and no later row for the same group MUST be marked dispatched by that call. A retry `append` of the same entry MUST re-run the handlers and, once they succeed, set `dispatched:true`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-4",
+      "question": "AC-HIST-4: `append` MUST settle within 10 s: a handler that never resolves MUST cause `append` to reject within 10 s of fake-time (not hang), leaving `dispatched:false`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (fake timers)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-5",
+      "question": "AC-HIST-5: `withdraw(groupId, eventIds)` MUST delete the matching `few-group-history` rows and invoke the handlers' retract path once per withdrawn row; ids with no row MUST be a no-op (no retract call, no throw). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-6",
+      "question": "AC-HIST-6: `purge(groupId)` MUST delete every row for that group and no rows of any other group. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-7",
+      "question": "AC-HIST-7: Startup sweep: before `groups.list()`, every row with `dispatched:false` MUST be re-dispatched through the handlers in `seq` order per group and then marked `dispatched:true`; a row with `dispatched:true` MUST NOT be re-dispatched. A sweep handler failure MUST leave the row `dispatched:false` and MUST NOT abort the sweep of other groups. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-015",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-HIST-8",
+      "question": "AC-HIST-8: The sink MUST NOT use idb-keyval `update()`: no `update(` call from `idb-keyval` appears in any file under `app/src/lib/marmot/history/`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (existing repo-wide ban test)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S3-016",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IDEM-1",
+      "question": "AC-IDEM-1: Replaying `append` for an event id whose row is `dispatched:true` MUST leave exactly one stored row, exactly one chat/reaction/poll row in the app store, and handler spies called once total. Re-appending a row with `dispatched:false` MUST re-run the handlers. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-017",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-IDEM-2",
+      "question": "AC-IDEM-2: `list(groupId)` MUST return rows ordered by `seq` ascending; `seq` MUST be a per-group monotonic counter assigned at first append and unchanged by re-append. Tests seed the idb mock rows with keys deliberately out of `seq` order and assert the output order, and assert two groups keep independent counters. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-018",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WDR-4",
+      "question": "AC-WDR-4: `withdraw` for an eventId that was never appended, or `withdraw` that precedes the `append` of the same id in time, MUST leave all stores unchanged. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S3-019",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-WDR-5",
+      "question": "AC-WDR-5: Harness: a fork rewind in the library that abandons another member's message causes the sink's `withdraw` to remove its chat row from the app store (A2). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness (smoke spec covers the real-relay equivalent)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

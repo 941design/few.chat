@@ -1,0 +1,78 @@
+{
+  "story_id": "S25",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S25-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S25 (E2E rewrites: leave, reinvite, reload-atomic, dispatch-isolation), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/tests/e2e/groups-leave-intent.spec.ts; app/tests/e2e/groups-leave-purges-mls-state.spec.ts; app/tests/e2e/groups-reinvite-after-leave.spec.ts; app/tests/e2e/groups-reinvite-after-removal.spec.ts; app/tests/e2e/groups-rumor-reload-atomic.spec.ts; app/tests/e2e/groups-accept-reload-atomic.spec.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S25-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `MarmotContext` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S25-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S25 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S25-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S25's scope (app/tests/e2e/groups-leave-intent.spec.ts; app/tests/e2e/groups-leave-purges-mls-state.spec.ts; app/tests/e2e/groups-reinvite-after-leave.spec.ts; app/tests/e2e/groups-reinvite-after-removal.spec.ts; app/tests/e2e/groups-rumor-reload-atomic.spec.ts; app/tests/e2e/groups-accept-reload-atomic.spec.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S25-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S25 implementation match the intent of its scope (Rewrite groups-leave-intent, groups-leave-purges-mls-state, groups-reinvite-after-leave, groups-reinvite-after-removal, groups-rumor-reload-atomic, groups-accept-reload-atomic, groups-dispatch-isolation against new behaviour, and add the new groups-multi-tab spec (wait for library group absence via ) and respect its exclusions (Backup and preview specs (S26))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S25-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S25 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S25-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-OWN-3",
+      "question": "AC-OWN-3: e2e `groups-dispatch-isolation` MUST be rewritten so that its AC-AR-22 expectation reads: own send reconciles via the sink with no unread/bell increase (replacing dispatcher-level own-send suppression, D13); another member's message still raises unread. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-dispatch-isolation (rewritten)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S25-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-LEAVE-5",
+      "question": "AC-LEAVE-5: e2e: `groups-leave-intent`, `groups-leave-purges-mls-state`, `groups-reinvite-after-leave` MUST be rewritten to wait for library group absence via a `__fewTest` hook polling `groups.list()` before reload or re-invite, and MUST assert: the leaver's UI group is gone, the remaining members' rosters no longer contain the leaver, and re-invite after leave succeeds. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-leave-intent, groups-leave-purges-mls-state, groups-reinvite-after-leave (rewritten)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S25-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MEM-6",
+      "question": "AC-MEM-6: A reinvited member (after leave or removal) MUST receive and be able to accept a fresh Welcome; the leaver's/removed member's old leaf MUST NOT block re-adding. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-reinvite-after-leave, groups-reinvite-after-removal (rewritten)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S25-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-TEST-3",
+      "question": "AC-TEST-3: `groups-rumor-reload-atomic` and `groups-accept-reload-atomic` MUST be rewritten to assert: a reload between sink persist and handler dispatch re-dispatches the row after reload so the message/accept outcome appears exactly once (the sink's startup sweep, AC-HIST-7), with no duplicate row. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-rumor-reload-atomic, groups-accept-reload-atomic (rewritten)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S25-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MT-5",
+      "question": "AC-MT-5: A new relay-bucket spec `app/tests/e2e/groups-multi-tab.spec.ts` MUST drive two pages of the same account in one browser context against the real Web Locks API and the real library lease (no mock, no raw relay publish): (a) after the first page has created a group, the second page MUST show the \"active in another tab\" state and MUST list that group; (b) after the first page is closed, the second page MUST become ready with no reload and a message sent from it in that group MUST appear in its chat. The spec MUST be counted in the CLAUDE.md e2e totals. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-multi-tab] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

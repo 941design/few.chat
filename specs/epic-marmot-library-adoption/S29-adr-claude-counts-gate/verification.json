@@ -1,0 +1,71 @@
+{
+  "story_id": "S29",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S29-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S29 (ADR, CLAUDE.md counts and end gate), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in docs/adr/ADR-013-*.md (new); docs/adr/ADR-012-*.md; docs/adr/ADR-003-*.md; CLAUDE.md; run report and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S29-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `MarmotContext` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S29-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S29 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S29-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S29's scope (docs/adr/ADR-013-*.md (new); docs/adr/ADR-012-*.md; docs/adr/ADR-003-*.md; CLAUDE.md; run report)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S29-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S29 implementation match the intent of its scope (New ADR superseding ADR-012's fork mechanism (keeps handler rule, reaffirms ADR-003 app-level, records own-change-lost) with ADR-012/ADR-003 header references; CLAUDE.md e2e counts match playwright --list; run-report lists uncovered topic changes; end gate make build + make test with e2e not INVALID) and respect its exclusions ()? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S29-006",
+      "phase": "pre-impl",
+      "category": "BEST_PRACTICES",
+      "question": "Does S29 follow project conventions (all new UI text in i18n.ts with en and de, no hardcoded user-visible strings, make-driven build/test, idb-keyval update() banned, no edits to app/ during an e2e run, and no leak of profile data to unaddressed audiences)? Cite evidence for each convention the story's files touch."
+    },
+    {
+      "question_id": "VQ-S29-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DOC-2",
+      "question": "AC-DOC-2: A new ADR under `docs/adr/` MUST supersede ADR-012's fork mechanism while keeping its handler rule (group handlers take the sender only from the authenticated account, never `rumor.pubkey`; inbox handlers use the seal-bound `rumor.pubkey`), reaffirm ADR-003 for app-level rev-clock mutations and supersede only its marmot-ts-specific claims, and record the own-change-lost policy; ADR-012 and ADR-003 headers MUST reference the new ADR. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (doc grep)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S29-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DOC-3",
+      "question": "AC-DOC-3: CLAUDE.md e2e test counts (60 / 12 / 48 and the dm-* breakdown) MUST equal the counts printed by `playwright test --list` per bucket on the final tree. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (script compares)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S29-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DOC-4",
+      "question": "AC-DOC-4: Behaviour changes to a topic not covered by any behaviour document MUST be listed in the run report rather than authored mid-feature. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (report)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S29-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-GATE-3",
+      "question": "AC-GATE-3: The end gate: `make build` and `make test` (unit + `make test-e2e-all` over the full suite) MUST exit 0 on the final tree, with e2e not INVALID. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (gate)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    }
+  ]
+}

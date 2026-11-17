@@ -1,0 +1,88 @@
+{
+  "story_id": "S1",
+  "status": "done",
+  "remediation_rounds": 0,
+  "files_created": [
+    "app/src/lib/marmot/client/index.ts",
+    "app/src/lib/marmot/client/createClient.ts",
+    "app/src/lib/marmot/client/signerAdapter.ts",
+    "app/src/lib/marmot/client/transport.ts",
+    "app/src/lib/marmot/client/storage.ts",
+    "app/src/lib/marmot/client/lifecycle.ts",
+    "app/src/lib/marmot/client/fifo.ts",
+    "app/src/lib/marmot/client/keyPackageEnsure.ts",
+    "app/src/lib/testHooks/groupLibrary.ts",
+    "app/src/lib/testHooks/recordingHistoryBackend.ts",
+    "app/tests/unit/depsResolve.test.ts",
+    "app/tests/unit/marmot/client/fifo.test.ts",
+    "app/tests/unit/marmot/client/signerAdapter.test.ts",
+    "app/tests/unit/marmot/client/transport.test.ts",
+    "app/tests/unit/marmot/client/lifecycle.test.ts",
+    "app/tests/unit/marmot/client/bootstrap.sequence.test.ts",
+    "app/tests/unit/marmot/client/bootstrap.harness.test.ts",
+    "app/tests/unit/marmot/client/historySink.assumptions.harness.test.ts",
+    "app/tests/unit/marmot/client/importSafety.test.ts",
+    "app/tests/unit/marmot/client/importBoundary.test.ts",
+    "app/tests/e2e/groups-library-smoke.spec.ts"
+  ],
+  "files_modified": [
+    "app/next.config.mjs",
+    "app/package-lock.json",
+    "app/package.json",
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/i18n.ts",
+    "app/tests/e2e/helpers/relay-query.ts"
+  ],
+  "tests_added": {
+    "unit": 47,
+    "library_harness": 10,
+    "structural": 20,
+    "e2e": 3
+  },
+  "test_counts": {
+    "baseline": 6566,
+    "final": 6646
+  },
+  "mocks": [],
+  "modules_touched": [
+    "client"
+  ],
+  "implementation_summary": "Pinned @941design/marmot, marmot-engine, nostr-events 0.2.0-alpha.0 and nostr-tools 2.23.3 (npm install --save-exact in app/, platform stamp re-touched; @rotheric/visuals lock entry untouched). swc-loader include gained @941design/marmot (also matches marmot-engine) and @941design/nostr-events. New client/ module implements the signer adapter, SimplePool transport, IndexedDB store+lease open, bootstrapAccountClient (ordered startup, loud TypeError on missing collaborators, fatal-step cleanup), owned FIFO, key-package ensure, teardown. Dev-only __fewTest.groupLibrary hook + recording HistoryBackend and the temporary groups-library-smoke spec prove A1-A3 in a real browser. Library harness twin runs the same hook in node.",
+  "verification": {
+    "unit_full": "296 files / 6646 passed, 1 skipped (baseline 286 / 6566)",
+    "typecheck": "clean (tsc --noEmit); lint NO_LINT at baseline and now",
+    "make_build": "exit 0; library present in lazy chunk app/out/_next/static/chunks/349.*.js (contains marmot.group.profile.v1, state.1)",
+    "smoke_e2e": "groups-library-smoke 3/3 passed on 3 consecutive fresh-relay runs: A3 pass, A1 pass, A2 pass",
+    "old_flow_spot_check": "groups-lifecycle 5/5 passed (first run flagged INVALID by cold-compile reload, rerun valid and green)",
+    "git_tag": "pre-marmot-library-adoption resolves to 65a0805 (pre-existing)"
+  },
+  "decisions": [
+    "Adapter factory returns {signer,budget} separately (client takes budget as an option). nsec -> {policy:'none'}; nip07/nip46 -> {concurrency:2,minSpacingMs:200,timeoutMs:120000,leaseMs:150000}.",
+    "New adapter takes a structural AppEventSigner, so client/ never imports applesauce-core (goes away with the fork) or NDK.",
+    "Key-package ensure and the injected 10050 ensure are non-fatal (reported via onError, recorded in account.ensure); every earlier step is fatal and triggers contract-order cleanup.",
+    "lease-held is returned as a value ({status:'lease-held'}); waiting/lease-loss left to S17.",
+    "All collaborators (history, client event handlers, inbox handlers, group notification callback, inbox relay list port) are required; omission throws TypeError before anything opens.",
+    "Smoke hook is installed from MarmotContext.tsx (outside scope.includes, one effect) through a variable-guarded dev check so the library is bundled in production and make build is a real bundling proof; S27 must remove the effect, hook files and spec.",
+    "A2 fork staged by a partitionable transport wrapper (held inbound, timed-out history requests) in testHooks, with both clients admins.",
+    "Inbox kinds 21059/21064 defined locally in client/createClient.ts (INBOX_HANDLER_KINDS) until S2 provides AppKinds.",
+    "Playwright chromium for the guest HOME was missing; installed into ~/.cache/playwright-few via npx playwright install chromium."
+  ],
+  "limitations": [
+    "e2e runs on next dev; the production bundle is proven to compile/bundle/export and contain the library, but is not executed in a browser.",
+    "Second half of A3 (own send on an abandoned branch before confirmation is never delivered/withdrawn) not exercised: own sends confirm by publish ack even while partitioned (recorded as VQ-S1-031)."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story scope listed no place to install the dev-only hook (MarmotContext.tsx/_app.tsx), and the obvious `if (NODE_ENV !== 'production') import(...)` guard is dead-code-eliminated, which would have made the make build bundling proof vacuous; I had to route it through a variable and verify the library chunk exists. Also the guest HOME lacked ~/.cache/playwright-few, so the stated e2e command failed at browser launch until chromium was installed.",
+    "surprised_by": "The first single-spec run of groups-lifecycle after the build was flagged INVALID (cold-compile reload) with no edit; rerun was clean.",
+    "scope": "project_specific",
+    "outcome": "planning_only",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  },
+  "lead_notes": [
+    "2026-11-17 post-examiner: relay-query.ts gained #h/ids/since filter fields (Fable remediation, smoke-spec scoping); production build tree-shakes the dev hook call site, so make build proves compile+emit only \u2014 runtime proof moved to AC-GATE-6 (S29). bootstrap result union also includes unsupported(storage), aborted, signer-timeout."
+  ]
+}

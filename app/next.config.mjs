@@ -46,6 +46,12 @@ const nextConfig = {
         /node_modules\/@internet-privacy\/marmot-ts/,
         /node_modules\/@noble\/post-quantum/,
         /node_modules\/@hpke\//,
+        // @941design/marmot adoption: the library packages ship untranspiled
+        // ES2022+ ESM and (via marmot-engine's `ts-mls` alias, whose path
+        // still matches the ts-mls entry above) the same bitwise code that
+        // crashes the SWC optimizer. `marmot` also matches `marmot-engine`.
+        /node_modules\/@941design\/marmot/,
+        /node_modules\/@941design\/nostr-events/,
       ],
       use: {
         // Use next-swc with no optimization for these files

@@ -1,0 +1,220 @@
+{
+  "story_id": "S1",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S1-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S1 (Dependencies, client bootstrap module and bundling proof), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/package.json (+ lockfile via make deps); app/next.config.mjs; app/src/lib/marmot/client/index.ts; app/src/lib/marmot/client/createClient.ts; app/src/lib/marmot/client/signerAdapter.ts; app/src/lib/marmot/client/transport.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S1-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `client` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S1-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S1 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S1-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S1's scope (app/package.json (+ lockfile via make deps); app/next.config.mjs; app/src/lib/marmot/client/index.ts; app/src/lib/marmot/client/createClient.ts; app/src/lib/marmot/client/signerAdapter.ts; app/src/lib/marmot/client/transport.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S1-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S1 implementation match the intent of its scope (Adds the pinned @941design/* deps (old forks stay installed, nothing old deleted), swc-loader include update, and the new client/ module: signer adapter (fromForeignSigner, budgets, nip44 gate, secure-context gate), SimplePool transport, IndexedDB storage + lease open, createMarmotClient with timing) and respect its exclusions (Removing @internet-privacy/marmot-ts / ts-mls (S22); Wiring MarmotContext (S18); Lease-loss/wipe/reconciliation (S17); 10050 publish policy (S16): only the injected ensure port and its call order here; Any deletion of old code)? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S1-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S1 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S1-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-1",
+      "question": "Seam contract AccountClientHandle (consumed beyond S1; consumers: S13): does the delivered artifact at app/src/lib/marmot/client/index.ts expose exactly the declared shape (fields: client: MarmotClient; pubkey: string; leaseHeld: () => boolean; enqueue: ClientJobQueue['enqueue']) and uphold each invariant (only client/ constructs or disposes the MarmotClient; modules receive the handle by injection and never import React contexts; no group write while leaseHeld() is false)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S1-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-5",
+      "question": "Seam contract ClientJobQueue (consumed beyond S1; consumers: S5): does the delivered artifact at app/src/lib/marmot/client/fifo.ts expose exactly the declared shape (fields: enqueue: (job: () => Promise<void>) => void) and uphold each invariant (a job never runs before the enqueuing frame returns (setTimeout(0), not a microtask); jobs run strictly one at a time in enqueue order; a rejecting job does not stall the queue)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S1-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-1",
+      "question": "Seam contract InboxRelayListEnsure (consumed beyond S1; consumers: S16): does the delivered artifact at app/src/lib/marmot/client/createClient.ts expose exactly the declared shape (fields: ensure: (ctx:{pubkey:string; relays:string[]}) => Promise<void>) and uphold each invariant (called exactly once, after key-package ensure; publishes only when no 10050 exists or the existing one carries the app client tag)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S1-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEP-1",
+      "question": "AC-DEP-1: After the change, `app/package.json` MUST list `@941design/marmot`, `@941design/marmot-engine`, `@941design/nostr-events` each at the exact string `0.2.0-alpha.0` and `nostr-tools` at the exact string `2.23.3` (no `^`/`~`/range). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural; checked by a node script reading package.json] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S1-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEP-3",
+      "question": "AC-DEP-3: `app/next.config.mjs` swc-loader include MUST match `node_modules/@941design/marmot`, `\u2026/marmot-engine`, `\u2026/nostr-events` paths and MUST still match `node_modules/ts-mls`; `swcMinify` MUST remain `false`. Evaluating the include predicate against a path under each of those four packages MUST return true. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (imports the config's include list)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-DEP-4",
+      "question": "AC-DEP-4: A resolve check MUST import each new package's subpath exports used by the app (`@941design/marmot`, `@941design/marmot/mls`, `@941design/marmot-engine`, `@941design/nostr-events`, `@941design/nostr-events/transport/contract/conformance`) without a \"Cannot find module\" error after `make deps`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit/structural (node resolve script wired into a vitest test)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-013",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-TRANS-1",
+      "question": "AC-TRANS-1: The client bootstrap MUST build its transport with `createSimplePoolNetwork({pool}).asTransportContract()` over a nostr-tools `SimplePool` owned by the marmot client, MUST pass no `verifier`, and MUST dispose that pool on teardown. A harness/unit test with a recording pool MUST observe the client's subscription and publish calls going to that pool, and observe `pool.close` (or equivalent) called after `dispose`. No `NDKRelay`/NDK instance MUST be reachable from the client module's import graph. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (stub pool) + structural import-graph check] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-014",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SIGN-1",
+      "question": "AC-SIGN-1: The signer adapter MUST wrap the app `EventSigner` with `fromForeignSigner(..., APPLESAUCE_SHAPE)`. For an nsec signer it MUST return a signer whose `budget` policy is `none`; for NIP-07 and NIP-46 signers it MUST return a timeout-policy budget. Asserted by calling the adapter factory with each signer mode and inspecting the resulting budget policy value. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-015",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SIGN-2",
+      "question": "AC-SIGN-2: Given a signer lacking `nip44`, the adapter factory MUST report `unsupported` with reason `nip44` and MUST NOT construct a client; the `useMarmot()` state MUST be `unsupported` and the UI MUST render the new i18n string (en and de entries both present and non-empty, different from each other). No fallback encryption path MUST exist. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (factory + i18n key presence)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-016",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SIGN-5",
+      "question": "AC-SIGN-5: The secure-context gate MUST still prevent client construction when `window.isSecureContext` is false (state `unsupported`, no `createMarmotClient` call). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-017",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOUND-1",
+      "question": "AC-BOUND-1: Pure modules under `app/src/lib/marmot/**` MUST NOT import from `app/src/context/**` or React. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural; existing import-boundary test extended to the new directories] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S1-018",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-1",
+      "question": "AC-BOOT-1: Given the library harness, the bootstrap MUST run in this order: `openForWrite(pubkey)` \u2192 `createMarmotClient` \u2192 listener attach \u2192 inbox handlers registered (kinds 21059 and 21064) \u2192 `groups.list()` \u2192 per-group `onNotification` attach \u2192 `inbox.start()` \u2192 key-package ensure \u2192 kind-10050 ensure. A recording fake MUST show that call sequence; `inbox.start()` MUST NOT be called before `groups.list()` resolves. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (sequence recorder) + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-019",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-2",
+      "question": "AC-BOOT-2: Key-package ensure: when `keyPackages.count()` is 0 the bootstrap MUST call `keyPackages.create({lastResort:true})` exactly once; when count > 0 it MUST NOT create. After bootstrap in the harness the relay MUST hold exactly one kind-30443 event authored by the account and no kind-443 event. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-020",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-3",
+      "question": "AC-BOOT-3: Teardown MUST call `client.dispose()` then `stores.close()` (in that order) on sign-out and on signer-mode change, and a subsequent bootstrap for a different pubkey MUST use that pubkey's own store (no cross-account reads). A recording fake MUST show the order; a harness two-account run MUST show account B sees none of account A's groups. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-021",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-4",
+      "question": "AC-BOOT-4: Client event listeners MUST be attached for `groupRemoved`, `inboxDisposition`, `welcomeDeclined`, `intentFailed`, `storeIncompatible`, `groupBranchSwitched`; emitting each event on a fake client MUST invoke exactly the corresponding app handler once. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-022",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-5",
+      "question": "AC-BOOT-5: Code running inside `HistoryBackend` calls, inbox handlers or client event listeners MUST NOT await an account-scope client call; follow-up client work MUST be queued with `setTimeout(0)` onto an owned FIFO that runs one job at a time. A test that enqueues two jobs from within a handler MUST observe: neither runs before the handler returns, and the second starts only after the first settles. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (fake timers)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-023",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-6",
+      "question": "AC-BOOT-6: Library timing options MUST be `leaveTimeoutMs: 10000` and `removalSettleMs: 5000` in the options object passed to `createMarmotClient`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (captured options)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-024",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-BOOT-7",
+      "question": "AC-BOOT-7: The library MUST be constructed only inside browser effects: importing `app/src/lib/marmot/client/index.ts` under `// @vitest-environment node` with `window` undefined MUST NOT throw, and `next build` static export MUST succeed. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + structural (`make build`)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-025",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-TEST-7",
+      "question": "AC-TEST-7: e2e `groups-library-smoke.spec.ts` (temporary): creates a group, sends a message and observes its own echo via the sink through a dev-only `__fewTest` hook; exercises A1 (an `append` that throws once is retried and eventually dispatched), A2 (`withdraw` called with kind-445 ids after a rewind), A3 (own message delivered after confirmation). It MUST pass in S1; it MUST be deleted in the last story. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [e2e:groups-library-smoke] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S1-026",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-GATE-1",
+      "question": "AC-GATE-1: Story S1 ends with `make build` exit 0 and the smoke spec green; failure aborts the run with the old flow intact. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural (build) + e2e:groups-library-smoke] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S1-027",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-GATE-4",
+      "question": "AC-GATE-4: The pre-run commit MUST be tagged `pre-marmot-library-adoption` (`git rev-parse pre-marmot-library-adoption` resolves) before the first story's changes; on an unmet end gate after the remediation budget the run reverts nothing. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S1-028",
+      "category": "SECURITY",
+      "question": "The temporary smoke hook is bundled into the PRODUCTION build on purpose (dev check goes through the variable `smokeHookEnabled` in app/src/context/MarmotContext.tsx so webpack does not dead-code-eliminate the import and `make build` really bundles @941design/marmot). Confirm that in a production build nothing ever executes `installGroupLibraryHook` (the effect returns before the dynamic import when NODE_ENV === 'production'), that `window.__fewTest.groupLibrary` (which accepts a raw `privateKeyHex`) is therefore never installed in production, and that the hook module under app/src/lib/testHooks/ has no import-time side effect. Cite file:line and the built chunk that contains the library (grep `marmot.group.profile.v1` in app/out/_next/static).",
+      "phase": "post-impl"
+    },
+    {
+      "question_id": "VQ-S1-029",
+      "category": "ARCHITECTURE",
+      "question": "bootstrapAccountClient (app/src/lib/marmot/client/createClient.ts) treats the key-package ensure (step 9) and the injected kind-10050 ensure (step 10) as NON-FATAL: a failure is reported through `onError` and recorded in `account.ensure`, while every earlier step (stores, client, listeners, inbox handlers, groups.list, inbox.start) is fatal and triggers a contract-order teardown (dispose then stores.close then pool close). Is that split consistent with what S16 (10050 policy) and S17 (lifecycle/lease) will assume, and does S16's ensure still get called exactly once, after the key-package ensure, even when the key-package ensure failed?",
+      "phase": "post-impl"
+    },
+    {
+      "question_id": "VQ-S1-030",
+      "category": "SPEC",
+      "question": "Scope deviations to confirm as intentional: (1) app/src/context/MarmotContext.tsx (one dev-only effect installing the smoke hook; not in S1's scope.includes but required to load the hook in the page; S27 removes it), (2) app/src/lib/testHooks/recordingHistoryBackend.ts and groupLibrary.ts (the scope names only the directory), (3) extra unit tests beyond the scope list: tests/unit/marmot/client/{importBoundary,importSafety,bootstrap.harness,bootstrap.sequence,historySink.assumptions.harness,...}.test.ts, (4) app/src/lib/marmot/client/index.ts re-exports (public surface). Does any of these build capability owned by a later story (lease wait/loss S17, 10050 policy S16, kinds registry S2, sink S3)?",
+      "phase": "post-impl"
+    },
+    {
+      "question_id": "VQ-S1-031",
+      "category": "TEST",
+      "question": "Assumption A3 has two halves; S1 proves only the first (an own message is delivered through the sink after confirmation, orderingKey.account === own pubkey). The second half (an own send whose send-time branch was abandoned BEFORE confirmation is never delivered and never withdrawn) is not exercised: the fork harness staged in groupLibrary.ts confirms an own send by publish acknowledgement even while partitioned, so the abandoned own message is appended and later withdrawn (A2), not silently dropped. Is the unproven half load-bearing for S3/S6 (own-row failure detection), and which story should add a deterministic test for it?",
+      "phase": "post-impl"
+    },
+    {
+      "question_id": "VQ-S1-032",
+      "category": "TEST",
+      "question": "The partition used to stage the fork (`partitionable()` in app/src/lib/testHooks/groupLibrary.ts) holds inbound live events and answers history requests with `{events:[],timedOut:true,eosedRelays:[],silentRelays}` (cast `as never`). Does that faithfully model a network partition for the library (RequestWithDeadlineResult shape, relaySilent exclusion after historySilenceThreshold) so that A2 passing is evidence about real rewinds rather than an artefact of the fake? Show the node-harness and the e2e A2 both observing exactly one withdraw call whose eventIds equal the abandoned branch's kind-445 id.",
+      "phase": "post-impl"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "story_id": "S14",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S14-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S14 (Remove member, cancel invitation, grant admin, rename), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/membership/removeMember.ts; app/src/lib/marmot/membership/cancelInvitation.ts; app/src/lib/marmot/membership/setAdmins.ts; app/src/lib/marmot/membership/renameGroup.ts; app/tests/unit/marmot/membership/adminOps*.test.ts; app/tests/unit/marmot/membership/adminOps.harness.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S14-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `membership` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S14-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S14 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S14-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S14's scope (app/src/lib/marmot/membership/removeMember.ts; app/src/lib/marmot/membership/cancelInvitation.ts; app/src/lib/marmot/membership/setAdmins.ts; app/src/lib/marmot/membership/renameGroup.ts; app/tests/unit/marmot/membership/adminOps*.test.ts; app/tests/unit/marmot/membership/adminOps.harness.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S14-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S14 implementation match the intent of its scope (removeMember (admin-only, library error surfaced), cancel pending invitation via removeMember + marker clear, setAdmins(previous+target), rename(name), own-change-lost logged with view refresh and no toast, each awaiting group.synced().) and respect its exclusions (Deleting grantAdminImpl/renameGroupImpl/cancelInvitationImpl (S22))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S14-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S14 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S14-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MEM-1",
+      "question": "AC-MEM-1: Remove member MUST call the library `removeMember` once with the member's account and MUST work only for admins (a non-admin attempt surfaces the library error and the roster is unchanged). ADR-010 preserved. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness; e2e:groups-remove-member (kept), groups-reinvite-after-removal (rewritten)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S14-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MEM-2",
+      "question": "AC-MEM-2: Cancel pending invitation MUST call `removeMember` for the invitee, clear the pending-direct-invite marker and update the UI. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit; e2e:groups-cancel-pending (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S14-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-MEM-3",
+      "question": "AC-MEM-3: Grant admin MUST call `setAdmins` with the previous admins plus the target; rename MUST call `rename(name)`. After each, `group.admins` / name read from the library reflects the change in the harness. An `own-change-lost` outcome MUST be logged (console spy) and the view refreshed, with no toast and no UI notice. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness; e2e:groups-admin (kept minus pending-removal assertions), groups-rename (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

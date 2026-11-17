@@ -1,0 +1,61 @@
+{
+  "epic_name": "marmot-library-adoption",
+  "status": "in_progress",
+  "phase": "IMPLEMENTING",
+  "created_at": "2026-11-17T08:07:10Z",
+  "updated_at": "2026-11-17T11:21:16Z",
+  "pre_existing_dirty_files": [
+    ".clauded.yaml",
+    "package.json.copy",
+    "specs/epic-marmot-library-adoption/spec.md"
+  ],
+  "completed_stories": [
+    "S1"
+  ],
+  "escalated_stories": [],
+  "phase_history": [
+    {
+      "phase": "SPEC_VALIDATED",
+      "timestamp": "2026-11-17T08:07:10Z",
+      "trigger": "validation_passed"
+    },
+    {
+      "phase": "IMPLEMENTING",
+      "timestamp": "2026-11-17T08:20:07Z",
+      "trigger": "planning_complete"
+    }
+  ],
+  "plugin_sha": "unknown",
+  "consumer_sha": "65a08054cf7375279eb30ecb056a338b0b4f3dc2",
+  "models": {
+    "lead": "opus",
+    "examiner": "haiku",
+    "implementer": "sonnet"
+  },
+  "gate_runs": [
+    {
+      "gate_id": "spec_adversary_review",
+      "outcome": "fired_remediated"
+    },
+    {
+      "gate_id": "s1_relay_bucket_baseline",
+      "outcome": "passed",
+      "detail": "make test-e2e on wiped relay: 356 passed, 19 skipped, 0 failed, smoke A1-A3 green mid-bucket"
+    }
+  ],
+  "ownership_ledger_path": "ownership-ledger.json",
+  "reviewer_agent_id": "a832d00a9d559719b",
+  "blocked_history": {
+    "resolved": "2026-11-17 after machine restart; post-crash tsc clean, unit 6672 pass",
+    "since": "2026-11-17",
+    "reason": "host shell EIO: every Bash call (lead and subagents) fails opening its task-output file; serena MCP fallback unreachable (connect timeout). File Read/Write still work.",
+    "resume_point": "S1: Opus review clean; Fable cross-review findings #1-#4 fixed in working tree (unit 6672 pass, tsc clean, reported before fault). Pending: (1) make test-e2e-groups on a wiped relay to verify the scoped smoke spec runs green after the other groups-* specs and to record pre-existing bucket failures; (2) Fable re-review of the 4 fixes; (3) S1 verification examiners; (4) mark S1 complete; then S2.",
+    "deferred_s1_findings": [
+      "engines.node>=22 in app/package.json (optional)",
+      "Makefile/CLAUDE.md e2e counts drift (+3 smoke tests until S27) -> S29"
+    ]
+  },
+  "deferred_human_review_runtime": [
+    "Library issue for @941design/nostr-events maintainers: the simple-pool transport de-duplicates by event id BEFORE signature verification, so a relay sending a forged event that reuses a genuine event id first gets the forgery rejected AND the genuine event dropped as a duplicate (message-suppression by a hostile relay). Found by app/tests/unit/marmot/client/transport.forgery.harness.test.ts. Not fixable in-app without a custom verifier (AC-TRANS-1 forbids one)."
+  ]
+}

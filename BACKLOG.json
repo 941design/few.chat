@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updated_at": "2026-11-10T00:12:12Z",
+  "updated_at": "2026-11-17T08:07:18Z",
   "epics": [
     {
       "path": "specs/epic-cancel-pending-invitations/",
@@ -260,6 +260,11 @@
     {
       "path": "specs/epic-backup-restore-reliability/",
       "status": "DONE"
+    },
+    {
+      "path": "specs/epic-marmot-library-adoption/",
+      "status": "IN_PROGRESS",
+      "next_action": "created 2026-11-17"
     }
   ],
   "findings": [

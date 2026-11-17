@@ -1,0 +1,78 @@
+{
+  "story_id": "S8",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S8-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S8 (Invite flow with single-candidate key-package lookup), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/invitations/index.ts; app/src/lib/marmot/invitations/keyPackageLookup.ts; app/src/lib/marmot/invitations/invite.ts; app/tests/unit/marmot/invitations/keyPackageLookup.test.ts; app/tests/unit/marmot/invitations/invite.harness.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S8-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `invitations` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S8-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S8 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S8-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S8's scope (app/src/lib/marmot/invitations/index.ts; app/src/lib/marmot/invitations/keyPackageLookup.ts; app/src/lib/marmot/invitations/invite.ts; app/tests/unit/marmot/invitations/keyPackageLookup.test.ts; app/tests/unit/marmot/invitations/invite.harness.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S8-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S8 implementation match the intent of its scope (invitations/ module: kind-30443 lookup via transport.requestWithDeadline over union of invitee 10050 relays, 10002 write relays and defaults; order by created_at desc, tie lower id; one-event group.invite with invalid-options fall-through; 'no usable key package'; harness invite/accept round trip. k) and respect its exclusions (Pending view / deny / caps (S9); Invite-context send (S10))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S8-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S8 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S8-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KP-1",
+      "question": "Seam contract KeyPackageInvite (consumed beyond S8; consumers: S12): does the delivered artifact at app/src/lib/marmot/invitations/invite.ts expose exactly the declared shape (fields: inviteByPubkey: (group: MarmotGroup, pubkey: string) => Promise<InviteOutcome | {error:'no usable key package'}>) and uphold each invariant (group.invite receives exactly one key-package event; candidates ordered created_at desc, tie lower event id; invalid-options falls through to next candidate; exhaustion yields 'no usable key package')? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S8-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KP-1",
+      "question": "AC-KP-1: Invite MUST call `group.invite` with exactly one key-package event per call. Given candidates `[c1,c2,c3]` ordered `created_at` desc (tie: lower event id first), when `c1` yields `invalid-options` the lookup MUST call `invite([c2])` next, and on success stop. When all candidates are exhausted the result MUST be the error `no usable key package`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + harness] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S8-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KP-2",
+      "question": "AC-KP-2: The key-package lookup MUST query `transport.requestWithDeadline` with filter `{kinds:[30443], authors:[pk]}` over the union of the invitee's kind-10050 relays, kind-10002 write relays and the app defaults (deduplicated). \"No key package found\" MUST be reported on EOSE-with-empty-result or deadline. `keyPackages.observe` MUST NOT be called. This preserves commit aa39de3: an invitee advertising a relay outside the defaults MUST be found. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (recording transport)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S8-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KP-3",
+      "question": "AC-KP-3: Tie-breaking: two candidates with equal `created_at` MUST be ordered by lexicographically lower event id first. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S8-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-INV-1",
+      "question": "AC-INV-1: Library harness: Alice creates a group (`groups.create(name)`), invites Bob via the key-package lookup, Bob's `invitations.pending()` contains one invitation with Alice as `sponsorAccount`, `invitations.accept(id)` makes Bob a member, and both see each other in `group.members()`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness; e2e:groups-lifecycle, groups-welcome (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

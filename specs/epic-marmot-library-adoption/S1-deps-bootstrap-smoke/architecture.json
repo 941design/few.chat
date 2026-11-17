@@ -1,0 +1,154 @@
+{
+  "module_name": "client",
+  "purpose": "Builds and owns the one MarmotClient per account: signer adapter (fromForeignSigner/APPLESAUCE_SHAPE, budgets, nip44 + secure-context gates), SimplePool transport, per-account IndexedDB stores + lease, createMarmotClient with timing options, ordered startup (listeners, inbox handlers, groups.list, group notifications, inbox.start, key-package ensure, injected kind-10050 ensure), owned setTimeout(0) FIFO, teardown.",
+  "public_api": [
+    {
+      "name": "bootstrapAccountClient",
+      "signature": "(input: BootstrapInput) => Promise<BootstrapResult>",
+      "description": "Runs the gated, ordered startup; resolves ready | unsupported(insecure-context|nip44) | lease-held; throws TypeError for a missing collaborator; releases everything acquired on a fatal step failure."
+    },
+    {
+      "name": "AccountClientHandle",
+      "signature": "{ client: MarmotClient; pubkey: string; leaseHeld: () => boolean; enqueue: ClientJobQueue['enqueue'] }",
+      "description": "Seam handle injected into feature modules (exactly these four fields)."
+    },
+    {
+      "name": "AccountClient",
+      "signature": "{ handle; stores: WritableStores; groups; ensure; attachGroup(group): void; queue: JobQueue; teardown(): Promise<void> }",
+      "description": "What a ready bootstrap yields; attachGroup wires the notification listener for groups created/joined later."
+    },
+    {
+      "name": "ClientJobQueue / createJobQueue",
+      "signature": "{ enqueue: (job: () => Promise<void>) => void } / (opts?) => JobQueue",
+      "description": "Owned FIFO: setTimeout(0) start, one at a time, enqueue order, rejecting job does not stall."
+    },
+    {
+      "name": "InboxRelayListEnsure",
+      "signature": "{ ensure: (ctx: { pubkey: string; relays: string[] }) => Promise<void> }",
+      "description": "Port for the kind-10050 ensure; called once, after key-package ensure (policy owned by S16)."
+    },
+    {
+      "name": "createAccountSigner / budgetPolicyFor / signerSupportsNip44",
+      "signature": "({eventSigner, kind}) => {status:'ready',signer,budget}|{status:'unsupported',reason:'nip44'}",
+      "description": "fromForeignSigner(APPLESAUCE_SHAPE) wrap; budget none for local, timeout budget for nip07/nip46."
+    },
+    {
+      "name": "createClientTransport",
+      "signature": "({relays, createPool?}) => {transport, pool, closePool}",
+      "description": "createSimplePoolNetwork({pool}).asTransportContract() over an app-owned SimplePool; no verifier; closePool destroys the pool once."
+    },
+    {
+      "name": "openAccountStores",
+      "signature": "(pubkey, backend?, opts?) => Promise<{status:'opened',stores}|{status:'lease-held'}>",
+      "description": "createIndexedDbStorage().openForWrite(pubkey); lease-held reported as a value."
+    },
+    {
+      "name": "ensureKeyPackage",
+      "signature": "(client) => Promise<'created'|'present'>",
+      "description": "count()==0 -> create({lastResort:true}) once, else none."
+    },
+    {
+      "name": "createTeardown",
+      "signature": "(parts) => () => Promise<void>",
+      "description": "queue dispose, unsubscribe listeners, client.dispose(), await stores.close(), pool close; idempotent; runs every step."
+    },
+    {
+      "name": "CLIENT_TIMING_OPTIONS / INBOX_HANDLER_KINDS / CLIENT_EVENT_NAMES",
+      "signature": "constants",
+      "description": "leaveTimeoutMs 10000, removalSettleMs 5000; kinds 21059/21064; the six app-visible client events."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/client/index.ts",
+    "app/src/lib/marmot/client/createClient.ts",
+    "app/src/lib/marmot/client/signerAdapter.ts",
+    "app/src/lib/marmot/client/transport.ts",
+    "app/src/lib/marmot/client/storage.ts",
+    "app/src/lib/marmot/client/lifecycle.ts",
+    "app/src/lib/marmot/client/fifo.ts",
+    "app/src/lib/marmot/client/keyPackageEnsure.ts"
+  ],
+  "owned_data": [
+    "library account DB marmot:<pubkey> (opaque, library-owned; opened only by client/)"
+  ],
+  "dependencies_allowed": [
+    "@941design/marmot",
+    "@941design/marmot/storage",
+    "@941design/marmot/storage/indexeddb",
+    "@941design/nostr-events/signer",
+    "@941design/nostr-events/signer/adapters",
+    "@941design/nostr-events/signer/budget",
+    "@941design/nostr-events/transport/simple-pool",
+    "@941design/nostr-events/transport/contract",
+    "nostr-tools/pool"
+  ],
+  "dependencies_forbidden": [
+    "@internet-privacy/marmot-ts",
+    "ts-mls",
+    "@nostr-dev-kit/ndk",
+    "applesauce-core",
+    "idb-keyval",
+    "react",
+    "app/src/context/**",
+    "app/src/lib/marmot/* (old flow modules)",
+    "app/src/lib/ndkClient"
+  ],
+  "external_ports": [
+    "IndexedDB (via @941design/marmot/storage/indexeddb, per-account Web Lock lease)",
+    "relays over WebSocket (SimplePool)",
+    "injected: HistoryBackend (S3 sink), client event handlers, inbox handlers (21059, 21064), group notification callback, InboxRelayListEnsure (S16)"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "groupRemoved",
+    "inboxDisposition",
+    "welcomeDeclined",
+    "intentFailed",
+    "storeIncompatible",
+    "groupBranchSwitched (client.on, forwarded to injected handlers)",
+    "group notifications (group.onNotification, forwarded)",
+    "inbox rumors of kinds 21059 and 21064 (registerInboxHandler, forwarded)"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/client/fifo.test.ts",
+    "app/tests/unit/marmot/client/signerAdapter.test.ts",
+    "app/tests/unit/marmot/client/transport.test.ts",
+    "app/tests/unit/marmot/client/lifecycle.test.ts",
+    "app/tests/unit/marmot/client/bootstrap.sequence.test.ts",
+    "app/tests/unit/marmot/client/bootstrap.harness.test.ts",
+    "app/tests/unit/marmot/client/historySink.assumptions.harness.test.ts",
+    "app/tests/unit/marmot/client/importSafety.test.ts",
+    "app/tests/unit/marmot/client/importBoundary.test.ts",
+    "app/tests/unit/depsResolve.test.ts",
+    "app/tests/e2e/groups-library-smoke.spec.ts"
+  ],
+  "seams": [
+    {
+      "name": "AccountClientHandle",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S13"
+        ]
+      }
+    },
+    {
+      "name": "ClientJobQueue",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S5"
+        ]
+      }
+    },
+    {
+      "name": "InboxRelayListEnsure",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S16"
+        ]
+      }
+    }
+  ]
+}

@@ -1015,6 +1015,23 @@ export function MarmotProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // TEMPORARY (marmot-library-adoption D15, removed in the last story): installs the
+  // dev-only `window.__fewTest.groupLibrary` smoke hook for groups-library-smoke.spec.ts.
+  // The dev check goes through a variable on purpose: a literal
+  // `if (process.env.NODE_ENV !== 'production')` is dead-code-eliminated at build time,
+  // which would keep @941design/marmot out of the production bundle and make
+  // `make build` a vacuous bundling proof. This way the library (client/ module) is
+  // always bundled and only *executed* in dev.
+  useEffect(() => {
+    const smokeHookEnabled = process.env.NODE_ENV !== 'production';
+    if (!smokeHookEnabled || typeof window === 'undefined') return;
+    void import('@/src/lib/testHooks/groupLibrary')
+      .then(({ installGroupLibraryHook }) => {
+        installGroupLibraryHook();
+      })
+      .catch((e) => console.warn('[groupLibrary] hook install failed', e));
+  }, []);
+
   // AC-023: App-start sweep — runs sweepStaleProfiles exactly once after
   // ready, groups, and pubkeyHex are all set. The ref guard prevents re-runs
   // if React re-renders when any of those dependencies change independently.

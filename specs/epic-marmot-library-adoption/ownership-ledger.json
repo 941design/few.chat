@@ -1,0 +1,185 @@
+{
+  "epic": "marmot-library-adoption",
+  "concepts": [
+    {
+      "id": "client",
+      "name": "One MarmotClient per account, built only in browser effects, lease-bound writes",
+      "owning_module": "client",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "history",
+      "name": "Durable at-least-once, seq-ordered sink idempotent by kind-445 event id",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "handlers",
+      "name": "Group handlers take sender only from orderingKey.account",
+      "owning_module": "handlers",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "send",
+      "name": "sendGroupRumor canonical rumor id equals sink echo id",
+      "owning_module": "send",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "invitations",
+      "name": "Pending store is invitations.pending(); deny layer, caps, single-candidate invite",
+      "owning_module": "invitations",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "join-requests",
+      "name": "Join-request protocol on the library inbox, auto-accept at most once",
+      "owning_module": "joinRequests",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "membership",
+      "name": "Leave eligibility, admin ops, local purge (abandon)",
+      "owning_module": "membership",
+      "type": "validation_rule",
+      "added_by_story": null
+    },
+    {
+      "id": "kinds",
+      "name": "App/inbox/retired kind registry with import-time collision check",
+      "owning_module": "kinds",
+      "type": "naming_scheme",
+      "added_by_story": null
+    },
+    {
+      "id": "media",
+      "name": "Encrypted media via group.encryptMedia/decryptMedia, Blossom upload",
+      "owning_module": "media",
+      "type": "path_convention",
+      "added_by_story": null
+    },
+    {
+      "id": "backup",
+      "name": "Backup payload has settings and own profile only; NIP-44 to own key",
+      "owning_module": "backup",
+      "type": "invariant",
+      "added_by_story": null
+    },
+    {
+      "id": "marmot-context",
+      "name": "Thin composition root exposing useMarmot() with no protocol logic",
+      "owning_module": "MarmotContext",
+      "type": "public_contract",
+      "added_by_story": null
+    },
+    {
+      "id": "client.AccountClientHandle",
+      "name": "{client,pubkey,leaseHeld,enqueue}; leaseHeld reads stores.lease.held",
+      "owning_module": "client",
+      "type": "public_contract",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "client.ClientJobQueue",
+      "name": "setTimeout(0) FIFO, one job at a time; a job starts after the enqueuing synchronous frame returns (not after the surface settles) — enqueue as last action",
+      "owning_module": "client",
+      "type": "invariant",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "client.InboxRelayListEnsure",
+      "name": "kind-10050 ensure port, called once after key-package ensure, non-fatal",
+      "owning_module": "client",
+      "type": "public_contract",
+      "added_by_story": "S1",
+      "consumer": "S16"
+    },
+    {
+      "id": "client.bootstrap-order",
+      "name": "gates > openForWrite > createMarmotClient > listeners > inbox handlers 21059/21064 > groups.list > onNotification > inbox.start > KP ensure > 10050 ensure; abortable; fatal step runs contract-order teardown",
+      "owning_module": "client",
+      "type": "invariant",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "client.teardown-order",
+      "name": "queue.dispose > unsubscribe > client.dispose > stores.close > pool.destroy; idempotent",
+      "owning_module": "client",
+      "type": "invariant",
+      "added_by_story": "S1"
+    },
+    {
+      "id": "client.inbox-kinds-local",
+      "name": "INBOX_HANDLER_KINDS defined locally in client; S2 must replace with AppKinds",
+      "owning_module": "client",
+      "type": "naming_scheme",
+      "added_by_story": "S1",
+      "resolve_in": "S2"
+    },
+    {
+      "id": "testhooks.groupLibrary-smoke",
+      "name": "Dev-only __fewTest.groupLibrary hook installed from MarmotContext.tsx; S18 must keep it; S27 removes it",
+      "owning_module": "testHooks",
+      "type": "path_convention",
+      "added_by_story": "S1",
+      "remove_in": "S27"
+    },
+    {
+      "id": "library.own-confirmed-withdraw",
+      "name": "Own message confirmed on a branch that later loses IS withdrawn through the sink → failed/retry (AC-WDR-2); detection triggers never downgrade confirmed rows",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S1",
+      "affects": [
+        "S3",
+        "S5",
+        "S6"
+      ]
+    },
+    {
+      "id": "client.group-attach",
+      "name": "Notification listeners attach per handle (WeakSet), automatically on groupCreated/groupJoined via FIFO; attachGroup idempotent fallback, no-op after teardown",
+      "owning_module": "client",
+      "type": "invariant",
+      "added_by_story": "S1"
+    }
+  ],
+  "stories": [
+    {
+      "id": "S1",
+      "surfaces_touched": [
+        "app/src/lib/marmot/client/*",
+        "app/src/lib/testHooks/{groupLibrary,recordingHistoryBackend}.ts",
+        "app/src/context/MarmotContext.tsx (dev smoke-hook effect only)",
+        "app/src/lib/i18n.ts",
+        "app/next.config.mjs",
+        "app/package.json",
+        "app/package-lock.json"
+      ],
+      "concepts_owned": [
+        "client",
+        "client.AccountClientHandle",
+        "client.ClientJobQueue",
+        "client.InboxRelayListEnsure"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S2": "replace INBOX_HANDLER_KINDS with AppKinds",
+        "S3/S5": "handlers enqueue as last action after own awaits; Node harness shows violations as queuedJob reentrant — add a harness test documenting it",
+        "S6": "own confirmed message withdrawn -> failed/retry (AC-WDR-2); detection triggers never downgrade confirmed",
+        "S17": "lease-held right after a same-tab abort is retryable (LeaseState waiting); call attachGroup after any reload/restore that yields a new handle; consider racing getPublicKey/inbox.start against abort",
+        "S18": "pass AbortSignal from effect cleanup; handle aborted and signer-timeout results; keep groupLibrary dev-hook effect until S27"
+      }
+    }
+  ],
+  "reviewer_state": {
+    "last_story_reviewed": "S1",
+    "model_at": "2026-11-17T08:15:41Z"
+  }
+}

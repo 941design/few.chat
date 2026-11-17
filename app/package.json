@@ -15,6 +15,9 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@941design/marmot": "0.2.0-alpha.0",
+    "@941design/marmot-engine": "0.2.0-alpha.0",
+    "@941design/nostr-events": "0.2.0-alpha.0",
     "@chakra-ui/react": "^2.10.9",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
@@ -37,7 +40,7 @@
     "idb-keyval": "^6.2.2",
     "mustache": "^4.2.0",
     "next": "14.2.35",
-    "nostr-tools": "^2.23.0",
+    "nostr-tools": "2.23.3",
     "qr-scanner": "^1.4.2",
     "qrcode": "^1.5.4",
     "react": "^18",

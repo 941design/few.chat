@@ -106,6 +106,8 @@ export type Copy = {
   groups: {
     pageTitle: string;
     heading: string;
+    /** Shown when the account's signer cannot do NIP-44 (group features are unsupported; no fallback encryption). */
+    unsupportedNip44: string;
     noGroups: string;
     noGroupsBody: string;
     createGroup: string;
@@ -806,6 +808,7 @@ const copy: Record<LanguageCode, Copy> = {
     groups: {
       pageTitle: 'Groups',
       heading: 'Groups',
+      unsupportedNip44: 'Groups are unavailable: your signer does not support NIP-44 encryption, which group chats require.',
       noGroups: 'You are not in any groups yet.',
       noGroupsBody: 'Create a group or wait for an invitation from a friend.',
       createGroup: 'Create Group',
@@ -1393,6 +1396,7 @@ const copy: Record<LanguageCode, Copy> = {
     groups: {
       pageTitle: 'Gruppen',
       heading: 'Gruppen',
+      unsupportedNip44: 'Gruppen sind nicht verfügbar: Dein Signer unterstützt keine NIP-44-Verschlüsselung, die Gruppenchats benötigen.',
       noGroups: 'Du bist noch in keiner Gruppe.',
       noGroupsBody: 'Erstelle eine Gruppe oder warte auf eine Einladung von einem Freund.',
       createGroup: 'Gruppe erstellen',

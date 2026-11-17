@@ -1,0 +1,85 @@
+{
+  "story_id": "S2",
+  "authored_by": "story-planner",
+  "authored_at": "2026-11-17T08:19:50Z",
+  "questions": [
+    {
+      "question_id": "VQ-S2-001",
+      "phase": "pre-impl",
+      "category": "QUALITY",
+      "question": "In story S2 (Kind registry with collision check and NIP-46 permission set), is there any vacuous or placeholder production path: a no-op/stub body, a tautological assertion, a frozen stand-in constant, or an optional dependency (injected port, handler, client handle) that silently degrades to non-behavior when not injected? Cite file:line for each injection point in app/src/lib/marmot/kinds.ts; app/src/lib/nostrPermissions or existing NIP-46 perms module (pure builder + discard predicate); app/tests/unit/marmot/kinds.test.ts; app/tests/unit/nip46Perms.test.ts and show that omitting the dependency fails loudly rather than succeeding silently."
+    },
+    {
+      "question_id": "VQ-S2-002",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Could `kinds` be deleted and rewritten without modifying any file outside its `dependencies_allowed` list? If not, which cross-module dependencies exist and do they flow through declared seam contracts in architecture.md (imports only via each module's index.ts, no React-context imports under app/src/lib/marmot/**, no ts-mls or @internet-privacy/marmot-ts imports)?"
+    },
+    {
+      "question_id": "VQ-S2-003",
+      "phase": "pre-impl",
+      "category": "ARCHITECTURE",
+      "question": "Does S2 comply with the architecture.md boundary rules: only `client/` constructs or disposes the MarmotClient, code inside HistoryBackend calls / inbox handlers / client listeners never awaits an account-scope client call (follow-up work via the owned setTimeout(0) FIFO), group sender identity comes only from orderingKey.account, and idb-keyval update() is not used? List each rule touched by this story's files with file:line evidence, or state why it is not touched."
+    },
+    {
+      "question_id": "VQ-S2-004",
+      "phase": "pre-impl",
+      "category": "TEST",
+      "question": "Do unit, property, and (where the AC names them) library-harness or e2e tests cover the artifacts named in S2's scope (app/src/lib/marmot/kinds.ts; app/src/lib/nostrPermissions or existing NIP-46 perms module (pure builder + discard predicate); app/tests/unit/marmot/kinds.test.ts; app/tests/unit/nip46Perms.test.ts)? Show that tests use real collaborators or test fixtures rather than mocking the helper used at the SUT call site, that idb mocks are seeded out of key order where order matters, and that at least one test fails if the production code is replaced by a no-op."
+    },
+    {
+      "question_id": "VQ-S2-005",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "question": "Does the delivered S2 implementation match the intent of its scope (kinds.ts exporting app rumor kinds, app inbox kinds (incl. 21064 invite context), retired kinds (13, 21063) and RUMOR_KINDS-derived reserved kinds, throwing at import on any collision. Pure NIP-46 requested-permission builder (union of permissions.toNip46Perms() and sign_event:0/20602/30078/10050) a) and respect its exclusions (Wiring the permission set into NostrIdentityContext (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+    },
+    {
+      "question_id": "VQ-S2-006",
+      "phase": "pre-impl",
+      "category": "SECURITY",
+      "question": "Which trust or validation boundaries does S2 touch (signer budget/permissions, relay-supplied events, rumor sender/pubkey attribution, invite/join payloads, privacy invariant that no profile metadata is published to public relays)? Show the validation or defensive check at each boundary with file:line evidence and a test that feeds a malformed or hostile input and observes rejection."
+    },
+    {
+      "question_id": "VQ-S2-007",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KIND-1",
+      "question": "Seam contract AppKinds (consumed beyond S2; consumers: S3): does the delivered artifact at app/src/lib/marmot/kinds.ts expose exactly the declared shape (fields: APP_RUMOR_KINDS: readonly [0,5,7,9,10,11,12,30]; APP_INBOX_KINDS: {joinRequest:21059,pairingAck:21060,dmProfile:[21061,21062],inviteContext:21064}; RETIRED_KINDS: readonly [13,21063]; RESERVED_KINDS: values of RUMOR_KINDS) and uphold each invariant (no two app kinds equal; none equals a RUMOR_KINDS value or retired kind (module throws at import); inviteContext === 21064)? Show the type/definition with file:line and a test asserting each invariant, including enum/constant membership and value ranges where the contract constrains them."
+    },
+    {
+      "question_id": "VQ-S2-008",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KIND-1",
+      "question": "AC-KIND-1: Importing `app/src/lib/marmot/kinds.ts` MUST throw when any two app kinds are equal, when an app kind equals a value in `RUMOR_KINDS`, or when an app kind equals a retired kind (13, 21063). Tested by importing the module with mocked registry inputs for each of the three collisions (each throws with a message naming the kinds) and a clean import not throwing. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S2-009",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KIND-2",
+      "question": "AC-KIND-2: The registry MUST export: app rumor kinds {0,5,7,9,10,11,12,30}, app inbox kinds {21059 join request, 21060 pairing ack, 21061, 21062, 21064 invite context}, retired {13, 21063}; library-reserved values MUST be taken from `RUMOR_KINDS` (no literal copies: grep for `4460|4461|4462` literals outside the registry test returns none). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit + structural] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S2-010",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-KIND-3",
+      "question": "AC-KIND-3: The invite-context kind MUST equal 21064 and MUST NOT be in 4460–4462 or 21059–21063. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S2-011",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SIGN-3",
+      "question": "AC-SIGN-3: The NIP-46 requested-permission list MUST equal the union of `permissions.toNip46Perms()` and exactly `sign_event:0`, `sign_event:20602`, `sign_event:30078`, `sign_event:10050`; it MUST NOT contain `sign_event` for 443, 444, 445, 1059, 10051 or 30051. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (exact set equality)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S2-012",
+      "phase": "pre-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SIGN-4",
+      "question": "AC-SIGN-4: A stored NIP-46 session whose granted perms equal the old set (including 30051/443/444) MUST be discarded on load (stored session cleared, user routed to reconnect); a stored session whose granted perms cover the new set MUST be kept. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    }
+  ]
+}

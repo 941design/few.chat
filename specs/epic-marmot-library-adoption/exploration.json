@@ -1,0 +1,27 @@
+{
+  "created_at": "2026-11-17T08:07:44Z",
+  "reports": {
+    "library-api": "specs/epic-marmot-library-adoption/exploration/marmot-lib-api.md",
+    "app-inventory": "specs/epic-marmot-library-adoption/exploration/app-marmot-inventory.md",
+    "testing-and-conventions": "specs/epic-marmot-library-adoption/exploration/test-infra.md",
+    "prior-learnings": "specs/epic-marmot-library-adoption/exploration/prior-learnings.md"
+  },
+  "library_typings_note": "The library is not yet installed in app/node_modules. Story 1 installs it; after that, read typings at app/node_modules/@941design/marmot/dist (client/create-client.d.ts is the core contract; history/index.d.ts the HistoryBackend contract).",
+  "key_findings": [
+    "MarmotContext.tsx (3096 lines) is the composition root; ~14.6k lines of hand-rolled plumbing in app/src/lib/marmot.",
+    "Library owns 445 group sync (auto-started by groups.list/create/accept) and the 1059 inbox (inbox.start()); one client per account; per-account IndexedDB with exclusive Web-Lock lease.",
+    "HistoryBackend is the durable at-least-once ordered delivery seam (5 attempts, 10s timeout, idempotent by kind-445 eventId) — replaces rumorJournal + applicationRumorDispatcher.",
+    "Engine binds rumor.pubkey to MLS-authenticated sender; orderingKey.account is the sender.",
+    "Own messages echo back as confirmed message notifications; abandoned own sends are never announced.",
+    "group.invite takes key-package EVENTS (kind 30443), one leaf per event, whole call rejects on any invalid event.",
+    "No public KP fetch; no disband initiation; no pending-invite group name; no NDK adapters (use createSimplePoolNetwork + fromForeignSigner APPLESAUCE_SHAPE).",
+    "Inbox handlers run inside a re-entrancy frame: record and return; follow-up client calls via setTimeout(0), never microtasks.",
+    "Loaded groups refuse invite/removeMember/setAdmins/rename/leave with commit-pending until group.synced().",
+    "next.config.mjs routes ts-mls/marmot-ts/@hpke/@noble/post-quantum through next-swc-loader and sets swcMinify:false; tsconfig moduleResolution bundler.",
+    "Unit tests: vitest 4, tests/unit/**/*.test.ts, no jsdom; 161 files reference marmot-ts/ts-mls or src/lib/marmot/MarmotContext; many are source-scan tests.",
+    "E2E: relay bucket = groups-*/dm-* filenames; helpers in app/tests/e2e/helpers/group-setup.ts; __fewTest hooks used by several specs; definitive gate make test (unit + make test-e2e-all)."
+  ],
+  "retro_stub_path": "/home/mrother.guest/.claude/plugins/data/base-941design/retros/quizzl/marmot-library-adoption-2026-11-17-0810.stub.md",
+  "learnings_source_run_id": "feature-marmot-library-adoption-2026-11-17-0810",
+  "prior_learnings": "see reports.prior-learnings (10 entries incl. 8 @941design/marmot quirks)"
+}
