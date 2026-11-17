@@ -444,10 +444,24 @@
         "S16": "MarmotContext.tsx (~1628, ~2958) still signs kind 30051 with the account key; it is NOT in the NIP-46 requested set (AC-SIGN-3) — S16 must remove that publish (AC-REL-3); until then it is silently refused under permission-enforcing bunkers",
         "S18/S22": "consider a media/index.ts public surface; nip46Perms imports dependency-free kind constant modules (calls/callKinds.ts, media/blossomAuthKind.ts)"
       }
+    },
+    {
+      "id": "S8",
+      "concepts_owned": [
+        "invitations.keyPackageLookup",
+        "invitations.invite"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S12": "call inviteByPubkey only from a handle.enqueue job; handle {error:already-member} distinctly (one leaf per invited account is guarded inside the KeyPackageInvite seam)",
+        "S16": "relay-URL validation: user-configured relays (relay.ts) vs invitee-advertised (strict routable wss) — keep one shared routable-host rule with the media guard; 10050 publish must not advertise local/private hosts",
+        "S18": "build the lookup from the client transport requestWithDeadline + configured relays; allowLocalAdvertised only in e2e builds",
+        "S22": "delete legacy src/lib/marmot/inviteeKeyPackageLookup.ts (double owner with invitations/keyPackageLookup.ts until cut-over)"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S6",
+    "last_story_reviewed": "S8",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

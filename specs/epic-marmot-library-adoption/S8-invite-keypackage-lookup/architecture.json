@@ -1,0 +1,93 @@
+{
+  "module_name": "invitations",
+  "purpose": "Invite side of the invitation flow: find an invitee's kind-30443 key packages over the union of the invitee's advertised relays (kind 10050, kind 10002 write set) and the app defaults, order the candidates deterministically, and call group.invite with exactly one key-package event per call through the S6 GroupOpQueue. S9/S10/S11 later add the pending view, deny layer and invite context to the same module.",
+  "public_api": [
+    {
+      "name": "createKeyPackageLookup",
+      "signature": "(deps: { transport: Pick<TransportContract,'requestWithDeadline'>; defaultRelays: readonly string[]; timeoutMs?: number; allowLocalAdvertised?: boolean; verifyEvent?: (e: NostrEvent) => boolean }) => KeyPackageLookup",
+      "description": "Validates its ports at construction (TypeError). lookup(pubkey, {signal}) reads relay lists (10050 / 10002) then kind-30443 events via transport.requestWithDeadline and returns ordered, verified candidates or a none-found / timed-out result. Read-only: publishes nothing."
+    },
+    {
+      "name": "allowLocalAdvertised",
+      "signature": "createKeyPackageLookup dep: boolean (default false)",
+      "description": "TESTS ONLY: accept invitee-advertised ws:// / loopback / private hosts (credentials stay refused). Production leaves it unset."
+    },
+    {
+      "name": "orderKeyPackageCandidates",
+      "signature": "(events: readonly NostrEvent[]) => NostrEvent[]",
+      "description": "created_at descending, tie lower lexicographic event id first; pure."
+    },
+    {
+      "name": "createKeyPackageInviter",
+      "signature": "(deps: { lookup: KeyPackageLookup; queue: GroupOpQueue }) => KeyPackageInviter",
+      "description": "Validates its ports at construction. inviteByPubkey(group, pubkey, opts?) pre-checks group.leaves(pubkey) (already-member without any lookup), runs the lookup outside the queue, then one queue.runCommit(group, () => group.invite([candidate])) per candidate: invalid-options falls through, success stops, an in-queue group.leaves re-check after synced() is authoritative; exhaustion yields {error:'no usable key package'}."
+    },
+    {
+      "name": "KeyPackageInviter.inviteByPubkey",
+      "signature": "(group: InviteGroup, pubkey: string, opts?: InviteOptions) => Promise<InviteOutcome | NoUsableKeyPackage | AlreadyMember>",
+      "description": "Seam KeyPackageInvite (consumer S12). Other errors (GroupOpError not-synced/aborted, commit-pending reasons the queue surfaces, not-admin) are thrown unchanged."
+    },
+    {
+      "name": "AlreadyMember",
+      "signature": "{ error: 'already-member' }",
+      "description": "Returned (not thrown) when the invitee already holds a leaf of the group: from a cheap pre-check before any lookup, and from the authoritative re-check inside the queued op after synced(). group.invite is never called."
+    },
+    {
+      "name": "InviteOptions",
+      "signature": "{ signal?: AbortSignal; syncTimeoutMs?: number }",
+      "description": "Options of inviteByPubkey."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/invitations/keyPackageLookup.ts",
+    "app/src/lib/marmot/invitations/invite.ts"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "send (GroupOpQueue type via send/index.ts only)",
+    "@941design/marmot (types, isMarmotError)",
+    "@941design/nostr-events (event / transport/contract types, parsers)",
+    "nostr-tools/pure (verifyEvent)",
+    "app/src/lib/relay.ts"
+  ],
+  "dependencies_forbidden": [
+    "client (the transport and queue are injected; invitations never constructs or disposes the MarmotClient)",
+    "any React context under src/context",
+    "@internet-privacy/marmot-ts",
+    "ts-mls",
+    "keyPackages.observe",
+    "idb-keyval update()"
+  ],
+  "external_ports": [
+    "transport.requestWithDeadline (read-only: kinds 10050, 10002, 30443)",
+    "group.invite (via GroupOpQueue.runCommit)"
+  ],
+  "events_emitted": [],
+  "events_consumed": [],
+  "seams": [
+    {
+      "name": "KeyPackageInvite",
+      "role": "producer",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S12"
+        ]
+      }
+    },
+    {
+      "name": "GroupOpQueue",
+      "role": "consumer",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S6"
+        ]
+      }
+    }
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/invitations/keyPackageLookup.test.ts",
+    "app/tests/unit/marmot/invitations/invite.harness.test.ts"
+  ]
+}

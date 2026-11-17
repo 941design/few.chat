@@ -17,6 +17,7 @@
     "tests/unit/marmot/history/**/*.ts",
     "tests/unit/marmot/handlers/**/*.ts",
     "tests/unit/marmot/send/**/*.ts",
+    "tests/unit/marmot/invitations/**/*.ts",
     "tests/unit/media/group*.test.ts",
     "tests/unit/media/blossomClient.test.ts",
     "tests/unit/marmot/media.harness.test.ts",

@@ -73,6 +73,30 @@
       "category": "SPEC",
       "ac_id": "AC-INV-1",
       "question": "AC-INV-1: Library harness: Alice creates a group (`groups.create(name)`), invites Bob via the key-package lookup, Bob's `invitations.pending()` contains one invitation with Alice as `sponsorAccount`, `invitations.accept(id)` makes Bob a member, and both see each other in `group.members()`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness; e2e:groups-lifecycle, groups-welcome (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S8-012",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "keyPackageLookup.ts consumes relay-supplied events and invitee-controlled relay lists. Show that (a) events with a foreign author, a kind other than 30443/10050/10002, an invalid signature or a malformed id are dropped (`usable`), (b) advertised relay URLs are validated by normaliseRelayUrl (wss only, ws only on localhost, no credentials) and capped at MAX_ADVERTISED_RELAYS per list, (c) a relay list signed by someone else is ignored, and the tests in keyPackageLookup.test.ts 'hostile relay input' that fail when `verify` is replaced by `() => true` or the cap is removed."
+    },
+    {
+      "question_id": "VQ-S8-013",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "invite.ts treats `invalid-options` as a candidate rejection except details.reason 'not-admin' (a verdict on the caller, thrown at once). Is that classification sound against the library (invitations/invite.js reasons: no-invitees, invalid-keypackage, verifier, ineligible, duplicate; pipeline.js group-level invalid-options without a reason, e.g. 'has no relays to name in its Welcomes', which would walk all candidates and report 'no usable key package' with reason all-rejected)? Decide whether S12 needs a distinct surface for group-level invalid-options."
+    },
+    {
+      "question_id": "VQ-S8-014",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The lookup runs OUTSIDE the GroupOpQueue (only each group.invite attempt is queued) and `inviteByPubkey` must never be called from a library frame (history sink, inbox handler, client listener). Show that no file of invitations/ imports client/ or touches the client handle, that the transport reaches the module only by injection (createKeyPackageLookup validates `transport.requestWithDeadline` at construction), and what S12 must do to call it (handle.enqueue job)."
+    },
+    {
+      "question_id": "VQ-S8-015",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The harness AC-KP-2 test uses two FakeRelays: Bob's bootstrap key package lands only on relay 2, Alice's default is relay 1, and Bob's kind-10002 is published to relay 1 by a separate pool. Confirm the control assertion (lookup none-found before the advertisement) and the mutation result: with the relay union reduced to the defaults, the unit test 'queries exactly ...' and the harness AC-KP-2 test fail (recorded in result.json mutation_spot_checks)."
     }
   ]
 }

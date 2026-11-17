@@ -1,0 +1,77 @@
+{
+  "story_id": "S8",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T19:00:00Z",
+  "files_created": [
+    "app/src/lib/marmot/invitations/index.ts",
+    "app/src/lib/marmot/invitations/keyPackageLookup.ts",
+    "app/src/lib/marmot/invitations/invite.ts",
+    "app/tests/unit/marmot/invitations/keyPackageLookup.test.ts",
+    "app/tests/unit/marmot/invitations/invite.harness.test.ts",
+    "specs/epic-marmot-library-adoption/S8-invite-keypackage-lookup/architecture.json",
+    "specs/epic-marmot-library-adoption/S8-invite-keypackage-lookup/baseline.json",
+    "app/src/lib/marmot/invitations/relayUrlPolicy.ts",
+    "specs/epic-marmot-library-adoption/S8-invite-keypackage-lookup/result.json"
+  ],
+  "files_modified": [
+    "app/tsconfig.tests-marmot.json",
+    "specs/epic-marmot-library-adoption/S8-invite-keypackage-lookup/verification.json"
+  ],
+  "adjacent_fixes": [],
+  "tests_added": {
+    "unit": "keyPackageLookup.test.ts (43): candidate order; lookup filter ({kinds:[30443], authors, limit:6}) and union over 10050 + 10002 write + defaults (a 10002 'read' relay is not queried); none-found vs timed-out; discovery failure/timeout falls back to defaults; a failed key-package request is thrown unchanged; abort forwarded; hostile input (foreign author/kind/bad sig/bad id dropped); relay URL policy (wss://192.168.1.1, ws://localhost:3000, wss://printer.local and other local/private/IP hosts rejected by default, allowLocalAdvertised lifts it, app defaults such as ws://umbrel.local:4848 kept); candidate cap of 6 and no signature verification for junk (verify spy); already-member pre-check (member with no discoverable key package: no lookup request); timeoutMs bound; inviter over the real GroupOpQueue: one event per call, per-candidate reason allowlist (reason-less 'group has no relays', no-invitees, duplicate, foreign eventId thrown unchanged), already-member (checked inside the queued op after synced()), abort normalised to GroupOpError 'aborted'.",
+    "harness": "invite.harness.test.ts (5): AC-INV-1 round trip; no key package -> error value; AC-KP-2 two-relay case (advertised local relay via allowLocalAdvertised); AC-KP-1 real invalid-options fall-through; no double add: Bob accepted and minted a new key package, inviting him again yields {error:'already-member'}, group.invite is not called again, one leaf of Bob (on the pre-fix code the library rejects the second commit as terminal 'Commit cannot contain an Add proposal for someone already in the group')."
+  },
+  "test_counts": {
+    "baseline": 7634,
+    "final": 7682
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": [
+    "invitations"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "New module app/src/lib/marmot/invitations (beside the legacy inviteeKeyPackageLookup.ts, which S22 deletes). keyPackageLookup.ts: createKeyPackageLookup({transport, defaultRelays, timeoutMs?, verifyEvent?}) validates its ports at construction; lookup(pubkey, {signal}) first asks the defaults for the invitee's kind-10050 and kind-10002 (newest of each, parsed with the library's nostr-events parsers: 10050 relay tags, 10002 write set), then requests exactly {kinds:[30443], authors:[pk]} over the de-duplicated union of advertised relays and defaults via transport.requestWithDeadline; events are re-checked (kind, author, id shape, nostr-tools signature) and returned ordered created_at desc / tie lower id; empty result and deadline are reported as none-found / timed-out; keyPackages.observe is never used; read-only. invite.ts: createKeyPackageInviter({lookup, queue}) validates its ports; inviteByPubkey(group, pubkey, {signal, syncTimeoutMs}) does the lookup outside the queue, then one queue.runCommit(group, () => group.invite([candidate])) per candidate: an invalid-options whose details.reason is verifier / invalid-keypackage / ineligible (and eventId, when named, is this candidate) falls through, the first accepted call returns {outcome, keyPackageEventId, attempts}, exhaustion or no key package returns {error:'no usable key package', reason, attempts}; a pubkey that already holds a leaf (group.leaves) yields {error:'already-member'} without calling invite, checked cheaply BEFORE the lookup (no request) and again authoritatively inside the queued op after synced(); every other error (GroupOpError, surfaced commit-pending, publish-failed, not-admin, reason-less invalid-options) is thrown unchanged, and an abort anywhere is GroupOpError 'aborted'. index.ts is the public surface (seam KeyPackageInvite, consumer S12). Privacy: only REQs for kinds 10050/10002/30443 leave the module; nothing about profiles is published. Review hardening: relayUrlPolicy.ts splits the URL policy (app defaults as given via isValidRelayUrl; invitee-advertised wss + public DNS host only); candidates are capped at MAX_KEY_PACKAGE_CANDIDATES = 6 with limit in the filter and cheap checks before signature verification.",
+  "verification": {
+    "unit_full": "make test-unit: tsc -p tsconfig.tests-marmot.json clean, 348 files, 7682 passed, 1 skipped, 0 failed; tsc --noEmit clean",
+    "typecheck": "tsc --noEmit clean; tsc -p tsconfig.tests-marmot.json --noEmit clean",
+    "lint": "NO_LINT",
+    "mutation_spot_checks": "7 scratch-copy mutants (vitest alias to /tmp scratch dir, no stash/checkout), all killed: tie-break removed (KP-3 unit + lookup), group.invite gets all candidates (KP-1 unit + harness), relay union reduced to defaults (KP-2 unit + harness), fall-through removed (unit + harness), queue bypassed (not-synced + serialisation tests), signature verification removed (hostile-input test), created_at order reversed (unit + harness). Review round: the new tests were run against a scratch copy of the pre-fix source (vitest alias, /tmp scratchpad): 14 fail there (double add, reason-less fall-through, advertised local/private relays, cap and verification cost, closeRelays, abort shape, timeoutMs bound, defaults as given)."
+  },
+  "decisions": [
+    "The lookup port is the TransportContract slice {requestWithDeadline} injected by the caller (S18 builds it from the client's transport); invitations/ imports neither client/ nor any React context.",
+    "Relay discovery is best-effort: a failed or timed-out discovery request contributes no relays and the key-package request still runs on the defaults; only an abort rethrows.",
+    "Success value is {outcome: WelcomeOutcome, keyPackageEventId, attempts}; the failure value is {error:'no usable key package', reason: 'none-found'|'timed-out'|'all-rejected', attempts}; the seam's `InviteOutcome | {error}` shape is discriminated by `'error' in r`, the extra fields are additive.",
+    "Signature verification of relay events defaults to nostr-tools verifyEvent (a real check, never a no-op) and is injectable for tests only.",
+    "Advertised relay lists come from kind 10050 (relay tags) and kind 10002 (write set) as D10/D17 say, not the legacy 30051/10051 of commit aa39de3; the behaviour preserved is 'an invitee advertising a relay outside the defaults is found'. Each list is capped at MAX_ADVERTISED_RELAYS = 3 (the legacy cap).",
+    "Relay URL policy split: app-configured defaults are used as given (isValidRelayUrl: ws or wss, canonicalised, de-duplicated) so self-hosted ws://umbrel.local:4848 relays keep working; invitee-advertised URLs must be wss://, credential-free and name a public DNS host (no loopback, RFC 1918, link-local, CGNAT, ULA, .local/.internal/.lan/.home.arpa, single-label names or any literal IP). allowLocalAdvertised (default false) lifts the host/scheme rule and is set only by the harness (FakeRelays on 127.0.0.1). No shared routable-host rule existed (assertDownloadableBlobUrl is an origin allowlist), so the rule lives in invitations/relayUrlPolicy.ts.",
+    "No double add, two checks: inviteByPubkey first does a cheap group.leaves(pubkey) pre-check on the current member list (a holder yields {error:'already-member'} with no lookup request at all), and keeps the authoritative check inside the queued op after the bounded synced() (a leaf that appears while syncing still blocks the invite); group.invite is never called for a holder (the library otherwise adds a second leaf for the account from a rotated key package and the engine rejects the commit as terminal). The InviteGroup port gained `leaves`.",
+    "Rejection allowlist: only invalid-options with details.reason verifier / invalid-keypackage / ineligible (and, when the library names an event, that event is this candidate) falls through. Reason-less invalid-options ('group has no relays'), not-admin, no-invitees and a group-level duplicate are thrown unchanged. This closes the earlier decision_needed (group-level failures no longer end as all-rejected).",
+    "Candidate cap: the key-package filter carries limit 6 and at most MAX_KEY_PACKAGE_CANDIDATES = 6 verified candidates (newest first) are kept. Cheap checks (kind, author, id format, duplicate id) run before signature verification, which runs newest-first and stops at 6 verified; relay lists verify only until the newest valid one.",
+    "Abort is one shape: inviteByPubkey throws GroupOpError('aborted') for a pre-aborted signal and for any lookup failure while the signal is aborted (the queue already did so for later phases).",
+    "There is no closeRelays dependency: pool.close(urls) would also end the inviter's own live subscriptions (e.g. its inbox) on a shared relay URL, so the lookup leaves sockets to the shared pool (see limitations).",
+    "timeoutMs above 2^31-1 is rejected at construction (setTimeout would fire at once)."
+  ],
+  "limitations": [
+    "inviteByPubkey is not re-entrancy safe by itself: callers (S12 approval) must run it from a handle.enqueue job, never from a library frame; documented in invite.ts.",
+    "The lookup does not read kind-5 deletions or the key package's own `relays` tag; group.invite validates the key package itself, so a stale candidate only costs one fall-through.",
+    "The advertised-relay policy is lexical: a public-looking DNS name that resolves to a private address (DNS rebinding) is not caught.",
+    "sockets the shared pool opened to invitee-advertised relays may stay open after the lookup (IP/presence exposure to at most 6 public relays per invite); S18 may route advertised-relay lookups through a short-lived pool",
+    "A hostile relay can still make the inviter verify signatures of newer events it crafted (bounded by what the transport delivers): the cap limits kept candidates, not examined junk with bad signatures.",
+    "A manual re-invite of an account whose invite commit was re-driven after fork loss is still refused by the library (send-rejected) while the re-drive is in flight; the already-member guard covers settled membership only."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "nostr-tools verifyEvent caches its verified mark on the event object (a symbol property), so a spread copy of a signed event with changed content still verifies: hostile-input fixtures must be plain JSON copies. Also the vitest config for scratch-copy mutation checks cannot import 'vitest/config' from /tmp (use a plain .mjs object config with an alias).",
+    "surprised_by": "",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

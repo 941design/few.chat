@@ -146,11 +146,12 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
 ### `KeyPackageInvite` — Single-candidate invite via key-package lookup
 - Producer: S8 `app/src/lib/marmot/invitations/invite.ts` -> Consumer: S12 `app/src/lib/marmot/joinRequestApproval.ts`
 - Fields:
-  - `inviteByPubkey`: `(group: MarmotGroup, pubkey: string) => Promise<InviteOutcome | {error:'no usable key package'}>`
+  - `inviteByPubkey`: `(group: MarmotGroup, pubkey: string, opts?) => Promise<InviteOutcome | {error:'no usable key package', reason, attempts} | {error:'already-member'}>` (`already-member`: the pubkey already holds a leaf of the group, checked inside the queued op after `synced()`; no commit is made)
 - Invariants:
   - group.invite receives exactly one key-package event
   - candidates ordered created_at desc, tie lower event id
-  - invalid-options falls through to next candidate; exhaustion yields 'no usable key package'
+  - only a per-candidate invalid-options (details.reason verifier / invalid-keypackage / ineligible) falls through to the next candidate; any other error (reason-less invalid-options, not-admin, ...) is thrown unchanged; exhaustion yields 'no usable key package'
+  - at most 6 candidates (newest first); advertised relays must be public wss hosts, app-configured defaults are used as given; abort is `GroupOpError('aborted')`
 
 ### `PendingInvitationView` — Pending invitations as the single pending store
 - Producer: S9 `app/src/lib/marmot/invitations/pendingView.ts` -> Consumer: S10 `app/src/lib/marmot/invitations/invitationCardViewModel.ts`
