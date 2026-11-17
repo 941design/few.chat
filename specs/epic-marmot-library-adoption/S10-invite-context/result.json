@@ -1,0 +1,97 @@
+{
+  "story_id": "S10",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T20:40:00Z",
+  "files_created": [
+    "app/src/lib/marmot/invitations/inviteContext.ts",
+    "app/src/lib/marmot/invitations/inviteContextStore.ts",
+    "app/src/lib/marmot/invitations/inviteContextHandler.ts",
+    "app/src/lib/marmot/invitations/invitationCardViewModel.ts",
+    "app/src/lib/marmot/inviteContextIdbPort.ts",
+    "app/tests/unit/marmot/invitations/inviteContext.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextStore.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextIdbPort.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextHandler.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextCard.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContext.harness.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContext.fixtures.ts",
+    "app/tests/unit/marmot/invitations/inviteContext.copy.ts",
+    "specs/epic-marmot-library-adoption/S10-invite-context/architecture.json",
+    "specs/epic-marmot-library-adoption/S10-invite-context/baseline.json",
+    "specs/epic-marmot-library-adoption/S10-invite-context/result.json",
+    "app/tests/unit/marmot/invitations/inviteContextSanitize.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/invitations/index.ts",
+    "app/src/components/groups/InvitationCard.tsx",
+    "specs/epic-marmot-library-adoption/S10-invite-context/verification.json",
+    "app/tests/unit/components/InvitationCard.test.ts"
+  ],
+  "adjacent_fixes": [],
+  "tests_added": {
+    "unit": "inviteContext.test.ts (AC-CTX-1 recording sendInboxRumor, sanitise/cap, strict parse), inviteContextStore.test.ts (AC-CTX-3 exact retained sets after 9 / 65 inserts, 7d+1ms fake time, sponsor validation, deletion on accept/decline/left-pending, dedupe, persistence incl. out-of-seq-order seeding), inviteContextHandler.test.ts (AC-CTX-4 dedupe + no client, AC-BLK-1 ctx leg, hostile matrix), inviteContextCard.test.ts (AC-CTX-2/5 pure view model, live either order, i18n en+de), inviteContextIdbPort.test.ts (idb-keyval port).",
+    "harness": "inviteContext.harness.test.ts (5): real clients over FakeRelay; one extra kind-1059 wrap, no top-level kind 21064, name absent from every stored relay event (AC-PRIV-2); card shows name; accept deletes context; non-sponsor context dropped; failed invite sends no wrap; blocked sponsor dropped with positive control."
+  },
+  "test_counts": {
+    "baseline": 7721,
+    "final": 7907
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": [
+    "invitations"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Sender (inviteContext.ts): createInviteContextSender sends one extensions.sendInboxRumor of kind 21064 (APP_INBOX_KINDS.inviteContext) with content exactly {groupId,name} after a delivered/retryable invite outcome (rumor id = NIP-01 hash), nothing for failed/declined/error values, never throws; createContextSendingInviter decorates the S8 inviter and does not await the context send. Name handling: sanitizeContextName (NFC, invisible format characters removed with ZWJ kept between emoji, controls to space, grapheme-boundary 64 code-point cap, markup literal) and strict parseInviteContextContent that never carries extra keys. Store (inviteContextStore.ts): per-account holding store keyed groupId+sender, dedupe by rumor id (plus bounded tombstones of discarded ids), whole-snapshot port persistence ordered by persisted seq, 8 per sender / 64 total (strangers evicted before trusted, oldest first) / 7 days over unmatched contexts, sponsor validation against sponsorAccount/sponsors on arrival, matched contexts deleted when their invitation leaves pending(); bindInviteContextToPendingView reconciles on view.onChange, withInviteContextCleanup discards on successful accept/decline. Handler (inviteContextHandler.ts): drops wrong kind, non-64-hex sender, blocked sender (DenyLayer.isBlocked before anything is stored), malformed payload; persist-and-return, no client call, store errors reported not thrown. View model (invitationCardViewModel.ts): pure {invitationId, displayName, nameSource, sponsorAccount}; name only from a sponsor context, else the generic i18n label; no description/admin fields. InvitationCard gets an optional viewModel prop (legacy Welcome decode remains the fallback until the S18 cut-over). Production IDB adapter in app/src/lib/marmot/inviteContextIdbPort.ts.",
+  "verification": {
+    "pre_impl": 11,
+    "post_impl": 5,
+    "commands": [
+      "make test-unit (359 files, 7907 passed, 1 skipped, 0 failed; includes both tsc typechecks)",
+      "cd app && npx tsc --noEmit (clean)",
+      "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit (clean)"
+    ],
+    "fail_first": "In-place mutants (backup + cmp restore) each killed by unit and/or harness tests: no deny check, no sponsor validation (store), no sponsor check (card), send on failed/declined, no expiry, no dedupe, no invitation-left deletion. Remediation round: in-place mutants (backup + cmp restore) for invisible-to-space, ZWJ always dropped/kept, no grapheme cap, no mark cap, no NFC, no visible check, awaited context send, no lowercase, no onError on failed, oldest-first eviction, no tombstone check, no load retry, persist before load, card decode not skipped, mismatched view model accepted, no accept cleanup discard: all killed. ZWNJ rule mutants (always dropped, always kept, no next-letter check, no previous-letter check, state not reset after a control-space) all killed.",
+    "lint": "NO_LINT (no eslint config in the repo; next lint is interactive and was not configured)",
+    "typecheck": "clean"
+  },
+  "decisions": [
+    "Generic label reuses the existing i18n key copy.groups.pendingInvitations.unknownGroupFallback (en 'Group invitation', de 'Gruppeneinladung'); no new string was needed, so i18n.ts is unchanged. A test pins both languages.",
+    "The IndexedDB adapter lives in app/src/lib/marmot/inviteContextIdbPort.ts, outside scope.includes, because the S9 structural scan (pendingView.test.ts) forbids any idb-keyval import inside app/src/lib/marmot/invitations/. The store stays pure behind an injected load/save port.",
+    "Caps (8/64) apply only to HELD (unmatched) contexts, per the AC wording 'contexts with no matching invitation'; a context validated against a pending invitation is exempt and bounded by the invitation caps, so a stranger flood cannot evict a real invitation's name. Age order is the insertion seq, not the sender's created_at.",
+    "Expiry is measured from local arrival time (injected clock) and is strict: kept at exactly 7 days, gone at 7 days + 1 ms.",
+    "A later rumor with the same groupId+sender replaces the earlier name (keyed by groupId+sender); the same rumor id is a no-op even without a stored key match.",
+    "Sender sanitises the name with the same function as the receiver and sends nothing when it sanitises to empty (card keeps the generic label); a normal name is sent verbatim.",
+    "Payload extra keys are ignored and never stored (rather than rejecting the rumor), so a sender-added description cannot reach any model; parsing requires a hex groupId (<=128) and a non-empty sanitised name.",
+    "InvitationCard.tsx takes an optional viewModel prop; without it the legacy Welcome-decode path is unchanged. The production composition is intentionally not done here (see limitations).",
+    "Name sanitising (remediation): NFC first; C0/C1 controls and line separators become a space; every Unicode format character (Cf) plus blank fillers (U+115F/1160/3164/FFA0/2800/180E/00AD/061C/FFF9-FFFB, tag range) is REMOVED, not spaced; a ZWJ is kept only between Extended_Pictographic code points (family, rainbow flag, professions round-trip); at most 4 combining marks per base; a name with no visible character is empty (generic label); the 64 cap is in code points and cuts on a grapheme boundary via Intl.Segmenter (code-point fallback). MAX_CONTEXT_NAME_LENGTH is asserted equal to MAX_GROUP_NAME_LENGTH (units differ: code points vs UTF-16, so a valid group name always fits).",
+    "createContextSendingInviter returns the invite result immediately: the context send is started, not awaited, and every failure (target read, rumor build, sync throw, rejection) is routed to onError; the send promise is exposed through the optional onContextSend hook for callers and tests.",
+    "The sender lowercases the invitee pubkey and reports a 'failed' delivery status through onError with the reason only (never the content or name).",
+    "Held-context eviction at the 64 total cap is trust-ranked: the store takes the same isTrustedSponsor predicate as the pending view and evicts strangers before trusted senders, oldest first within a class (a throwing predicate counts as a stranger).",
+    "Discarded contexts (accept/decline discard, matched context leaving pending) leave a bounded (256) tombstone of the rumor id with the 7-day TTL, so a redelivery is 'duplicate'.",
+    "A failed port.load clears the memoised load so the next call retries; nothing is persisted until a load succeeded; a successful retry merges the contexts accepted in memory meanwhile after the stored ones under fresh seqs.",
+    "InvitationCard ignores a view model whose invitationId differs from the invitation and skips the legacy Welcome decode whenever a matching view model is supplied (selectCardViewModel, pure).",
+    "ZWNJ (U+200C) rule: kept only when it sits between two letters (\\p{L}, combining marks attached to the first are transparent), exactly like ZWJ between pictographs, because it is orthographically required in Persian and several Indic scripts; removed when leading, trailing, next to a space/digit/punctuation, or doubled (a doubled ZWNJ drops both; chosen over collapsing to one for simplicity and predictability). The rule is script-agnostic: a ZWNJ between two Latin letters is also kept."
+  ],
+  "limitations": [
+    "Not wired into production: registering createInviteContextHandler as inboxHandlers.inviteContext at bootstrap, constructing the store with createIdbInviteContextPort + view.pending, calling bindInviteContextToPendingView.reconcileNow() after view.seed(), passing viewModel to InvitationCard and swapping the invite call site to createContextSendingInviter all belong to the production cut-over (S18-marmot-context-cutover); the harness proves the composition works end to end.",
+    "e2e halves of AC-CTX-2/5 (groups-invitation-preview rewrite) run in S26.",
+    "A context that arrives after its invitation was capped out or declined is held up to 7 days as an unmatched context (bounded by the held caps), never shown.",
+    "Before the S18 cut-over the card has no live subscription: consumers must re-render on InviteContextStore.subscribe and PendingInvitationView.onChange.",
+    "Tombstones are in memory only: a redelivery of a discarded rumor after an app reload is not suppressed by the store (the library's own inbox dedupe is the first line).",
+    "Tag characters are stripped, so emoji subdivision flags (England, Scotland, Wales) lose their tag sequence and show as the base flag."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The S9 structural scan (pendingView.test.ts) bans idb-keyval imports anywhere in app/src/lib/marmot/invitations/, which is not stated in the story scope; a store with its own persistence only found out via a full-suite failure, forcing the adapter outside scope.includes.",
+    "surprised_by": "A file-level unicode escape written through a heredoc was materialised as literal U+2028 characters and broke the regex literal; escapes had to be built with chr().",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

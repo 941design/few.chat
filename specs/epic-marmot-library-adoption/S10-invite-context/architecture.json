@@ -1,0 +1,67 @@
+{
+  "module_name": "invitations",
+  "purpose": "S10 adds the D3 pre-join preview to the invitations module: the sponsor sends a gift-wrapped kind-21064 invite-context rumor {groupId,name} after a delivered/retryable invite; the invitee's inbox handler validates, dedupes and holds it (8/sender, 64 total, 7 days); a pure card view model shows the sponsor's group name (untrusted text) or the generic label, never a description or admin list.",
+  "public_api": [
+    { "name": "createInviteContextSender", "signature": "(deps: { inbox: { sendInboxRumor }; ownPubkey: string; now: () => number; onError? }) => { sendAfterInvite(result: InviteOutcome | NoUsableKeyPackage | AlreadyMember, target: { to; groupId; name }): Promise<'sent' | 'skipped' | 'failed'> }", "description": "Sends exactly one extensions.sendInboxRumor of kind 21064, content {\"groupId\":..,\"name\":..} only, after delivered/retryable; failed/declined/error values send nothing; a rejection is reported, never thrown. Account-scope call: UI handler / queued job only." },
+    { "name": "createContextSendingInviter", "signature": "(deps: { inviter: KeyPackageInviter; sender: InviteContextSender }) => { inviteByPubkey(group: InviteGroup & { name }, pubkey, opts?) }", "description": "KeyPackageInviter decorated with the context send; returns the invite result unchanged." },
+    { "name": "sanitizeContextName / parseInviteContextContent / buildInviteContextContent / MAX_CONTEXT_NAME_LENGTH / INVITE_CONTEXT_KIND", "signature": "pure helpers; cap 64 code points; kind = APP_INBOX_KINDS.inviteContext (21064)", "description": "Untrusted-name normalisation (control/bidi removed, whitespace collapsed, capped, markup left literal) and strict payload parsing that never carries extra keys." },
+    { "name": "createInviteContextStore", "signature": "(deps: { port: { load; save }; now; getPending: () => InvitationRef[]; onError? }) => InviteContextStore", "description": "Holding store keyed groupId+sender: add (dedupe by rumor id, replace by key), reconcile(pending) (7-day expiry, sponsor validation, invitation-left deletion, held caps 8/sender 64 total oldest first), discard(group), snapshot(), subscribe(). Whole-snapshot persistence through the injected port; never calls the client." },
+    { "name": "bindInviteContextToPendingView / withInviteContextCleanup", "signature": "wiring helpers", "description": "Reconcile on every pending-list change; discard a group's contexts after a successful accept/decline." },
+    { "name": "createInviteContextHandler", "signature": "(deps: { store: { add }; denyLayer: DenyLayer; onError? }) => InboxRumorHandler", "description": "Registered by the bootstrap for APP_INBOX_KINDS.inviteContext. Drops wrong kind, blocked sender (before storing), malformed payload; sender = seal-bound rumor.pubkey. Persist-and-return, no account-scope client call." },
+    { "name": "buildInvitationCardViewModel / buildInvitationCardViewModels", "signature": "({ invitation, contexts, genericLabel, now }) => { invitationId, displayName, nameSource: 'context' | 'generic', sponsorAccount }", "description": "Pure. Name only from a context whose sender is sponsorAccount or in sponsors[]; sanitised and capped again; no description/admin fields exist in the model." }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/invitations/inviteContext.ts",
+    "app/src/lib/marmot/invitations/inviteContextStore.ts",
+    "app/src/lib/marmot/invitations/inviteContextHandler.ts",
+    "app/src/lib/marmot/invitations/invitationCardViewModel.ts",
+    "app/src/lib/marmot/inviteContextIdbPort.ts"
+  ],
+  "owned_data": [
+    "few-invite-contexts IndexedDB database (one whole-snapshot record per account pubkey; access only through createIdbInviteContextPort)"
+  ],
+  "dependencies_allowed": [
+    "@941design/marmot (types only: PendingInvitation, InboxRumorHandler)",
+    "@941design/nostr-events/event (Rumor type, getEventHash)",
+    "app/src/lib/marmot/kinds.ts (APP_INBOX_KINDS)",
+    "invitations/denyLayer (DenyLayer, S9), invitations/invite (types, S8), invitations/pendingView (view structurally, S9)",
+    "idb-keyval (only in app/src/lib/marmot/inviteContextIdbPort.ts, outside the pure invitations/ directory)"
+  ],
+  "dependencies_forbidden": [
+    "client/ construction or any MarmotClient call from the handler or store",
+    "any React context under src/context",
+    "@internet-privacy/marmot-ts",
+    "ts-mls",
+    "idb-keyval inside app/src/lib/marmot/invitations/ (S9 structural scan)",
+    "idb-keyval update()",
+    "publishing the context outside sendInboxRumor (privacy invariant)"
+  ],
+  "external_ports": [
+    "extensions.sendInboxRumor (library, account scope: UI handler / queued job only)",
+    "extensions.registerInboxHandler (registered by client/ bootstrap, existing inboxHandlers.inviteContext slot)",
+    "InviteContextStorePort { load, save } (IndexedDB adapter in lib/marmot/inviteContextIdbPort.ts)",
+    "getPending: PendingInvitationView.pending (sync snapshot)",
+    "DenyLayer.isBlocked"
+  ],
+  "events_emitted": [
+    "InviteContextStore.subscribe: fires after every change of the held set (live card update in either arrival order)"
+  ],
+  "events_consumed": [
+    "inbox rumor kind 21064 (via registerInboxHandler)",
+    "PendingInvitationView.onChange (reconcile)"
+  ],
+  "seams": [
+    { "name": "AppKinds", "role": "consumer", "seam": { "cross_story": true, "consumed_by": ["S10"] } },
+    { "name": "DenyLayer", "role": "consumer", "seam": { "cross_story": true, "consumed_by": ["S10", "S12"] } },
+    { "name": "PendingInvitationView", "role": "consumer", "seam": { "cross_story": true, "consumed_by": ["S10"] } },
+    { "name": "InviteContextStore", "role": "producer", "seam": { "cross_story": true, "consumed_by": ["S22"] } }
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/invitations/inviteContext.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextStore.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextIdbPort.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextHandler.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContextCard.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContext.harness.test.ts"
+  ]
+}

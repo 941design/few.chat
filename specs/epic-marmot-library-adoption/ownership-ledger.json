@@ -325,6 +325,13 @@
       "owning_module": "invitations",
       "type": "invariant",
       "added_by_story": "S9"
+    },
+    {
+      "id": "invitations.invite-context",
+      "name": "Sponsor sends one gift-wrapped 21064 {groupId,name} to the invitee after delivered/retryable invite; invitee drops blocked senders, dedupes, holds unmatched contexts (8/sender, 64 total, 7 d), validates against sponsorAccount/sponsors, shows only a matched sanitised name (else generic label)",
+      "owning_module": "invitations",
+      "type": "invariant",
+      "added_by_story": "S10"
     }
   ],
   "stories": [
@@ -488,10 +495,24 @@
         "S18": "call view.seed() once after bootstrap; route clientEvents.inboxDisposition to view.onInboxDisposition; hook scheduleRefresh to block-set changes; inject isTrustedSponsor (own account or isKnownPeer) and now(); accept/decline only from UI handlers; bell count from view.pending().length; view disposed/recreated with the handle",
         "S22/S23": "move GLOBAL_CAP/PER_INVITER_CAP into invitations/caps.ts when deleting lib/pendingInvitations.ts"
       }
+    },
+    {
+      "id": "S10",
+      "concepts_owned": [
+        "invitations.inviteContext"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "cut-over wiring (result.json said S22 — it is S18): register inviteContext handler as inboxHandlers.inviteContext; build the store with inviteContextIdbPort; call bindInviteContextToPendingView(...).reconcileNow() after view.seed(); pass viewModel to InvitationCard; swap the invite call site to createContextSendingInviter",
+        "S22": "remove InvitationCard legacy Welcome-decode path once viewModel is always supplied",
+        "S26": "e2e halves of AC-CTX-2/5",
+        "S17": "the account wipe (clearAllGroupData / storeIncompatible) deletes the account few-invite-contexts entry",
+        "S18/S28": "pre-join card name is a sponsor claim — show sponsor identity next to it or label it; optional notice when joined MLS name differs"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S9",
+    "last_story_reviewed": "S10",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

@@ -37,6 +37,7 @@ import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { resolveInviterLabel } from '@/src/lib/pubkeyDisplay';
 import { BADGE_ACCENT } from '@/src/lib/badgeAccent';
 import type { PendingInvitation } from '@/src/lib/pendingInvitations';
+import type { InvitationCardViewModel } from '@/src/lib/marmot/invitations';
 
 type InvitationGroupData = { name: string; description: string; adminPubkeys: string[] } | null;
 
@@ -54,20 +55,41 @@ export function selectInvitationDisplayName(
   return groupData?.name ? groupData.name : fallback;
 }
 
+/**
+ * The view model that may be used for `invitationId`: the supplied one only when it was built for THIS invitation
+ * (a model of another invitation, e.g. a stale or mismatched list index, is ignored).
+ */
+export function selectCardViewModel(
+  invitationId: string,
+  viewModel: InvitationCardViewModel | undefined,
+): InvitationCardViewModel | undefined {
+  return viewModel && viewModel.invitationId === invitationId ? viewModel : undefined;
+}
+
 type InvitationCardProps = {
   invitation: PendingInvitation;
+  /**
+   * Library-native card model (D3): the sponsor's group name from a validated invite context, or the generic
+   * label. Pure text (never markup); the card never shows a description or admin list. When absent the legacy
+   * Welcome decode below supplies the name until the production cut-over (S18) removes it.
+   */
+  viewModel?: InvitationCardViewModel;
 };
 
-export default function InvitationCard({ invitation }: InvitationCardProps) {
+export default function InvitationCard({ invitation, viewModel }: InvitationCardProps) {
   const copy = useCopy();
   const { acceptPendingInvitation, declinePendingInvitation, getInvitationGroupData } = useMarmot();
   const { pubkeyHex } = useNostrIdentity();
 
+  const model = selectCardViewModel(invitation.id, viewModel);
+  const hasModel = model !== undefined;
   const [groupData, setGroupData] = useState<InvitationGroupData>(null);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
+    // The library-native view model supplies the name: the legacy Welcome decode is skipped entirely.
+    if (hasModel) return;
     let cancelled = false;
     getInvitationGroupData(invitation.welcomeEventJson)
       .then((data) => {
@@ -79,12 +101,11 @@ export default function InvitationCard({ invitation }: InvitationCardProps) {
     return () => {
       cancelled = true;
     };
-  }, [invitation.welcomeEventJson, getInvitationGroupData]);
+  }, [hasModel, invitation.welcomeEventJson, getInvitationGroupData]);
 
-  const displayName = selectInvitationDisplayName(
-    groupData,
-    copy.groups.pendingInvitations.unknownGroupFallback,
-  );
+  const displayName = model
+    ? model.displayName
+    : selectInvitationDisplayName(groupData, copy.groups.pendingInvitations.unknownGroupFallback);
   const inviterLabel = resolveInviterLabel(invitation.inviterPubkeyHex, pubkeyHex);
 
   async function handleAccept() {

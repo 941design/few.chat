@@ -1,0 +1,17 @@
+{
+  "story_id": "S10",
+  "baseline_commit": "7c1ab7b",
+  "captured_at": "2026-11-17",
+  "tests": {
+    "status": "PASS",
+    "command": "make test-unit",
+    "passed": 7721,
+    "skipped": 1,
+    "failed": 0,
+    "files": 351,
+    "note": "S9 final count (7721 passed at 7c1ab7b). A raw run started after the first S10 source file existed showed 1 failure: the S9 structural scan in pendingView.test.ts forbids `from 'idb-keyval'` in any file of app/src/lib/marmot/invitations/ (caused by an idb adapter that was then moved to app/src/lib/marmot/inviteContextIdbPort.ts). That in-progress run counted 7750 passed + 1 failed of 7752 (S10 tests included); it is not the baseline."
+  },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": ["cd app && npx tsc --noEmit", "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"]
+}

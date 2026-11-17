@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { selectInvitationDisplayName } from '@/src/components/groups/InvitationCard';
+import { selectCardViewModel, selectInvitationDisplayName } from '@/src/components/groups/InvitationCard';
 
 const TEST_FILE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(TEST_FILE_DIR, '..', '..', '..'); // app/tests/unit/components -> app/
@@ -165,5 +165,26 @@ describe('selectInvitationDisplayName', () => {
 
   it('returns the fallback when groupData.name is an empty string (undecodable, AC-DATA-2)', () => {
     expect(selectInvitationDisplayName({ name: '' }, fallback)).toBe(fallback);
+  });
+});
+
+describe('selectCardViewModel: the library view model is used only for its own invitation', () => {
+  const model = { invitationId: 'inv-1', displayName: 'Chess club', nameSource: 'context' as const, sponsorAccount: 'a'.repeat(64) };
+
+  it('returns the model when it was built for this invitation', () => {
+    expect(selectCardViewModel('inv-1', model)).toBe(model);
+  });
+  it('ignores a model of another invitation (mismatched list index): the card falls back to the legacy path', () => {
+    expect(selectCardViewModel('inv-2', model)).toBeUndefined();
+  });
+  it('no model: undefined', () => {
+    expect(selectCardViewModel('inv-1', undefined)).toBeUndefined();
+  });
+  it('the Welcome-decode effect is skipped when a (matching) model is supplied', () => {
+    // No render capability in this repo: pin the guard in the effect body and that the display name uses the checked model.
+    const effect = stripComments(CARD_SOURCE).match(/useEffect\(\(\) => \{([\s\S]*?)getInvitationGroupData\(/);
+    expect(effect?.[1]).toMatch(/if \(hasModel\) return;/);
+    expect(CARD_SOURCE).toMatch(/const model = selectCardViewModel\(invitation\.id, viewModel\);/);
+    expect(stripComments(CARD_SOURCE)).not.toMatch(/viewModel\s*\?\s*viewModel\.displayName/);
   });
 });

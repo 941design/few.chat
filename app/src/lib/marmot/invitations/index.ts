@@ -1,6 +1,6 @@
 /**
  * invitations — invite side of the invitation flow (S8). Public surface of the module; other modules
- * import only from here. S9 adds the pending view, deny layer, caps and accept/decline; S10-S11 add the invite context.
+ * import only from here. S9 adds the pending view, deny layer, caps and accept/decline; S10 adds the invite context (send, hold, handler, card view model).
  */
 export {
   createKeyPackageLookup,
@@ -48,3 +48,44 @@ export {
   type PendingInvitationViewDeps,
 } from './pendingView';
 export { createInvitationActions, InvitationActionError, type InvitationActions, type InvitationActionsDeps } from './acceptDecline';
+export {
+  INVITE_CONTEXT_KIND,
+  MAX_COMBINING_MARKS_PER_BASE,
+  MAX_CONTEXT_NAME_LENGTH,
+  buildInviteContextContent,
+  createContextSendingInviter,
+  createInviteContextSender,
+  parseInviteContextContent,
+  sanitizeContextName,
+  type ContextInviteGroup,
+  type ContextSendingInviterDeps,
+  type InboxRumorSender,
+  type InviteContextPayload,
+  type InviteContextSendResult,
+  type InviteContextSender,
+  type InviteContextSenderDeps,
+} from './inviteContext';
+export {
+  CONTEXT_TTL_MS,
+  HELD_PER_SENDER_CAP,
+  HELD_TOTAL_CAP,
+  TOMBSTONE_CAP,
+  bindInviteContextToPendingView,
+  createInviteContextStore,
+  withInviteContextCleanup,
+  type PendingListSource,
+  type AddResult,
+  type InvitationRef,
+  type InviteContextRecord,
+  type InviteContextStore,
+  type InviteContextStoreDeps,
+  type InviteContextStorePort,
+} from './inviteContextStore';
+export { createInviteContextHandler, type InviteContextHandlerDeps } from './inviteContextHandler';
+export {
+  buildInvitationCardViewModel,
+  buildInvitationCardViewModels,
+  type CardInvitation,
+  type CardViewModelInput,
+  type InvitationCardViewModel,
+} from './invitationCardViewModel';
