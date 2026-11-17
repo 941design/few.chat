@@ -35,6 +35,7 @@ import {
   type KeyPackageInviter,
   type PendingInvitationView,
 } from '@/src/lib/marmot/invitations';
+import { noPurge } from './noPurge';
 
 const SECRET_A = 'a1'.repeat(32);
 const SECRET_B = 'b2'.repeat(32);
@@ -130,7 +131,7 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
   const arrivals: string[] = [];
   view.onArrival((i) => arrivals.push(i.id));
   await view.seed(); // the baseline load, as startup does
-  const actions = createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), onError: (e) => void errors.push(e) });
+  const actions = createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), purge: noPurge, onError: (e) => void errors.push(e) });
   const peer: Peer = { account, pubkey, inviter, declined, blocked, view, actions, declineCalls, arrivals, errors };
   peers.push(peer);
   return peer;

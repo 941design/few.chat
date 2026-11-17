@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PendingInvitation } from '@941design/marmot';
 import { createDenyLayer, createInvitationActions, createPendingInvitationView } from '@/src/lib/marmot/invitations';
+import { noPurge } from './noPurge';
 
 const hex = (n: number) => n.toString(16).padStart(64, 'e');
 const inv = (id: string, sponsor = 1, receivedAt = 1): PendingInvitation => ({
@@ -128,7 +129,7 @@ describe('accept / decline actions (stubbed library)', () => {
       accept: async (id: string) => { accepted.push(id); list = []; return group; },
     };
     const view = createPendingInvitationView({ invitations, denyLayer: noDeny, ...ret, enqueue: (j) => void j() });
-    const actions = createInvitationActions({ invitations, view, attachGroup: (g) => attached.push(g) });
+    const actions = createInvitationActions({ invitations, view, attachGroup: (g) => attached.push(g), purge: noPurge });
     await expect(actions.accept('nope')).rejects.toMatchObject({ code: 'unknown-invitation', invitationId: 'nope' });
     expect(accepted).toEqual([]);
     expect(await actions.accept('a')).toBe(group);
@@ -149,7 +150,7 @@ describe('accept / decline actions (stubbed library)', () => {
     };
     const view = createPendingInvitationView({ invitations: invitations as never, denyLayer: noDeny, ...ret, enqueue: (j) => void j() });
     await view.refresh();
-    const actions = createInvitationActions({ invitations: invitations as never, view, attachGroup: () => undefined, onError: (e) => errors.push(e) });
+    const actions = createInvitationActions({ invitations: invitations as never, view, attachGroup: () => undefined, purge: noPurge, onError: (e) => errors.push(e) });
     await expect(actions.decline('a')).resolves.toBeUndefined();
     expect(declines).toEqual([['a', { declineRumor: true }]]);
     expect(errors).toHaveLength(1);
@@ -190,7 +191,7 @@ describe('decline mirrors accept (the pending list is re-read first)', () => {
       accept: async () => ({}) as never,
     };
     const view = createPendingInvitationView({ invitations, denyLayer: createDenyLayer({ loadBlockedPeers: () => blocked }), ...ret, enqueue: (j) => void j(), onError: (e) => { throw e; } });
-    const actions = createInvitationActions({ invitations, view, attachGroup: () => undefined });
+    const actions = createInvitationActions({ invitations, view, attachGroup: () => undefined, purge: noPurge });
     return { view, actions, calls, live, invitations };
   };
 
@@ -219,7 +220,7 @@ describe('decline mirrors accept (the pending list is re-read first)', () => {
       accept: async () => ({}) as never,
     };
     const view = createPendingInvitationView({ invitations, denyLayer: noDeny, ...ret, enqueue: (j) => void j() });
-    const actions = createInvitationActions({ invitations, view, attachGroup: () => undefined, onError: () => undefined });
+    const actions = createInvitationActions({ invitations, view, attachGroup: () => undefined, purge: noPurge, onError: () => undefined });
     await expect(actions.decline('a')).resolves.toBeUndefined();
     list = [inv('a')];
     vanish = false;

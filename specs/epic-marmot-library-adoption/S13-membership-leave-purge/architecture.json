@@ -1,0 +1,77 @@
+{
+  "module_name": "membership",
+  "purpose": "S13 adds the leave half of the membership module (D9): pure leave eligibility with the twin-read discipline on the library roster accessors (opposite fail-closed directions on the execution and the live-member path), the background leave (immediate UI removal, bounded soft-failing kind-9 announcement, group.leave() through the GroupOpQueue with skipSync, failure restore + leave-failed toast, no durable leaving marker), the single idempotent local purge (library abandon + sink purge + every app-side store, overlay row last as the retry key), and the library-driven membership changes (groupRemoved -> enqueued purge, startup check of listed groups whose members() lack the own account, disband notification/marker -> overlay marked disbanded).",
+  "public_api": [
+    {
+      "name": "decideLeave",
+      "signature": "(facts: RosterFacts, own: string) => LeaveDecision",
+      "description": "leaveEligibility.ts. EXECUTION-path truth table: unreadable members -> {leave, rosterKnown:false} (fail-open, purge never skipped); sole member or account absent from a readable roster -> abandon; sole admin with other members -> blocked 'last-admin'; else leave. Case-insensitive."
+    },
+    {
+      "name": "selectLeaveModalState / readLiveMembers / readRosterFacts",
+      "signature": "(facts, own) => 'abandon'|'blocked'|'confirm'; (getGroup, groupId) => Promise<string[]|undefined>; (group) => {members, admins}",
+      "description": "leaveEligibility.ts. LIVE-MEMBER path, fail-closed in the OPPOSITE direction: an unreadable member list is undefined and never offered as abandon. readRosterFacts guards members() and activeAdmins() each on its own."
+    },
+    {
+      "name": "createGroupLeaver",
+      "signature": "(deps: GroupLeaverDeps) => { leave(groupId): Promise<{status:'blocked',reason:'last-admin'} | {status:'started',mode:'leave'|'abandon',settled:Promise<LeaveSettled>}>; dispose() }",
+      "description": "leaveGroup.ts. decide -> hideGroup at once -> background: kind-9 leave_intent announcement (bounded announceTimeoutMs 5 s, soft-fail) -> queue.runCommit(group, () => group.leave(), {skipSync:true, signal}) bounded by leaveDeadlineMs 20 s -> purgeLocalGroup -> pendingView.scheduleRefresh(). Failure other than last-admin: restoreGroup + notifyLeaveFailed (i18n groups.leaveFailed); last-admin rejection: restoreGroup + notifyLastAdminBlocked; unreadable roster: purge never skipped, no restore. Same-group calls share one run. Every port validated at construction."
+    },
+    {
+      "name": "createLocalGroupPurger (seam GroupDataPurger)",
+      "signature": "(deps: PurgeLocalGroupDeps) => { purgeLocalGroup(groupId: string): Promise<void> }",
+      "description": "purgeLocalGroup.ts. tracker.forgetGroup -> getGroup + group.abandon() (a failure aborts before any app-side deletion) -> history.purge -> re-join guard -> messages (+ edit aux/slot meta), reaction rows, held reactions, polls/votes, media, member profiles, profile-request memos, unread, join requests, invite links/expiries, pending-direct-invite markers (+ orphans) -> overlay row LAST and only when nothing failed (retry key for AC-WIPE-2) -> onPurged. Idempotent; concurrent calls share one run; PurgeError names the failed steps.",
+      "seam": { "cross_story": true, "consumed_by": ["S17", "S18"] }
+    },
+    {
+      "name": "createGroupRemovalHandlers",
+      "signature": "(deps: {ownPubkey, purger, enqueue, onError?}) => { onGroupRemoved(payload): void; checkListedGroups(groups): Promise<string[]> }",
+      "description": "groupNotifications.ts. onGroupRemoved is a client-listener frame: only enqueues the purge as its last action (collapsing per group). checkListedGroups (startup, after groups.list(), under the lease): purges listed groups whose READABLE members() lack the own account; an unreadable roster is left alone (fail-closed); the group id is read before the purge (an abandoned handle throws from id).",
+      "seam": { "cross_story": true, "consumed_by": ["S18"] }
+    },
+    {
+      "name": "createDisbandMarker",
+      "signature": "(deps: {overlay:{load,save}, now, onMarked, onError?}) => { markDisbanded(groupId, info?): Promise<boolean>; disbandTarget(groupId): void; syncListed(groups): Promise<string[]> }",
+      "description": "groupNotifications.ts. Marks the overlay row disbanded {actor?, at} (idempotent, per-group serialised, no row -> nothing). disbandTarget is the handlers router's disband target; syncListed re-marks at startup every listed group carrying the library's persisted group.disbanded marker (the notification is announced once).",
+      "seam": { "cross_story": true, "consumed_by": ["S18"] }
+    },
+    {
+      "name": "clearReactionsForGroup (reactions/api.ts, scope amendment)",
+      "signature": "(groupId: string) => Promise<void>",
+      "description": "Deletes few:reactions:group:<id> on the thread's own write queue and cross-tab lock, cache emptied first, idempotent. Required by the S5 ledger obligation (purge reaction rows); no per-group delete existed."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "none exclusively: the purge deletes a group's rows from the stores their modules own (chat, reactions, polls, media, profiles, invite links, join requests, markers, unread) through injected ports; the overlay row's disbanded mark is written through an injected overlay port"
+  ],
+  "dependencies_allowed": [
+    "injected ports only: client.groups.get handle, GroupOpQueue (send/ runCommit shape), history sink purge, own-row tracker forgetGroup, the per-store clear functions, the S9 pending view scheduleRefresh, handle.enqueue",
+    "tests only: client/ (bootstrapAccountClient, createJobQueue), send/, invitations/ (inviter), handlers/ (router, realApp fixture), parseStructured"
+  ],
+  "dependencies_forbidden": [
+    "react or any src/context import under app/src/lib/marmot/** (AC-BOUND-1)",
+    "@internet-privacy/marmot-ts, ts-mls",
+    "any account-scope client call from a library frame (groupRemoved listener / notification router): follow-ups only via handle.enqueue, enqueue last",
+    "idb-keyval update()",
+    "a durable 'leaving' marker (AC-LEAVE-3)",
+    "publishing profile data or any group data outside the group (privacy invariant): the only send is the kind-9 leave_intent announcement into the group being left"
+  ],
+  "external_ports": [
+    "client.groups.get / group.leave() / group.abandon() via injected ports (production wiring: S18)",
+    "sendGroupRumor (SendGroupRumor seam) for the kind-9 announcement"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "client event groupRemoved {groupId, actor?} (at most once; lost on a crash between settle and emit: backed by checkListedGroups)",
+    "group notification group-disbanded (routed by the handlers module's createGroupNotificationRouter disband target) and the persisted MarmotGroup.disbanded marker"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/membership/leaveEligibility.test.ts",
+    "app/tests/unit/marmot/membership/leaveGroup.test.ts",
+    "app/tests/unit/marmot/membership/purgeLocalGroup.test.ts",
+    "app/tests/unit/marmot/membership/purgeLocalGroup.realStores.test.ts",
+    "app/tests/unit/marmot/membership/groupNotifications.test.ts",
+    "app/tests/unit/marmot/membership/leave.harness.test.ts"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "story_id": "S13",
+  "baseline_commit": "2963ec0",
+  "captured_at": "2026-11-17",
+  "tests": {
+    "status": "PASS",
+    "command": "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit && npx vitest run  (the make test-unit recipe)",
+    "passed": 8151,
+    "skipped": 1,
+    "failed": 0,
+    "files": 370,
+    "note": "Captured before any S13 test existed (the run started before app/tests/unit/marmot/membership/ was created); equals S12's recorded final (8151 passed, 370 files). The only pre-existing uncommitted changes are .clauded.yaml and package.json.copy (not source)."
+  },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": [
+    "cd app && npx tsc --noEmit",
+    "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"
+  ]
+}

@@ -191,10 +191,13 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
 ### `GroupDataPurger` — Local group purge (abandon) path
 - Producer: S13 `app/src/lib/marmot/membership/purgeLocalGroup.ts` -> Consumer: S17 `app/src/lib/marmot/client/reconcile.ts`
 - Fields:
-  - `purgeLocalGroup`: `(groupId: string) => Promise<void>`
+  - `purgeLocalGroup`: `(groupId: string, options?: { ownAccountIsMember?: boolean }) => Promise<void>` (`options.ownAccountIsMember` bypasses the re-join guard for the readable sole-member abandon only)
+  - `withGroupLock`: `<T>(groupId: string, fn: () => Promise<T>) => Promise<T>` (exported by the purger, `LocalGroupPurger`; per-group FIFO async lock, not re-entrant; the purge runs inside it and `createInvitationActions.accept` runs the library accept inside it, so purge and accept of one group id exclude each other; the `purge` port is required by `createInvitationActions` and `createAutoAccept`)
+  - `isPurging` / `whenPurged`: in-flight (running or queued) purge view
 - Invariants:
   - calls group.abandon() and removes overlay, member profiles, chat/poll rows, history rows, invite links, markers
   - idempotent on second call
+  - an undeletable group (library state cannot be loaded) keeps its overlay row (retry key), is marked `unloadable` (optional `markUnloadable` port) and the purge rejects with `PurgeError.unloadable === true`
 
 ## Implementation Constraints
 

@@ -25,6 +25,11 @@
  * are considered (`view.refresh()` returns the shown set, so a blocked sponsor's invitation is never auto-accepted: a block
  * beats a correlation). The job's LAST action is `view.scheduleRefresh()` (the pending list changed).
  *
+ * Purge exclusion: the accept goes through `actions.accept`, which runs the library accept inside the purger's per-group
+ * lock, so it waits for a running purge of the invitation's group and a purge started meanwhile waits for it. The
+ * `purge` port is required (validated at construction); the correlation also waits out a running purge first, so
+ * nothing is consumed behind a purge. (S13 edited this S12 path.)
+ *
  * `evaluate()` re-runs the same job without a new event: for startup (after `view.seed()`) and for a context arriving
  * after the invitation (the name just became known).
  *
@@ -36,6 +41,7 @@
 import type { PendingInvitation } from '@941design/marmot';
 import { sanitizeContextName } from './inviteContext';
 import type { InvitationActions } from './acceptDecline';
+import type { LocalGroupPurger } from '../membership/purgeLocalGroup';
 import type { PendingInvitationView } from './pendingView';
 
 /** The slice of an outbound join-request record the correlation reads. */
@@ -58,6 +64,12 @@ export interface AutoAcceptDeps {
     /** Consumes one record by nonce (production: `deleteOutboundJoinRequest`). */
     consume: (nonce: string) => Promise<void>;
   };
+  /**
+   * The local purger (`LocalGroupPurger`), REQUIRED. The exclusion itself is the per-group lock inside
+   * `actions.accept` (every auto-accept goes through it, so it cannot be bypassed here); this port lets the
+   * correlation wait out a running purge BEFORE it accepts and consumes anything (`whenPurged`).
+   */
+  purge: Pick<LocalGroupPurger, 'whenPurged'>;
   /** The sponsor-claimed name of an invitation's group (a validated invite context), or `undefined` when none is held yet. Sync, no client call. */
   groupNameOf: (invitation: Pick<PendingInvitation, 'id' | 'groupId' | 'sponsorAccount'>) => string | undefined;
   onError?: (error: unknown) => void;
@@ -88,6 +100,7 @@ export function createAutoAccept(deps: AutoAcceptDeps): AutoAccept {
   requireFn(deps.outbound?.loadUnexpiredForAdmin, 'outbound.loadUnexpiredForAdmin');
   requireFn(deps.outbound?.consume, 'outbound.consume');
   requireFn(deps.groupNameOf, 'groupNameOf');
+  requireFn(deps.purge?.whenPurged, 'purge.whenPurged');
   const { view, actions, enqueue, outbound, groupNameOf } = deps;
   const onError = deps.onError ?? ((e: unknown) => console.error('[marmot/invitations] auto-accept', e));
 
@@ -130,6 +143,9 @@ export function createAutoAccept(deps: AutoAcceptDeps): AutoAccept {
         }
         if (!record) continue;
         try {
+          // Wait out a running purge of the same group id first; the actual exclusion (a purge starting meanwhile) is the
+          // lock `actions.accept` holds around the library accept.
+          await deps.purge.whenPurged(invitation.groupId);
           await actions.accept(invitation.id);
         } catch (e) {
           onError(e); // stays pending: the user can accept by hand; the record is kept

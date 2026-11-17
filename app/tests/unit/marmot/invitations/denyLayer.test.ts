@@ -8,6 +8,7 @@ import type { PendingInvitation } from '@941design/marmot';
 import { archiveContact, rememberContact } from '@/src/lib/contacts';
 import { loadBlockedPeers } from '@/src/lib/blockedPeers';
 import { createDenyLayer, createPendingInvitationView, createInvitationActions } from '@/src/lib/marmot/invitations';
+import { noPurge } from './noPurge';
 
 const store: Record<string, string> = {};
 Object.defineProperty(globalThis, 'localStorage', {
@@ -124,6 +125,7 @@ describe('AC-BLK-1: pending view with a blocked sponsor', () => {
       invitations: { pending: async () => [], decline: async () => undefined, accept: async () => { accepted++; return {} as never; } },
       view,
       attachGroup: () => undefined,
+      purge: noPurge,
     });
     await expect(actions.accept('b')).rejects.toMatchObject({ code: 'unknown-invitation' });
     expect(accepted).toBe(0);

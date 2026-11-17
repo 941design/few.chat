@@ -235,6 +235,8 @@ export type Copy = {
     makeAdminError: string;
     adminBadge: string;
     lastAdminLeaveBlocked: string;
+    /** Toast when a background leave failed or timed out and the group was put back in the list. */
+    leaveFailed: string;
     leavePendingBadge: string;
     removalPendingBadge: string;
     chatLoading: string;
@@ -937,6 +939,7 @@ const copy: Record<LanguageCode, Copy> = {
       makeAdminError: 'Failed to grant admin. Please try again.',
       adminBadge: 'Admin',
       lastAdminLeaveBlocked: 'You are the only admin. Grant admin to another member before leaving.',
+      leaveFailed: 'Leaving the group did not work. The group is back in your list; please try again.',
       leavePendingBadge: 'Departed, cleanup pending',
       // removalPendingBadge is reserved for a future cause-distinction increment (S6 decision:
       // PendingRemoval carries no cause field, so all pending removals use leavePendingBadge today).
@@ -1525,6 +1528,7 @@ const copy: Record<LanguageCode, Copy> = {
       makeAdminError: 'Admin-Rechte konnten nicht erteilt werden. Bitte erneut versuchen.',
       adminBadge: 'Admin',
       lastAdminLeaveBlocked: 'Du bist der einzige Admin. Erteile einem anderen Mitglied Admin-Rechte, bevor du die Gruppe verlässt.',
+      leaveFailed: 'Das Verlassen der Gruppe hat nicht geklappt. Die Gruppe ist wieder in deiner Liste; bitte versuche es erneut.',
       leavePendingBadge: 'Verlassen, Bereinigung ausstehend',
       // removalPendingBadge: reserved for future cause-distinction (see English comment above).
       removalPendingBadge: 'Entfernung ausstehend',

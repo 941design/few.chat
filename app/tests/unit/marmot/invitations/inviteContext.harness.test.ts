@@ -43,6 +43,7 @@ import {
   type PendingInvitationView,
 } from '@/src/lib/marmot/invitations';
 import { memoryPort } from './inviteContext.fixtures';
+import { noPurge } from './noPurge';
 
 const SECRETS = { a: 'a1'.repeat(32), b: 'b2'.repeat(32), c: 'c3'.repeat(32) };
 const bytes = (hex: string) => Uint8Array.from(Buffer.from(hex, 'hex'));
@@ -145,7 +146,7 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
   const discards: Array<{ groupId: string }> = [];
   const recordingStore = { discard: (invitation: { groupId: string }) => (discards.push({ groupId: invitation.groupId }), store.discard(invitation)) };
   const actions = withInviteContextCleanup({
-    actions: createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), onError: (e) => void errors.push(e) }),
+    actions: createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), purge: noPurge, onError: (e) => void errors.push(e) }),
     view,
     store: recordingStore,
   });

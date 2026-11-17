@@ -15,6 +15,7 @@ import {
   type OutboundRequestRef,
 } from '@/src/lib/marmot/invitations/autoAccept';
 import { createDenyLayer, createInvitationActions, createPendingInvitationView } from '@/src/lib/marmot/invitations';
+import { noPurge } from './noPurge';
 
 const hex = (n: number) => n.toString(16).padStart(64, '0');
 const ADMIN = hex(1);
@@ -25,7 +26,7 @@ const inv = (id: string, sponsor: string, groupId = `g-${id}`): PendingInvitatio
 });
 const rec = (nonce: string, admin: string, groupName: string): OutboundRequestRef => ({ nonce, adminPubkeyHex: admin, groupName });
 
-function setup(opts: { list?: PendingInvitation[]; records?: OutboundRequestRef[]; names?: Record<string, string>; blocked?: string[]; acceptFails?: boolean; consumeFails?: boolean } = {}) {
+function setup(opts: { list?: PendingInvitation[]; records?: OutboundRequestRef[]; names?: Record<string, string>; blocked?: string[]; acceptFails?: boolean; consumeFails?: boolean; purge?: { whenPurged: (groupId: string) => Promise<void> } } = {}) {
   let list = [...(opts.list ?? [])];
   let records = [...(opts.records ?? [])];
   const jobs: Array<() => Promise<void>> = [];
@@ -52,7 +53,7 @@ function setup(opts: { list?: PendingInvitation[]; records?: OutboundRequestRef[
     now: () => 1_000,
     onError: (e) => void errors.push(e),
   });
-  const actions = createInvitationActions({ invitations, view, attachGroup: () => undefined, onError: (e) => void errors.push(e) });
+  const actions = createInvitationActions({ invitations, view, attachGroup: () => undefined, purge: noPurge, onError: (e) => void errors.push(e) });
   const loadUnexpiredForAdmin = vi.fn(async (admin: string) => records.filter((r) => r.adminPubkeyHex === admin));
   const auto = createAutoAccept({
     view,
@@ -60,6 +61,7 @@ function setup(opts: { list?: PendingInvitation[]; records?: OutboundRequestRef[
     enqueue,
     outbound: { loadUnexpiredForAdmin, consume: async (nonce) => { if (opts.consumeFails) throw new Error('idb down'); consumed.push(nonce); records = records.filter((r) => r.nonce !== nonce); } },
     groupNameOf: (i) => opts.names?.[i.groupId],
+    purge: { ...noPurge, ...opts.purge },
     onError: (e) => void errors.push(e),
   });
   const runJobs = async () => {
@@ -296,6 +298,7 @@ describe('AC-AUTO-1: correlation on inboxDisposition pending', () => {
       enqueue: () => { calls.push(1); return accept; },
       outbound: { loadUnexpiredForAdmin: async () => [], consume: async () => undefined },
       groupNameOf: () => undefined,
+      purge: noPurge,
     });
     auto.onInboxDisposition({ kind: 'pending' });
     auto.onInboxDisposition({ kind: 'pending' });
@@ -308,10 +311,11 @@ describe('AC-AUTO-1: correlation on inboxDisposition pending', () => {
     const t = setup({ list: [inv('i1', ADMIN)] });
     const auto = createAutoAccept({
       view: t.view,
-      actions: createInvitationActions({ invitations: t.invitations, view: t.view, attachGroup: () => undefined }),
+      actions: createInvitationActions({ invitations: t.invitations, view: t.view, attachGroup: () => undefined, purge: noPurge }),
       enqueue: (job) => void t.jobs.push(job),
       outbound: { loadUnexpiredForAdmin: async () => { throw new Error('idb down'); }, consume: async () => undefined },
       groupNameOf: () => undefined,
+      purge: noPurge,
       onError: (e) => void errors.push(e),
     });
     auto.onInboxDisposition({ kind: 'pending' });
@@ -328,6 +332,7 @@ describe('construction validates every required port (no silent degradation)', (
     enqueue: () => undefined,
     outbound: { loadUnexpiredForAdmin: async () => [], consume: async () => undefined },
     groupNameOf: () => undefined,
+    purge: noPurge,
   });
   it.each([
     ['view'],
@@ -335,6 +340,7 @@ describe('construction validates every required port (no silent degradation)', (
     ['enqueue'],
     ['outbound'],
     ['groupNameOf'],
+    ['purge'],
   ])('throws when %s is missing', (key) => {
     const deps = full() as Record<string, unknown>;
     delete deps[key];
@@ -342,5 +348,28 @@ describe('construction validates every required port (no silent degradation)', (
   });
   it('throws without dependencies', () => {
     expect(() => createAutoAccept(undefined as never)).toThrow(TypeError);
+  });
+});
+
+describe('accept and a purge of the same group id are mutually exclusive', () => {
+  it('a matching invitation is NOT accepted while a purge of its group runs; it is accepted once the purge settled', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const asked: string[] = [];
+    const t = setup({
+      list: [inv('i1', ADMIN, 'gx')],
+      records: [rec('n1', ADMIN, 'Club')],
+      names: { gx: 'Club' },
+      purge: { whenPurged: async (g) => (asked.push(g), gate) },
+    });
+    t.auto.onInboxDisposition({ kind: 'pending' });
+    const run = t.runJobs();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(asked).toContain('gx');
+    expect(t.accepts).toEqual([]); // deferred behind the purge
+    release();
+    await run;
+    expect(t.accepts).toEqual(['i1']);
+    expect(t.consumed).toEqual(['n1']);
   });
 });

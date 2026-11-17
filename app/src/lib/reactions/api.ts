@@ -1068,8 +1068,48 @@ export async function recomputeMessageReactions(
 }
 
 /**
+ * Deletes the stored reaction rows of one group (`few:reactions:group:<id>`: emoji, message ids, reactor pubkeys).
+ * The group-leave / removal purge (`membership/purgeLocalGroup`) calls it next to `purgeHeldReactionsForGroup`:
+ * no account-wide wipe covers a single group, and without it a left group's reactions would outlive the group.
+ *
+ * Runs on the thread's own write queue (and its cross-tab lock), so it cannot interleave with an in-flight
+ * read-modify-write of the same thread; the cache is emptied first (the badge-revival guard of `enqueue`), the
+ * other tabs and this tab's listeners are told afterwards. Idempotent; a rejected idb delete drops the cache
+ * entry (the next load re-reads storage) and rethrows. A wipe in progress (`clearAllReactions`) makes it a no-op:
+ * that wipe removes the key itself.
+ */
+export function clearReactionsForGroup(groupId: string): Promise<void> {
+  const key = idbKeyFor({ kind: 'group', groupId });
+  if (clearingInProgress) return Promise.resolve();
+  const prev = writeQueues.get(key) ?? Promise.resolve();
+  const step = async (): Promise<void> => {
+    const { del } = await import('idb-keyval');
+    cache.set(key, []);
+    try {
+      await del(key);
+    } catch (err) {
+      cache.delete(key);
+      throw err;
+    } finally {
+      announce(key);
+    }
+    emit(key);
+  };
+  const next = prev.then(() => {
+    const locks = webLocks();
+    return locks ? locks.request(`few:reactions:${key}`, step) : step();
+  });
+  const settled = next.then(() => {}, () => {});
+  writeQueues.set(key, settled);
+  settled.then(() => {
+    if (writeQueues.get(key) === settled) writeQueues.delete(key);
+  });
+  return next;
+}
+
+/**
  * Removes the held-reaction queue of one group (reactions whose target message never arrived). The group-leave
- * purge (S13) calls it: no account-wide wipe covers a single group, and without it a left group's reactions
+ * purge (`membership/purgeLocalGroup`) calls it: no account-wide wipe covers a single group, and without it a left group's reactions
  * (reactor pubkeys, emoji, message ids) would outlive the group until their TTL. Serialised with the queue's
  * other turns; resolves once the key is gone. Idempotent.
  */

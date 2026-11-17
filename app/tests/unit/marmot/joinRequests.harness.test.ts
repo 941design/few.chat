@@ -43,6 +43,7 @@ import { createJoinRequestApproval } from '@/src/lib/marmot/joinRequestApproval'
 import type { PendingJoinRequest } from '@/src/lib/marmot/joinRequestStorage';
 import type { OutboundJoinRequestRecord } from '@/src/lib/marmot/outboundJoinRequests';
 import { APP_INBOX_KINDS } from '@/src/lib/marmot/kinds';
+import { noPurge } from './invitations/noPurge';
 
 const SECRETS = { a: 'a1'.repeat(32), b: 'b2'.repeat(32), c: 'c3'.repeat(32) };
 const bytes = (hex: string) => Uint8Array.from(Buffer.from(hex, 'hex'));
@@ -179,10 +180,11 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
     now: () => Date.now(),
     onError: (e) => void errors.push(e),
   });
-  const actions = createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), onError: (e) => void errors.push(e) });
+  const actions = createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), purge: noPurge, onError: (e) => void errors.push(e) });
   const auto = createAutoAccept({
     view,
     actions,
+    purge: noPurge,
     enqueue: account.handle.enqueue,
     outbound: {
       loadUnexpiredForAdmin: async (admin) => outbound.filter((r) => r.adminPubkeyHex === admin),

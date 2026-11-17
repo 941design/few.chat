@@ -13,11 +13,19 @@
  *    rumor (the library decline kind, an addressed gift wrap to the sponsor, whose client then emits `welcomeDeclined`) ONLY when
  *    `declineRumor` is exactly `true`; its default is no rumor, so the flag is explicit. No kind-21063 DM exists.
  *
+ * Accept and a local purge of the same group id are mutually exclusive through the purger's per-group lock
+ * (`purge.withGroupLock`): the library `accept` (and `attachGroup`) run INSIDE the lock, so an accept started during a
+ * purge waits for it, and a purge started once the accept holds the lock waits for the accept (it cannot delete the
+ * new membership's first messages). The visibility check before the lock is not part of the exclusion: it only
+ * decides whether to try. The `purge` port is REQUIRED (validated at construction), so the exclusion cannot be
+ * silently disabled. (S13 edited this accept path, which S9 introduced.)
+ *
  * These are called from UI handlers, outside any library frame, so awaiting account-scope calls is allowed.
  * After either, the view is refreshed (a refresh failure is reported, it never turns a success into a failure).
  * Ports are injected and validated at construction.
  */
 import type { MarmotGroup } from '@941design/marmot';
+import type { LocalGroupPurger } from '../membership/purgeLocalGroup';
 import type { PendingInvitationsApi, PendingInvitationView } from './pendingView';
 
 export class InvitationActionError extends Error {
@@ -31,6 +39,8 @@ export class InvitationActionError extends Error {
 export interface InvitationActionsDeps {
   invitations: PendingInvitationsApi & { accept: (id: string) => Promise<MarmotGroup> };
   view: Pick<PendingInvitationView, 'refresh' | 'isVisible'>;
+  /** The local purger's per-group lock (`LocalGroupPurger.withGroupLock`): an accept never overlaps a purge of its group. REQUIRED. */
+  purge: Pick<LocalGroupPurger, 'withGroupLock'>;
   /** `AccountClient.attachGroup`: starts the app's notification listener on the joined group. */
   attachGroup: (group: MarmotGroup) => void;
   onError?: (error: unknown) => void;
@@ -52,6 +62,7 @@ export function createInvitationActions(deps: InvitationActionsDeps): Invitation
   requireFn(deps.view?.refresh, 'view.refresh');
   requireFn(deps.view?.isVisible, 'view.isVisible');
   requireFn(deps.attachGroup, 'attachGroup');
+  requireFn(deps.purge?.withGroupLock, 'purge.withGroupLock');
   const { invitations, view, attachGroup } = deps;
   const onError = deps.onError ?? ((e: unknown) => console.error('[marmot/invitations] actions', e));
 
@@ -65,10 +76,16 @@ export function createInvitationActions(deps: InvitationActionsDeps): Invitation
 
   return {
     accept: async (id) => {
-      await view.refresh();
+      const shown = await view.refresh();
       if (!view.isVisible(id)) throw new InvitationActionError(id);
-      const group = await invitations.accept(id);
-      attachGroup(group);
+      const groupId = Array.isArray(shown) ? shown.find((i) => i.id === id)?.groupId : undefined;
+      const join = async () => {
+        const joined = await invitations.accept(id);
+        attachGroup(joined);
+        return joined;
+      };
+      // Without a known group id there is nothing to exclude against (the library rejects the accept of an unknown id).
+      const group = groupId !== undefined ? await deps.purge.withGroupLock(groupId, join) : await join();
       await refreshQuietly();
       return group;
     },

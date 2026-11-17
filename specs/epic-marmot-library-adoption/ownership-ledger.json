@@ -539,10 +539,26 @@
         "S18": "register createJoinRequestInboxHandler as inboxHandlers.joinRequest; createJoinRequestSender replaces raw-WebSocket sendJoinRequest in UI callers; approval via joinRequestApproval (enqueue); wire autoAccept listener to inboxDisposition; directMessageNotifications.ts must call dispatchDmGiftWrap; roster snapshot port for the join-request handler; auto-accept never runs without a known matching group name (AC-AUTO-1 amended); dispatchDmGiftWrap needs a signer-based nip44 decrypt port for NIP-07/46 accounts (it uses selfPrivKeyHex)",
         "S22": "delete legacy raw-WebSocket sendJoinRequest and welcomeSubscription.ts, and remove the welcomeSubscription.ts exemption in the AC-INBOX structural scan"
       }
+    },
+    {
+      "id": "S13",
+      "concepts_owned": [
+        "membership.leaveEligibility",
+        "membership.leaveGroup",
+        "membership.purgeLocalGroup",
+        "membership.groupNotifications"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S17/S18": "wire getGroup=client.groups.get, groupOpQueue, sendGroupRumor for leave_intent, UI hide/restore, per-store clears; call checkListedGroups + syncListed after groups.list() under the lease; add optional disbanded to the Group overlay type and keep it on rewrite; never read a group handle after purge (library handle throws after abandon)",
+        "S17": "reconcile purges overlay groups absent from groups.list() via purgeLocalGroup BEFORE the first sink delivery; checkListedGroups/syncListed under the lease after the removal settle window",
+        "S18": "onPurged → UI reload + view.scheduleRefresh(); releasePollPurgeMark on join; wire purger isPurging/whenPurged into accept + auto-accept; add optional disbanded to the Group overlay type; withGroupLock is NOT re-entrant (actions.accept already holds it — callers inside must not re-take it); markUnloadable port for the overlay; purge port required in acceptDecline/autoAccept",
+        "S22": "delete leaveGroupImpl, pending-removal, tombstones, leaveHandler kind 13"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S11",
+    "last_story_reviewed": "S13",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

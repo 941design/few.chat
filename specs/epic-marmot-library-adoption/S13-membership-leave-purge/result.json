@@ -1,0 +1,132 @@
+{
+  "story_id": "S13",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T23:10:00Z",
+  "files_created": [
+    "app/src/lib/marmot/membership/index.ts",
+    "app/src/lib/marmot/membership/leaveEligibility.ts",
+    "app/src/lib/marmot/membership/leaveGroup.ts",
+    "app/src/lib/marmot/membership/purgeLocalGroup.ts",
+    "app/src/lib/marmot/membership/groupNotifications.ts",
+    "app/tests/unit/marmot/membership/leaveEligibility.test.ts",
+    "app/tests/unit/marmot/membership/leaveGroup.test.ts",
+    "app/tests/unit/marmot/membership/purgeLocalGroup.test.ts",
+    "app/tests/unit/marmot/membership/purgeLocalGroup.realStores.test.ts",
+    "app/tests/unit/marmot/membership/groupNotifications.test.ts",
+    "app/tests/unit/marmot/membership/leave.harness.test.ts",
+    "specs/epic-marmot-library-adoption/S13-membership-leave-purge/architecture.json",
+    "specs/epic-marmot-library-adoption/S13-membership-leave-purge/baseline.json",
+    "specs/epic-marmot-library-adoption/S13-membership-leave-purge/result.json",
+    "app/tests/unit/marmot/membership/purgeAcceptExclusion.test.ts",
+    "app/tests/unit/marmot/invitations/noPurge.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/i18n.ts",
+    "app/src/lib/marmot/invitations/acceptDecline.ts",
+    "app/src/lib/marmot/invitations/autoAccept.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/tests/unit/marmot/invitations/autoAccept.test.ts",
+    "app/tsconfig.tests-marmot.json",
+    "specs/epic-marmot-library-adoption/S13-membership-leave-purge/verification.json",
+    "specs/epic-marmot-library-adoption/architecture.md",
+    "app/tests/unit/marmot/joinRequests.harness.test.ts",
+    "app/tests/unit/marmot/invitations/inviteContext.harness.test.ts",
+    "app/tests/unit/marmot/invitations/pendingDeny.harness.test.ts",
+    "app/tests/unit/marmot/invitations/pendingView.test.ts",
+    "app/tests/unit/marmot/invitations/denyLayer.test.ts"
+  ],
+  "adjacent_fixes": [
+    "S9 accept path (app/src/lib/marmot/invitations/acceptDecline.ts, introduced by S9) was edited by S13: S13 round 1 added an optional `purge.whenPurged` wait; round 2 replaces it with the REQUIRED `purge.withGroupLock` port (the library accept + attachGroup run inside the per-group lock) and updates the header. Six S9/S12/S10 test files only gained the explicit `purge: noPurge` port (helper app/tests/unit/marmot/invitations/noPurge.ts).",
+    "S12 auto-accept path (app/src/lib/marmot/invitations/autoAccept.ts, introduced by S12) was edited by S13: round 1 added an optional `purge.whenPurged` wait; round 2 makes the `purge` port REQUIRED (validated at construction), keeps the pre-accept `whenPurged` wait, documents that the exclusion itself is the lock inside actions.accept."
+  ],
+  "tests_added": {
+    "unit": "leaveEligibility.test.ts (20: AC-LEAVE-1 truth table exhaustive + seeded oracle over 4000 rosters, case-insensitivity, not-a-member abandon, twin reads with opposite fail-closed directions, malformed answers, readLiveMembers); leaveGroup.test.ts (34, REAL GroupOpQueue: hide before leave() is called, background leave, kind-9 leave_intent announcement parsed by parseStructured, skipSync with a never-settling synced(), soft-fail rejecting/throwing/hanging(bounded)/late-rejecting announcement, deadline timeout restore + toast, last-admin pre-check and late rejection, sole-member abandon mode, unreadable roster never skips the purge, no durable marker (idb + localStorage scan mid-leave and after failure), dedupe, dispose, port validation); purgeLocalGroup.test.ts (35: order, overlay last, abort on abandon failure, retry key, idempotence, shared in-flight run, re-join guard incl. unreadable roster, throwing reporters, 17 ports validated); groupNotifications.test.ts (22: listener frame-safety over the real client FIFO, enqueue last, collapsing, startup check incl. fail-closed unreadable roster and an abandoned handle, disband through the REAL handlers router, idempotent mark, startup sync from the library marker); purgeLocalGroup.realStores.test.ts (6, real stores over fake-indexeddb + real history sink + production handlers: every store emptied at key level, another group byte-identical, tracker forgotten, abandon once, idempotent, retry after a failing store, overlay-only group's sink rows, ledger case own message + hung dispatch + leave + release = no chat row)",
+    "harness": "leave.harness.test.ts (8, real @941design/marmot clients over FakeRelay + createMemoryStorage, ~10 s): leave round trip with the app's REAL timing options (5.3 s observed, < 15 s, announcement received by Alice, roster updated, group gone from groups.list()), second leave abandon mode, leave with the relay down, leave from a group loaded while the relay is down, groupRemoved event path through the client FIFO, startup check with the event lost, healthy group untouched, persisted disband marker surfaced at startup",
+    "mutation_fail_first": "24 in-place mutations (backup + cmp restore) of the 5 production files, each killed by the named test file: no immediate hide, skipSync off, non-soft announcement, unbounded announcement, sole-admin block removed, unreadable members -> abandon (leave and modal directions), restore-vs-purge on unreadable roster, no restore on failure, overlay removed despite failed step, abandon failure not aborting, reactions/held reactions/markers/tracker/sink purge skipped, no in-flight sharing, re-join guard removed, startup check purging unreadable rosters, listener purging inline, disband not idempotent / startup sync removed, post-leave purge skipped, pending-view refresh dropped; plus the ledger case killed by dropping abandon + sink purge",
+    "fix_round": "Review-fix round: leaveGroup.test.ts +7 (late success after deadline, failure with the library group gone, timeout with the group gone, unreadable-roster purge failing at abandon/get-group restores, app-side failure does not, purge options), purgeLocalGroup.test.ts +11 (re-join guard before touching, ownAccountIsMember, every caller on a re-joined group, undeletable group, transient retry, teardown abort, message-edits / invite-contexts steps, isPurging/whenPurged), groupNotifications.test.ts +9 (syncListed getters throwing, malformed marker, check-then-sync combined, settle window with fake timers x4, validation), purgeLocalGroup.realStores.test.ts +1 (accept waits for a purge: real sink + chat store keep the new group's first message), autoAccept.test.ts +1. 15 in-place mutations (backup + cmp restore) each killed.",
+    "fix_round_2": "Remediation round 2: leaveGroup.test.ts (unreadable-roster AC-LEAVE-3 rewritten: rejected / timed-out / library-gone / app-side purge failure; failed-lookup tests x3; 15 s bound with fake timers x2), purgeLocalGroup.test.ts (undeletable group keeps overlay + unloadable mark + marker failure + loadable not marked), purgeAcceptExclusion.test.ts (new: purge after accept began waits, rejecting accept releases the lock, other group unaffected, accept during a purge waits, auto-accept deferred behind a purge, withGroupLock FIFO, required ports). Each new test confirmed failing against the pre-fix code before the fix; fix-level mutations (backup + cmp restore) listed in the run report. Mutations (round 2): purge without the lock (killed by purgeAcceptExclusion), unconditional ownAccountIsMember (killed by leaveGroup), leave started after the deadline fired (killed by leaveGroup); overlay removal despite unloadable is an equivalent mutant (the get-group failure already blocks it)."
+  },
+  "test_counts": {
+    "baseline": 8151,
+    "final": 8321
+  },
+  "mocks": [],
+  "remediation_rounds": 2,
+  "architect_skipped": false,
+  "modules_touched": [
+    "membership",
+    "reactions",
+    "i18n"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "membership/ gains the leave half (D9) as injected-port factories. leaveEligibility.ts: pure decideLeave (execution path: unreadable members -> leave with rosterKnown:false; sole member or absent account -> abandon; sole admin with others -> blocked last-admin) and selectLeaveModalState/readLiveMembers (live-member path: an unreadable member list never offers abandon): the two directions are opposite on purpose, readRosterFacts guards members() and activeAdmins() separately. leaveGroup.ts: createGroupLeaver hides the group at once, then in the background sends the kind-9 leave_intent announcement (bounded 5 s, soft-fail), runs group.leave() through the GroupOpQueue with skipSync (bounded by a 20 s deadline), purges locally and refreshes the pending view; on failure restores the group and raises the leave-failed toast (last-admin: blocked notice); an unreadable roster never skips the purge; no durable marker. purgeLocalGroup.ts: createLocalGroupPurger (seam GroupDataPurger): tracker.forgetGroup, group.abandon() (failure aborts before deletion), explicit sink purge, re-join guard, every app-side store (chat + edit aux/slot meta, reaction rows, held reactions, polls/votes, media, member profiles, memos, unread, join requests, invite links/expiries, direct-invite markers), overlay row last and only on full success (retry key), idempotent, in-flight runs shared. groupNotifications.ts: groupRemoved listener only enqueues the purge (frame-safe, collapsing); checkListedGroups purges listed groups whose readable members() lack the own account (unreadable = left alone); createDisbandMarker marks the overlay row disbanded from the router's disband target and re-marks at startup from the library's persisted group.disbanded. Additive out-of-scope support: reactions/api.ts clearReactionsForGroup (no per-group reaction delete existed) and i18n groups.leaveFailed en+de (the 'existing' key did not exist); app/tsconfig.tests-marmot.json includes the new test dir.",
+  "verification": {
+    "pre_impl": 12,
+    "post_impl": 7,
+    "commands": [
+      "make test-unit equivalent: cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit && npx vitest run (376 files, 8276 passed, 1 skipped, 0 failed)",
+      "cd app && npx tsc --noEmit (clean)",
+      "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit (clean)",
+      "round 2: cd app && npx tsc --noEmit (clean); make test-unit (377 files, 8321 passed, 1 skipped, 0 failed)"
+    ],
+    "lint": "NO_LINT (no eslint config)",
+    "typecheck": "clean"
+  },
+  "decisions": [
+    "Immediate UI removal is a port (hideGroup/restoreGroup, in-memory UI state), not a data purge: the app data is deleted only once leave() resolved, so a failed leave can restore the group with its history. No durable marker is written anywhere (idb/localStorage scan test).",
+    "Leave deadline 20 s = library leaveTimeoutMs 10 s + removalSettleMs 5 s + 5 s slack: the library itself resolves (purging) at its leaveTimeoutMs, so 'times out' in AC-LEAVE-3 is the app-level deadline for a hung library call. SUPERSEDES the original 'late success leaves a ghost the startup check purges' decision (S13-D2): the leave() promise now keeps a continuation after the deadline or a non-last-admin rejection; a late resolve hides the group again, runs the purge and refreshes the pending view (no second toast). After ANY failure the library is asked again (getGroup): a group it no longer holds means the leave committed, so the leave counts as done (hide + app-side purge) instead of failed.",
+    "Unreadable roster on the leave path: leave is attempted; if it fails the local purge still runs and the group is NOT restored for an app-side step failure (an undeletable corrupt group is the failure to avoid, F1); but a purge that fails at the LIBRARY step (get-group / abandon in the PurgeError) means the group is intact, so it is restored with the leave-failed toast. With a readable roster a failed leave restores. The startup check does the opposite (unreadable = left alone).",
+    "purgeLocalGroup aborts at an abandon() failure before deleting anything app-side (group stays intact and listed), then runs every other step best effort and removes the overlay row last only when all succeeded, so overlay-present-but-library-absent is the retry key S17/AC-WIPE-2 purges at startup. The explicit sink purge is kept although group.abandon() calls history.purge itself (a group the library does not hold needs it).",
+    "Re-join safety: the purger checks holdsAccount (the own account in a READABLE members()) BEFORE forgetGroup / abandon / history.purge and returns untouched, for every caller (leave-finished, groupRemoved event, startup check). Only the sole-member abandon passes { ownAccountIsMember: true }. The post-abandon second guard stays. Purge and accept are mutually exclusive per group id: the purger exports isPurging(groupId) / whenPurged(groupId) (never rejects); createInvitationActions.accept and createAutoAccept defer the accept while a purge of that group id runs (optional `purge` port).",
+    "Disband: only receive-side exists in the library. The overlay mark is {actor?, at}; `at` is taken from the library's GroupDisbanded.at (client-clock ms of the settlement; the library type DOES carry it) and falls back to the injected clock. Written through an injected overlay port (the Group type is not edited: S18 adds an optional disbanded field); fenced groups have no notification and stay on the intentFailed path. syncListed reads `id` once per iteration in a try (a handle purged meanwhile throws from every accessor and is never touched again) and guards the marker's shape.",
+    "Production binding is S18 (kept out of scope): provide ports getGroup = client.groups.get, queue = createGroupOpQueue, sendAnnouncement = sender.sendGroupRumor, hide/restore = group-list state, notifyLeaveFailed = toast with copy.groups.leaveFailed, notifyLastAdminBlocked = copy.groups.lastAdminLeaveBlocked, pendingView, and for the purger the per-store clears (clearMessages, clearReactionsForGroup, purgeHeldReactionsForGroup, clearPollData, clearGroupMedia, clearMemberProfiles, clearProfileRequestMemos, clearUnreadGroup, clearPendingJoinRequestsForGroup + clearJoinRequestGroup, clearInviteLinksForGroup, clearInviteExpiries, clearPendingDirectInvitesForGroup, deleteGroup) as in purgeLocalGroup.realStores.test.ts.",
+    "Undeletable group: when getGroup rejects twice in a row with anything but the client-teardown code `disposed`, the purge skips the library step, reports the failure through onError (step get-group) and removes the app-side data and the overlay row anyway (the library state cannot be loaded, a retry will not change that); it then resolves. A `disposed` rejection aborts untouched with PurgeError.",
+    "message-edits and invite-contexts are their own purge steps (clearMessageEdits -> clearMessageEditsStateForThread, whose failure the chat-store clear swallows; clearInviteContexts -> InviteContextStore.discard({ groupId })), so a failure keeps the overlay retry key.",
+    "Startup check settle window: createGroupRemovalHandlers takes removalSettleMs (default 5000, injectable with now/wait); checkListedGroups collects candidates, waits out the remainder of the window since construction, then re-reads each roster before purging (re-joined or unreadable = left alone).",
+    "leaveEligibility documents its dependency on the one-leaf-per-account invite guard (roster = accounts, library last-admin rule = leaves).",
+    "Remediation round 2 (1) A failed getGroup lookup is not 'not a member': leave() takes the leave path with rosterKnown:false (never abandon); the background run asks once more (handle -> normal leave; library does not hold it -> finish the app side; still failing -> plain purge WITHOUT ownAccountIsMember, restored with the toast if the purger rejects or the library turns out to hold the group). ownAccountIsMember:true is passed ONLY for the sole-member abandon decided from a readable roster; a lookup that resolved undefined (not-a-member) abandons without the bypass.",
+    "Remediation round 2 (2) Purge/accept exclusion is real: the purger exports withGroupLock(groupId, fn) (per-group FIFO async lock, not re-entrant, a rejecting holder releases it); the purge runs inside it; createInvitationActions.accept runs invitations.accept + attachGroup inside it; createAutoAccept accepts through those actions (so the lock applies) and additionally waits out a running purge with whenPurged. The `purge` port is REQUIRED in both (TypeError at construction). Deliberate deviation: autoAccept does not take the lock itself, because the lock is not re-entrant and actions.accept already holds it (taking it twice would deadlock).",
+    "Remediation round 2 (3) AC-LEAVE-3 with an unreadable roster now matches the readable case: a rejected or timed-out leave restores the group and raises the leave-failed toast, nothing is purged; EXCEPT when the library no longer holds the group (getGroup -> undefined): the leave did commit, so it is done. The old 'purge still runs and the group is not restored' behaviour (and its test) is replaced. The twin-read fail-closed rule for the leave path is therefore: an unreadable roster never turns a leave into an abandon and never blocks it; it no longer forces a purge after a failed leave.",
+    "Remediation round 2 (4) Undeletable group (getGroup keeps rejecting with a non-teardown error): the app-side data is purged but the overlay row is KEPT (retry key) and marked `unloadable` through the optional `markUnloadable` port; the purge REJECTS with PurgeError{unloadable:true, failures:[get-group,...]} instead of claiming success. The leaver restores the group with the toast so the UI can offer a retry. A failing markUnloadable is one more failure (step mark-unloadable). A `disposed` rejection still aborts untouched.",
+    "Remediation round 2 (5) AC-LEAVE-2 bound: chosen design = ONE deadline (leaveDeadlineMs, 20 s) covering the announcement wait AND leave(), plus the announcement wait capped at 2 s (DEFAULT_ANNOUNCE_TIMEOUT_MS 5 s -> 2 s; the send continues in the background). Worst case click-to-settle = 20 s (+ the post-failure getGroup lookup) instead of 25 s, leave() keeps >= 18 s of budget (library leave 10 s + 5 s settle), and a deadline firing during the announcement wait means leave() is never started. Proven with fake timers at the default timing. Trade-off: a kind-9 announcement slower than 2 s is still sent but may land after leave() started."
+  ],
+  "limitations": [
+    "Not wired into production: no component calls createGroupLeaver yet and the legacy leaveGroupImpl/pending-removal/tombstone code stays until S18/S22.",
+    "A group that is mid-leave when the tab reloads is listed again (spec D9); a leave that did commit is finished by checkListedGroups at startup, which S18 must call after groups.list() under the lease.",
+    "A leave() that is still running when the app deadline fires restores the UI row with the toast; if it succeeds later the continuation hides the group again and purges it (no ghost, no second toast). A leave() that never resolves and leaves the library holding the group stays restored: the user can leave again.",
+    "The harness could not reproduce a never-settling synced() (a stopped FakeRelay lets the first sync end); the skipSync guarantee is proven over the real GroupOpQueue with a faked never-settling synced().",
+    "A live group-disbanded notification cannot be produced through the public library API (no disband()); it is covered through the handlers router, and the persisted marker through the harness.",
+    "Reactions rows are deleted by the new clearReactionsForGroup; its cache/queue behaviour is exercised only through the purge tests, not a dedicated reactions/api test.",
+    "S18 must wire: onPurged -> view.scheduleRefresh() (the purger's onPurged is the UI reload and the pending view must refresh after a purge); releasePollPurgeMark on join (a re-joined group must not stay marked as purged for polls); and pass the purger's isPurging/whenPurged into the accept paths (createInvitationActions({ purge }), createAutoAccept({ purge })) - until wired, accept and purge are not exclusive in production.",
+    "The invite-context clear is bound by S18 as InviteContextStore.discard({ groupId }); the message-edit clear as messageEdits/api.clearMessageEditsStateForThread.",
+    "S18 must bind the new optional purger port markUnloadable (overlay row flag, e.g. Group.unloadable) and surface a retry for a group whose leave/purge failed with PurgeError.unloadable; until then the kept overlay row is only retried by the startup reconciliation.",
+    "A leave whose lookup failed twice and whose purge then resolved on a group the library still holds is reported failed (restored + toast); a transient 4-fold getGroup rejection on a healthy group would reach the purger's undeletable-group branch (app-side data purged, overlay kept) - accepted, the purger cannot distinguish it from a persistently unloadable group."
+  ],
+  "decisions_needed": [
+    {
+      "id": "S13-D1",
+      "question": "Ratify the two additive edits outside scope.includes: reactions/api.ts clearReactionsForGroup and i18n.ts groups.leaveFailed (en+de)?",
+      "context": "The S5 ledger requires S13's purge to remove reaction rows but no per-group delete existed (purgeHeldReactionsForGroup covers only the held queue); AC-LEAVE-3 says the 'existing' leave-failed i18n key but none exists in the repo.",
+      "default_taken": "Added both (about 45 lines, additive, tested) rather than leave the ledger obligation and AC-LEAVE-3 without a production binding; the verification question VQ-S13-015 records it.",
+      "alternative": "Revert both edits and move them to S17 (i18n) / S5 follow-up (reactions); S13's purger and leaver take them as required ports, so nothing else changes."
+    },
+    {
+      "id": "S13-D2",
+      "question": "SUPERSEDED: the ghost-row decision (late library success after the 20 s deadline leaves a restored row). Resolved by the late-success continuation and the getGroup re-check; no decision needed.",
+      "context": "The library resolves leave() at its own leaveTimeoutMs; the app deadline only guards a hung call.",
+      "default_taken": "Continuation on the leave() promise: a late resolve hides the group again, purges and refreshes; after any failure a group the library no longer holds counts as left.",
+      "alternative": "None needed."
+    }
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "AC-LEAVE-3 and the S5 ledger both assume things that do not exist (an 'existing' leave-failed i18n key, and a per-group reaction-row purge covered by purgeHeldReactionsForGroup), so two out-of-scope additive edits had to be decided unattended; and nothing in the library docs says a MarmotGroup handle throws from id/members() once abandoned, which only the real-client harness surfaced (checkListedGroups read group.id after the purge).",
+    "surprised_by": "A stopped FakeRelay does not make group.synced() hang (the library's first sync simply ends), so the 'offline group cannot block leave' guarantee cannot be shown in the harness and had to be proven at the group-op queue with a faked never-settling synced().",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}
