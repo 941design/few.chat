@@ -1,0 +1,107 @@
+{
+  "story_id": "S6",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T17:30:00Z",
+  "files_created": [
+    "app/src/lib/marmot/send/index.ts",
+    "app/src/lib/marmot/send/sendGroupRumor.ts",
+    "app/src/lib/marmot/send/ownRowTracker.ts",
+    "app/src/lib/marmot/send/groupOpQueue.ts",
+    "app/tests/unit/marmot/send/sendGroupRumor.test.ts",
+    "app/tests/unit/marmot/send/groupOpQueue.test.ts",
+    "app/tests/unit/marmot/send/ownRowTracker.test.ts",
+    "app/tests/unit/marmot/send/ownRowLifecycle.property.test.ts",
+    "app/tests/unit/marmot/send/ownEcho.integration.test.ts",
+    "app/tests/unit/marmot/send/send.harness.test.ts",
+    "specs/epic-marmot-library-adoption/S6-send-helper-own-lifecycle/baseline.json",
+    "app/tests/unit/marmot/send/groupOpQueue.bounded.test.ts",
+    "app/tests/unit/marmot/send/ownSendHardening.test.ts",
+    "app/tests/unit/marmot/send/ownRowLifecycle.store.property.test.ts",
+    "app/tests/unit/marmot/send/ownSendFollowUp.test.ts",
+    "specs/epic-marmot-library-adoption/S6-send-helper-own-lifecycle/architecture.json"
+  ],
+  "files_modified": [
+    "app/src/lib/pendingOwnSends.ts",
+    "app/tsconfig.tests-marmot.json",
+    "specs/epic-marmot-library-adoption/S6-send-helper-own-lifecycle/verification.json",
+    "specs/epic-marmot-library-adoption/architecture.md",
+    "specs/epic-marmot-library-adoption/S6-send-helper-own-lifecycle/architecture.json"
+  ],
+  "adjacent_fixes": [],
+  "tests_added": {
+    "unit": "sendGroupRumor (23), groupOpQueue (16), groupOpQueue.bounded (20: timeout/abort/skipSync, per-reason commit-pending), ownRowTracker (30), ownSendHardening (31: intent matching, timer after synced, queued stays sending, retry same id, same-second, signal-only, caps, forgetGroup)",
+    "property": "ownRowLifecycle.property (3, now also clause v: last port report equals final status), ownRowLifecycle.store.property (1: exhaustive length 1..3 over the real chat store, clause i exactly one row)",
+    "integration": "ownEcho.integration (15: pendingOwnSends multi-transition status through the port incl. register-failed-echo and register-echo-withdraw, carrier bookkeeping via handler adapter)",
+    "harness": "send.harness (5)",
+    "follow_up": "ownSendFollowUp (12: forgotten rows incl. eviction/forgetGroup, confirmed-visible during own action, bounded/abortable/logged barrier, attempt generation, warn-once pendingIntents, signal default)"
+  },
+  "test_counts": {
+    "baseline": 7450,
+    "final": 7519
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": [
+    "send"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "send/ module: createGroupRumorSender (prepare/send, getEventHash id, own pubkey, group.send exactly once, required tracker), createOwnRowTracker (confirmed-by-echo in either order, D6 triggers a-d never downgrading confirmed, explicit withdraw -> failed, later echo flips failed, no resend port), createGroupOpQueue (per-group serial, synced() first, bounded commit-pending retry); pendingOwnSendsStatusPort re-points status to module-scope pending sends. Hardening round: multi-transition per-row status port (sending|confirmed|failed, kept until confirmed-and-persisted or forgotten, own change event; failed KEEPS the row); bounded synced() wait with signal/timeout/skipSync and reason-branched commit-pending retry behind an ingest([]) barrier; own-intent matching by intent id, timer after synced(), still-queued stays sending, retry(rumorId) re-sends the stored rumor; same-second id bump; signal-only pendingSignals; failed-row cap, unknown-withdraw not tracked, forgetGroup.",
+  "verification": {
+    "unit_full": "make test-unit: tsc -p tsconfig.tests-marmot.json clean, 340 files, 7507 passed, 1 skipped, 0 failed",
+    "typecheck": "tsc --noEmit clean",
+    "lint": "NO_LINT",
+    "mutation_spot_checks": "3 tracker mutants killed (sendRejected no-op, withdraw no-op, trigger downgrades confirmed)"
+  },
+  "decisions": [
+    "Own optimistic signals: tracker keeps the rumor while sending and exposes pendingSignals(groupId) to re-apply after a recompute; failed/withdrawn signals are dropped (AC-WDR-2). No recompute caller consumes it until S18.",
+    "onOwnEcho/onOwnWithdrawn take optional eventId (carrier) so a withdraw of a non-confirming carrier is ignored; handler ports in chatHandler.ts not widened (out of scope) so the rule is inert until S18 passes input.eventId.",
+    "onOwnEcho for an unknown row is a no-op; onOwnWithdrawn for an unknown row still reports failed (the stored row exists).",
+    "sendGroupRumor is delivered as a factory (createGroupRumorSender) binding ownPubkey and a required tracker; prepare() gives the final id before send for the optimistic row.",
+    "A3 second half is staged with a publish hold then rejecting the held publish: a held publish blocks the group op queue so the fork cannot resolve; the app-visible signal is send() rejecting publish-failed (no intentFailed/groupBranchSwitched observed).",
+    "ClientJobQueue is not used inside send: nothing calls the client from a library frame; callers in frames must enqueue.",
+    "RETRY RULE: a retry MUST re-send the identical stored rumor (same id, same created_at) via sender.retry(group, rumorId) (tracker.retry returns the stored rumor and flips failed -> sending); never rebuild. Peers dedupe by rumor id, so a retry of a send that did reach the group (lost ack, publish-failed that the library publishes later) is harmless; a rebuilt rumor would be a duplicate message.",
+    "Timer start: the 60 s unconfirmed clock starts when group.synced() resolves after send() resolved (AC-PIPE-15: a send before the first post-load sync only records an awaiting-sync intent); synced() rejecting (fenced/disposed/not-a-member) fails the row. A group without synced() keeps the old start-at-send-resolution.",
+    "Intent matching: group.send returns no intent id and intentFailed carries only intentId, so the sender reads pendingIntents() (read issued before send, diff after) and binds the single new application intent not claimed by another row (tracker.bindIntent). onIntentFailed({groupId,intentId}) fails only rows bound to that id; non-application intents, other groups, unbound ids fail nothing. Ambiguous diffs (concurrent sends) bind nothing and fall back to send() rejection / timer / branch switch.",
+    "A send-rejected whose new intent is still 'queued' (AC-INVITE-3: rumor stays queued) keeps the row sending, bound to the queue id; no clock runs for it (nothing resolved), it confirms by echo or fails by intentFailed(queueId) / branch switch.",
+    "Status port is multi-transition and now reports 'sending' on retry; pendingOwnSends keeps a per-row status map (own change event subscribeOwnRowStatus, ownRowStatusOf/For, forget) beside the existing one-shot settle: confirmed settles the pending send as persisted and ends the status, failed keeps pending entry + status, so ContactChat's remount semantics are unchanged. ContactChat is not yet wired to the new status (S18).",
+    "groupOpQueue: synced() wait is bounded (default 30 s) by timeout/AbortSignal; lost before op() starts -> GroupOpError not-synced/aborted, op never runs, chain released in order (an aborted queued op never lets its successor overtake). commit-pending branches on details.reason: own-commit-pending (pendingIntentId), selfremove-election-wait, staged-adds-commit-unconfirmed -> ingest([]) barrier + backoff 250/1000/3000 ms; awaiting-sync -> bounded synced() then retry; proposal-deferred and any other reason -> surfaced at once.",
+    "S13 leave recommendation: queue.runCommit(group, () => group.leave(), { skipSync: true, signal }) so leave never hangs behind a synced() that never settles offline; the library bounds leave() itself (leaveTimeoutMs, default 60 s). queue.leave keeps the safe default (sync first, bounded 30 s). With skipSync an awaiting-sync refusal is surfaced at once. S13 must call sender.forgetGroup(groupId) on purge.",
+    "pendingSignals carries only signal rumors (reaction 7, delete 5, poll 10/11/12, edit-marked kind 9 via hasEditMarkerTag); sender passes signal:isSignalRumor, the tracker still stores every rumor (for retry). Failed rows are capped like confirmed (maxFailedRetained, default 500; eviction tells the port via forget). A withdraw of an unknown id reports failed without tracking a row, so a later echo of it does not flip it (limitation).",
+    "S18 MUST pass input.eventId through the chat handler ports onOwnEcho/onOwnWithdrawn: the carrier rule is proven live only through a test adapter (ownEcho.integration 'carrier bookkeeping') which reads the carrier of the sink call in flight.",
+    "Review follow-up: a row the tracker forgets (forget, forgetGroup, eviction beyond maxFailedRetained/maxConfirmedRetained) is GONE in pendingOwnSends: the port's forget drops the status record AND the pending entry (settled persisted:false) and announces status 'forgotten' (OwnRowViewStatus widened). 'failed keeps the row' holds for live rows only; otherwise a forgotten row would read sending forever with no retry.",
+    "Review follow-up: a confirmed row whose settle is deferred by an own edit/delete in flight keeps a 'confirmed' status record until the settle applies; ownRowStatusOf/ownRowStatusesFor may return 'confirmed'.",
+    "Review follow-up: groupOpQueue's ingest([]) barrier is bounded by syncTimeoutMs and abortable (timeout falls through to the backoff; a throwing ingest is logged with console.warn and falls through); the backoff sleep clears its timer on abort; leave with skipSync is bounded on the barrier too; GroupOpError 'aborted' means 'no attempt is in flight'.",
+    "Review follow-up: attempt generation: tracker.retry bumps a per-row attempt (tracker.attemptOf); the sender captures it per dispatch and passes it to bindIntent/sendResolved/sendRejected, which ignore an older attempt (incl. the detached synced() waiter), so a first send that settles after a retry never changes the retried row.",
+    "Review follow-up: SendableGroup.pendingIntents is required by type (MarmotGroup always has it); a group object without it warns once (trigger b inert). register() defaults signal to false."
+  ],
+  "limitations": [
+    "groupOpQueue: a synced() wait that lost the race leaves the library's syncWaiter registered until the group syncs (no cancel API); harmless but not freed.",
+    "Own-intent binding observes an application intent only while it still exists after send() resolves (awaiting-sync, queued, pending-publish); a normally confirmed send has no record left, nothing to bind, nothing to fail. Not reachable in the harness (needs a reloaded group handle), covered by unit tests over a library model; concurrent sends from one group may leave an ambiguous diff unbound (they fall back to the other triggers).",
+    "A real commit-pending behind an own pending commit is not reachable via the public API (the library resumes the pending commit at the start of the next op; concurrent ops serialise on its own queue): reason branches are unit-tested over the documented error shapes; the harness checks runCommit composition over a real group after a refused publish.",
+    "A withdraw of an unknown row reports failed to the port but is not tracked: a later echo of that id does not flip the app status back (the stored row exists, so the sink re-delivery path owns it).",
+    "No call sites migrated (S18); ContactChat does not yet display the failed/retry status; no behaviour docs changed (no user-visible change yet).",
+    "The failed/sending/confirmed status is session memory only (module-scope maps in pendingOwnSends): a reload loses a failed row's status and its retry. S18 decides whether a durable failed flag on the stored row is added.",
+    "The handler carrier ports (onOwnEcho/onOwnWithdrawn eventId) are widened in S18, not here.",
+    "The same-second id bump guards TRACKED rows only: a row the tracker pruned or forgotten (or of an earlier session) is not seen, so identical content sent in the same second as such a row can still collide with its id.",
+    "A3 harness asserts 'not delivered while the publish is refused': the library still holds the abandoned intent (pending-publish), so it may yet go out; that is why failed/retry re-sends the same rumor id.",
+    "A failed row evicted by the cap is forgotten: its retry, status and pending entry are dropped and views are told 'forgotten' (the stored app row stays)."
+  ],
+  "decisions_needed": [
+    {
+      "question": "Widen the chat handler onOwnEcho/onOwnWithdrawn ports to pass input.eventId so the carrier rule is live?",
+      "default": "Yes, in S18 wiring (small handler change plus test updates). S18 must pass input.eventId."
+    }
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The A3 second-half scenario in the story notes (abandoned before publish ack via an outbound hold) is not reproducible as written: a held publish blocks the library group operation queue, so the fork never resolves until the hold is released, and releasing it yields confirmed-then-withdrawn instead. Finding the working staging (reject the held publish) took several exploratory harness runs.",
+    "surprised_by": "Neither intentFailed nor groupBranchSwitched fires for a fork-rewind abandoned send; only the send() rejection signals it, and the intent stays in pendingIntents().",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

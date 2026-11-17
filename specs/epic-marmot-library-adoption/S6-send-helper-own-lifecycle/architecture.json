@@ -1,0 +1,83 @@
+{
+  "module_name": "send",
+  "purpose": "Outbound group sends and the own-send lifecycle: the canonical rumor builder + single group.send (sendGroupRumor), per-group serialisation of commit ops with synced() and commit-pending retry (groupOpQueue), and the optimistic own-row tracker that confirms by rumor.id from the history sink echo and fails a row on the four D6 triggers without ever downgrading a confirmed row or resending (ownRowTracker).",
+  "public_api": [
+    {
+      "name": "buildGroupRumor",
+      "signature": "(ownPubkey: string, kind: number, content: string, tags: readonly (readonly string[])[], createdAt: number) => Rumor",
+      "description": "Pure canonical unsigned rumor; id = nostr-tools getEventHash; validates pubkey hex, kind range, content string, tags string[][]; throws TypeError."
+    },
+    {
+      "name": "createGroupRumorSender",
+      "signature": "(options: { ownPubkey: string; tracker: OwnRowTracker; nowSeconds?: () => number }) => { prepare(group: SendableGroup, kind: number, content: string, tags: string[][]): PreparedGroupRumor; sendGroupRumor(group: SendableGroup, kind: number, content: string, tags: string[][]): Promise<{ id: string; result: unknown }>; retry(group: SendableGroup, rumorId: string): Promise<{ id: string; result: unknown }>; forgetGroup(groupId: string): void }",
+      "description": "Seam SendGroupRumor (consumed by S18). prepare() builds the rumor (pubkey = own account) and registers the optimistic row with the REQUIRED tracker; send() calls group.send({type:'application', rumor}) exactly once (idempotent on repeat) and feeds resolve/reject into the tracker; no automatic retry or resend. retry(group, rumorId) re-sends the IDENTICAL stored rumor of a failed row. Each dispatch captures the row's attempt generation (tracker.attemptOf, bumped by tracker.retry): results (resolve, reject, intent binding, the detached synced() waiter) of an older attempt are ignored. SendableGroup.pendingIntents is required (the library always provides it); a group without it warns once and trigger (b) is inert. Same-second id bump guards tracked rows only (residual: a pruned/forgotten row can collide)."
+    },
+    {
+      "name": "createOwnRowTracker",
+      "signature": "(options: { ports: { setStatus(groupId, rumorId, status: 'sending'|'confirmed'|'failed'): void; forget?(groupId, rumorId): void }; timeoutMs?: number; maxConfirmedRetained?: number; maxFailedRetained?: number }) => OwnRowTracker",
+      "description": "Own-row state machine. register (signal defaults to false)/attemptOf/bindIntent/retry/sendResolved/sendRejected (the last three take an optional attempt generation) from the sender; onOwnEcho(groupId, rumorId, eventId?) and onOwnWithdrawn(groupId, rumorId, eventId?) are the chat handler's required ports; onIntentFailed({groupId}) / onGroupBranchSwitched({groupId}) are the client lifecycle listeners; statusOf, pendingSignals(groupId), forget, dispose. Triggers (a)-(d) act only on unconfirmed rows; only an explicit sink withdraw downgrades a confirmed row; a later echo flips failed to confirmed. No resend port exists."
+    },
+    {
+      "name": "createGroupOpQueue",
+      "signature": "(options?: { maxCommitPendingRetries?: number; commitPendingBackoffMs?: readonly number[]; syncTimeoutMs?: number }) => GroupOpQueue",
+      "description": "Seam GroupOpQueue (consumed by S8, S11, S13, S14). run(groupId, op) serialises per group; runCommit(group, op, { signal?, syncTimeoutMs?, skipSync? })/invite/removeMember/setAdmins/rename/leave await group.synced() first (BOUNDED by syncTimeoutMs, default 30 s, and abortable; a wait lost before op() starts rejects GroupOpError not-synced/aborted and the op never runs) and retry a commit-pending rejection by details.reason: own pending commit / selfremove-election-wait / staged-adds-commit-unconfirmed after an ingest([]) barrier (bounded by syncTimeoutMs, abortable, a throwing ingest is logged) plus backoff, awaiting-sync after a bounded synced(), proposal-deferred and unknown reasons surfaced at once (max 3 retries). Never calls the client from a library frame: callers inside a frame schedule through the ClientJobQueue."
+    },
+    {
+      "name": "pendingOwnSendsStatusPort (in app/src/lib/pendingOwnSends.ts)",
+      "signature": "(owner: string) => OwnRowStatusPort",
+      "description": "Re-points the tracker's status port at the module-scope pending own sends: setStatus(groupId, rumorId, 'sending'|'confirmed'|'failed') keeps a per-row status; failed KEEPS the pending entry and the status (failed/retry), confirmed settles the pending send as persisted (kept visible as confirmed while an own edit/delete is in flight); forget(groupId, rumorId) (tracker forgot the row: discard, group left, eviction beyond maxFailedRetained) drops the status AND the pending entry (settled not persisted) and announces 'forgotten'; unknown rows are a no-op."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/send/sendGroupRumor.ts",
+    "app/src/lib/marmot/send/ownRowTracker.ts",
+    "app/src/lib/marmot/send/groupOpQueue.ts"
+  ],
+  "owned_data": [
+    "in-memory own-row status per (groupId, rumorId) and the confirmation timers",
+    "per-group op chain tails"
+  ],
+  "dependencies_allowed": [
+    "nostr-tools/pure (getEventHash)",
+    "@941design/nostr-events/event (Rumor type only)",
+    "@/src/lib/messageEdits/rumor (hasEditMarkerTag: edit-marked kind 9 is a signal)",
+    "app/src/lib/marmot/history (GroupHistoryHandlers seam, consumed through the handler ports wired by S18)",
+    "app/src/lib/marmot/client (ClientJobQueue seam: callers schedule ops from library frames with handle.enqueue)"
+  ],
+  "dependencies_forbidden": [
+    "ts-mls",
+    "@internet-privacy/marmot-ts",
+    "any React context",
+    "idb-keyval update()",
+    "app/src/lib/marmot/chatPersistence and the stores (the tracker reports status through an injected port only)"
+  ],
+  "external_ports": [
+    "OwnRowStatusPort.setStatus (required; no silent default), OwnRowStatusPort.forget (optional, wired by pendingOwnSendsStatusPort)",
+    "SendableGroup.send (the library group handle)",
+    "CommitOpGroup.synced (+ optional ingest([]) barrier) + the five commit ops"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "history sink own echo (handler port onOwnEcho) and own withdraw (handler port onOwnWithdrawn)",
+    "client intentFailed",
+    "client groupBranchSwitched"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/send/sendGroupRumor.test.ts",
+    "app/tests/unit/marmot/send/groupOpQueue.test.ts",
+    "app/tests/unit/marmot/send/ownRowTracker.test.ts",
+    "app/tests/unit/marmot/send/groupOpQueue.bounded.test.ts",
+    "app/tests/unit/marmot/send/ownSendHardening.test.ts",
+    "app/tests/unit/marmot/send/ownSendFollowUp.test.ts",
+    "app/tests/unit/marmot/send/ownRowLifecycle.property.test.ts",
+    "app/tests/unit/marmot/send/ownRowLifecycle.store.property.test.ts",
+    "app/tests/unit/marmot/send/ownEcho.integration.test.ts",
+    "app/tests/unit/marmot/send/send.harness.test.ts"
+  ],
+  "seams": [
+    { "name": "SendGroupRumor", "seam": { "cross_story": true, "consumed_by": ["S18"] } },
+    { "name": "GroupOpQueue", "seam": { "cross_story": true, "consumed_by": ["S8", "S11", "S13", "S14"] } },
+    { "name": "GroupHistoryHandlers (consumed: onOwnEcho / onOwnWithdrawn ports)", "seam": { "cross_story": true, "consumed_by": ["S18"] } },
+    { "name": "ClientJobQueue (consumed by callers of GroupOpQueue inside library frames)", "seam": { "cross_story": false, "consumed_by": [] } }
+  ]
+}

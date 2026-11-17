@@ -9,6 +9,7 @@
  * settles. Entries are per account, so another account in this tab never sees them.
  */
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
+import type { OwnRowStatusPort } from '@/src/lib/marmot/send';
 
 /**
  * `replacedIds` are earlier ids of the same send (an image send's temp id): a view
@@ -146,8 +147,14 @@ export function settlePendingOwnSend(owner: string, id: string, persisted: boole
     entry.settledAs = persisted;
     return;
   }
+  removeEntry(key, entry, persisted);
+}
+
+/** Removes a pending entry (and its aliases) and tells the settle listeners. A `confirmed` status record held back by a deferred settle ends with it. */
+function removeEntry(key: string, entry: Entry, persisted: boolean): void {
   entries.delete(key);
   for (const [from, to] of aliases) if (to === key) aliases.delete(from);
+  if (statuses.get(keyOf(entry.owner, entry.message.id))?.status === 'confirmed') statuses.delete(keyOf(entry.owner, entry.message.id));
   notify(listeners, {
     owner: entry.owner,
     threadId: entry.message.groupId,
@@ -233,10 +240,114 @@ export function subscribePendingOwnSendChanged(
   };
 }
 
+/**
+ * The status of an own send's row, from the own-send lifecycle tracker (`send/ownRowTracker`):
+ * `sending` (in flight, or retried), `failed` (kept: the failed/retry state, NOT a drop),
+ * `confirmed` (the sink delivered it back; transient, see below) or `forgotten` (the tracker dropped the row: evicted
+ * beyond `maxFailedRetained`, discarded, its group left; the last event of such a row, nothing is kept for it).
+ */
+export type OwnRowViewStatus = 'sending' | 'confirmed' | 'failed' | 'forgotten';
+
+/** A row changed status. `confirmed` is the last event of a row: it is persisted by then. */
+export type OwnRowStatusChanged = { owner: string; threadId: string; id: string; status: OwnRowViewStatus };
+
+type StatusEntry = { owner: string; threadId: string; id: string; status: 'sending' | 'failed' | 'confirmed' };
+
+// Per-row status kept until the row is confirmed-and-persisted (the sink persisted it before it echoed
+// it) or explicitly forgotten. Unlike `entries` this survives a failure: `settlePendingOwnSend(…, false)`
+// means "drop the row" (ContactChat), a failed own-lifecycle row must stay as failed/retry.
+const statuses = new Map<string, StatusEntry>();
+const statusListeners = new Set<(event: OwnRowStatusChanged) => void>();
+
+/**
+ * Records a status of an own row and tells the subscribers. `confirmed` settles the module-scope pending send
+ * as persisted (a late echo thus also reaches a row that had failed) and ends the row's status record;
+ * `failed` keeps both the pending send and the status; `sending` (a retry) turns a failed row back.
+ */
+export function setOwnRowStatus(owner: string, threadId: string, id: string, status: OwnRowViewStatus): void {
+  const who = owner.toLowerCase();
+  const key = keyOf(owner, id);
+  if (status === 'forgotten') {
+    forgetOwnRowStatus(owner, id, threadId);
+    return;
+  }
+  const entry = entries.get(entryKey(owner, id));
+  // `confirmed` ends the status record, unless the pending entry's settle is held back by an own edit/delete in
+  // flight: the record stays as `confirmed` until that settle applies, so the confirmation stays visible.
+  if (status === 'confirmed' && !(entry && entry.actions > 0)) statuses.delete(key);
+  else statuses.set(key, { owner: who, threadId, id, status });
+  notify(statusListeners, { owner: who, threadId, id, status });
+  if (status === 'confirmed') settlePendingOwnSend(owner, id, true);
+}
+
+/**
+ * The tracker dropped a row (the user discarded a failed row, the group was left, a failed row was evicted beyond
+ * `maxFailedRetained`): "failed keeps the row" holds for LIVE rows only, a forgotten row is gone. Drops the status
+ * record AND the pending send (settled as not persisted, so the views drop the row: without a status the pending send
+ * would read `sending` forever with no retry left) and announces `forgotten` so mounted views update. A row this
+ * module knows nothing about is a no-op.
+ */
+export function forgetOwnRowStatus(owner: string, id: string, threadId?: string): void {
+  const key = keyOf(owner, id);
+  const record = statuses.get(key);
+  statuses.delete(key);
+  const entryKeyed = entryKey(owner, id);
+  const entry = entries.get(entryKeyed);
+  if (entry) removeEntry(entryKeyed, entry, false);
+  const thread = record?.threadId ?? entry?.message.groupId ?? threadId;
+  if (thread !== undefined && (record || entry)) notify(statusListeners, { owner: owner.toLowerCase(), threadId: thread, id, status: 'forgotten' });
+}
+
+/** The status of an own row: the last reported one, `sending` for a pending send with none, undefined when unknown. */
+export function ownRowStatusOf(owner: string, id: string): 'sending' | 'failed' | 'confirmed' | undefined {
+  const known = statuses.get(keyOf(owner, id));
+  if (known) return known.status;
+  return entries.has(entryKey(owner, id)) ? 'sending' : undefined;
+}
+
+/** The rows of one account's thread that are not persisted yet, with their status (a view mounted later reads this). */
+export function ownRowStatusesFor(owner: string, threadId: string): Array<{ id: string; status: 'sending' | 'failed' | 'confirmed' }> {
+  const who = owner.toLowerCase();
+  const out = new Map<string, 'sending' | 'failed' | 'confirmed'>();
+  for (const entry of entries.values()) if (entry.owner === who && entry.message.groupId === threadId) out.set(entry.message.id, 'sending');
+  for (const s of statuses.values()) if (s.owner === who && s.threadId === threadId) out.set(s.id, s.status);
+  return [...out].map(([id, status]) => ({ id, status }));
+}
+
+/** Listens for status changes of one account's rows in one thread. Returns the unsubscribe function. */
+export function subscribeOwnRowStatus(owner: string, threadId: string, onStatus: (event: OwnRowStatusChanged) => void): () => void {
+  const who = owner.toLowerCase();
+  const listener = (event: OwnRowStatusChanged) => {
+    if (event.owner === who && event.threadId === threadId) onStatus(event);
+  };
+  statusListeners.add(listener);
+  return () => {
+    statusListeners.delete(listener);
+  };
+}
+
+/**
+ * The own-send lifecycle's status port (`send/ownRowTracker`) pointed at this module: every transition
+ * (`sending` on a retry, `failed`, `confirmed`) is a per-row status, kept and announced through
+ * `subscribeOwnRowStatus`, so a view mounted (or remounted) after the send started catches up through the
+ * same module-scope state as every other pending own send. `failed` KEEPS the row (failed/retry); only
+ * `confirmed` settles the pending send as persisted. `forget` (the tracker dropped the row: discarded, group left,
+ * evicted beyond `maxFailedRetained`) removes the status AND the pending send and announces `forgotten`. A row with no pending entry (earlier session, a signal)
+ * still gets its status recorded.
+ */
+export function pendingOwnSendsStatusPort(owner: string): OwnRowStatusPort {
+  return {
+    setStatus: (groupId, rumorId, status) => setOwnRowStatus(owner, groupId, rumorId, status),
+    forget: (groupId, rumorId) => forgetOwnRowStatus(owner, rumorId, groupId),
+  };
+}
+
 /** Test seam: drops every entry and listener. */
 export function _resetPendingOwnSends(): void {
   entries.clear();
   aliases.clear();
   listeners.clear();
   changeListeners.clear();
+  statuses.clear();
+  statusListeners.clear();
 }

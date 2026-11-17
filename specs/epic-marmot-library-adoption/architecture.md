@@ -140,8 +140,8 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
   - `run`: `<T>(groupId: string, op: () => Promise<T>) => Promise<T>`
 - Invariants:
   - at most one invite in flight per group
-  - group.synced() awaited before invite/removeMember/setAdmins/rename/leave
-  - commit-pending is retried after synced()
+  - group.synced() awaited before invite/removeMember/setAdmins/rename/leave; the wait is BOUNDED (`syncTimeoutMs`, default 30 s) and abortable (`signal`); a wait lost before the op starts rejects `GroupOpError` (`not-synced` / `aborted`, "no attempt is in flight") and the op never runs; leave may skip it (`skipSync`)
+  - commit-pending is branched on `details.reason`: own pending commit / selfremove-election-wait / staged-adds-commit-unconfirmed are retried after an `ingest([])` barrier (bounded by `syncTimeoutMs`, abortable, a throwing ingest is logged) plus backoff; awaiting-sync after a bounded `synced()`; proposal-deferred and unknown reasons are surfaced at once
 
 ### `KeyPackageInvite` — Single-candidate invite via key-package lookup
 - Producer: S8 `app/src/lib/marmot/invitations/invite.ts` -> Consumer: S12 `app/src/lib/marmot/joinRequestApproval.ts`

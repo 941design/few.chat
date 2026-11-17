@@ -297,6 +297,20 @@
       "owning_module": "handlers",
       "type": "invariant",
       "added_by_story": "S5"
+    },
+    {
+      "id": "send.own-row-lifecycle",
+      "name": "sending -> confirmed (echo, also from failed) | failed (own intent failed, groupBranchSwitched, send reject unless still queued, 60 s after the group is synced); confirmed downgraded only by an explicit own withdraw of its last carrier; retry re-sends the identical rumor; no auto-resend",
+      "owning_module": "send",
+      "type": "invariant",
+      "added_by_story": "S6"
+    },
+    {
+      "id": "send.group-op-queue",
+      "name": "Commit ops serialised per group; bounded synced() wait with abort; commit-pending retried only for library-cleared reasons with a real barrier + backoff; errors isolated per op",
+      "owning_module": "send",
+      "type": "invariant",
+      "added_by_story": "S6"
     }
   ],
   "stories": [
@@ -402,10 +416,25 @@
         "S17/S18": "MUST assert the reconciliation purge of overlay groups absent from groups.list() completes BEFORE the first sink delivery (append/withdraw/sweep) — this makes recompute-from-sink equal full state (AC-WDR-7)",
         "S18": "wire groupOf, enqueue, recomputeUnread(ownPubkey), registerGroupAdminsProvider(createGroupAdminsProvider(groupOf)), reaction hold/release ports, receiptNow port, recomputePoll selfPubkeyHex; sendAnnouncement/sendSelfProfile/handleIncomingProfileRequest via group.send ONLY (privacy)"
       }
+    },
+    {
+      "id": "S6",
+      "concepts_owned": [
+        "send",
+        "send.ownRowTracker",
+        "send.groupOpQueue"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "widen chat handler ports to pass input.eventId to onOwnEcho/onOwnWithdrawn; wire onIntentFailed/onGroupBranchSwitched to client events; a retry MUST re-send the identical stored rumor (sender.retry(rumorId), same id) — never rebuild; recompute callers re-apply tracker.pendingSignals(groupId) after recomputePoll/recomputeSlot; failed rows stay visible as failed/retry (status port is multi-transition); failed/retry status is session-memory only — decide a durable failed flag (e.g. on the stored chat row) and how an earlier-session failed row is retried; forgotten rows (eviction/forgetGroup) are dropped from pendingOwnSends",
+        "S13/S14": "groupOpQueue awaits group.synced() with NO timeout — bound your own waits (leave/admin ops) so an offline group cannot block leave forever",
+        "S19": "A3 second half: an own send abandoned before publish ack surfaces ONLY as send() rejection (publish-failed); intentFailed/groupBranchSwitched do not fire",
+        "S8/S13/S14": "all commit ops go through groupOpQueue (bounded synced wait, abort signal); never from a library frame (enqueue); leave uses skipSync offline; S13 calls tracker.forgetGroup on purge"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S5",
+    "last_story_reviewed": "S6",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

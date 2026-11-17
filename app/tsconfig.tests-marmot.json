@@ -16,6 +16,7 @@
     "tests/unit/marmot/client/**/*.ts",
     "tests/unit/marmot/history/**/*.ts",
     "tests/unit/marmot/handlers/**/*.ts",
+    "tests/unit/marmot/send/**/*.ts",
     "tests/unit/marmot/kinds.test.ts",
     "tests/unit/marmot/forgery.harness.test.ts",
     "tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts",

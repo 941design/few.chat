@@ -94,6 +94,42 @@
       "category": "SPEC",
       "ac_id": "AC-WDR-3",
       "question": "AC-WDR-3: Failure detection, one test per trigger: (a) `send()` rejects → row failed/retry; (b) `intentFailed` naming the row's group while unconfirmed → failed/retry; (c) `groupBranchSwitched` for the group while unconfirmed → failed/retry; (d) still unconfirmed 60 s (fake-time) after `send()` resolved → failed/retry. For a row already confirmed through the sink, none of (a)–(d) MUST change its status. A later sink arrival with the same `rumor.id` for a failed row MUST flip it to confirmed. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (fake timers)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S6-015",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "The tracker's onOwnEcho/onOwnWithdrawn take an OPTIONAL third `eventId` (the kind-445 carrier) so a withdraw of one carrier does not fail a row another carrier confirmed (ownership-ledger S4 note), but the production handler ports (chatHandler.ts OwnEcho/OwnWithdrawn dep types and their call sites in createChatGroupHandler) still pass only (groupId, rumorId). Confirm: (a) the carrier logic is exercised in ownRowTracker.test.ts ('onOwnWithdrawn ignores a row confirmed by a DIFFERENT eventId'), (b) without an eventId a withdraw applies (the documented fallback), and (c) S18 or a follow-up must widen the handler ports to pass input.eventId for the carrier rule to be live in production; state whether leaving it unwired is acceptable for this story."
+    },
+    {
+      "question_id": "VQ-S6-016",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "groupOpQueue chains ALL commit ops of one group and awaits group.synced() with no timeout. Show (groupOpQueue.ts runCommit) that a rejection never poisons the chain (test 'a failed first op does not stall or poison the second') and discuss the residual: a synced() that never settles (offline) blocks every later op of that group, including leave. Confirm the callers (S13 leave with leaveTimeoutMs, S14 admin ops) bound their own wait and that the queue is never entered from inside a library frame (it does not touch the client; frames must schedule through handle.enqueue)."
+    },
+    {
+      "question_id": "VQ-S6-017",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "Own optimistic poll votes / edits / deletes not yet echoed are reset by a recompute of their poll/slot (ledger S5 note). S6 chose: the tracker keeps the signal rumor while the row is `sending` and exposes pendingSignals(groupId) for the recompute caller to re-apply after the fold; failed or withdrawn signals are dropped (AC-WDR-2). Verify the accessor and its tests (ownRowTracker.test.ts 'own optimistic signals still sending ...', sendGroupRumor.test.ts), and that no recompute caller consumes it yet (S18 wiring): is any in-scope behaviour left unimplemented?"
+    },
+    {
+      "question_id": "VQ-S6-018",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "The A3 second-half harness (send.harness.test.ts) stages an abandoned send with a same-epoch fork and an outbound publish hold, then rejects the held publish. Observed library behaviour: while the publish is held the group's operation queue is blocked and the fork does not resolve; the app-visible signal is the send() rejection `publish-failed` (trigger a) -- the library emitted neither intentFailed nor groupBranchSwitched, nothing reached the sink, and the intent stays in group.pendingIntents(). Verify the assertions (no append on either sink, no withdraw, relay never stores the held event, row failed, group.send once) fail if the tracker's sendRejected is a no-op (mutation run recorded), and state the residual: a later publish of that pending intent would arrive as a sink echo and flip the row to confirmed (tracker-level covered, not end-to-end)."
+    },
+    {
+      "question_id": "VQ-S6-019",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "The own-row key is (groupId, rumor.id) and rumor.id = getEventHash of (pubkey, created_at seconds, kind, tags, content): two identical messages sent in the same second share one id, so the second prepare() re-registers a known row (no-op) and the library/sink see one logical rumor. Confirm this matches the pre-adoption behaviour (buildChatRumor had the same id basis), whether S18 must add a uniqueness tag, and that the helper never reuses an id across different content."
+    },
+    {
+      "question_id": "VQ-S6-020",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "pendingOwnSendsStatusPort maps failed -> settlePendingOwnSend(owner, id, false), which forgets the pending entry (module-scope pendingOwnSends semantics are preserved: per-owner keys, remount catch-up via settle listeners). Show that the port tolerates unknown rows (no throw), that the tracker swallows a throwing port (console.warn, lifecycle continues), and that nothing in send/ imports React, idb-keyval or the stores (status goes out through the injected port only)."
     }
   ]
 }
