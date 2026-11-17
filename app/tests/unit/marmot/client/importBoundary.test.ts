@@ -117,7 +117,10 @@ describe('client module import graph (AC-TRANS-1, boundary rules)', () => {
   });
 
   it('stays inside src/lib/marmot/client (imports no old flow module, no ndkClient)', () => {
-    const outside = files.filter((f) => !f.startsWith(join(MARMOT_DIR, 'client') + '/'));
+    // The AppKinds registry (kinds.ts) is the one sanctioned module outside client/.
+    const outside = files.filter(
+      (f) => !f.startsWith(join(MARMOT_DIR, 'client') + '/') && f !== join(MARMOT_DIR, 'kinds.ts'),
+    );
     expect(outside.map((f) => relative(APP_ROOT, f))).toEqual([]);
   });
 

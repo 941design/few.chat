@@ -30,7 +30,7 @@ The top level is a modular monolith (Next.js 14 static-export client app).
 
 ## Boundary Rules
 
-- No direct imports across module boundaries. Cross-module access goes only through each module's `index.ts` exports.
+- No direct imports across module boundaries. Cross-module access goes only through each module's `index.ts` exports. A single-file module (e.g. `kinds.ts`) has no `index.ts`; the file itself is its public surface.
 - Only `client/` constructs or disposes the `MarmotClient` or opens stores. Other modules receive a `MarmotClient` / `MarmotGroup` handle by injection.
 - Import MLS types only from `@941design/marmot/mls`. Never import `ts-mls` or `@internet-privacy/marmot-ts`.
 - **Re-entrancy:** code running inside `HistoryBackend` calls, inbox handlers or client event listeners never awaits an account-scope client call.

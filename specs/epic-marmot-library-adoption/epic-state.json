@@ -3,14 +3,15 @@
   "status": "in_progress",
   "phase": "IMPLEMENTING",
   "created_at": "2026-11-17T08:07:10Z",
-  "updated_at": "2026-11-17T11:21:16Z",
+  "updated_at": "2026-11-17T11:36:41Z",
   "pre_existing_dirty_files": [
     ".clauded.yaml",
     "package.json.copy",
     "specs/epic-marmot-library-adoption/spec.md"
   ],
   "completed_stories": [
-    "S1"
+    "S1",
+    "S2"
   ],
   "escalated_stories": [],
   "phase_history": [
@@ -56,6 +57,7 @@
     ]
   },
   "deferred_human_review_runtime": [
-    "Library issue for @941design/nostr-events maintainers: the simple-pool transport de-duplicates by event id BEFORE signature verification, so a relay sending a forged event that reuses a genuine event id first gets the forgery rejected AND the genuine event dropped as a duplicate (message-suppression by a hostile relay). Found by app/tests/unit/marmot/client/transport.forgery.harness.test.ts. Not fixable in-app without a custom verifier (AC-TRANS-1 forbids one)."
+    "Library issue for @941design/nostr-events maintainers: the simple-pool transport de-duplicates by event id BEFORE signature verification, so a relay sending a forged event that reuses a genuine event id first gets the forgery rejected AND the genuine event dropped as a duplicate (message-suppression by a hostile relay). Found by app/tests/unit/marmot/client/transport.forgery.harness.test.ts. Not fixable in-app without a custom verifier (AC-TRANS-1 forbids one).",
+    "Pre-existing gap (not caused by this epic): call signaling signs inner kinds 25050-25055 with the account signer, but neither the old nor the new NIP-46 permission set requests them — calls may fail under permission-enforcing bunkers. AC-SIGN-3 fixes the app-added set to exactly {0,20602,30078,10050}; adding call kinds needs a spec change."
   ]
 }

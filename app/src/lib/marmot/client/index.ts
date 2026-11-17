@@ -6,7 +6,6 @@ export {
   bootstrapAccountClient,
   CLIENT_EVENT_NAMES,
   CLIENT_TIMING_OPTIONS,
-  INBOX_HANDLER_KINDS,
   type AccountClient,
   type AccountClientHandle,
   type BootstrapInput,

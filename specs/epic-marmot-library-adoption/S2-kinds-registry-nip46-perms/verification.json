@@ -65,7 +65,7 @@
       "phase": "pre-impl",
       "category": "SPEC",
       "ac_id": "AC-KIND-3",
-      "question": "AC-KIND-3: The invite-context kind MUST equal 21064 and MUST NOT be in 4460–4462 or 21059–21063. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+      "question": "AC-KIND-3: The invite-context kind MUST equal 21064 and MUST NOT be in 4460\u20134462 or 21059\u201321063. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
     },
     {
       "question_id": "VQ-S2-011",
@@ -80,6 +80,19 @@
       "category": "SPEC",
       "ac_id": "AC-SIGN-4",
       "question": "AC-SIGN-4: A stored NIP-46 session whose granted perms equal the old set (including 30051/443/444) MUST be discarded on load (stored session cleared, user routed to reconnect); a stored session whose granted perms cover the new set MUST be kept. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S2-013",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "ac_id": "AC-SIGN-4",
+      "question": "The NDK NIP-46 session payload (STORAGE_KEYS.nip46Session) carries no granted perms, so shouldDiscardStoredNip46Session(granted) discards any session lacking a recorded grant list. Does S18 persist the requested/granted perms next to the payload (app/src/context/NostrIdentityContext.tsx near the toPayload() write) and call the predicate on load, so a legitimate new-set session is not discarded on every reload?"
+    },
+    {
+      "question_id": "VQ-S2-014",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "app/tests/unit/marmot/client/importBoundary.test.ts now allows exactly app/src/lib/marmot/kinds.ts outside client/. Confirm no other file outside client/ is reachable from the client import graph and that kinds.ts stays free of React/context imports."
     }
   ]
 }

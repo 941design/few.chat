@@ -82,6 +82,8 @@ Reconciliation note (Mode 1): AC text names new modules (`client/`, `history/`, 
 
 **AC-BOOT-3b** — After the cut-over, sign-out and signer-mode change MUST run the client teardown (abort an in-flight bootstrap via its AbortSignal, else `teardown()`), and the next bootstrap MUST be for the new pubkey only. [L: unit (context lifecycle extraction)]
 
+**AC-SIGN-4b** — After the cut-over, on connect the app MUST persist `buildNip46Permissions()` next to the NIP-46 session payload, and on load MUST call `shouldDiscardStoredNip46Session` with that record: an old-set or missing record clears the session and routes to reconnect; a new-set session survives a reload (connect → reload → kept). [L: unit (identity load/connect extraction)]
+
 **AC-BOUND-1** — Pure modules under `app/src/lib/marmot/**` MUST NOT import from `app/src/context/**` or React. [L: structural; existing import-boundary test extended to the new directories] Sole temporary exemption: the pre-existing `outboundJoinRequests.ts` React import, which S12 (owner of that file) removes, deleting the exemption from the boundary test.
 
 **AC-BOOT-1** — Given the library harness, the bootstrap MUST run in this order: `openForWrite(pubkey)` → `createMarmotClient` → listener attach → inbox handlers registered (kinds 21059 and 21064) → `groups.list()` → per-group `onNotification` attach → `inbox.start()` → key-package ensure → kind-10050 ensure. A recording fake MUST show that call sequence; `inbox.start()` MUST NOT be called before `groups.list()` resolves. [L: unit (sequence recorder) + harness]

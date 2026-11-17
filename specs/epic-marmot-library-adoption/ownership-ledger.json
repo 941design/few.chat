@@ -120,7 +120,8 @@
       "owning_module": "client",
       "type": "naming_scheme",
       "added_by_story": "S1",
-      "resolve_in": "S2"
+      "resolve_in": "S2",
+      "status": "resolved in S2"
     },
     {
       "id": "testhooks.groupLibrary-smoke",
@@ -148,6 +149,13 @@
       "owning_module": "client",
       "type": "invariant",
       "added_by_story": "S1"
+    },
+    {
+      "id": "nip46-perms",
+      "name": "Requested NIP-46 perms = library toNip46Perms() ∪ sign_event:{0,20602,30078,10050}; stored session discarded unless recordedPerms (requested set saved at connect) covers it; null discards",
+      "owning_module": "nip46Perms",
+      "type": "validation_rule",
+      "added_by_story": "S2"
     }
   ],
   "stories": [
@@ -176,10 +184,29 @@
         "S17": "lease-held right after a same-tab abort is retryable (LeaseState waiting); call attachGroup after any reload/restore that yields a new handle; consider racing getPublicKey/inbox.start against abort",
         "S18": "pass AbortSignal from effect cleanup; handle aborted and signer-timeout results; keep groupLibrary dev-hook effect until S27"
       }
+    },
+    {
+      "id": "S2",
+      "surfaces_touched": [
+        "app/src/lib/marmot/kinds.ts",
+        "app/src/lib/nip46Perms.ts",
+        "app/src/lib/marmot/client/createClient.ts (APP_INBOX_KINDS)",
+        "app/src/lib/marmot/client/index.ts"
+      ],
+      "concepts_owned": [
+        "kinds",
+        "nip46-perms"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "import nip46Perms (and kinds.ts) lazily — @941design/marmot root barrel has no sideEffects:false, static import from identity/DM code pulls the whole library into eager chunks; compare app/out chunk sizes before/after. On NIP-46 connect persist buildNip46Permissions() next to the session (recordedPerms) — else every load discards the session; add connect→reload→kept test.",
+        "S22/S23": "replace PAIRING_ACK_KIND, DM_PROFILE_*_KIND, JOIN_REQUEST_KIND, JOIN_REQUEST_RUMOR_KIND literals with APP_INBOX_KINDS; CALL_GIFT_WRAP_KIND=21059 is a WRAP kind on the calls plane — keep separate and comment it",
+        "S9/S10/S12": "consume APP_INBOX_KINDS from kinds.ts; never re-declare 21059/21064"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S1",
+    "last_story_reviewed": "S2",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

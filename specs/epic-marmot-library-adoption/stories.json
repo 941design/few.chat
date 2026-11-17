@@ -92,7 +92,7 @@
       "complexity": "low",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "completed",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [],
@@ -716,7 +716,8 @@
         "AC-MT-3",
         "AC-GATE-2",
         "AC-SIGN-2b",
-        "AC-BOOT-3b"
+        "AC-BOOT-3b",
+        "AC-SIGN-4b"
       ],
       "scope": {
         "includes": [

@@ -51,14 +51,12 @@ import {
   type AppEventSigner,
   type SignerKind,
 } from './signerAdapter';
+import { APP_INBOX_KINDS } from '../kinds';
 import { createClientTransport, type ClientTransport } from './transport';
 import { openAccountStores, type OpenStoresResult } from './storage';
 import { createJobQueue, type ClientJobQueue, type JobQueue } from './fifo';
 import { ensureKeyPackage, type KeyPackageEnsureOutcome } from './keyPackageEnsure';
 import { createTeardown } from './lifecycle';
-
-/** App inbox kinds the bootstrap registers handlers for (join request, invite context). */
-export const INBOX_HANDLER_KINDS = { joinRequest: 21059, inviteContext: 21064 } as const;
 
 /** Library timing options the app pins (everything else keeps the library default). */
 export const CLIENT_TIMING_OPTIONS = { leaveTimeoutMs: 10_000, removalSettleMs: 5_000 } as const;
@@ -341,8 +339,8 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
 
     // 5. inbox handlers
     unsubscribers.push(
-      liveClient.extensions.registerInboxHandler(INBOX_HANDLER_KINDS.joinRequest, input.inboxHandlers.joinRequest),
-      liveClient.extensions.registerInboxHandler(INBOX_HANDLER_KINDS.inviteContext, input.inboxHandlers.inviteContext),
+      liveClient.extensions.registerInboxHandler(APP_INBOX_KINDS.joinRequest, input.inboxHandlers.joinRequest),
+      liveClient.extensions.registerInboxHandler(APP_INBOX_KINDS.inviteContext, input.inboxHandlers.inviteContext),
     );
 
     // 6. groups (this starts every stored group's relay sync)

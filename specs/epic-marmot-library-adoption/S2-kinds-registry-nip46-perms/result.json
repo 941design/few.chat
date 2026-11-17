@@ -1,0 +1,49 @@
+{
+  "story_id": "S2",
+  "status": "done",
+  "remediation_rounds": 0,
+  "files_created": [
+    "app/src/lib/marmot/kinds.ts",
+    "app/src/lib/nip46Perms.ts",
+    "app/tests/unit/marmot/kinds.test.ts",
+    "app/tests/unit/nip46Perms.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/client/createClient.ts",
+    "app/src/lib/marmot/client/index.ts",
+    "app/tests/unit/marmot/client/bootstrap.sequence.test.ts",
+    "app/tests/unit/marmot/client/importBoundary.test.ts"
+  ],
+  "tests_added": {
+    "unit": "kinds.test.ts (11) + nip46Perms.test.ts (7) approx; collision, registry content, literal-ban scan, perms set equality, discard predicate"
+  },
+  "test_counts": {
+    "baseline": 6646,
+    "final": 6704
+  },
+  "mocks": [],
+  "implementation_summary": "kinds.ts exports APP_RUMOR_KINDS, APP_INBOX_KINDS, RETIRED_KINDS, RESERVED_KINDS (Object.values(RUMOR_KINDS)) and assertNoKindCollisions, run at import. nip46Perms.ts exports buildNip46Permissions/PermsParam (library toNip46Perms() union sign_event 0/20602/30078/10050) and shouldDiscardStoredNip46Session. S1 carry-over done: INBOX_HANDLER_KINDS deleted from createClient.ts and the client barrel; createClient uses APP_INBOX_KINDS.",
+  "verification": {
+    "unit_full": "make test-unit: 301 files, 6704 passed, 1 skipped, 0 failed",
+    "typecheck": "clean",
+    "lint": "NO_LINT"
+  },
+  "decisions": [
+    "Perms module placed at app/src/lib/nip46Perms.ts (no existing pure module; old REQUIRED_PERMS stays in NostrIdentityContext until S18).",
+    "Discard predicate takes the recorded granted perms (string[] or comma string); null/undefined/empty is discarded because NDK's stored payload records no grants. S18 must persist granted perms next to the session payload.",
+    "importBoundary test allows kinds.ts as the one sanctioned module outside client/."
+  ],
+  "limitations": [
+    "Permission set not wired into NostrIdentityContext (S18, excluded by scope)."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "clean_run"
+  },
+  "modules_touched": [
+    "kinds",
+    "nip46Perms",
+    "client"
+  ]
+}

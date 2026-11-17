@@ -1,0 +1,15 @@
+{
+  "module": "kinds",
+  "captured_at": "2026-11-17T12:20:00Z",
+  "tests": {
+    "command": "cd app && npx vitest run",
+    "status": "PASS",
+    "files": 296,
+    "passed": 6646,
+    "skipped": 1,
+    "failed": 0
+  },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "note": "baseline taken from S1 result (HEAD aea4f79 only adds S1 artifacts); tsc --noEmit clean before and after"
+}

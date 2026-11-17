@@ -9,11 +9,11 @@ import { MarmotError } from '@941design/marmot';
 import {
   bootstrapAccountClient,
   CLIENT_EVENT_NAMES,
-  INBOX_HANDLER_KINDS,
   type AccountClientHandle,
   type BootstrapInput,
 } from '@/src/lib/marmot/client';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
+import { APP_INBOX_KINDS } from '@/src/lib/marmot/kinds';
 
 const PUBKEY_SECRET = '55'.repeat(32);
 
@@ -111,8 +111,8 @@ describe('startup order (AC-BOOT-1)', () => {
       ...CLIENT_EVENT_NAMES.map((n) => `client.on:${n}`),
       'client.on:groupCreated',
       'client.on:groupJoined',
-      `registerInboxHandler:${INBOX_HANDLER_KINDS.joinRequest}`,
-      `registerInboxHandler:${INBOX_HANDLER_KINDS.inviteContext}`,
+      `registerInboxHandler:${APP_INBOX_KINDS.joinRequest}`,
+      `registerInboxHandler:${APP_INBOX_KINDS.inviteContext}`,
       'groups.list',
       'groups.list.resolved',
       'group.onNotification:g1',
@@ -122,7 +122,7 @@ describe('startup order (AC-BOOT-1)', () => {
       'keyPackages.create:{"lastResort":true}',
       'inboxRelayList.ensure:wss://relay.example',
     ]);
-    expect(INBOX_HANDLER_KINDS).toEqual({ joinRequest: 21059, inviteContext: 21064 });
+    expect([APP_INBOX_KINDS.joinRequest, APP_INBOX_KINDS.inviteContext]).toEqual([21059, 21064]);
   });
 
   it('inbox.start is never called before groups.list has resolved', async () => {

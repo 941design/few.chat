@@ -1,0 +1,22 @@
+{
+  "module_name": "kinds",
+  "purpose": "App/inbox/retired kind registry with import-time collision check (D12) plus the pure NIP-46 requested-permission builder and stored-session discard predicate (D2).",
+  "public_api": [
+    {"name": "APP_RUMOR_KINDS", "signature": "readonly [0,5,7,9,10,11,12,30]", "description": "App kinds carried as MLS application rumors."},
+    {"name": "APP_INBOX_KINDS", "signature": "{joinRequest:21059,pairingAck:21060,dmProfile:[21061,21062],inviteContext:21064}", "description": "Gift-wrapped inbox rumor kinds."},
+    {"name": "RETIRED_KINDS", "signature": "readonly [13,21063]", "description": "Never sent or handled."},
+    {"name": "RESERVED_KINDS", "signature": "readonly number[]", "description": "Object.values(RUMOR_KINDS) from the library; no literal copies."},
+    {"name": "assertNoKindCollisions", "signature": "(inputs: KindRegistryInputs) => void", "description": "Throws naming the kinds on duplicate app kinds, retired collision, or RUMOR_KINDS collision; run at module import."},
+    {"name": "buildNip46Permissions / buildNip46PermsParam", "signature": "() => string[] / () => string", "description": "Union of permissions.toNip46Perms() and sign_event 0/20602/30078/10050 (app/src/lib/nip46Perms.ts)."},
+    {"name": "shouldDiscardStoredNip46Session", "signature": "(granted: readonly string[] | string | null | undefined) => boolean", "description": "True unless granted perms cover the required set; missing record is discarded."}
+  ],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": ["@941design/marmot (RUMOR_KINDS, permissions)"],
+  "dependencies_forbidden": ["app/src/context/**", "react", "ts-mls", "@internet-privacy/marmot-ts", "@nostr-dev-kit/*"],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": ["app/tests/unit/marmot/kinds.test.ts", "app/tests/unit/nip46Perms.test.ts"],
+  "seam": {"name": "AppKinds", "cross_story": true, "consumed_by": ["S3"]}
+}
