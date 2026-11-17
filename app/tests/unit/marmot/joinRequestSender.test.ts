@@ -280,11 +280,24 @@ describe('joinRequestSender', () => {
       globalThis.WebSocket = origWebSocket;
     });
 
-    /** Waits for all mock WebSocket instances to have connected (onopen fired) and sent. */
+    /**
+     * Waits until `count` mock sockets exist AND each has already sent its EVENT frame.
+     *
+     * Constructing a socket is not enough: the mock connects on a `setTimeout(0)` and only then does the sender's
+     * `onopen` send. Under CPU load a coarse 5 ms poll timer can fire BEFORE those just-scheduled 0 ms timers (the
+     * expiry order follows scheduling time, and a >4 ms stall between the two schedules inverts it), so returning on the
+     * instance count alone let the caller read `send.mock.calls[0]` of a socket that had not sent yet
+     * (`Cannot read properties of undefined`, seen only in full-suite runs). Polling the observable condition removes the
+     * ordering assumption.
+     */
     async function waitForSockets(count: number) {
-      for (let i = 0; i < 50 && mockWebSocketInstances.length < count; i++) {
-        await new Promise((r) => setTimeout(r, 5));
-      }
+      await vi.waitFor(
+        () => {
+          expect(mockWebSocketInstances.length).toBeGreaterThanOrEqual(count);
+          for (const ws of mockWebSocketInstances) expect(ws.send.mock.calls.length).toBeGreaterThan(0);
+        },
+        { timeout: 5_000, interval: 5 },
+      );
     }
 
     it('persists an outbound record keyed by nonce when at least one relay accepts the event', async () => {

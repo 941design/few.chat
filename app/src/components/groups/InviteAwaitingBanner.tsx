@@ -53,7 +53,7 @@ import { useMarmot } from '@/src/context/MarmotContext';
 import { useProfile } from '@/src/context/ProfileContext';
 import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
 import { sendJoinRequest } from '@/src/lib/marmot/joinRequestSender';
-import { useOutboundJoinRequests } from '@/src/lib/marmot/outboundJoinRequests';
+import { useOutboundJoinRequests } from '@/src/hooks/useOutboundJoinRequests';
 import { isWelcomeJoinRequestDisabled } from '@/src/components/groups/JoinRequestCard';
 import { resolveInviteBannerState, computeGroupsPathAfterJoinSend } from '@/src/lib/inviteBannerState';
 

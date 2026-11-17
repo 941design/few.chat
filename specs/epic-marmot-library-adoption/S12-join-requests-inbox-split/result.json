@@ -1,0 +1,112 @@
+{
+  "story_id": "S12",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T22:10:00Z",
+  "files_created": [
+    "app/src/lib/marmot/joinRequestApproval.ts",
+    "app/src/lib/marmot/invitations/autoAccept.ts",
+    "app/src/hooks/useOutboundJoinRequests.ts",
+    "app/tests/unit/marmot/joinRequestInboxHandler.test.ts",
+    "app/tests/unit/marmot/joinRequestSender.inbox.test.ts",
+    "app/tests/unit/marmot/joinRequestApproval.test.ts",
+    "app/tests/unit/marmot/invitations/autoAccept.test.ts",
+    "app/tests/unit/marmot/joinRequestStorage.seen.test.ts",
+    "app/tests/unit/marmot/joinRequestInbox.scan.test.ts",
+    "app/tests/unit/marmot/joinRequests.harness.test.ts",
+    "app/tests/unit/directMessages.dmPlaneDispatch.test.ts",
+    "specs/epic-marmot-library-adoption/S12-join-requests-inbox-split/architecture.json",
+    "specs/epic-marmot-library-adoption/S12-join-requests-inbox-split/baseline.json",
+    "specs/epic-marmot-library-adoption/S12-join-requests-inbox-split/result.json",
+    "app/src/lib/marmot/joinRequestTtl.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/joinRequestHandler.ts",
+    "app/src/lib/marmot/joinRequestSender.ts",
+    "app/src/lib/marmot/joinRequestStorage.ts",
+    "app/src/lib/marmot/outboundJoinRequests.ts",
+    "app/src/lib/marmot/invitations/index.ts",
+    "app/src/lib/directMessages.ts",
+    "app/pages/groups.tsx",
+    "app/src/components/groups/InviteAwaitingBanner.tsx",
+    "app/tests/unit/marmot/client/importBoundary.test.ts",
+    "app/tests/unit/marmot/joinRequestSender.test.ts",
+    "app/tests/unit/marmot/outboundJoinRequests.test.ts",
+    "app/tsconfig.tests-marmot.json",
+    "specs/epic-marmot-library-adoption/S12-join-requests-inbox-split/verification.json"
+  ],
+  "adjacent_fixes": [
+    "joinRequestSender.test.ts: waitForSockets raced the mock sockets' setTimeout(0) connect (see decisions); now polls until every socket has sent."
+  ],
+  "tests_added": {
+    "unit": "joinRequestInboxHandler.test.ts (34: requester only from rumor.pubkey incl. spoofed content fields, lowercase, replay/duplicate by rumor id, replay after consume, name cap, nonce/mute/expiry/legacy-expiry/member drops, malformed content/kind/sender/id, deny layer first with no lookup and no seen mark, block read per arrival, storage failure rethrown, bell failure swallowed, port validation); joinRequestSender.inbox.test.ts (19: one sendInboxRumor of the canonical rumor, privacy, record only when delivered, retryable/failed/rejected = JoinRequestSendError with fake-timer proof of zero timers and one send, message hygiene, port validation); joinRequestApproval.test.ts (18: AC-JOIN-2 one-event invite via the REAL inviter over a fake group, newest candidate, no usable key package / throw / group missing keep the request, consume failure non-fatal, AC-JOIN-3 already-member incl. a leaf appearing after synced() with no group.invite and no lookup, enqueue-only calling frame, queue-unavailable, in-flight sharing, port validation); autoAccept.test.ts (24: REAL pending view + REAL invitation actions over a fake library list: match accepts once outside the listener frame and consumes the record, no second accept even with a lagging list and an unconsumed record, other-admin/no-record/known-different-name stay pending, name normalisation, one record per invitation, blocked sponsor never accepted, failed accept keeps the record and may retry, only pending triggers, collapsing, scheduleRefresh last, evaluate() after a late context, throwing store, port validation); joinRequestStorage.seen.test.ts (6, real fake-indexeddb: membership, idempotence, 512 cap evicting the oldest BY STORED TIME with out-of-key-order seeding, tie never evicts the just-written id, account clear, production-port wiring of the handler over the real idb stores incl. replay after delete); directMessages.dmPlaneDispatch.test.ts (13: skip set equals registries, silent skip of 444/4460-4462/21059/21064 over real NIP-59 wraps with every logger level observed, pairing-ack routed with the wrap, throw propagation, chat rumor returned, foreign key / non-wrap unwrap-failed); joinRequestInbox.scan.test.ts (structural: AC-AUTO-2 no keyPackages.offer/expectWelcome, AC-INBOX-2 no 21063 except kinds.ts RETIRED_KINDS and a self-expiring legacy exemption, no React/context in the join modules, inbox sender has no raw WebSocket, handler has no client reference, no update()); importBoundary.test.ts now asserts NO file under src/lib/marmot imports react (LEGACY_REACT_IMPORTERS deleted).",
+    "harness": "joinRequests.harness.test.ts (4): REAL Alice/Bob/Carol clients over FakeRelay + createMemoryStorage with the app's bootstrap, handler registered as inboxHandlers.joinRequest: request is exactly one extra kind-1059 wrap, no kind 0/21059 at top level, no cleartext name or nonce on the relay; approval invites with exactly one key-package event on Alice's job queue; Bob is auto-joined with one accept and the outbound record consumed; an unrelated sponsor's invitation stays pending with zero accepts; already-member approval makes no commit; blocked requester leaves nothing and rings nothing; library-replayed identical rumor makes no second entry.",
+    "fail_first": "In-place mutants (backup + cmp restore, scratch driver), all killed: deny layer removed, seen check removed, mute check removed, storage failure swallowed instead of rethrown, accepted-id memory removed, name narrowing removed, scheduleRefresh removed, any disposition triggers, already-member treated as an error, in-flight sharing removed, retryable treated as delivered, joinRequest missing from the DM skip set, seen eviction ignoring stored time."
+  },
+  "test_counts": {
+    "baseline": 8002,
+    "final": 8152
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": [
+    "joinRequests",
+    "invitations",
+    "directMessages",
+    "outboundJoinRequests"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Join-request protocol moved onto the library inbox as new, injected-port modules; the legacy raw-WebSocket/Welcome-subscription entry points stay until the cut-over. (1) joinRequestSender.ts: createJoinRequestSender sends ONE extensions.sendInboxRumor of a canonical-id kind-21059 rumor (requester name only inside the rumor, tags [['p',admin]]); delivered writes the outbound record, retryable/failed/rejected throw JoinRequestSendError (the UI's existing catch = send-failure state), no record, no timer. (2) joinRequestHandler.ts: createJoinRequestInboxHandler for registerInboxHandler(21059): deny layer first, seen rumor id, parse, nonce/mute/expiry gates unchanged, roster snapshot port (no client call), same-requester dedup, save, remember rumor id, bell; storage failures are rethrown so the library redelivers. joinRequestStorage.ts gains a durable bounded seen-rumor-id memory (few-join-request-seen, 512). (3) joinRequestApproval.ts (KeyPackageInvite consumer): getGroup + inviteByPubkey run only inside a handle.enqueue job; invited and already-member both consume the request (already-member = no group.invite, plain success); failures keep the request pending. (4) invitations/autoAccept.ts: frame-safe pending-disposition listener enqueueing a collapsed correlation job (shown set only, sponsor === admin, sanitised group-name narrowing, exactly one record, at most one accept per invitation id, consume after success, ends with view.scheduleRefresh()). (5) directMessages.ts: DM_PLANE_SKIPPED_KINDS (RESERVED_KINDS + 21059 + 21064) and dispatchDmGiftWrap (strict unwrapAndOpen; silent skip; 21060 routed to an injected pairing handler with the wrap). (6) outboundJoinRequests.ts no longer imports React: the hook moved to src/hooks/useOutboundJoinRequests.ts (two importers repointed) and LEGACY_REACT_IMPORTERS is deleted. (7) joinRequestSender.test.ts flake fixed at its root.",
+  "verification": {
+    "pre_impl": 15,
+    "post_impl": 6,
+    "commands": [
+      "make test-unit (370 files, 8151 passed, 1 skipped, 0 failed; includes the tsc -p tsconfig.tests-marmot.json typecheck)",
+      "cd app && npx tsc --noEmit (clean)",
+      "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit (clean)"
+    ],
+    "lint": "NO_LINT (no eslint config)",
+    "typecheck": "clean"
+  },
+  "decisions": [
+    "Legacy entry points kept: sendJoinRequest/buildGiftWrap/buildJoinRequestRumor (raw WebSocket) and handleJoinRequest still serve the current UI callers (InviteAwaitingBanner, JoinRequestCard) and welcomeSubscription until S18 rewires and S22 deletes; the new sender/handler are separate factories. A first full run failed because joinRequestHandler.test.ts mocks joinRequestStorage without the new exports and an eager production-ports object read them at import: joinRequestStorePorts is now call-time wrappers.",
+    "AC-AUTO-1 'groupId + sponsorAccount' is implemented as sponsor === admin plus the existing AC-AUTO-4a group-NAME rule, because an outbound record has no groupId (an invite link carries admin, nonce, name). The name comes from the validated invite context via the groupNameOf port, compared after sanitizeContextName on both sides; an unknown name NEVER auto-accepts (even with one record; consent needs the sponsor-claimed name), a later matching context accepts once, a differing one keeps the record and never accepts; several records stay pending until the context arrives (evaluate()).",
+    "The inbox handler takes the member roster as a SYNC snapshot port (memberPubkeys) rather than awaiting groupOf: the groupOf exception is verified only for history drains, and an uncached groups.get inside an inbox handler could reject reentrant. An unknown group yields an empty roster; an already-member requester is then resolved by the approval as a no-op success (AC-JOIN-3).",
+    "A storage failure inside the inbox handler is reported and RETHROWN (the library defers and redelivers; seen-mark is written only after the save) while parse/gate drops and a throwing bell never throw. This differs from the invite-context handler, which swallows store errors.",
+    "Dedupe by rumor.id is durable (new few-join-request-seen store, cap 512, oldest by stored time evicted, cleared with clearAllPendingJoinRequests) so a replay after approval/prune cannot resurrect a request. A blocked sender is dropped before the seen-mark so it leaves no trace.",
+    "Approval consumes the request for BOTH invited and already-member and calls onApproved(request, kind) so the wiring decides on the provisional name seed and the invite-link usage count; the approval does not itself touch those stores. A Welcome outcome of any status counts as approved (the commit is durable; a failed Welcome is retried by the library).",
+    "Pairing-ack on the DM plane is delivered as a tested pure dispatcher (dispatchDmGiftWrap, DM_PLANE_SKIPPED_KINDS) in directMessages.ts, the only DM file in scope. The real NDK DM listener is directMessageNotifications.ts (not in scope.includes) and the pairing handler needs wiring parameters from MarmotContext (S18). The legacy welcomeSubscription still handles pairing-ack until S22, so nothing regresses meanwhile.",
+    "AC-INBOX-1's 'welcomeSubscription.ts MUST NOT exist' and AC-INBOX-2's 'no 21063 anywhere' hold only after S22: the structural test carries ONE explicit exemption (welcomeSubscription.ts) that asserts the file still exists, so deleting the file forces removing the exemption.",
+    "invitations/index.ts exports createAutoAccept (barrel edit outside scope.includes, as S8/S10/S11 did, because modules import invitations only via the index). pages/groups.tsx and InviteAwaitingBanner.tsx import the moved hook (forced by removing React from outboundJoinRequests.ts per the story note).",
+    "No global pending-request cap (MAX_PENDING_JOIN_REQUESTS_TOTAL removed): a global bound let one flooded invite nonce lock out every other group (cross-group lockout). Only the per-group cap (50) and the 30-day TTL remain; a test proves a group at its cap does not affect another group.",
+    "The 30-day TTL is enforced on arrival (prune), on load (loadPendingJoinRequests deletes and hides expired requests of every group, so a stale list never shows them) and at approval (an expired request is refused with {ok:false,error:'request-expired'}, never invited, consumed, no onApproved follow-up). The TTL constant and isPendingJoinRequestExpired live in the dependency-free joinRequestTtl.ts so the pure approval module can share them; approval takes an optional now() port (default Date.now).",
+    "AC-INBOX-1 and AC-INBOX-2 moved to S22: they hold only once welcomeSubscription.ts is deleted (and 21063 is gone from app/src), which S22 does; S12 keeps the structural scan's single explicit exemption for the still-present file."
+  ],
+  "limitations": [
+    "Not wired into production (S18): register createJoinRequestInboxHandler(...) as inboxHandlers.joinRequest with ports joinRequestStorePorts + denyLayer + a sync memberPubkeys backed by the attached groups' members() + onReceived = bell/count; replace the UI's sendJoinRequest with createJoinRequestSender({inbox: client.extensions, ownPubkey, now, saveOutbound: saveOutboundJoinRequest}) (catch JoinRequestSendError as the existing send-failure state, no retry timer); build createJoinRequestApproval with the S8 inviter (wrapped by createMarkerRecordingInviter/createContextSendingInviter), getGroup = client.groups.get, handle.enqueue, consumeRequest = deletePendingJoinRequest + local state, onApproved = provisional name seed + incrementInviteLinkUsage; build createAutoAccept with the S9 view/actions, handle.enqueue, outbound = loadUnexpiredOutboundJoinRequestsForAdmin/deleteOutboundJoinRequest, groupNameOf from the invite-context store snapshot (sender === sponsorAccount, same groupId); route clientEvents.inboxDisposition to BOTH view.onInboxDisposition and autoAccept.onInboxDisposition; call autoAccept.evaluate() after view.seed() and when a context is stored; wire directMessageNotifications.ts to dispatchDmGiftWrap + handlePairingAck (+ incrementPendingContact / onPairingAckReceived callbacks) so pairing-ack survives welcomeSubscription's deletion (S22).",
+    "Residual signal: auto-accept calls view.refresh() inside its job, which announces the invitation as an arrival (a transient bell) before it is accepted; suppressing it needs a view option (S18 can ignore arrivals whose id autoAccept accepted).",
+    "A rumor id evicted beyond the 512 seen cap could re-admit a very old replay; the nonce, mute and expiry gates still apply.",
+    "User-visible behaviour is unchanged (transport/internal story), so docs/behavior was not edited; the join-request / invite-link behaviour docs should be re-checked when S18 cuts over.",
+    "S18 obligation (DM plane): wire dispatchDmGiftWrap into directMessageNotifications.ts (together with handlePairingAck). dispatchDmGiftWrap unwraps with selfPrivKeyHex, so the remote-signer unwrap path must be checked: NIP-07/NIP-46 accounts hold no private key and need a signer-based nip44 decrypt port instead; until that exists the helper is correct only for local-key accounts. Today the helper is a tested but UNWIRED seam; no listener behaviour is claimed.",
+    "S18 obligation (registration): register createJoinRequestInboxHandler, createJoinRequestSender, createJoinRequestApproval and createAutoAccept in production (see the wiring limitation above), including autoAccept.evaluate() after view.seed() and whenever an invite context is stored (an invitation whose context arrives later is only auto-accepted then).",
+    "S18 obligation (bell): suppress the pending-invitation arrival bell for invitation ids auto-accept is about to accept (view.refresh() inside the auto-accept job announces them as arrivals before the accept).",
+    "Consent rule (amended AC-AUTO-1): an invitation whose sponsor-claimed group name (invite context) is unknown is never auto-accepted and stays a manual pending card; with a known name exactly one outbound record of that sponsor and name must match.",
+    "Pending join requests are bounded in the inbox handler: 50 per group and a 30-day TTL (constants exported from joinRequestHandler.ts); there is deliberately NO global cap, so a flood through one group's invite nonce can only fill that group's own allowance and never blocks other groups (the store is therefore not globally bounded: it grows with the number of groups x 50). Beyond the per-group cap requests are dropped silently with no bell. Duplicate (same requester and group) rumors are no longer remembered in the seen store.",
+    "autoAccept keeps an in-memory set of consumed nonces: a record whose delete failed is not matched again within the session; after a reload a still-stored record could correlate again (the name must still match).",
+    "Seen-mark failure after consume: the handler writes the seen mark after the save and a failing mark is reported, never rethrown. If the mark failed AND the request was later consumed (approved), a redelivered wrap is no longer caught by the seen check or the pending-duplicate check and could resurrect the consumed request. Rare double failure (seen-store write failing, then a redelivery), accepted.",
+    "Same-admin name disambiguation residual: auto-accept correlates an invitation to an outbound record by sponsor === admin plus the sanitised group name; two outbound records of the same admin for groups with the same name cannot be told apart and stay pending for a manual accept.",
+    "autoAccept's consumed-nonce set is in-memory only (see above): it is lost on reload, so a record whose delete failed can correlate again in a later session (the name must still match)."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The story scope names directMessages.ts as 'the DM listener' and AC-AUTO-1 matches on groupId, but the real NDK listener is directMessageNotifications.ts (out of scope) and an outbound join request never knows the group id, so two ACs had to be re-read against the code rather than implemented as written.",
+    "surprised_by": "The flaky joinRequestSender test was not the memory-noted dynamic-import mock race: it was a timer-ordering assumption (a 5 ms poll vs just-scheduled 0 ms mock-socket connects) that only inverts under CPU stall, reproduced 1 in 6 under a busy-loop and 0 in 8 after the fix.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

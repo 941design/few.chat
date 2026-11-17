@@ -206,11 +206,11 @@ Reconciliation note (Mode 1): AC text names new modules (`client/`, `history/`, 
 
 **AC-CTX-5** — The invitation card MUST never show description or admin list pre-join. [L: unit (view model contains no such fields); e2e:groups-invitation-preview (rewritten)]
 
-**AC-AUTO-1** — On `inboxDisposition: pending` with `groupId` and `sponsorAccount` matching an unexpired outbound join request, the app MUST call `invitations.accept(id)` exactly once (outside the listener frame, via the owned FIFO) and consume the request; a second matching event MUST NOT call accept. A non-matching invitation (different group, different sponsor, expired request) MUST stay pending with zero accept calls. The existing AC-AUTO rules apply unchanged. [L: unit + harness; e2e:groups-join-request-live (kept)]
+**AC-AUTO-1** — On `inboxDisposition: pending` whose authenticated `sponsorAccount` equals the admin of an unexpired outbound join request AND whose sponsor-claimed group name (the S10 invite context) is known and matches that request's group name, the app MUST call `invitations.accept(id)` exactly once (outside the listener frame, via the owned FIFO) and consume the request; a second matching event MUST NOT call accept. While the name is unknown the invitation MUST stay pending (re-evaluated when the context arrives); an invitation with a different name, a different sponsor or an expired request MUST stay pending with zero accept calls and MUST NOT consume the request. The existing AC-AUTO rules apply unchanged. [L: unit + harness; e2e:groups-join-request-live (kept)]
 
 **AC-AUTO-2** — Auto-accept MUST have exactly one mechanism: no `keyPackages.offer` and no `expectWelcome` call exists in `app/src`. [L: structural]
 
-**AC-JOIN-1** — Join requests MUST be sent with `extensions.sendInboxRumor` of kind 21059; the join-request handler registered with `registerInboxHandler(21059)` MUST take the requester only from the delivered `rumor.pubkey`, dedupe by `rumor.id`, persist and return. Requester name/avatar travel inside the gift wrap only (recording transport: no kind 0, no cleartext nickname). [L: unit + harness]
+**AC-JOIN-1** — Join requests MUST be sent with `extensions.sendInboxRumor` of kind 21059; the join-request handler registered with `registerInboxHandler(21059)` MUST take the requester only from the delivered `rumor.pubkey`, dedupe by `rumor.id`, persist and return. Requester name travel inside the gift wrap only (recording transport: no kind 0, no cleartext nickname). [L: unit + harness]
 
 **AC-JOIN-2** — Approval MUST fetch the requester's key package (AC-KP-1/2) and call `group.invite` with exactly one event; the request is then marked approved. [L: unit + harness; e2e:groups-invite-link, groups-join-request-profile (kept)]
 

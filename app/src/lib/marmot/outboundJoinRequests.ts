@@ -6,19 +6,24 @@
  * nonce, using idb-keyval — mirrors joinRequestStorage.ts / inviteLinkStorage.ts
  * conventions.
  *
- * Written only on a SUCCESSFUL `sendJoinRequest` (joinRequestSender.ts) — a
- * failed send writes nothing (AC-AUTO-1). Consulted by welcomeSubscription.ts
- * to correlate an inbound Welcome's AUTHENTICATED sender against an admin
- * this device requested to join, for auto-accept.
+ * Written only on a SUCCESSFUL join-request send (joinRequestSender.ts) — a
+ * failed send writes nothing (AC-AUTO-1). Consulted by the auto-accept
+ * correlation (invitations/autoAccept.ts; until the cut-over also by
+ * welcomeSubscription.ts) to match an invitation's sponsor against an admin
+ * this device requested to join.
  *
- * Correlation is by `adminPubkeyHex` ONLY. The `nonce` never reaches the
- * Welcome (it lives solely in the join-request rumor, a separate message —
- * see DD-3 / AC-AUTO-4) and MUST NOT be used as a Welcome-side correlation
- * key; it remains the record's storage key purely for identity/lookup
- * purposes on the sender's own device.
+ * Pure of React (AC-BOUND-1): the `useOutboundJoinRequests` hook lives in
+ * `src/hooks/useOutboundJoinRequests.ts` and reads this module's
+ * subscribe/snapshot surface.
+ *
+ * Correlation starts from `adminPubkeyHex` (the sponsor of the invitation) and is
+ * narrowed by the group NAME the sponsor claims (invite context; see
+ * invitations/autoAccept.ts). The `nonce` never reaches the Welcome (it lives solely
+ * in the join-request rumor, a separate message — see DD-3 / AC-AUTO-4) and MUST NOT
+ * be used as a Welcome-side correlation key; it remains the record's storage key
+ * purely for identity/lookup purposes on the sender's own device.
  */
 
-import { useSyncExternalStore } from 'react';
 import { createStore, set, del, entries, clear } from 'idb-keyval';
 
 export interface OutboundJoinRequestRecord {
@@ -169,36 +174,14 @@ export function isOutboundJoinRequestsLoaded(): boolean {
 /** Synchronous `loaded`-flag accessor for useSyncExternalStore. Returns a
  *  PRIMITIVE boolean so useSyncExternalStore's Object.is check detects the
  *  one-shot false→true transition even when the loaded record set is empty
- *  (see the hook's doc comment for why that case is the bug this fixes). */
-function getLoadedSnapshot(): boolean {
+ *  (see `useOutboundJoinRequests` for why that case is the bug this fixes). */
+export function getLoadedSnapshot(): boolean {
   return _loaded;
 }
 
 /** SSR/static-export loaded snapshot — always false before hydration. */
-function getLoadedServerSnapshot(): boolean {
+export function getLoadedServerSnapshot(): boolean {
   return false;
-}
-
-/**
- * React hook — mirrors unreadStore.ts's `useUnreadCounts` wrapper shape.
- *
- * Both `records` AND `loaded` are piped through `useSyncExternalStore` over
- * the same `subscribe`. This is load-bearing: on an EMPTY initial load,
- * `_recomputeSnapshot([])` leaves `getSnapshot`'s array reference unchanged
- * (empty→empty), so the records subscription alone produces no re-render —
- * useSyncExternalStore suppresses re-renders when the snapshot reference is
- * Object.is-equal. A consumer that mounted before the load resolved would
- * then stay stuck at `loaded === false` and render nothing (e.g. the Invited
- * banner for a returning user opening a fresh invite link with no prior
- * outbound records). Reading `_loaded` plainly here does NOT fix that,
- * because there is no guaranteed re-render at which to re-read it. Routing
- * `loaded` through its own primitive-boolean snapshot makes the false→true
- * flip itself the re-render trigger (Codex pre-commit review, P1).
- */
-export function useOutboundJoinRequests() {
-  const records = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const loaded = useSyncExternalStore(subscribe, getLoadedSnapshot, getLoadedServerSnapshot);
-  return { records, loaded };
 }
 
 // Kick off the initial load at module-init time in a browser environment, not
@@ -287,9 +270,8 @@ export async function deleteOutboundJoinRequest(nonce: string): Promise<void> {
 
   // Reactive-store funnel point (AC-STORE-4): every mutation of this IDB store
   // MUST recompute the cached snapshot and emit here — this is the ONLY place
-  // deleteOutboundJoinRequest notifies subscribers. This is what makes
-  // welcomeSubscription.ts:553's existing `deleteOutboundJoinRequest(matchedRecord.nonce)`
-  // call reactive, with zero edits to that file.
+  // deleteOutboundJoinRequest notifies subscribers. Every caller (the auto-accept consume
+  // port, the UI cancel) is therefore reactive without any edit of its own.
   try {
     const persisted = await entries<string, OutboundJoinRequestRecord>(outboundJoinRequestStore);
     _recomputeSnapshot(persisted.map(([, r]) => r));
@@ -314,9 +296,9 @@ export async function cancelOutboundJoinRequest(nonce: string): Promise<void> {
 /**
  * Drop every outbound join-request record (account-wide reset).
  *
- * Dead code (nothing calls it) per the story brief — the recompute+emit
- * below is added for funnel consistency only and is not load-bearing for
- * any behavior beyond "it still clears the store."
+ * Nothing calls it yet; the recompute+emit below is for funnel consistency
+ * only and is not load-bearing for any behavior beyond "it still clears the
+ * store."
  */
 export async function clearAllOutboundJoinRequests(): Promise<void> {
   await clear(outboundJoinRequestStore);

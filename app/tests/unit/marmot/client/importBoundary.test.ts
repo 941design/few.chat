@@ -18,8 +18,6 @@ const APP_ROOT = resolve(__dirname, '../../../..');
 const MARMOT_DIR = join(APP_ROOT, 'src/lib/marmot');
 /** Directories (relative to src/lib/marmot) written for the library adoption. */
 const NEW_MODULE_DIRS = ['client'];
-/** Pre-existing exception (old flow, deleted later in this epic). */
-const LEGACY_REACT_IMPORTERS = new Set(['outboundJoinRequests.ts']);
 
 function listTs(dir: string): string[] {
   const out: string[] = [];
@@ -88,12 +86,10 @@ describe('AC-BOUND-1: pure modules do not import React contexts', () => {
     }
   });
 
-  it('only the known legacy file imports react in the rest of src/lib/marmot', () => {
+  it('no file anywhere under src/lib/marmot imports react (the old exemption for outboundJoinRequests.ts is gone: its hook lives in src/hooks)', () => {
     const offenders = files
-      .filter((f) => !NEW_MODULE_DIRS.some((d) => f.startsWith(join(MARMOT_DIR, d) + '/')))
-      .filter((f) => specifiersOf(f).includes('react'))
-      .map((f) => relative(MARMOT_DIR, f))
-      .filter((f) => !LEGACY_REACT_IMPORTERS.has(f));
+      .filter((f) => specifiersOf(f).some((s) => s === 'react' || s.startsWith('react/') || s.startsWith('react-dom')))
+      .map((f) => relative(MARMOT_DIR, f));
     expect(offenders).toEqual([]);
   });
 });

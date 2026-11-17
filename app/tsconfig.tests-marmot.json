@@ -22,6 +22,8 @@
     "tests/unit/media/blossomClient.test.ts",
     "tests/unit/marmot/media.harness.test.ts",
     "tests/unit/marmot/kinds.test.ts",
+    "tests/unit/marmot/joinRequest*.test.ts",
+    "tests/unit/directMessages.dmPlaneDispatch.test.ts",
     "tests/unit/marmot/forgery.harness.test.ts",
     "tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts",
     "tests/unit/marmot/pollRetract.test.ts",

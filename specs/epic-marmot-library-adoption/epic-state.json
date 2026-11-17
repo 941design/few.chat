@@ -3,7 +3,7 @@
   "status": "in_progress",
   "phase": "IMPLEMENTING",
   "created_at": "2026-11-17T08:07:10Z",
-  "updated_at": "2026-11-17T20:42:30Z",
+  "updated_at": "2026-11-17T21:42:51Z",
   "pre_existing_dirty_files": [
     ".clauded.yaml",
     "package.json.copy",
@@ -20,7 +20,8 @@
     "S8",
     "S9",
     "S10",
-    "S11"
+    "S11",
+    "S12"
   ],
   "escalated_stories": [],
   "phase_history": [
@@ -86,6 +87,7 @@
     "AC-SIGN-3 amended (S7 review): NIP-46 requested permissions now also include sign_event:24242 (Blossom upload auth for group images) and 25050–25055 (call signaling; previously missing). Existing bunker sessions recorded with the old set will be discarded once and must reconnect (AC-SIGN-4).",
     "S8 product call: inviting a pubkey that already holds a leaf in the group returns already-member (no second leaf), so adding a SECOND DEVICE of the same account via invite is refused, although the library permits same-account device adds (its ADR-003). Few has no multi-device flow today; confirm this is intended.",
     "S9 decider: invitation caps now retain TRUSTED sponsors first (own account or ever-known peer incl. contacts) and expire STRANGER invitations after 14 days (AC-CAP-1/D14 amended). Confirm the 14-day figure; under a sustained stranger flood a legitimate stranger invitation can still be silently lost (recovery: add as contact and re-invite); confirm a sponsor can re-invite after a silent decline (not verified in the library).",
-    "S9 residual (privacy, needs your call): a SILENT decline (blocked or over-cap sponsor) sends no rumor or wrap, but the library then rotates the consumed key package, publicly superseding the kind-30443 event the sponsor used — the sponsor can observe that its Welcome was processed and rejected (a per-decline receipt oracle). Options: accept, or ask the library for a silent decline that defers/skips rotation."
+    "S9 residual (privacy, needs your call): a SILENT decline (blocked or over-cap sponsor) sends no rumor or wrap, but the library then rotates the consumed key package, publicly superseding the kind-30443 event the sponsor used — the sponsor can observe that its Welcome was processed and rejected (a per-decline receipt oracle). Options: accept, or ask the library for a silent decline that defers/skips rotation.",
+    "S12: auto-accept now requires the sponsor-claimed group name to be known and match the join request (else the invitation stays a manual card); pending join requests are capped at 50 per group with a 30-day TTL — the TTL also applies to the CURRENT app list (requests older than 30 days are pruned when the list loads). Confirm both."
   ]
 }

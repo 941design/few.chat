@@ -426,7 +426,7 @@ describe('outboundJoinRequests', () => {
     // outbound records. This source-scan asserts the fix's shape survives.
     describe('loaded flag is reactive (P1 regression guard)', () => {
       const src = readFileSync(
-        fileURLToPath(new URL('../../../src/lib/marmot/outboundJoinRequests.ts', import.meta.url)),
+        fileURLToPath(new URL('../../../src/hooks/useOutboundJoinRequests.ts', import.meta.url)),
         'utf8',
       );
       const hookBody = src.slice(src.indexOf('export function useOutboundJoinRequests'));

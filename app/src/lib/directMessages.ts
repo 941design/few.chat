@@ -3,6 +3,7 @@ import { nip04, nip44 } from 'nostr-tools';
 import { wrapEvent, createRumor } from 'nostr-tools/nip59';
 import { getPublicKey, verifyEvent, getEventHash } from 'nostr-tools/pure';
 import { createLogger } from '@/src/lib/logger';
+import { APP_INBOX_KINDS, RESERVED_KINDS } from '@/src/lib/marmot/kinds';
 import { publishWithTimeout } from '@/src/lib/ndkClient';
 import { put, get as blossomGet } from '@/src/lib/media/blossomClient';
 import { MAX_OUTPUT_BYTES } from '@/src/config/blossom';
@@ -280,6 +281,56 @@ export async function unwrapAndOpen(
     logger.info('dm:unwrap-failed', { wrapId: giftWrap.id ?? 'unknown' });
     throw new Error('gift wrap decryption failed');
   }
+}
+
+/**
+ * Rumor kinds that belong to the LIBRARY inbox plane, not to the NDK DM plane (D7, AC-INBOX-1): the MLS Welcome (444) and
+ * the library's own control rumors, read from the library's `RUMOR_KINDS` through the registry, plus the app
+ * rumors the library inbox handles for us: the join request (21059) and the invite context (21064). The DM listener sees
+ * their gift wraps too (every kind-1059 addressed to us reaches it), so it MUST skip them silently: no handler call, no
+ * state change, no log line.
+ */
+export const DM_PLANE_SKIPPED_KINDS: ReadonlySet<number> = new Set<number>([
+  ...RESERVED_KINDS,
+  APP_INBOX_KINDS.joinRequest,
+  APP_INBOX_KINDS.inviteContext,
+]);
+
+/** What the DM listener should do with one received gift wrap (see `dispatchDmGiftWrap`). */
+export type DmGiftWrapDispatch<R> =
+  /** Not openable as a gift wrap addressed to us (foreign key, malformed, forged seal): the listener's usual quiet drop. */
+  | { status: 'unwrap-failed' }
+  /** A library-inbox-plane kind (`DM_PLANE_SKIPPED_KINDS`): nothing to do, nothing to log. */
+  | { status: 'skipped'; kind: number }
+  /** A pairing-ack (21060): handled by `handlers.pairingAck`; its result is returned for the listener's follow-ups. */
+  | { status: 'pairing-ack'; result: R }
+  /** Any other DM-plane rumor (chat, reaction, ...): the authenticated rumor, for the listener's own handling. */
+  | { status: 'rumor'; rumor: UnsignedRumor };
+
+/**
+ * The NDK DM listener's gift-wrap dispatch (D7, AC-INBOX-1). Opens the wrap with the strict `unwrapAndOpen` (seal signature,
+ * sender binding, canonical rumor id) and routes by the rumor kind:
+ *   - library-inbox-plane kinds (`DM_PLANE_SKIPPED_KINDS`) are skipped silently;
+ *   - the pairing-ack kind (`APP_INBOX_KINDS.pairingAck`) goes to `handlers.pairingAck` WITH THE WRAP (the pairing handler
+ *     re-opens it through the same strict primitive and sender-binds the enclosed card), and its result is returned;
+ *   - everything else is returned as `{status:'rumor'}` for the caller's existing handling.
+ * A throwing pairing handler propagates: the listener owns reporting. This function only classifies; it never touches
+ * contacts, unread state or storage itself.
+ */
+export async function dispatchDmGiftWrap<R>(
+  giftWrap: import('nostr-tools').NostrEvent,
+  selfPrivKeyHex: string,
+  handlers: { pairingAck: (giftWrap: import('nostr-tools').NostrEvent) => Promise<R> },
+): Promise<DmGiftWrapDispatch<R>> {
+  let rumor: UnsignedRumor;
+  try {
+    rumor = await unwrapAndOpen(giftWrap, selfPrivKeyHex);
+  } catch {
+    return { status: 'unwrap-failed' };
+  }
+  if (DM_PLANE_SKIPPED_KINDS.has(rumor.kind)) return { status: 'skipped', kind: rumor.kind };
+  if (rumor.kind === APP_INBOX_KINDS.pairingAck) return { status: 'pairing-ack', result: await handlers.pairingAck(giftWrap) };
+  return { status: 'rumor', rumor };
 }
 
 /**

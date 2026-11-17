@@ -1,0 +1,20 @@
+{
+  "story_id": "S12",
+  "baseline_commit": "dd0a45d",
+  "captured_at": "2026-11-17",
+  "tests": {
+    "status": "PASS",
+    "command": "make test-unit",
+    "passed": 8002,
+    "skipped": 1,
+    "failed": 0,
+    "files": 362,
+    "note": "Captured before any S12 source edit (new S12 files existed untracked but were not collected; the run's tsc step and vitest both exit 0). The only pre-existing uncommitted changes are .clauded.yaml and package.json.copy (not source)."
+  },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": [
+    "cd app && npx tsc --noEmit",
+    "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"
+  ]
+}

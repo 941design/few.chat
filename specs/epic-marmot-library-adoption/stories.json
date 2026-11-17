@@ -483,9 +483,7 @@
         "AC-JOIN-4",
         "AC-JOIN-5",
         "AC-AUTO-1",
-        "AC-AUTO-2",
-        "AC-INBOX-1",
-        "AC-INBOX-2"
+        "AC-AUTO-2"
       ],
       "scope": {
         "includes": [
@@ -497,7 +495,13 @@
           "app/src/lib/marmot/invitations/autoAccept.ts (new)",
           "app/src/lib/directMessages.ts (DM listener skip-set + pairing-ack)",
           "app/tests/unit/marmot/joinRequest*.test.ts",
-          "app/tests/unit/directMessages*.test.ts"
+          "app/tests/unit/directMessages*.test.ts",
+          "app/pages/groups.tsx, app/src/components/groups/InviteAwaitingBanner.tsx (hook import)",
+          "app/src/hooks/useOutboundJoinRequests.ts",
+          "app/src/lib/marmot/invitations/index.ts (exports)",
+          "app/tests/unit/marmot/client/importBoundary.test.ts (exemption removed)",
+          "app/tests/unit/marmot/outboundJoinRequests.test.ts",
+          "app/tsconfig.tests-marmot.json"
         ],
         "excludes": [
           "MarmotContext wiring (S18)",
@@ -507,7 +511,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "completed",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -517,7 +521,7 @@
         "ClientJobQueue",
         "KeyPackageInvite"
       ],
-      "notes": "Existing AC-AUTO rules apply unchanged. Auto-accept lives here (not in invitations) because it correlates outbound join requests. Remove the React import from outboundJoinRequests.ts and delete its LEGACY_REACT_IMPORTERS exemption in app/tests/unit/marmot/client/importBoundary.test.ts (AC-BOUND-1). Flaky: tests/unit/marmot/joinRequestSender.test.ts:305 failed twice in full-suite runs (2026-11-17) and passes alone — investigate (likely shared module state / concurrent dynamic-import mock race, see memory) while touching joinRequestSender.",
+      "notes": "Existing AC-AUTO rules apply unchanged. Auto-accept lives here (not in invitations) because it correlates outbound join requests. Remove the React import from outboundJoinRequests.ts and delete its LEGACY_REACT_IMPORTERS exemption in app/tests/unit/marmot/client/importBoundary.test.ts (AC-BOUND-1). Flaky: tests/unit/marmot/joinRequestSender.test.ts:305 failed twice in full-suite runs (2026-11-17) and passes alone — investigate (likely shared module state / concurrent dynamic-import mock race, see memory) while touching joinRequestSender. AC-INBOX-1/2 moved to S22: they can only hold once welcomeSubscription.ts (21063 handling) is deleted and the DM listener routes through dispatchDmGiftWrap (S18 wiring).",
       "owning_module": "joinRequests",
       "story_dir": "S12-join-requests-inbox-split"
     },
@@ -883,7 +887,9 @@
         "AC-DEL-3",
         "AC-DEL-5",
         "AC-SEND-4",
-        "AC-LEAVE-4"
+        "AC-LEAVE-4",
+        "AC-INBOX-1",
+        "AC-INBOX-2"
       ],
       "scope": {
         "includes": [

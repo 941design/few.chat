@@ -36,7 +36,7 @@ import ManageInviteLinksModal from '@/src/components/groups/ManageInviteLinksMod
 import JoinRequestCard from '@/src/components/groups/JoinRequestCard';
 import InviteAwaitingBanner from '@/src/components/groups/InviteAwaitingBanner';
 import OutboundJoinRequestCard from '@/src/components/groups/OutboundJoinRequestCard';
-import { useOutboundJoinRequests } from '@/src/lib/marmot/outboundJoinRequests';
+import { useOutboundJoinRequests } from '@/src/hooks/useOutboundJoinRequests';
 import InvitationCard from '@/src/components/groups/InvitationCard';
 import {
   subscribe as subscribePendingInvitations,

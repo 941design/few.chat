@@ -1,5 +1,5 @@
 /**
- * invitations — invite side of the invitation flow (S8); S11 adds decline durability. Public surface of the module; other modules
+ * invitations — invite side of the invitation flow (S8); S11 adds decline durability, S12 the auto-accept correlation. Public surface of the module; other modules
  * import only from here. S9 adds the pending view, deny layer, caps and accept/decline; S10 adds the invite context (send, hold, handler, card view model).
  */
 export {
@@ -89,6 +89,7 @@ export {
   type CardViewModelInput,
   type InvitationCardViewModel,
 } from './invitationCardViewModel';
+export { createAutoAccept, type AutoAccept, type AutoAcceptDeps, type OutboundRequestRef } from './autoAccept';
 export {
   buildDeclinedAnnouncementContent,
   createDeclineDurability,

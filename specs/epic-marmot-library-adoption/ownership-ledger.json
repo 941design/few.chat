@@ -526,6 +526,19 @@
         "S18/S19": "declined announcements now carry id groupId:inviteeRef (at-least-once); parseStructured currently DROPS the extra id field — receivers must keep it and dedupe declined announcements by id. Pass onRecordedDeclined: durability.replayMarker to the inviter; retryDeclined() on reconnect/group sync.",
         "library": "MarmotGroup exposes no removeLeaf; multi-leaf decline resolves as superseded (nothing removed, onError)"
       }
+    },
+    {
+      "id": "S12",
+      "concepts_owned": [
+        "joinRequests.inbox",
+        "invitations.autoAccept",
+        "directMessages.dmPlaneDispatch"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "register createJoinRequestInboxHandler as inboxHandlers.joinRequest; createJoinRequestSender replaces raw-WebSocket sendJoinRequest in UI callers; approval via joinRequestApproval (enqueue); wire autoAccept listener to inboxDisposition; directMessageNotifications.ts must call dispatchDmGiftWrap; roster snapshot port for the join-request handler; auto-accept never runs without a known matching group name (AC-AUTO-1 amended); dispatchDmGiftWrap needs a signer-based nip44 decrypt port for NIP-07/46 accounts (it uses selfPrivKeyHex)",
+        "S22": "delete legacy raw-WebSocket sendJoinRequest and welcomeSubscription.ts, and remove the welcomeSubscription.ts exemption in the AC-INBOX structural scan"
+      }
     }
   ],
   "reviewer_state": {

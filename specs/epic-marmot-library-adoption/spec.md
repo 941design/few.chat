@@ -381,6 +381,8 @@ No manual-validation rows are claimed; all ACs are automated (unit, library-back
 
 ## Amendments
 
+- 2026-11-17 (S12 reviews): auto-accept requires the sponsor-claimed group name (invite context) to be known and to match the outbound join request; without it the invitation stays a manual card (no silent join into a different group of the same admin). Pending join requests are capped per group and globally with a TTL. AC-AUTO-1 amended.
+
 - 2026-11-17 (S11 reviews): decline removal is leaf-bound and re-checked in the commit; the declined announcement is phased (survives reload) and carries a dedup id; unknown-ref declines are kept as orphans and adopted only by an earlier-or-equal invite record; terminal failures and >30-day markers are dropped. AC-DECL-1/2 amended.
 
 - 2026-11-17 (S9 review + Fable decider): invitation caps are trust-ordered (trusted = own account or ever-known peer, incl. contacts) with a 14-day stranger TTL, so a stranger flood cannot lock out invitations from people the user knows; all cap/expiry declines stay silent. AC-CAP-1 and D14 amended.

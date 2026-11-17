@@ -25,7 +25,7 @@ function makeRequest(overrides: Partial<PendingJoinRequest> = {}): PendingJoinRe
     pubkeyHex: 'pk-requester-1',
     nonce: 'nonce-1',
     groupId: 'group-1',
-    receivedAt: 1000,
+    receivedAt: Date.now(),
     nickname: undefined,
     eventId: 'evt-1',
     ...overrides,

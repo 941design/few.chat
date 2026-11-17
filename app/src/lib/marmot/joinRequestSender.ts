@@ -1,27 +1,134 @@
 /**
- * Join request sender — builds a kind 21059 inner rumor and wraps it
- * in a NIP-59 gift wrap (kind 1059) for publishing to relays.
+ * Join request sender (invitee side) — builds a kind 21059 rumor and delivers it gift-wrapped to the admin.
  *
- * This is the invitee-side counterpart to the admin-side gift-wrap
- * handler in welcomeSubscription.ts.
+ * Two senders live here:
+ *  - `createJoinRequestSender` (D7/D8, S12): the library path. The rumor goes out through
+ *    `extensions.sendInboxRumor` (NIP-59 gift wrap to the admin's inbox relays, done by the library). This is the
+ *    sender the cut-over wires.
+ *  - `sendJoinRequest`, `buildGiftWrap`, `buildJoinRequestRumor`: the legacy hand-rolled path (own wrap + raw WebSocket
+ *    publish) that the current UI callers still use. It is removed with its callers at the cut-over (S18) and the old
+ *    Welcome subscription (S22).
  */
 
 import { wrapEvent } from 'nostr-tools/nip59';
-import { getPublicKey } from 'nostr-tools/pure';
+import { getPublicKey, getEventHash } from 'nostr-tools/pure';
 import { hexToBytes } from 'nostr-tools/utils';
+import type { Rumor } from '@941design/nostr-events/event';
 import { DEFAULT_RELAYS } from '@/src/types';
 import { saveOutboundJoinRequest } from './outboundJoinRequests';
+import type { OutboundJoinRequestRecord } from './outboundJoinRequests';
+import { APP_INBOX_KINDS } from './kinds';
 
-export const JOIN_REQUEST_RUMOR_KIND = 21059;
+export const JOIN_REQUEST_RUMOR_KIND: number = APP_INBOX_KINDS.joinRequest;
 
 export interface JoinRequestRumor {
   id: string;
-  kind: typeof JOIN_REQUEST_RUMOR_KIND;
+  kind: number;
   pubkey: string;
   created_at: number;
   tags: string[][];
   content: string;
 }
+
+// ---------------------------------------------------------------------------
+// Library inbox sender (D7 / D8, AC-JOIN-1 / AC-JOIN-4)
+// ---------------------------------------------------------------------------
+
+/** The slice of `MarmotClient['extensions']` the sender uses. */
+export interface JoinRequestInbox {
+  sendInboxRumor: (input: { readonly to: string; readonly rumor: Rumor }) => Promise<{ readonly status: 'delivered' | 'retryable' | 'failed'; readonly reason?: string }>;
+}
+
+/**
+ * A join request that was not delivered: the existing send-failure state of the UI (its catch shows the join-request
+ * error). `outcome` is the library delivery status (`retryable` / `failed`), or `failed` when the send rejected (the
+ * rejection is the `cause`). The message holds only the machine reason, never the rumor, the name or the nonce.
+ * `sendInboxRumor` persists and retries nothing and the app creates no retry timer for it: the user sends again.
+ */
+export class JoinRequestSendError extends Error {
+  constructor(
+    readonly outcome: 'retryable' | 'failed',
+    readonly reason: string | undefined,
+    options?: { cause?: unknown },
+  ) {
+    super(`join request not delivered: ${outcome}${reason ? ` (${reason})` : ''}`, options);
+    this.name = 'JoinRequestSendError';
+  }
+}
+
+export interface JoinRequestSenderDeps {
+  inbox: JoinRequestInbox;
+  /** The own account pubkey (hex): the rumor's author. */
+  ownPubkey: string;
+  /** Clock, ms (rumor `created_at` and the record's `sentAt`). */
+  now: () => number;
+  /** Persists the outbound record (production: `saveOutboundJoinRequest`). Called ONLY for a delivered request. */
+  saveOutbound: (record: OutboundJoinRequestRecord) => Promise<void>;
+  /** A record write that failed after a delivered send (default `console.error`). */
+  onError?: (error: unknown) => void;
+}
+
+export interface JoinRequestSender {
+  /** Resolves when the request was delivered; rejects with `JoinRequestSendError` for `retryable` / `failed`. Never calls the client from a library frame: call it from a UI handler or a queued job. */
+  send: (params: { adminPubkeyHex: string; nonce: string; groupName: string; requesterName?: string }) => Promise<void>;
+}
+
+const HEX_PUBKEY = /^[0-9a-fA-F]{64}$/;
+
+export function createJoinRequestSender(deps: JoinRequestSenderDeps): JoinRequestSender {
+  if (!deps) throw new TypeError('createJoinRequestSender: dependencies are required');
+  if (typeof deps.inbox?.sendInboxRumor !== 'function') throw new TypeError('createJoinRequestSender: required dependency "inbox.sendInboxRumor" is missing');
+  if (typeof deps.now !== 'function') throw new TypeError('createJoinRequestSender: required dependency "now" is missing');
+  if (typeof deps.saveOutbound !== 'function') throw new TypeError('createJoinRequestSender: required dependency "saveOutbound" is missing');
+  if (typeof deps.ownPubkey !== 'string' || !HEX_PUBKEY.test(deps.ownPubkey)) throw new TypeError('createJoinRequestSender: required dependency "ownPubkey" must be a 64-char hex pubkey');
+  const { inbox, now, saveOutbound } = deps;
+  const ownPubkey = deps.ownPubkey.toLowerCase();
+  const onError = deps.onError ?? ((e: unknown) => console.error('[marmot/joinRequests] sender', e));
+
+  return {
+    async send(params) {
+      if (!params || typeof params.adminPubkeyHex !== 'string' || !HEX_PUBKEY.test(params.adminPubkeyHex)) {
+        throw new TypeError('sendJoinRequest: adminPubkeyHex must be a 64-char hex pubkey');
+      }
+      if (typeof params.nonce !== 'string' || params.nonce.length === 0) throw new TypeError('sendJoinRequest: nonce is required');
+      const admin = params.adminPubkeyHex.toLowerCase();
+      const at = now();
+      const unsigned = {
+        pubkey: ownPubkey,
+        created_at: Math.floor(at / 1000),
+        kind: JOIN_REQUEST_RUMOR_KIND,
+        tags: [['p', admin]],
+        content: JSON.stringify({
+          type: 'join_request',
+          nonce: params.nonce,
+          name: params.groupName,
+          requesterName: params.requesterName,
+        }),
+      };
+      const rumor: Rumor = { ...unsigned, id: getEventHash(unsigned) };
+      let delivery: Awaited<ReturnType<JoinRequestInbox['sendInboxRumor']>>;
+      try {
+        delivery = await inbox.sendInboxRumor({ to: admin, rumor });
+      } catch (cause) {
+        throw new JoinRequestSendError('failed', undefined, { cause });
+      }
+      if (delivery.status !== 'delivered') {
+        throw new JoinRequestSendError(delivery.status === 'retryable' ? 'retryable' : 'failed', typeof delivery.reason === 'string' ? delivery.reason : undefined);
+      }
+      // AC-AUTO-1: the outbound record exists ONLY for a delivered request. A write failure must not fail a send that
+      // already reached the relays.
+      try {
+        await saveOutbound({ nonce: params.nonce, adminPubkeyHex: admin, groupName: params.groupName, sentAt: at });
+      } catch (e) {
+        onError(e);
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Legacy hand-rolled path (removed with its callers at the cut-over)
+// ---------------------------------------------------------------------------
 
 /**
  * Build the inner join-request rumor (kind 21059).
@@ -145,7 +252,7 @@ export async function sendJoinRequest(params: {
   // AC-AUTO-1: persist an outbound record ONLY on a successful send (at least
   // one relay accepted, per the throw above). A failed send (thrown above)
   // never reaches this line, so no record is written for it. Correlated by
-  // welcomeSubscription.ts's auto-accept against adminPubkeyHex — see
+  // the auto-accept (invitations/autoAccept.ts) against adminPubkeyHex and the group name — see
   // outboundJoinRequests.ts.
   await saveOutboundJoinRequest({
     nonce: params.nonce,

@@ -101,6 +101,42 @@
       "category": "SPEC",
       "ac_id": "AC-INBOX-2",
       "question": "AC-INBOX-2: Kind 21063 MUST NOT be sent or handled anywhere in `app/src` (only the retired-kind registry entry). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [structural + AC-KIND-1] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies. Because the AC is structural, show the verification command's output on the pre-change tree and on the post-change tree and confirm they differ."
+    },
+    {
+      "question_id": "VQ-S12-016",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "joinRequestHandler.ts createJoinRequestInboxHandler runs inside a library frame on the serial inbox queue: it must make no account-scope client call. It takes the member roster as a SYNC snapshot port (memberPubkeys) instead of awaiting groupOf, because the architecture exception for groupOf was verified only for history drains, not for inbox handlers. Confirm no groups.get / groupOf / invite / sendInboxRumor appears in joinRequestHandler.ts (scan in joinRequestInbox.scan.test.ts), that S18 must feed memberPubkeys from the attached groups' members() snapshot, and that an unknown group (empty roster) falls through to the approval's already-member no-op (AC-JOIN-3)."
+    },
+    {
+      "question_id": "VQ-S12-017",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "The handler rethrows storage failures (the library then defers and redelivers the wrap, at-least-once, 10-failure cap) but swallows a throwing bell, and writes the durable rumor-id memory (few-join-request-seen, 512 cap, oldest-by-time eviction) only AFTER the request is saved. Confirm: a failed save leaves no seen mark (retry cannot be lost), a blocked sender leaves no seen mark either (joinRequestInboxHandler.test.ts), a replay after the request was consumed does not resurrect it (joinRequestStorage.seen.test.ts over real fake-indexeddb), and an unconsumed eviction beyond 512 ids can theoretically re-admit a very old replay (accepted residual: the nonce/expiry gates still apply)."
+    },
+    {
+      "question_id": "VQ-S12-018",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "AC-AUTO-1 says the invitation is matched on groupId and sponsorAccount, but an outbound record carries adminPubkeyHex, nonce and groupName only (the requester never learns the group id from an invite link). The implementation keeps the existing AC-AUTO-4a rules: sponsor === admin, then the group NAME (sanitised with the invite-context normaliser) narrowed to exactly one record when a validated context name is known (groupNameOf), else exactly one record for the sponsor. Is this the right reading, and is the residual accepted that a sponsor-claimed name (invite context, D3) is the disambiguator and that several same-admin requests with no context yet stay pending until the context arrives (autoAccept.evaluate() re-runs the job)?"
+    },
+    {
+      "question_id": "VQ-S12-019",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "autoAccept.onInboxDisposition and createJoinRequestApproval.approve both defer all account-scope work to handle.enqueue; the auto-accept job ends with view.scheduleRefresh() (S9 ledger note) and the approval job runs getGroup + inviteByPubkey only inside the job. Verify with the unit tests and the library harness (joinRequests.harness.test.ts: real clients, real FakeRelay) that omitting enqueue/view/actions/outbound/groupNameOf, or the inviter/getGroup/consumeRequest/onApproved ports, throws at construction rather than degrading, and that in-place mutants (no deny layer, no seen check, no accepted-id memory, no name narrowing, no scheduleRefresh, already-member as error, no in-flight sharing, retryable saved as delivered, joinRequest kind missing from the DM skip set, eviction ignoring stored time) all fail a test."
+    },
+    {
+      "question_id": "VQ-S12-020",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "joinRequestSender.test.ts:305 (flaky in full-suite runs) is fixed at its root: waitForSockets returned once the mock sockets were constructed, but each mock connects on setTimeout(0) and only then sends, so under CPU load the 5 ms poll timer could fire before those just-scheduled 0 ms timers and the test read send.mock.calls[0] of a socket that had not sent ('Cannot read properties of undefined'). It now polls the observable condition (every socket has sent). Confirm the old helper fails under a CPU-stress loop (1 of 6 runs failed in the session) and the fixed helper passed 8 of 8 under the same load. It was NOT the dynamic-import mock race of the memory note: the file has a single top-level dynamic import."
+    },
+    {
+      "question_id": "VQ-S12-021",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "Scope notes: (a) invitations/index.ts (barrel) is edited to export autoAccept although not in scope.includes, as S8/S10/S11 did; (b) pages/groups.tsx and src/components/groups/InviteAwaitingBanner.tsx import useOutboundJoinRequests from the new src/hooks/useOutboundJoinRequests.ts (the story notes require removing the React import from outboundJoinRequests.ts, which forces moving the hook and its two importers; outboundJoinRequests.test.ts source-scan now reads the hook file); (c) the legacy sendJoinRequest/buildGiftWrap/handleJoinRequest/parseJoinRequestContent stay until the cut-over: the UI callers still use the raw-WebSocket sender and welcomeSubscription still dispatches 21059/21060/21063 (S18 rewires callers, S22 deletes the file); (d) AC-INBOX-1's 'welcomeSubscription.ts MUST NOT exist' and AC-INBOX-2's 'no 21063 anywhere' are enforced with a self-expiring exemption for that one legacy file (joinRequestInbox.scan.test.ts), to be dropped by S22; (e) the DM-listener dispatcher dispatchDmGiftWrap in directMessages.ts is a tested seam that directMessageNotifications.ts (outside scope) must call at the cut-over together with handlePairingAck (S18): until then the legacy welcomeSubscription still handles pairing-ack."
     }
   ]
 }

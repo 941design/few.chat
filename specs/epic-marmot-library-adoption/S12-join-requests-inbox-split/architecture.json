@@ -1,0 +1,96 @@
+{
+  "module_name": "joinRequests",
+  "purpose": "S12 moves the join-request protocol (D8) onto the library inbox: the requester sends kind 21059 with extensions.sendInboxRumor (retryable/failed = the existing send-failure state, no retry timer); the admin's registerInboxHandler(21059) handler takes the requester only from the seal-bound rumor.pubkey, drops blocked senders first, dedupes by rumor.id, applies the unchanged nonce/mute/expiry/dedup gates and persists; approval runs on the client job queue through the key-package invite (already-member is a no-op success); auto-accept (invitations/autoAccept.ts) correlates a pending invitation with an unexpired outbound request exactly once. The DM listener gains a pure dispatcher that skips the library-inbox kinds silently and routes pairing-ack.",
+  "public_api": [
+    {
+      "name": "createJoinRequestInboxHandler",
+      "signature": "(deps: { denyLayer: Pick<DenyLayer,'isBlocked'>; inviteLinks: {get}; memberPubkeys: (groupId)=>readonly string[]; requests: {load,save}; seen: {has,add}; now: ()=>number; onReceived: (r: PendingJoinRequest)=>void; onError? }) => InboxRumorHandler",
+      "description": "joinRequestHandler.ts. Every port validated at construction. Order: wrong kind/malformed sender/missing id, deny layer (before any lookup or write), seen rumor id, parse, nonce/mute/expiry, member roster snapshot, same requester+group duplicate, save, seen.add, bell. A storage failure is reported and rethrown (the library defers and redelivers). No client call. joinRequestStorePorts = the idb-backed production ports."
+    },
+    {
+      "name": "createJoinRequestSender",
+      "signature": "(deps: { inbox: {sendInboxRumor}; ownPubkey: string; now: ()=>number; saveOutbound: (r: OutboundJoinRequestRecord)=>Promise<void>; onError? }) => { send(params: {adminPubkeyHex, nonce, groupName, requesterName?}): Promise<void> }",
+      "description": "joinRequestSender.ts. One sendInboxRumor of a canonical-id rumor (kind 21059, tags [['p',admin]], content {type,nonce,name,requesterName}). delivered: the outbound record is written (a write failure is reported, never fails the send); retryable/failed/rejected: JoinRequestSendError (outcome, reason, cause), no record, no timer. JoinRequestSendError is the existing send-failure state of the UI catch blocks."
+    },
+    {
+      "name": "createJoinRequestApproval",
+      "signature": "(deps: { inviter: Pick<KeyPackageInviter,'inviteByPubkey'>; getGroup: (groupId)=>Promise<InviteGroup|undefined>; enqueue: ClientJobQueue['enqueue']-like; consumeRequest: (r)=>Promise<void>; onApproved: (r, kind)=>void|Promise<void>; onError? }) => { approve(request): Promise<ApprovalResult> }",
+      "description": "joinRequestApproval.ts (the KeyPackageInvite consumer). getGroup and inviteByPubkey run only inside a handle.enqueue job. invited -> consume + onApproved('invited'); {error:'already-member'} -> consume + onApproved('already-member'), plain success, no group.invite; no usable key package / thrown error -> request stays pending. Same request in flight shares one run; a non-accepting queue settles queue-unavailable."
+    },
+    {
+      "name": "createAutoAccept",
+      "signature": "(deps: { view: Pick<PendingInvitationView,'refresh'|'scheduleRefresh'>; actions: Pick<InvitationActions,'accept'>; enqueue; outbound: {loadUnexpiredForAdmin, consume}; groupNameOf: (inv)=>string|undefined; onError? }) => { onInboxDisposition(d), evaluate(), idle(), dispose() }",
+      "description": "invitations/autoAccept.ts. onInboxDisposition is a frame-safe listener (pending only; enqueue last, collapsing). The job refreshes the view (shown set only: a blocked sponsor is never auto-accepted), correlates on sponsorAccount === admin and the sanitised group name (known name: exactly one record of that name; unknown name: exactly one record), accepts through actions.accept at most once per invitation id, consumes the record after a successful accept, and ends with view.scheduleRefresh()."
+    },
+    {
+      "name": "dispatchDmGiftWrap / DM_PLANE_SKIPPED_KINDS",
+      "signature": "dispatchDmGiftWrap<R>(giftWrap, selfPrivKeyHex, { pairingAck: (giftWrap)=>Promise<R> }): Promise<{unwrap-failed}|{skipped,kind}|{pairing-ack,result:R}|{rumor}>",
+      "description": "directMessages.ts. Opens the wrap with the strict unwrapAndOpen, skips 444/library control kinds (RESERVED_KINDS)/21059/21064 silently, routes 21060 to the injected pairing handler with the wrap, returns every other rumor to the listener."
+    },
+    {
+      "name": "hasSeenJoinRequestRumor / markJoinRequestRumorSeen / SEEN_JOIN_REQUEST_CAP",
+      "signature": "(rumorId) => Promise<boolean>; (rumorId, now) => Promise<void>; 512",
+      "description": "joinRequestStorage.ts. Durable bounded rumor-id memory (own idb store few-join-request-seen), oldest evicted by stored time, the just-written id never evicted, cleared by clearAllPendingJoinRequests."
+    },
+    {
+      "name": "useOutboundJoinRequests (src/hooks)",
+      "signature": "() => { records, loaded }",
+      "description": "Moved out of outboundJoinRequests.ts (React import removed, LEGACY_REACT_IMPORTERS exemption deleted); the module now exports getLoadedSnapshot/getLoadedServerSnapshot for the hook."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "few-join-requests (pending requests, key rumor id), few-join-request-seen (new, rumor id -> time, cap 512), few-invite-links, few-outbound-join-requests (access only through their storage modules)"
+  ],
+  "dependencies_allowed": [
+    "@941design/marmot (InboxRumorHandler type)",
+    "@941design/nostr-events/event (Rumor type)",
+    "invitations/ (index: DenyLayer, KeyPackageInviter, InviteGroup types; autoAccept lives in invitations/ and imports only invitations siblings)",
+    "kinds.ts (APP_INBOX_KINDS, RESERVED_KINDS)",
+    "inviteLinkStorage.ts, joinRequestStorage.ts, outboundJoinRequests.ts (idb-keyval stores of this domain)",
+    "lib/contactCard (truncateUtf8, MAX_NAME_BYTES)",
+    "client/ (types only: ClientJobQueue shape via the injected enqueue)"
+  ],
+  "dependencies_forbidden": [
+    "react or any src/context import under app/src/lib/marmot/** (AC-BOUND-1)",
+    "@internet-privacy/marmot-ts, ts-mls",
+    "any account-scope client call from the inbox handler or the client listener frame (follow-ups only via handle.enqueue, enqueue last)",
+    "idb-keyval update()",
+    "keyPackages.offer, expectWelcome, kind 21063 (AC-AUTO-2, AC-INBOX-2)",
+    "publishing the join request or any profile data outside a gift wrap (privacy invariant)"
+  ],
+  "external_ports": [
+    "extensions.sendInboxRumor (requester; account scope: UI handler or queued job)",
+    "extensions.registerInboxHandler(21059) (registered by client bootstrap as inboxHandlers.joinRequest)",
+    "invitations.accept via InvitationActions (auto-accept job)",
+    "inviteByPubkey via KeyPackageInviter (approval job)",
+    "handle.enqueue (ClientJobQueue)"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "client event inboxDisposition (kind pending) via autoAccept.onInboxDisposition"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/joinRequestInboxHandler.test.ts",
+    "app/tests/unit/marmot/joinRequestSender.inbox.test.ts",
+    "app/tests/unit/marmot/joinRequestApproval.test.ts",
+    "app/tests/unit/marmot/invitations/autoAccept.test.ts",
+    "app/tests/unit/marmot/joinRequestStorage.seen.test.ts",
+    "app/tests/unit/marmot/joinRequestInbox.scan.test.ts",
+    "app/tests/unit/marmot/joinRequests.harness.test.ts",
+    "app/tests/unit/directMessages.dmPlaneDispatch.test.ts",
+    "app/tests/unit/marmot/client/importBoundary.test.ts"
+  ],
+  "seam": {
+    "name": "JoinRequests",
+    "cross_story": true,
+    "consumed_by": ["S18", "S19", "S20"]
+  },
+  "consumes_seams": [
+    { "name": "AppKinds", "cross_story": true, "consumed_by": ["S12"] },
+    { "name": "DenyLayer", "cross_story": true, "consumed_by": ["S12"] },
+    { "name": "PendingInvitationView", "cross_story": true, "consumed_by": ["S12"] },
+    { "name": "ClientJobQueue", "cross_story": true, "consumed_by": ["S12"] },
+    { "name": "KeyPackageInvite", "cross_story": true, "consumed_by": ["S12"] }
+  ]
+}
