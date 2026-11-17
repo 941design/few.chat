@@ -26,7 +26,12 @@ vi.mock('idb-keyval', () => ({
 const { generateSecretKey, getPublicKey } = await import('nostr-tools/pure');
 const { buildReactionRumor } = await import('@/src/lib/reactions/rumor');
 const api = await import('@/src/lib/reactions/api');
-const { loadReactions, applyInboundRumor, applyOptimistic, clearAllReactions, prepareOwnReaction, stampFloorFor } = api;
+const { loadReactions, applyInboundRumor: applyInboundRumorReal, applyOptimistic, clearAllReactions, prepareOwnReaction, stampFloorFor } = api;
+
+// A group-thread signal needs an explicit authenticated sender (the store never falls back to the forgeable
+// `rumor.pubkey`): these fixtures deliver each rumor as sent by its own pubkey. A DM thread keeps the default.
+const applyInboundRumor = ((thread: Parameters<typeof applyInboundRumorReal>[0], rumor: Parameters<typeof applyInboundRumorReal>[1], sender?: Parameters<typeof applyInboundRumorReal>[2]) =>
+  applyInboundRumorReal(thread, rumor, sender ?? (thread.kind === 'group' ? { pubkey: rumor.pubkey, authenticity: 'mls' as const } : undefined))) as typeof applyInboundRumorReal;
 
 const priv = Array.from(generateSecretKey(), (b) => b.toString(16).padStart(2, '0')).join('');
 const ME = getPublicKey(Uint8Array.from(priv.match(/../g)!.map((h) => parseInt(h, 16))));
@@ -312,13 +317,18 @@ describe('revival of a rolled-back pending add (exact createdAt)', () => {
     expect((await loadReactions(THREAD))[0]).toMatchObject({ emoji: '🎉', removed: true, createdAt: 0 });
   });
 
-  it.each([['messageId', { messageId: 'other' }], ['reactorPubkey', { reactorPubkey: 'someone' }]])(
-    'the same id with a different %s is not revived',
-    async (_n, over) => {
-      seed([rolledBack(over)]);
-      expect(await applyOptimistic(THREAD, addRow({ createdAt: 5 }))).toBeNull();
-    },
-  );
+  it('the same id with a different messageId is not revived', async () => {
+    seed([rolledBack({ messageId: 'other' })]);
+    expect(await applyOptimistic(THREAD, addRow({ createdAt: 5 }))).toBeNull();
+  });
+
+  it('the same id under a different reactor is another reactor\'s row: nothing is revived, the add is its own row', async () => {
+    seed([rolledBack({ reactorPubkey: 'someone' })]);
+    const out = await applyOptimistic(THREAD, addRow({ createdAt: 5 }));
+    expect(out).toHaveLength(2);
+    expect(out![0]).toMatchObject({ reactorPubkey: 'someone', removed: true, createdAt: 0 }); // the tombstone stays as it was
+    expect(out![1]).toMatchObject({ removed: false, eventId: '' });
+  });
 });
 
 describe('tombstone merge of a new add (exact createdAt)', () => {

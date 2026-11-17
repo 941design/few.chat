@@ -18,6 +18,9 @@
     "tests/unit/marmot/handlers/**/*.ts",
     "tests/unit/marmot/kinds.test.ts",
     "tests/unit/marmot/forgery.harness.test.ts",
+    "tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts",
+    "tests/unit/marmot/pollRetract.test.ts",
+    "tests/unit/unreadRecompute.test.ts",
     "tests/unit/nip46Perms.test.ts",
     "tests/unit/depsResolve.test.ts"
   ],

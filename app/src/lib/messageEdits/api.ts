@@ -60,6 +60,31 @@
  *     ChatMessage rows it refers to
  *   - groupIdFor(thread)                                 — test-only export (parity check
  *     against directMessages.ts's directConversationId), not a seam
+ *   - recomputeSlot(thread, slotIds, signals)            — recompute-on-retract (below)
+ *   - deleteEditSlotIds(rumor)                           — the slot ids a rumor names (the recompute key)
+ *   - snapshotMessageEditsState(groupId)                 — the aux state, for the recompute oracle (tests)
+ *
+ * ─── Recompute-on-retract (AC-WDR-7, gate-remediation ruling) ──────────────
+ *
+ * A withdrawn delete (kind 5) or edit-marked replacement is NOT undone incrementally. The slot (message id) is the
+ * aggregate: `recomputeSlot` resets it to its BASE and folds the signals still in history, in `seq` order, through
+ * the SAME core as the live dispatch (`foldClassifiedSignal`), so the result equals dispatching only the survivors
+ * into empty stores, whatever was withdrawn and in whatever order.
+ *
+ *   - The base is the write-once `original` snapshot on the chat row (content / edited / tombstoned / rev), written
+ *     by the very write that first applies a signal (chatPersistence `mergePatchCore`) and cleared when the slot
+ *     recomputes to "no signals" (`resetSlotsToOriginal`). A tombstone also hides the BASE content
+ *     (`mergeTombstone`), so the hidden state does not depend on arrival order.
+ *   - Contribution identity is `(rumor.id, sender)`: pending entries are kept per (target, author), the slot meta
+ *     records its winner's author, and the idempotency shortcut matches both, so a forged byte-identical copy under
+ *     another sender is judged on its own (author gate) and neither shadows nor is shadowed by the real one.
+ *   - The fold's clock is the history row's own first-append time (`classifySignal(rumor, receivedAtSeconds)`), the
+ *     pins of the signals' rumors are dropped and re-derived from it, so a recompute never depends on the wall clock.
+ *   - Accepted residuals: see `recomputeSlot` (live-roster gates failing closed; an unechoed own optimistic signal and
+ *     pre-sink pending state are reset with the slot; a row edited before `original` existed keeps its state).
+ *   - A multi-e-tag delete (the original id PLUS prior replacement ids, D14) buffers one pending entry per named id
+ *     when no target is known; the siblings of ids that are never rows ("ghosts") are not part of the equivalence:
+ *     they can never apply to a row, and whether one survives depends on the arrival history, not on the survivors.
  *
  * ─── One apply path, marker-aware (round-2 gate-remediation) ───────────────
  *
@@ -118,13 +143,18 @@ import { createStore, get, promisifyRequest, set, type UseStore } from 'idb-keyv
 import {
   appendMessage,
   loadMessages,
+  mergePatchCore,
+  mergeTombstone,
+  resetSlotsToOriginal,
   tombstoneMessage,
   updateMessageInPlace,
   type ChatMessage,
+  type MessagePatch,
 } from '@/src/lib/marmot/chatPersistence';
 import { DELETE_EDIT_RUMOR_KIND, hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
 import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
 import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 
 // ─── Public types ─────────────────────────────────────────────────────────
 
@@ -323,6 +353,13 @@ interface SlotMeta {
    * and read in full on every self-heal sweep pass.
    */
   lastTouchedAt: number;
+  /**
+   * The author of the signal named by `lastRumorId`. A contribution is identified by
+   * `(rumorId, author)`, never by the rumor id alone: a byte-identical copy of a rumor
+   * under another sender is a different contribution. Absent on meta written before this
+   * field existed (such meta matches any author).
+   */
+  lastAuthorPubkeyHex?: string;
 }
 
 async function readArray<T>(key: string): Promise<T[]> {
@@ -379,25 +416,38 @@ async function writePendingAll(all: PendingSignal[]): Promise<void> {
   await set(PENDING_SIGNALS_KEY, all);
 }
 
-async function findPending(threadKey: string, targetId: string): Promise<PendingSignal | undefined> {
+/**
+ * Contribution identity is `(rumorId, author)`: a forged byte-identical copy of a rumor under another
+ * sender is a different contribution (it shares the rumor id but not the author), so no store below may
+ * match on the rumor id alone. `undefined` (an entry written before the field existed) matches any author.
+ */
+function sameAuthor(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return true;
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/** Every pending entry buffered for the target, one per author (see `insertOrCollapsePending`). */
+async function findPendingAll(threadKey: string, targetId: string): Promise<PendingSignal[]> {
   const all = await readPendingAll();
-  return all.find((e) => e.threadKey === threadKey && e.targetId === targetId);
+  return all.filter((e) => e.threadKey === threadKey && e.targetId === targetId);
 }
 
 /**
- * Insert a pending signal, collapsing per-target-id to the max-rev entry
- * (AC-ORDER-2). A re-delivery of the SAME rumor (matched by `rumorId`
- * alone, regardless of its classified `rev`) is a pure no-op — no idb write
- * — for AC-STORE-2 idempotency.
+ * Insert a pending signal, collapsing per (target id, AUTHOR) to the max-rev entry
+ * (AC-ORDER-2). Keying on the author as well keeps a forger's entry (a higher rev, or a
+ * byte-identical copy of the real rumor) from shadowing the real author's entry: the target
+ * is unknown here, so the author gate cannot yet decide between them; it runs per entry
+ * when the target arrives (`resolveKnownRowAgainstStores`). A re-delivery of the SAME
+ * contribution (matched by `(rumorId, author)`, regardless of its classified `rev`) is a pure
+ * no-op — no idb write — for AC-STORE-2 idempotency.
  *
- * Deliberately dedupes by `rumorId` alone rather than `rumorId AND rev`:
+ * Deliberately dedupes by rumor id regardless of rev rather than `rumorId AND rev`:
  * `sanitizeIncomingRev` caps a far-future rev to `nowSeconds +
  * MAX_REV_SKEW_SECONDS` at classification time, so two classifications of
  * the exact same rumor performed at different wall-clock moments (e.g. a
  * re-delivery reprocessed later) can produce two DIFFERENT capped revs for
  * an identical rumor id. Matching on rev too would miss that duplicate and
- * let the buffered entry's rev creep upward on every reprocess. Matching on
- * rumorId alone closes that gap.
+ * let the buffered entry's rev creep upward on every reprocess.
  *
  * Documented residual: AC-ORDER-3 convergence under a poisoned/adversarial
  * clock is best-effort, not guaranteed, in this one regime. Two DISTINCT
@@ -410,7 +460,9 @@ async function findPending(threadKey: string, targetId: string): Promise<Pending
  */
 async function insertOrCollapsePending(candidate: PendingSignal): Promise<void> {
   const all = await readPendingAll();
-  const idx = all.findIndex((e) => e.threadKey === candidate.threadKey && e.targetId === candidate.targetId);
+  const idx = all.findIndex(
+    (e) => e.threadKey === candidate.threadKey && e.targetId === candidate.targetId && sameAuthor(e.authorPubkeyHex, candidate.authorPubkeyHex),
+  );
   if (idx === -1) {
     const next = await evictOldestPendingIfOverCap([...all, candidate]);
     await writePendingAll(next);
@@ -418,7 +470,7 @@ async function insertOrCollapsePending(candidate: PendingSignal): Promise<void> 
   }
   const existing = all[idx];
   if (existing.rumorId === candidate.rumorId) {
-    return; // re-delivery of the same rumor — no-op regardless of rev drift
+    return; // re-delivery of the same contribution — no-op regardless of rev drift
   }
   if (signalBeats(candidate, existing)) {
     const next = all.slice();
@@ -428,8 +480,8 @@ async function insertOrCollapsePending(candidate: PendingSignal): Promise<void> 
 }
 
 /**
- * Remove every pending entry (across all threads/targets) whose `rumorId`
- * matches. A single delete rumor `e`-tags the original id PLUS every prior
+ * Remove every pending entry (across all threads/targets) of the contribution
+ * `(rumorId, author)`. A single delete rumor `e`-tags the original id PLUS every prior
  * replacement id (D14), so when the target is unknown,
  * `insertOrCollapsePending` is called once per e-tagged id — all sharing
  * the same `rumorId`. Once any one of those sibling entries is successfully
@@ -438,11 +490,12 @@ async function insertOrCollapsePending(candidate: PendingSignal): Promise<void> 
  * (superseded replacement rumor ids) that will never correspond to a real
  * `ChatMessage` row, so they would otherwise sit until TTL, materializing
  * as orphan delete-markers that occupy the cap for ids nobody looks up.
- * Called on every successful apply to clear them proactively.
+ * Called on every successful apply to clear them proactively. A copy of the
+ * same rumor under ANOTHER author keeps its own entries.
  */
-async function removePendingByRumorId(rumorId: string): Promise<void> {
+async function removePendingByRumorId(rumorId: string, authorPubkeyHex: string): Promise<void> {
   const all = await readPendingAll();
-  const next = all.filter((e) => e.rumorId !== rumorId);
+  const next = all.filter((e) => !(e.rumorId === rumorId && sameAuthor(e.authorPubkeyHex, authorPubkeyHex)));
   if (next.length !== all.length) await writePendingAll(next);
 }
 
@@ -510,7 +563,12 @@ function evictOldestSlotMetaIfOverCap(entries: SlotMeta[]): SlotMeta[] {
 async function writeSlotMeta(
   threadKey: string,
   slotId: string,
-  data: { lastRumorId: string; lastRev: number; lastKind: 'delete' | 'edit' },
+  data: {
+    lastRumorId: string;
+    lastRev: number;
+    lastKind: 'delete' | 'edit';
+    lastAuthorPubkeyHex: string;
+  },
 ): Promise<void> {
   const all = await readSlotMetaAll();
   const idx = all.findIndex((m) => m.threadKey === threadKey && m.slotId === slotId);
@@ -867,6 +925,11 @@ interface KnownSlotIncoming {
    * authorized against, rather than a second, possibly-inconsistent lookup.
    */
   adminPubkeysHex: string[];
+  /**
+   * Whether the write captures the row's write-once `original` (the base a recompute resets to). Default: a GROUP
+   * thread only; a DM thread never captures (nothing recomputes it).
+   */
+  captureOriginal?: boolean;
 }
 
 async function applyToKnownSlotCore(
@@ -875,9 +938,10 @@ async function applyToKnownSlotCore(
   incoming: KnownSlotIncoming,
 ): Promise<{ slotId: string; kind: ChangeResultKind }> {
   const meta = await readSlotMeta(threadKey, row.id);
+  const captureOriginal = incoming.captureOriginal ?? isGroupThreadKey(threadKey);
 
-  // AC-STORE-2 idempotency shortcut: the exact same signal, reprocessed.
-  if (meta && meta.lastRumorId === incoming.rumorId) {
+  // AC-STORE-2 idempotency shortcut: the exact same contribution (rumor id AND author), reprocessed.
+  if (meta && meta.lastRumorId === incoming.rumorId && sameAuthor(meta.lastAuthorPubkeyHex, incoming.senderPubkeyHex)) {
     return { slotId: row.id, kind: 'noop' };
   }
 
@@ -913,6 +977,8 @@ async function applyToKnownSlotCore(
 
   if (!wins) return { slotId: row.id, kind: 'noop' };
 
+  // The row's write-once base (`original`) is captured by the very write below
+  // (chatPersistence `mergePatchCore`), so a recompute can always reset the slot.
   if (incoming.kind === 'delete') {
     // S8: tombstoneMessage independently re-verifies the announcement/admin
     // gate (defense-in-depth, AC-IMMUT-4/5) — a rejection there means this
@@ -930,32 +996,35 @@ async function applyToKnownSlotCore(
     // for a DM thread would incorrectly re-apply the group-only
     // announcement gate inside `tombstoneMessage`.
     const applied = isGroupThreadKey(threadKey)
-      ? await tombstoneMessage(threadKey, row.id, incoming.rev, {
-          senderPubkeyHex: incoming.senderPubkeyHex,
-          adminPubkeysHex: incoming.adminPubkeysHex,
-        })
-      : await tombstoneMessage(threadKey, row.id, incoming.rev);
+      ? await tombstoneMessage(
+          threadKey,
+          row.id,
+          incoming.rev,
+          { senderPubkeyHex: incoming.senderPubkeyHex, adminPubkeysHex: incoming.adminPubkeysHex },
+          { ...TOMBSTONE_OPTIONS, captureOriginal },
+        )
+      : await tombstoneMessage(threadKey, row.id, incoming.rev, undefined, { ...TOMBSTONE_OPTIONS, captureOriginal });
     if (!applied) return { slotId: row.id, kind: 'noop' };
   } else {
     // Always pass tombstoned:false explicitly — MessagePatch is merge-only
     // (S1 carry-forward obligation): omitting the field would leave an
     // already-tombstoned row hidden even though this edit just won.
-    await updateMessageInPlace(threadKey, row.id, {
-      content: incoming.content,
-      edited: true,
-      tombstoned: false,
-      rev: incoming.rev,
-    });
+    await updateMessageInPlace(threadKey, row.id, editPatch(incoming.content ?? '', incoming.rev), { captureOriginal });
   }
 
   await writeSlotMeta(threadKey, row.id, {
     lastRumorId: incoming.rumorId,
     lastRev: incoming.rev,
     lastKind: incoming.kind,
+    lastAuthorPubkeyHex: incoming.senderPubkeyHex,
   });
 
   return { slotId: row.id, kind: incoming.kind };
 }
+
+const editPatch = (content: string, rev: number): MessagePatch => ({ content, edited: true, tombstoned: false, rev });
+/** A tombstone hides its row's BASE content (chatPersistence `mergeTombstone`): the hidden state is arrival-order independent. */
+const TOMBSTONE_OPTIONS = { restoreBase: true } as const;
 
 async function applyToKnownSlot(
   thread: MessageEditsThreadKey,
@@ -1022,7 +1091,7 @@ async function resolveKnownRowAgainstStores(
   row: ChatMessage,
   authorPubkeyHex: string,
 ): Promise<{ slotId: string; kind: ChangeResultKind }> {
-  const pendingEntry = await findPending(threadKey, row.id);
+  const pendingEntries = await findPendingAll(threadKey, row.id);
   const marker = await findMarker(threadKey, row.id);
 
   const targetIsAnnouncement = isAnnouncementInThread(threadKey, row.content);
@@ -1040,24 +1109,28 @@ async function resolveKnownRowAgainstStores(
 
   type WinnerCandidate = { kind: 'delete' | 'edit'; rev: number; rumorId: string; content?: string; authorPubkeyHex: string };
 
+  // One entry per author may be buffered for the slot; each is judged on its own (author
+  // gate), so a forger's entry can neither win nor shadow the real author's.
+  const pickBest = (a: WinnerCandidate | null, b: WinnerCandidate): WinnerCandidate => (a && !signalBeats(b, a) ? a : b);
   let candidate: WinnerCandidate | null = null;
-  if (pendingEntry) {
+  for (const pendingEntry of pendingEntries) {
     const authorized =
       pendingEntry.kind === 'delete'
         ? isDeleteEntryAuthorized(pendingEntry.authorPubkeyHex)
         : isEditEntryAuthorized(pendingEntry.authorPubkeyHex, pendingEntry.content);
-    if (authorized) {
-      candidate =
-        pendingEntry.kind === 'delete'
-          ? { kind: 'delete', rev: pendingEntry.rev, rumorId: pendingEntry.rumorId, authorPubkeyHex: pendingEntry.authorPubkeyHex }
-          : {
-              kind: 'edit',
-              rev: pendingEntry.rev,
-              rumorId: pendingEntry.rumorId,
-              content: pendingEntry.content,
-              authorPubkeyHex: pendingEntry.authorPubkeyHex,
-            };
-    }
+    if (!authorized) continue;
+    candidate = pickBest(
+      candidate,
+      pendingEntry.kind === 'delete'
+        ? { kind: 'delete', rev: pendingEntry.rev, rumorId: pendingEntry.rumorId, authorPubkeyHex: pendingEntry.authorPubkeyHex }
+        : {
+            kind: 'edit',
+            rev: pendingEntry.rev,
+            rumorId: pendingEntry.rumorId,
+            content: pendingEntry.content,
+            authorPubkeyHex: pendingEntry.authorPubkeyHex,
+          },
+    );
   }
 
   let markerSignal: WinnerCandidate | null = null;
@@ -1092,8 +1165,8 @@ async function resolveKnownRowAgainstStores(
   // regardless of whether it won — a mismatched-author entry is a
   // stale/invalid signal that must not keep suppressing or being
   // reprocessed once the real author is known.
-  if (pendingEntry) {
-    await removePendingByRumorId(pendingEntry.rumorId);
+  for (const pendingEntry of pendingEntries) {
+    await removePendingByRumorId(pendingEntry.rumorId, pendingEntry.authorPubkeyHex);
   }
   if (marker) {
     await removeMarker(threadKey, row.id);
@@ -1276,6 +1349,7 @@ async function persistExpiredEntryEffect(entry: PendingSignal, knownRow: ChatMes
     lastRumorId: entry.rumorId,
     lastRev: entry.rev,
     lastKind: 'edit',
+    lastAuthorPubkeyHex: entry.authorPubkeyHex,
   });
   if (existingMarker) {
     await removeMarker(entry.threadKey, entry.targetId);
@@ -1366,10 +1440,10 @@ async function sweepExpiredForThreadKeyLocked(threadKey: string, skipTargetId?: 
     const knownRow = messages.find((m) => m.id === targetId);
     if (!knownRow) continue; // no row yet — handled by phase 2 below, if it's a pending entry
     const [stillPending, stillMarked] = await Promise.all([
-      findPending(threadKey, targetId),
+      findPendingAll(threadKey, targetId),
       findMarker(threadKey, targetId),
     ]);
-    if (!stillPending && !stillMarked) continue; // already consumed as a rumor-id sibling earlier in this loop
+    if (stillPending.length === 0 && !stillMarked) continue; // already consumed as a rumor-id sibling earlier in this loop
     await resolveKnownRowAgainstStores(threadKey, knownRow, knownRow.senderPubkey);
   }
 
@@ -1384,10 +1458,12 @@ async function sweepExpiredForThreadKeyLocked(threadKey: string, skipTargetId?: 
     // entry in THIS loop, or phase 1 above, may already have removed this
     // one as a rumor-id sibling (e.g. a multi-e-tag delete's
     // replacement-id entry).
-    const stillThere = await findPending(threadKey, entry.targetId);
-    if (!stillThere || stillThere.rumorId !== entry.rumorId) continue;
+    const stillThere = (await findPendingAll(threadKey, entry.targetId)).find(
+      (e) => e.rumorId === entry.rumorId && sameAuthor(e.authorPubkeyHex, entry.authorPubkeyHex),
+    );
+    if (!stillThere) continue;
     await persistExpiredEntryEffect(entry, undefined);
-    await removePendingByRumorId(entry.rumorId);
+    await removePendingByRumorId(entry.rumorId, entry.authorPubkeyHex);
   }
 }
 
@@ -1413,6 +1489,167 @@ function serialize<T>(task: () => Promise<T>): Promise<T> {
 // ─── Public API ───────────────────────────────────────────────────────────
 
 /**
+ * What a fold needs besides the signal itself. One shape for BOTH callers of the fold core
+ * (`foldClassifiedSignal`): the live dispatch (`applyDeleteEditSignal`) and the recompute
+ * (`recomputeSlot`), so there is exactly one implementation of "apply a delete/edit signal".
+ */
+interface FoldEnv {
+  thread: MessageEditsThreadKey;
+  threadKey: string;
+  /** The thread's rows as the fold sees them (dispatch: read from storage; recompute: the one-read snapshot, kept current by `applied`). */
+  readRows: () => Promise<ChatMessage[]>;
+  /** Recompute only: called with the patch every time the fold wrote a row, to keep the snapshot current. */
+  applied?: (slotId: string, change: MessagePatch | { tombstone: number }) => void;
+  /**
+   * Recompute only: the slots whose ROWS the fold may write. A signal naming further slots (a multi-e-tag
+   * delete) has its decision made over ALL its targets (a row of another slot is left as it is; with no known
+   * target the pending entries are buffered for every named id, as in a live dispatch).
+   */
+  slots?: ReadonlySet<string>;
+  /** See `KnownSlotIncoming.captureOriginal`. */
+  captureOriginal?: boolean;
+  /**
+   * The buffering time (ms) of a pending entry this fold creates. Dispatch: the wall clock. Recompute: the
+   * folded history row's `receivedAt`, so the same remaining rows re-buffer identical entries whatever the clock.
+   */
+  bufferedAtMs: number;
+}
+
+/**
+ * The fold core: applies one CLASSIFIED (non-discard) signal from `senderPubkey`. Shared verbatim by
+ * dispatch and recompute. Authorization (own-author rule, announcement-immutability gate with the
+ * admin carve-out, AC-IMMUT-4..7) is decided here, against the live roster (`groupAdminsFor`, failing
+ * closed) in both modes.
+ */
+async function foldClassifiedSignal(
+  env: FoldEnv,
+  rumor: InboundDeleteEditRumor,
+  senderPubkey: string,
+  classification: Exclude<Classification, { type: 'discard' }>,
+): Promise<ChangeResult> {
+  const { thread, threadKey, slots, captureOriginal, bufferedAtMs: pendingStamp } = env;
+  const touches = (id: string) => !slots || slots.has(id);
+
+  // Replay-deterministic rev (see PinnedRev): a capped rev is pinned at
+  // first processing and reused by every later one.
+  classification.rev = await resolvePinnedRev(threadKey, rumor.id, classification.rev, classification.capped);
+
+  // Authorization needs the target row, i.e. storage: a failed read here
+  // rejects (the signal is retried, never applied unauthorized) — the one
+  // validity check that cannot be made without storage.
+  const messages = await env.readRows();
+  const applyKnown = async (row: ChatMessage, incoming: KnownSlotIncoming): Promise<ChangeResult> => {
+    const result = await applyToKnownSlot(thread, threadKey, row, captureOriginal === undefined ? incoming : { ...incoming, captureOriginal });
+    if (result.kind === 'edit') env.applied?.(row.id, editPatch(incoming.content ?? '', incoming.rev));
+    else if (result.kind === 'delete') env.applied?.(row.id, { tombstone: incoming.rev });
+    return result;
+  };
+
+  if (classification.type === 'delete') {
+    const knownRow = classification.targetIds
+      .map((id) => messages.find((m) => m.id === id))
+      .find((m): m is ChatMessage => m !== undefined);
+
+    if (!knownRow) {
+      // Buffered for EVERY named id, also in a recompute: the decision "no target is known" is made over all of
+      // them, and the entry for an id outside `slots` is the one the live dispatch would have buffered too (the
+      // insert is idempotent per contribution, so an already-buffered one is left as it is).
+      for (const targetId of classification.targetIds) {
+        await insertOrCollapsePending({
+          kind: 'delete',
+          threadKey,
+          targetId,
+          rev: classification.rev,
+          rumorId: rumor.id,
+          authorPubkeyHex: senderPubkey,
+          receivedAt: pendingStamp,
+        });
+      }
+      return { thread, slotId: null, kind: 'pending' as const };
+    }
+    if (!touches(knownRow.id)) return { thread, slotId: knownRow.id, kind: 'noop' as const };
+
+    // S8 (AC-IMMUT-4/5): for a GROUP-thread announcement, own-authorship
+    // is irrelevant — only current-admin sourcing authorizes the
+    // delete/tombstone; an ordinary message keeps the pre-S8 own-author
+    // rule (`authorizeDeleteAgainstTarget` folds both branches together).
+    const { authorized, adminPubkeysHex } = await authorizeDeleteAgainstTarget(
+      threadKey,
+      knownRow.content,
+      senderPubkey,
+      knownRow.senderPubkey,
+    );
+    if (!authorized) {
+      return { thread, slotId: knownRow.id, kind: 'discarded' as const };
+    }
+
+    return applyKnown(knownRow, {
+      kind: 'delete',
+      rev: classification.rev,
+      rumorId: rumor.id,
+      senderPubkeyHex: senderPubkey,
+      adminPubkeysHex,
+    });
+  }
+
+  // classification.type === 'edit'
+  const targetId = classification.targetId;
+  const knownRow = messages.find((m) => m.id === targetId);
+
+  // S8 (AC-IMMUT-6/7): reject outright when EITHER the (possibly still
+  // unknown) target's current content OR the edit's own replacement
+  // content is a GROUP-thread announcement — never an admin carve-out for
+  // edit. Checked BEFORE buffering so a forged replacement never even
+  // enters the pending buffer.
+  if (!isEditAuthorizedByAnnouncementGate(threadKey, knownRow?.content, classification.content)) {
+    return { thread, slotId: knownRow?.id ?? null, kind: 'discarded' as const };
+  }
+  if (!touches(targetId)) return { thread, slotId: knownRow?.id ?? null, kind: 'noop' as const };
+
+  if (!knownRow) {
+    await insertOrCollapsePending({
+      kind: 'edit',
+      threadKey,
+      targetId,
+      rev: classification.rev,
+      rumorId: rumor.id,
+      authorPubkeyHex: senderPubkey,
+      content: classification.content,
+      createdAtSeconds: classification.createdAtSeconds,
+      receivedAt: pendingStamp,
+    });
+    return { thread, slotId: null, kind: 'pending' as const };
+  }
+
+  if (!pubkeysMatch(senderPubkey, knownRow.senderPubkey)) {
+    return { thread, slotId: knownRow.id, kind: 'discarded' as const };
+  }
+
+  return applyKnown(knownRow, {
+    kind: 'edit',
+    rev: classification.rev,
+    rumorId: rumor.id,
+    content: classification.content,
+    senderPubkeyHex: senderPubkey,
+    adminPubkeysHex: [],
+  });
+}
+
+/** Options of the live dispatch. */
+export interface ApplyDeleteEditOptions {
+  /**
+   * The history row's persisted first-append time (ms): THE clock of the dispatch, the very one `recomputeSlot` folds
+   * the same row with, so a live dispatch and a later recompute classify (rev cap) identically even when the dispatch
+   * runs late (a recovered row). Absent / not a positive finite number: the wall clock.
+   */
+  receivedAt?: number;
+}
+
+/** The clock of a dispatch / fold step in ms: a valid row clock, else the wall clock. */
+const foldClockMs = (receivedAt: number | undefined): number =>
+  receivedAt !== undefined && Number.isFinite(receivedAt) && receivedAt > 0 ? receivedAt : Date.now();
+
+/**
  * The frozen reconciliation seam entrypoint. See the module doc comment for
  * the full classification / ordering / pending-buffer contract.
  *
@@ -1428,9 +1665,10 @@ export function applyDeleteEditSignal(
   thread: MessageEditsThreadKey,
   rumor: InboundDeleteEditRumor,
   sender?: AuthenticatedSender,
+  options?: ApplyDeleteEditOptions,
 ): Promise<ChangeResult> {
   return serialize(async () => {
-    const senderPubkey = sender?.pubkey ?? rumor.pubkey;
+    const senderPubkey = authorOf(thread, sender, rumor);
     const threadKey = groupIdFor(thread);
 
     // Classification is pure and runs FIRST (bug: reaction-storage-failures,
@@ -1441,7 +1679,7 @@ export function applyDeleteEditSignal(
     // cannot make a permanently-invalid signal fail and be retried instead
     // of being dropped. The sweep is crash-safe (persist-then-remove) and
     // runs again on the thread's next activity.
-    const nowSeconds = Math.floor(Date.now() / 1000);
+    const nowSeconds = Math.floor(foldClockMs(options?.receivedAt) / 1000);
     const classification = classifySignal(rumor, nowSeconds);
 
     if (classification.type === 'discard') {
@@ -1454,98 +1692,170 @@ export function applyDeleteEditSignal(
     // A valid signal: a failed sweep rejects, so the signal is retried.
     await sweepExpiredForThreadKeyLocked(threadKey);
 
-    // Replay-deterministic rev (see PinnedRev): a capped rev is pinned at
-    // first processing and reused by every later one.
-    classification.rev = await resolvePinnedRev(threadKey, rumor.id, classification.rev, classification.capped);
-
-    // Authorization needs the target row, i.e. storage: a failed read here
-    // rejects (the signal is retried, never applied unauthorized) — the one
-    // validity check that cannot be made without storage.
-    const { messages } = await loadMessages(threadKey);
-
-    if (classification.type === 'delete') {
-      const knownRow = classification.targetIds
-        .map((id) => messages.find((m) => m.id === id))
-        .find((m): m is ChatMessage => m !== undefined);
-
-      if (!knownRow) {
-        for (const targetId of classification.targetIds) {
-          await insertOrCollapsePending({
-            kind: 'delete',
-            threadKey,
-            targetId,
-            rev: classification.rev,
-            rumorId: rumor.id,
-            authorPubkeyHex: senderPubkey,
-            receivedAt: Date.now(),
-          });
-        }
-        return { thread, slotId: null, kind: 'pending' as const };
-      }
-
-      // S8 (AC-IMMUT-4/5): for a GROUP-thread announcement, own-authorship
-      // is irrelevant — only current-admin sourcing authorizes the
-      // delete/tombstone; an ordinary message keeps the pre-S8 own-author
-      // rule (`authorizeDeleteAgainstTarget` folds both branches together).
-      const { authorized, adminPubkeysHex } = await authorizeDeleteAgainstTarget(
+    return foldClassifiedSignal(
+      {
+        thread,
         threadKey,
-        knownRow.content,
-        senderPubkey,
-        knownRow.senderPubkey,
-      );
-      if (!authorized) {
-        return { thread, slotId: knownRow.id, kind: 'discarded' as const };
-      }
+        readRows: async () => (await loadMessages(threadKey)).messages,
+        // The base a recompute resets to is kept for EVERY group-thread write (sink-delivered and own optimistic: the
+        // optimistic write mutates the row before its echo, so only it can capture the true original); never for a DM.
+        captureOriginal: thread.kind === 'group',
+        bufferedAtMs: Date.now(),
+      },
+      rumor,
+      senderPubkey,
+      classification,
+    );
+  });
+}
 
-      return applyToKnownSlot(thread, threadKey, knownRow, {
-        kind: 'delete',
-        rev: classification.rev,
-        rumorId: rumor.id,
-        senderPubkeyHex: senderPubkey,
-        adminPubkeysHex,
-      });
+/**
+ * The signal author. A GROUP thread's author is the MLS-authenticated sender only: a missing sender throws
+ * (TypeError) instead of falling back to the forgeable `rumor.pubkey`. A DM thread (seal-signature-authenticated
+ * independently) reads `rumor.pubkey`.
+ */
+function authorOf(thread: MessageEditsThreadKey, sender: AuthenticatedSender | undefined, rumor: { pubkey: string }): string {
+  if (sender?.pubkey) return sender.pubkey;
+  if (thread.kind === 'group') throw new TypeError('applyDeleteEditSignal: a group-thread signal requires an authenticated sender');
+  return rumor.pubkey;
+}
+
+/**
+ * The delete/edit slots (message ids) a rumor names: every bare e-tag id of a kind-5 delete, the marked
+ * e-tag id of an edit-marked kind-9/14 replacement, none for anything else (a discarded signal, an
+ * edit-marked kind-5 companion, a plain message). The SAME extraction the classifier uses, so a handler
+ * derives its recompute key from the very ids the fold applies to.
+ */
+export function deleteEditSlotIds(rumor: InboundDeleteEditRumor): string[] {
+  const classification = classifySignal(rumor, Math.floor(Date.now() / 1000));
+  if (classification.type === 'discard') return [];
+  return classification.type === 'delete' ? [...classification.targetIds] : [classification.targetId];
+}
+
+/**
+ * Recompute-on-retract for delete/edit slots (AC-WDR-7): after history rows were withdrawn, brings the
+ * slots `slotIds` to exactly the state that dispatching ONLY the remaining signals, in `seq` order, into
+ * an empty store would produce (the oracle), whatever order the withdrawals came in.
+ *
+ * `signals` are the group's remaining history rows (any kind; this function keeps those naming one of
+ * `slotIds`). `sender` of each is its row's `orderingKey.account` — the rumor's own pubkey is never read.
+ * `withdrawnRumorIds` (optional) names the withdrawn rumors, whose pinned revs are dropped with the rest
+ * (a pin must not survive its rumor; the fold re-derives every remaining signal's rev from its row's
+ * `receivedAt`, so the result does not depend on the wall clock of the recompute).
+ *
+ * Runs inside the module's `serialize` queue, in two phases over the thread's rows (read ONCE):
+ *   1. RESET each slot to its base: the row's write-once `original` (chatPersistence
+ *      `resetSlotsToOriginal`; an expired-edit placeholder is removed), plus the slot's pending entries,
+ *      delete markers, slot meta and the pins of the signals' rumors.
+ *   2. FOLD the signals naming the slots, in seq order, through `foldClassifiedSignal` — the SAME core
+ *      as `applyDeleteEditSignal`. A multi-e-tag delete is judged over all its targets but writes only
+ *      into `slotIds`.
+ * Both phases are idempotent and the reset keeps `original` until the very write that restores the row,
+ * so a crash at any point converges when the (journaled) retract runs again.
+ *
+ * Contribution identity is `(rumor.id, sender)`: byte-identical copies of a rumor under different senders
+ * are folded independently (a forger's copy fails the author gate on someone else's message and can neither
+ * shadow nor be shadowed by the real one).
+ *
+ * Accepted residuals (documented, not fixed):
+ *  - Live-state gates are re-evaluated at recompute time: the admin carve-out for deleting a group
+ *    announcement (AC-IMMUT-4/5, AC-HIST-11) reads the CURRENT roster (`groupAdminsFor`), failing closed
+ *    (no provider / a throwing one: no admin), so a delete by someone no longer an admin is not re-applied.
+ *  - State without a history row is not part of the fold and is reset with the slot: a signal applied
+ *    locally and not yet echoed through the sink (an own optimistic edit/delete), and pending entries that
+ *    predate the sink. A row edited before `original` existed keeps its (already applied) state.
+ *  - Pending entries are re-buffered with the folded row's `receivedAt` as their buffering time (deterministic:
+ *    the same remaining rows give the same entries under any wall clock, AC-WDR-9); a row older than the pending
+ *    TTL therefore re-buffers an entry the next thread activity's sweep may already expire.
+ */
+export function recomputeSlot(
+  thread: MessageEditsThreadKey,
+  slotIds: readonly string[],
+  signals: readonly RecomputeSignal[],
+  options?: { withdrawnRumorIds?: readonly string[] },
+): Promise<void> {
+  return serialize(async () => {
+    const threadKey = groupIdFor(thread);
+    const slots = new Set(slotIds);
+    if (slots.size === 0) return;
+    const folded = signals
+      .filter((s) => deleteEditSlotIds(s.rumor).some((id) => slots.has(id)))
+      .slice()
+      .sort((a, b) => a.seq - b.seq);
+
+    // ── Phase 1: reset to base ──
+    await dropSlotAuxState(threadKey, slots, [...folded.map((s) => s.rumor.id), ...(options?.withdrawnRumorIds ?? [])]);
+    let rows = await resetSlotsToOriginal(threadKey, [...slots]);
+
+    // ── Phase 2: fold ──
+    const env: FoldEnv = {
+      thread,
+      threadKey,
+      slots,
+      bufferedAtMs: 0, // set per signal below
+      readRows: async () => rows,
+      applied: (slotId, change) => {
+        rows = ('tombstone' in change ? mergeTombstone(rows, slotId, change.tombstone, true) : mergePatchCore(rows, slotId, change)) ?? rows;
+      },
+    };
+    let clockMs = 0;
+    for (const signal of folded) {
+      // The row's own first-append time is the fold's clock (a row without one inherits its predecessor's).
+      const valid = Number.isFinite(signal.receivedAt) && signal.receivedAt > 0;
+      const nowMs = valid ? foldClockMs(signal.receivedAt) : clockMs || Date.now();
+      clockMs = nowMs;
+      const classification = classifySignal(signal.rumor, Math.floor(nowMs / 1000));
+      if (classification.type === 'discard') continue;
+      env.bufferedAtMs = nowMs;
+      await foldClassifiedSignal(env, signal.rumor, signal.sender, classification);
     }
+  });
+}
 
-    // classification.type === 'edit'
-    const targetId = classification.targetId;
-    const knownRow = messages.find((m) => m.id === targetId);
+/**
+ * Drops a thread's slot-owned aux state for `slots`: pending entries (every author), delete markers, slot meta,
+ * and the pinned revs of `rumorIds`. Idempotent; part of the reset phase of `recomputeSlot`.
+ */
+async function dropSlotAuxState(threadKey: string, slots: ReadonlySet<string>, rumorIds: readonly string[]): Promise<void> {
+  const pending = await readPendingAll();
+  const nextPending = pending.filter((e) => !(e.threadKey === threadKey && slots.has(e.targetId)));
+  if (nextPending.length !== pending.length) await writePendingAll(nextPending);
 
-    // S8 (AC-IMMUT-6/7): reject outright when EITHER the (possibly still
-    // unknown) target's current content OR the edit's own replacement
-    // content is a GROUP-thread announcement — never an admin carve-out for
-    // edit. Checked BEFORE buffering so a forged replacement never even
-    // enters the pending buffer.
-    if (!isEditAuthorizedByAnnouncementGate(threadKey, knownRow?.content, classification.content)) {
-      return { thread, slotId: knownRow?.id ?? null, kind: 'discarded' as const };
-    }
+  const markers = await readMarkersAll();
+  const nextMarkers = markers.filter((m) => !(m.threadKey === threadKey && slots.has(m.targetId)));
+  if (nextMarkers.length !== markers.length) await writeMarkersAll(nextMarkers);
 
-    if (!knownRow) {
-      await insertOrCollapsePending({
-        kind: 'edit',
-        threadKey,
-        targetId,
-        rev: classification.rev,
-        rumorId: rumor.id,
-        authorPubkeyHex: senderPubkey,
-        content: classification.content,
-        createdAtSeconds: classification.createdAtSeconds,
-        receivedAt: Date.now(),
-      });
-      return { thread, slotId: null, kind: 'pending' as const };
-    }
+  const metas = await readSlotMetaAll();
+  const nextMetas = metas.filter((m) => !(m.threadKey === threadKey && slots.has(m.slotId)));
+  if (nextMetas.length !== metas.length) await set(SLOT_META_KEY, nextMetas);
 
-    if (!pubkeysMatch(senderPubkey, knownRow.senderPubkey)) {
-      return { thread, slotId: knownRow.id, kind: 'discarded' as const };
-    }
+  const ids = new Set(rumorIds);
+  const pins = await readArray<PinnedRev>(PINNED_REVS_KEY);
+  if (pins.some((p) => p.threadKey === threadKey && ids.has(p.rumorId))) {
+    await modifyPinsAtomically((current) => ({
+      next: current.filter((p) => !(p.threadKey === threadKey && ids.has(p.rumorId))),
+      result: undefined,
+    }));
+  }
+}
 
-    return applyToKnownSlot(thread, threadKey, knownRow, {
-      kind: 'edit',
-      rev: classification.rev,
-      rumorId: rumor.id,
-      content: classification.content,
-      senderPubkeyHex: senderPubkey,
-      adminPubkeysHex: [],
-    });
+/**
+ * The thread's delete/edit aux state (pending entries, delete markers, slot meta, pinned revs) with time fields
+ * stripped and a stable order — what the recompute oracle compares (tests/unit/marmot/handlers/oracle.ts).
+ * Read-only; runs inside the module queue so it never observes a half-applied signal.
+ */
+export function snapshotMessageEditsState(groupId: string): Promise<unknown> {
+  return serialize(async () => {
+    const order = (a: unknown, b: unknown) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+    const strip = <T extends object>(rows: T[], ...fields: string[]) =>
+      rows.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => !fields.includes(k)))).sort(order);
+    const mine = <T extends { threadKey: string }>(rows: T[]) => rows.filter((r) => r.threadKey === groupId);
+    return {
+      pending: strip(mine(await readPendingAll()), 'receivedAt'),
+      markers: strip(mine(await readMarkersAll()), 'receivedAt'),
+      slotMeta: strip(mine(await readSlotMetaAll()), 'lastTouchedAt'),
+      pins: strip(mine(await readArray<PinnedRev>(PINNED_REVS_KEY)), 'receivedAt'),
+    };
   });
 }
 
@@ -1643,7 +1953,7 @@ export async function clearAllMessageEditsState(): Promise<void> {
 }
 
 /**
- * Clears this module's IDB namespaces (all four) for a SINGLE thread (round-2
+ * Clears this module's IDB namespaces for a SINGLE thread (round-2
  * remediation finding 5), as opposed to `clearAllMessageEditsState`'s
  * cross-thread account-switch sweep. Wired into chatPersistence.ts's
  * `clearMessages` (group leave) and `purgeStrangerDmThreads` (stranger
@@ -1662,11 +1972,7 @@ export async function clearAllMessageEditsState(): Promise<void> {
  */
 export async function clearMessageEditsStateForThread(threadKey: string): Promise<void> {
   await serialize(async () => {
-    const [pending, markers, slotMeta] = await Promise.all([
-      readPendingAll(),
-      readMarkersAll(),
-      readSlotMetaAll(),
-    ]);
+    const [pending, markers, slotMeta] = await Promise.all([readPendingAll(), readMarkersAll(), readSlotMetaAll()]);
     const nextPending = pending.filter((e) => e.threadKey !== threadKey);
     const nextMarkers = markers.filter((m) => m.threadKey !== threadKey);
     const nextSlotMeta = slotMeta.filter((m) => m.threadKey !== threadKey);

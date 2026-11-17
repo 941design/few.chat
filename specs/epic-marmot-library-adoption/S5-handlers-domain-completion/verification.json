@@ -58,7 +58,7 @@
       "phase": "pre-impl",
       "category": "SPEC",
       "ac_id": "AC-HIST-12",
-      "question": "AC-HIST-12: The existing behavioural handler suites (chat, reactions, delete/edit, polls, profile, profile-request, announcement roster gate) MUST be re-pointed at the new handler signature `{groupId, eventId, rumor, sender}` and pass; `handlersRumorPubkeyBoundary` MUST be re-expressed asserting that a handler given `sender ≠ rumor.pubkey` attributes the content to `sender`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+      "question": "AC-HIST-12: The existing behavioural handler suites (chat, reactions, delete/edit, polls, profile, profile-request, announcement roster gate) MUST be re-pointed at the new handler signature `{groupId, eventId, rumor, sender}` and pass; `handlersRumorPubkeyBoundary` MUST be re-expressed asserting that a handler given `sender \u2260 rumor.pubkey` attributes the content to `sender`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
     },
     {
       "question_id": "VQ-S5-010",
@@ -73,6 +73,48 @@
       "category": "SPEC",
       "ac_id": "AC-WDR-2",
       "question": "AC-WDR-2: An own chat row that was withdrawn MUST end in the existing failed/retry status (not deleted) and MUST NOT be auto-resent (send spy call count unchanged). Own withdrawn reactions, votes, edit and delete signals MUST be dropped from the stores. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S5-012",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "Profile-request replies and the 'accepted' announcement are client writes. Show that createProfileRequestGroupHandler and createProfileGroupHandler never await them inside dispatch (enqueue is the last recorded call: domainHandlers.test.ts 'follow-up client writes ...'), that the requester must be a current member by the live group.members() (non-member / undefined group / rejecting groupOf cases), and that no profile data leaves through a public path (only the injected sendSelfProfile/handleIncomingProfileRequest/sendAnnouncement ports, which S18 must wire to MLS group sends)."
+    },
+    {
+      "question_id": "VQ-S5-013",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "GroupRumorInput gained an optional `reason: 'withdrawn' | 'purged'` (history/historyBackend.ts) so a late retract after purge removes an own row instead of leaving failed/retry. Confirm the default (absent = withdrawn) keeps every existing retract call shape unchanged, that only the purge path sets 'purged', and that the chat handler's purged branch is the only consumer (domainHandlers.test.ts 'purge after leave' fails without it)."
+    },
+    {
+      "question_id": "VQ-S5-014",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "messageEdits/api.ts stages a pre-image (few:messageEditsPreImages:v1) BEFORE the row write and drops it after the slot meta is written, so a replay after a crash between the two keeps the ORIGINAL state as `prior`. Confirm the pre-image is dropped on the idempotent-replay shortcut and on a rejected tombstone, is cleared by clearAllMessageEditsState / clearMessageEditsStateForThread, and that deleteEditRetractReplay.test.ts fails when the staged pre-image is ignored."
+    },
+    {
+      "question_id": "VQ-S5-015",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "D6 retract coverage per kind: chat (carrier-aware removal + recomputeUnread, own -> onOwnWithdrawn), reaction (retractReaction incl. held), delete/edit (one-level undo via pre-image), poll open/vote/close (retractPollOpen/Vote/Close), profile and profile-request (documented no-ops: LWW identity metadata / already-emitted replies). Confirm the no-op kinds are deliberate, documented in code, and that the profile no-op leaves the stored profile and contact entry (AC-WDR-6) as asserted in domainHandlers.test.ts."
+    },
+    {
+      "question_id": "VQ-S5-016",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "Kind 13 (leave_intent) is RETIRED in kinds.ts, so no sink handler exists for it and AC-HIST-9 stores it dispatched:true; leaveHandler.ts stays legacy-only until S22. Confirm the leave announcement (kind-9 structured leave_intent, subject must equal sender) is covered by the chat handler gate and that nothing in S5 registers a kind-13 sink handler."
+    },
+    {
+      "question_id": "VQ-S5-017",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "Reactions held for a target that has not arrived: confirm the S4 test that codified the drop was changed to hold-then-apply (groupRumorDispatch.test.ts), that the real queue is covered by reactionHold.test.ts, and that the race (target lands between the first loadMessages check and the hold) is closed by the re-check in createReactionGroupHandler.dispatch and the release after every kind-9 delivery (also a duplicate), with a held-store failure rejecting the row after its own bookkeeping."
+    },
+    {
+      "question_id": "VQ-S5-018",
+      "phase": "post-impl",
+      "category": "QUALITY",
+      "question": "unreadStore.recomputeUnread shares countStoredUnread with initUnreadCounts and runs on the exclusive reconcile chain with `exact` semantics (a zero count clears the entry; the startup scan keeps its old keep-live-bump behaviour). Confirm unreadRecompute.test.ts covers the concrete 3 -> 2 -> clear case, the last-read mark, case-insensitive own key, other groups untouched and a live increment landing during the read."
     }
   ]
 }

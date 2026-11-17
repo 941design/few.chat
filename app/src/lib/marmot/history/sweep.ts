@@ -11,9 +11,10 @@
  * and before `inbox.start()` (AC-BOOT-1).
  *
  * Contract:
- *   - only groups with a recoverable row (`dispatched:false`, not abandoned) that
- *     this backend instance has not recovered yet are processed; groups in
- *     ascending id order;
+ *   - only groups with a recoverable row (`dispatched:false` and not abandoned, or a
+ *     `withdrawing` row whose retract/delete never finished) that this backend
+ *     instance has not recovered yet are processed; groups in ascending id order;
+ *     the recovery finishes withdrawing rows BEFORE it re-dispatches anything;
  *   - the per-group recovery runs inside the backend's per-group serialised
  *     job, so no newer entry of that group is dispatched ahead of it;
  *   - a failing row stays `dispatched:false` and is reported; recovery goes on
@@ -43,7 +44,8 @@ export async function sweepUndispatched(deps: SweepDeps): Promise<SweepResult> {
   const groupIds: string[] = [];
   for (const row of rows) {
     const groupId = row.entry.groupId;
-    if (row.dispatched || row.abandoned || deps.isTouched(groupId) || groupIds.includes(groupId)) continue;
+    // A row marked `withdrawing` always needs the group's recovery (its retract/delete must finish first).
+    if ((!row.withdrawing && (row.dispatched || row.abandoned)) || deps.isTouched(groupId) || groupIds.includes(groupId)) continue;
     groupIds.push(groupId);
   }
   const result: SweepResult = { redispatched: 0, failed: 0 };

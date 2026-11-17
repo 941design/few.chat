@@ -241,6 +241,62 @@
       "owning_module": "handlers",
       "type": "invariant",
       "added_by_story": "S4"
+    },
+    {
+      "id": "handlers.gates",
+      "name": "Roster/admin gates read live group.members()/group.admins via injected groupOf; undefined fails closed (row dispatched), rejection propagates (row retried)",
+      "owning_module": "handlers",
+      "type": "validation_rule",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "reactions.held",
+      "name": "Reactions to unknown targets held (TTL 7 d, cap 200/thread, dedup by rumor id), released after each kind-9 insert",
+      "owning_module": "reactions",
+      "type": "invariant",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "unread.recompute",
+      "name": "recomputeUnread shares predicate with initUnreadCounts",
+      "owning_module": "unreadStore",
+      "type": "invariant",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "history.withdraw-protocol",
+      "name": "Mark all batch rows withdrawing (durable), then per row in seq order retract (remaining() memoised, RetractInput.batch) then delete, each bounded; leftovers finished by next touch/withdraw/sweep/restart before re-dispatch",
+      "owning_module": "history",
+      "type": "invariant",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "history.RetractInput",
+      "name": "retract({groupId,eventId,rumor,sender,receivedAt,reason?,remaining,batch?}); remaining()=dispatched non-withdrawing rows in seq order",
+      "owning_module": "history",
+      "type": "public_contract",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "handlers.recompute-on-retract",
+      "name": "Dependent kinds 5/edit-9/7/10-12 recompute aggregate = base + fold(remaining()) via dispatch core; effect-free; clock = persisted receivedAt (live dispatch too); contribution=(rumor id, sender); depends on pre-adoption purge before first sink delivery",
+      "owning_module": "handlers",
+      "type": "invariant",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "chat.original-snapshot",
+      "name": "write-once original on GROUP chat rows = slot base, captured by first signal write incl. own optimistic, never DMs; cleared when slot recomputes to no signals",
+      "owning_module": "chatPersistence",
+      "type": "invariant",
+      "added_by_story": "S5"
+    },
+    {
+      "id": "profile.one-shot-gate",
+      "name": "profile apply one-shot per (group, inner event id), LRU 1024; accepted marker consumed last, announcement enqueued very last",
+      "owning_module": "handlers",
+      "type": "invariant",
+      "added_by_story": "S5"
     }
   ],
   "stories": [
@@ -331,10 +387,25 @@
         "S22": "delete legacy factories createChatHandler/createReactionHandler/createDeleteEditHandler and old dispatcher; shared handle() cores stay",
         "S5+": "add each new test dir to app/tsconfig.tests-marmot.json (typechecked by make test-unit); handler factories validate ports via assertPorts; held poll_close removal keyed by rumor id (not carrier) — accepted residual"
       }
+    },
+    {
+      "id": "S5",
+      "concepts_owned": [
+        "handlers.gates",
+        "handlers.retract",
+        "reactions.held"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S6": "own optimistic poll votes and edits/deletes not yet echoed are reset by a recompute of their poll/slot (reactions keep eventId empty); re-apply from own-send state or adopt uniform carry-over; original captured for own optimistic group writes (never DMs)",
+        "S13": "purgeLocalGroup must purge reaction rows, few:reactions:held:group:<id> (purgeHeldReactionsForGroup), poll/vote rows, slot meta; purge late retracts carry reason purged and never read remaining()",
+        "S17/S18": "MUST assert the reconciliation purge of overlay groups absent from groups.list() completes BEFORE the first sink delivery (append/withdraw/sweep) — this makes recompute-from-sink equal full state (AC-WDR-7)",
+        "S18": "wire groupOf, enqueue, recomputeUnread(ownPubkey), registerGroupAdminsProvider(createGroupAdminsProvider(groupOf)), reaction hold/release ports, receiptNow port, recomputePoll selfPubkeyHex; sendAnnouncement/sendSelfProfile/handleIncomingProfileRequest via group.send ONLY (privacy)"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S4",
+    "last_story_reviewed": "S5",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

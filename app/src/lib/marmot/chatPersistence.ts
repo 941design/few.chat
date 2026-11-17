@@ -16,6 +16,17 @@ import { postStoreChanged } from '@/src/lib/crossTab';
 /** MLS application-message kind discriminator for chat messages. */
 export const CHAT_MESSAGE_KIND = 9;
 
+/**
+ * The delete/edit-owned fields of a row as they were BEFORE the first edit/delete signal was
+ * applied to it (see `ChatMessage.original`). An absent field means the row did not carry it.
+ */
+export interface MessageOriginal {
+  content: string;
+  edited?: boolean;
+  tombstoned?: boolean;
+  rev?: number;
+}
+
 export interface ChatMessage {
   id: string;
   content: string;
@@ -60,6 +71,18 @@ export interface ChatMessage {
    * `MessagePatch` for how this is used by the AC-STORE-3 clobber-guard.
    */
   rev?: number;
+  /**
+   * Write-once base of the row's delete/edit slot: the row's content / edited / tombstoned / rev
+   * before the FIRST real edit/delete signal was applied to it. Written by the same write that
+   * applies that first signal (`mergePatchCore`), never overwritten by later ones, and cleared when
+   * the slot recomputes to "no signals" (`resetSlotsToOriginal`, driven by messageEdits/api.ts
+   * `recomputeSlot` when a withdrawn history row drops its last signal). Absent on a row no signal
+   * has touched (and on rows edited before this field existed, which therefore cannot be reset).
+   * Retention: captured for every GROUP-thread signal write (sink-delivered and own optimistic; the first write
+   * that applies any signal to the slot captures it). Never for a DM thread: nothing recomputes it, so its pre-edit
+   * content would only be retained.
+   */
+  original?: MessageOriginal;
   /**
    * True ONLY on a row fabricated by `messageEdits/api.ts`'s TTL-expiry
    * materialize-on-expiry path (`persistExpiredEntryEffect`'s no-known-row
@@ -452,32 +475,50 @@ function serialised<T>(groupId: string, task: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** True iff a row with this id is stored for the group. */
-export async function hasMessage(groupId: string, id: string): Promise<boolean> {
-  return serialised(groupId, async () => ((await get<ChatMessage[]>(storageKey(groupId))) ?? []).some((m) => m.id === id));
+/**
+ * True iff a row with this id is stored for the group; with `sender`, only if that row's sender is `sender`
+ * (case-insensitive) - a row of the same id from another member is not the caller's.
+ */
+export async function hasMessage(groupId: string, id: string, sender?: string): Promise<boolean> {
+  return serialised(groupId, async () =>
+    ((await get<ChatMessage[]>(storageKey(groupId))) ?? []).some(
+      (m) => m.id === id && (sender === undefined || m.senderPubkey.toLowerCase() === sender.toLowerCase()),
+    ),
+  );
 }
 
-/** Adds `eventId` to the carriers of stored row `rumorId`; MUST run inside a `serialised` task. */
-async function addCarrierLocked(groupId: string, rumorId: string, eventId: string): Promise<void> {
+/**
+ * Adds `eventId` to the carriers of stored row `rumorId`; MUST run inside a `serialised` task. With `sender`, the
+ * carrier is registered ONLY when the delivering sender is the stored row's sender (case-insensitive): a
+ * byte-identical copy of the rumor delivered by another member is not a carrier of the row (it never backed it, and
+ * `retractMessageCarrier` refuses to remove the row on that sender's behalf, so the carrier would stay stale).
+ * Resolves true iff `eventId` is now (or already was) a carrier.
+ */
+async function addCarrierLocked(groupId: string, rumorId: string, eventId: string, sender?: string): Promise<boolean> {
   const key = storageKey(groupId);
   const existing = (await get<ChatMessage[]>(key)) ?? [];
   const idx = existing.findIndex((m) => m.id === rumorId);
-  const carriers = idx === -1 ? undefined : existing[idx].carrierEventIds;
-  if (!carriers || carriers.includes(eventId)) return;
+  if (idx === -1) return false;
+  if (sender !== undefined && existing[idx].senderPubkey.toLowerCase() !== sender.toLowerCase()) return false;
+  const carriers = existing[idx].carrierEventIds;
+  if (!carriers) return false;
+  if (carriers.includes(eventId)) return true;
   const next = existing.slice();
   next[idx] = { ...existing[idx], carrierEventIds: [...carriers, eventId] };
   await set(key, next);
+  return true;
 }
 
 /**
  * Records `eventId` as another carrier of the stored row `rumorId` (a duplicate
  * delivery under a different event id). Idempotent; a no-op for a missing row
  * and for a legacy row (no carrier field: it already counts as one unknown carrier).
+ * With `sender`, also a no-op unless it is the stored row's sender (see `addCarrierLocked`).
  * Prefer `appendOrAddCarrier` on a delivery path: a separate insert and
  * add-carrier is not atomic against a concurrent `retractMessageCarrier`.
  */
-export function addMessageCarrier(groupId: string, rumorId: string, eventId: string): Promise<void> {
-  return serialised(groupId, () => addCarrierLocked(groupId, rumorId, eventId));
+export function addMessageCarrier(groupId: string, rumorId: string, eventId: string, sender?: string): Promise<void> {
+  return serialised(groupId, async () => void (await addCarrierLocked(groupId, rumorId, eventId, sender)));
 }
 
 /**
@@ -488,13 +529,21 @@ export function addMessageCarrier(groupId: string, rumorId: string, eventId: str
  * existence check and the carrier registration (it would drop a row this
  * delivery is about to depend on).
  *
+ * The carrier is registered only when the delivering sender (`message.senderPubkey`, the MLS-authenticated
+ * account on the sink path) is the stored row's sender: a byte-identical copy another member delivers is
+ * reported 'duplicate' WITHOUT becoming a carrier of the sender's row (it would keep the row alive after the
+ * real sender's delivery was withdrawn, and could never be retracted itself).
+ *
  * Resolves 'inserted' iff a row was inserted (or a materialized placeholder
  * superseded), 'duplicate' otherwise.
  */
+// Residual (documented): a byte-identical copy delivered by a DIFFERENT sender registers no carrier and stores
+// no effect, so when the real author's carrier is withdrawn the row goes and the copy is not re-applied as the
+// copier's own message (attribution-safe; plain kind-9 rows are outside the AC-WDR-7 recompute oracle).
 export function appendOrAddCarrier(groupId: string, message: ChatMessage, eventId: string): Promise<'inserted' | 'duplicate'> {
   return serialised(groupId, async () => {
     if (await insertIfAbsentLocked(groupId, message)) return 'inserted';
-    await addCarrierLocked(groupId, message.id, eventId);
+    await addCarrierLocked(groupId, message.id, eventId, message.senderPubkey);
     return 'duplicate';
   });
 }
@@ -627,7 +676,12 @@ export interface MessagePatch {
  * missing, clobber-guard, or rev floor) — the caller writes nothing in
  * that case; otherwise returns the full updated-rows array to persist.
  */
-function mergePatchCore(existing: ChatMessage[], id: string, patch: MessagePatch): ChatMessage[] | null {
+export function mergePatchCore(
+  existing: ChatMessage[],
+  id: string,
+  patch: MessagePatch,
+  options?: { captureOriginal?: boolean },
+): ChatMessage[] | null {
   const index = existing.findIndex((m) => m.id === id);
   if (index === -1) return null; // nothing to update
 
@@ -662,21 +716,62 @@ function mergePatchCore(existing: ChatMessage[], id: string, patch: MessagePatch
   const cleanPatch = stripUndefinedValues(sanitizedPatch);
 
   const updatedRow: ChatMessage = { ...target, ...cleanPatch };
+  // The slot's write-once base, captured by the SAME write that first applies a real signal, so a
+  // crash can never leave a changed row without its base (recompute-on-retract needs it).
+  // `captureOriginal: false` (default true): the caller keeps no base, e.g. a DM thread or an own optimistic write.
+  if (isRealSignal && options?.captureOriginal !== false && target.original === undefined) updatedRow.original = originalOf(target);
   const updatedRows = existing.slice();
   updatedRows[index] = updatedRow;
   return updatedRows;
+}
+
+/**
+ * The tombstone merge: `mergePatchCore` of `{tombstoned: true, rev}`, and with `restoreBase` the hidden row also
+ * gets its BASE content / edited flag back (from `original`, captured by this very write when it is the first
+ * signal). A tombstone hides the row, so what it hides is made canonical: otherwise the hidden content would depend
+ * on the arrival order of an edit and the delete that beat it (edit then delete vs the delete alone), and a recompute
+ * (messageEdits/api.ts) could not reproduce a live dispatch. Plain callers keep the S1 contract (content retained).
+ * Shared by `tombstoneMessage` and the recompute's in-memory mirror of its writes.
+ */
+export function mergeTombstone(
+  existing: ChatMessage[],
+  id: string,
+  rev: number,
+  restoreBase = false,
+  captureOriginal = true,
+): ChatMessage[] | null {
+  const rows = mergePatchCore(existing, id, { tombstoned: true, rev }, { captureOriginal });
+  if (rows === null || !restoreBase) return rows;
+  const index = rows.findIndex((m) => m.id === id);
+  const row = rows[index];
+  if (!row.original) return rows;
+  const restored: ChatMessage = { ...row, content: row.original.content };
+  if (row.original.edited === undefined) delete restored.edited;
+  else restored.edited = row.original.edited;
+  rows[index] = restored;
+  return rows;
+}
+
+/** The delete/edit-owned fields of `row` (absent ones stay absent). */
+function originalOf(row: ChatMessage): MessageOriginal {
+  const original: MessageOriginal = { content: row.content };
+  if (row.edited !== undefined) original.edited = row.edited;
+  if (row.tombstoned !== undefined) original.tombstoned = row.tombstoned;
+  if (row.rev !== undefined) original.rev = row.rev;
+  return original;
 }
 
 export function updateMessageInPlace(
   groupId: string,
   id: string,
   patch: MessagePatch,
+  options?: { captureOriginal?: boolean },
 ): Promise<void> {
   const key = storageKey(groupId);
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(async () => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
-    const updatedRows = mergePatchCore(existing, id, patch);
+    const updatedRows = mergePatchCore(existing, id, patch, options);
     if (updatedRows === null) return;
     await set(key, updatedRows);
     postStoreChanged('chat', groupId);
@@ -687,6 +782,53 @@ export function updateMessageInPlace(
     if (appendQueues.get(key) === settled) appendQueues.delete(key);
   });
   return next;
+}
+
+/**
+ * Resets the delete/edit slots `ids` to their base, in ONE per-thread queue turn that reads the thread once
+ * (recompute-on-retract, messageEdits/api.ts `recomputeSlot`):
+ *   - a row carrying `original` gets its content / edited / tombstoned / rev back verbatim (a field absent
+ *     from `original` is removed, the rev floor and clobber guard deliberately bypassed) and `original`
+ *     cleared, in the same write;
+ *   - a placeholder fabricated from an expired edit (`materializedFromEdit`) is removed: it exists only
+ *     because of the slot's own signals, and the fold re-buffers them instead;
+ *   - any other row (no signal ever applied, or edited before `original` existed) is left as it is.
+ * Positions are kept. Idempotent. Resolves the thread's rows AFTER the reset (the fold's starting snapshot).
+ */
+export function resetSlotsToOriginal(groupId: string, ids: readonly string[]): Promise<ChatMessage[]> {
+  const key = storageKey(groupId);
+  const slots = new Set(ids);
+  return serialised(groupId, async () => {
+    const existing = (await get<ChatMessage[]>(key)) ?? [];
+    let changed = false;
+    const next: ChatMessage[] = [];
+    for (const row of existing) {
+      if (!slots.has(row.id)) {
+        next.push(row);
+        continue;
+      }
+      if (row.materializedFromEdit) {
+        changed = true;
+        continue;
+      }
+      if (!row.original) {
+        next.push(row);
+        continue;
+      }
+      const { original, ...rest } = row;
+      const restored: ChatMessage = { ...rest, content: original.content };
+      for (const field of ['edited', 'tombstoned', 'rev'] as const) {
+        if (original[field] === undefined) delete restored[field];
+        else (restored as unknown as Record<string, unknown>)[field] = original[field];
+      }
+      next.push(restored);
+      changed = true;
+    }
+    if (!changed) return existing;
+    await set(key, next);
+    postStoreChanged('chat', groupId);
+    return next;
+  });
 }
 
 /**
@@ -747,6 +889,8 @@ export interface TombstoneAuthorization {
  * already-known-ordinary target; `messageEdits/api.ts` (this function's
  * sole production caller) always supplies it.
  *
+ * `options.restoreBase`: the hidden row gets its base content / edited flag back (see `mergeTombstone`).
+ *
  * @returns `true` iff the tombstone was actually written; `false` for any
  * rejection (malformed rev, missing row, clobber/rev-floor guard, or —
  * new in S8 — an unauthorized signal against an announcement target).
@@ -756,6 +900,7 @@ export function tombstoneMessage(
   id: string,
   rev: number,
   authorization?: TombstoneAuthorization,
+  options?: { restoreBase?: boolean; captureOriginal?: boolean },
 ): Promise<boolean> {
   if (typeof rev !== 'number' || !Number.isFinite(rev) || rev < 1) {
     return Promise.resolve(false);
@@ -780,7 +925,7 @@ export function tombstoneMessage(
       }
     }
 
-    const updatedRows = mergePatchCore(existing, id, { tombstoned: true, rev });
+    const updatedRows = mergeTombstone(existing, id, rev, options?.restoreBase === true, options?.captureOriginal !== false);
     if (updatedRows === null) return false;
     await set(key, updatedRows);
     postStoreChanged('chat', groupId);

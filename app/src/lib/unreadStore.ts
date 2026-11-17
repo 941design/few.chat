@@ -229,8 +229,9 @@ async function reconcileInit(
   onCommit?: (next: Record<string, number>) => void,
   baseFor?: (key: string, pre: number, stored: number) => number,
   onStart?: () => void,
+  exact = false,
 ): Promise<void> {
-  const run = reconcileChain[slice].then(() => reconcileInitExclusive(slice, keys, computeForKey, merge, onCommit, baseFor, onStart));
+  const run = reconcileChain[slice].then(() => reconcileInitExclusive(slice, keys, computeForKey, merge, onCommit, baseFor, onStart, exact));
   // Keep the queue alive even if this call rejects — one caller's failure
   // must not wedge every later same-slice reconcile behind a rejected
   // promise forever. The caller of `reconcileInit` still observes the real
@@ -247,6 +248,7 @@ async function reconcileInitExclusive(
   onCommit?: (next: Record<string, number>) => void,
   baseFor: (key: string, pre: number, stored: number) => number = (_key, pre, stored) => Math.max(pre, stored),
   onStart?: () => void,
+  exact = false,
 ): Promise<void> {
   initInProgress[slice] = true;
   initTouched[slice].clear();
@@ -299,7 +301,16 @@ async function reconcileInitExclusive(
     // `next` (authoritative) wins for every recomputed key; any live-only key not
     // in `keys` is preserved. No await between the last compute and the write, so
     // no increment can interleave and be lost.
-    state = { ...state, [slice]: { ...state[slice], ...next } };
+    // A read/clear during the scan (reread mode): a key still queued for a
+    // re-read here (pass bound exhausted) holds a count computed before the
+    // read, so it must not be written back.
+    for (const key of initReadDuring[slice]) if (initTouched[slice].has(key)) delete next[key];
+    const merged = { ...state[slice], ...next };
+    // `exact` (a recompute after rows were removed): a recomputed key with no
+    // count left must drop its stale entry too — the default keeps it, which an
+    // initial scan wants (a live-only bump must survive an empty store).
+    if (exact) for (const key of keys) if (!(key in next)) delete merged[key];
+    state = { ...state, [slice]: merged };
     emit();
   } finally {
     // Reset even if computeForKey rejects. Counts stay correct either way — the
@@ -354,6 +365,19 @@ function dmKey(peerPubkeyHex: string): string {
 
 // --- Public API ---
 
+/**
+ * A read/clear of a group while a `counts` reconcile is in flight: the scan may
+ * hold a count computed before the read, so the key is queued for the scan's
+ * re-read (which reads the fresh last-read mark) and recorded in
+ * `initReadDuring`. Live bumps before the read no longer count.
+ */
+function noteGroupReadDuringScan(groupId: string) {
+  if (!initInProgress.counts) return;
+  initReadDuring.counts.add(groupId);
+  initTouched.counts.add(groupId);
+  initLive.counts.set(groupId, 0);
+}
+
 /** Increment unread count for a group (called when a chat message arrives). */
 export function incrementUnread(groupId: string) {
   noteLiveIncrement('counts', groupId);
@@ -365,6 +389,7 @@ export function incrementUnread(groupId: string) {
 
 /** Mark a group as read — resets its unread count and persists the timestamp. */
 export function markAsRead(groupId: string) {
+  noteGroupReadDuringScan(groupId);
   const timestamps = loadLastReadTimestamps();
   timestamps[groupId] = Date.now();
   saveLastReadTimestamps(timestamps);
@@ -379,6 +404,7 @@ export function markAsRead(groupId: string) {
 
 /** Remove tracking for a group (called on group leave). */
 export function clearUnreadGroup(groupId: string) {
+  noteGroupReadDuringScan(groupId);
   const timestamps = loadLastReadTimestamps();
   delete timestamps[groupId];
   saveLastReadTimestamps(timestamps);
@@ -396,22 +422,47 @@ export function clearUnreadGroup(groupId: string) {
  * Called once after MarmotContext loads groups.
  */
 export async function initUnreadCounts(groupIds: string[], ownPubkey: string) {
-  const timestamps = loadLastReadTimestamps();
-  const { get } = await import('idb-keyval');
-  await reconcileInit('counts', groupIds, async (groupId) => {
-    const lastRead = timestamps[groupId] ?? 0;
+  await reconcileInit('counts', groupIds, countStoredUnread(ownPubkey));
+}
+
+/**
+ * The unread count of one group as persisted: stored rows newer than the
+ * group's last-read mark and not authored by the local account. The ONE
+ * definition shared by the startup scan and `recomputeUnread`, so a recompute
+ * after rows were removed lands on exactly the number a restart would show.
+ * Reads the stored rows and last-read mark at call time.
+ */
+function countStoredUnread(ownPubkey: string): (groupId: string) => Promise<number> {
+  const own = ownPubkey.toLowerCase();
+  return async (groupId) => {
+    const lastRead = loadLastReadTimestamps()[groupId] ?? 0;
+    // A failed storage read must not clear the badge: keep the current count.
+    let readFailed = false;
     try {
+      const { get } = await import('idb-keyval');
       const messages: Array<{ createdAt: number; senderPubkey: string }> | undefined = await get(
         `few:messages:${groupId}`,
       );
       if (messages && messages.length > 0) {
-        return messages.filter((m) => m.createdAt > lastRead && m.senderPubkey !== ownPubkey).length;
+        return messages.filter((m) => m.createdAt > lastRead && String(m.senderPubkey ?? '').toLowerCase() !== own).length;
       }
     } catch {
       // Non-fatal — group messages may not exist yet
+      readFailed = true;
     }
-    return 0;
-  });
+    return readFailed ? (state.counts[groupId] ?? 0) : 0;
+  };
+}
+
+/**
+ * Recomputes a group's unread count over its remaining stored rows after rows
+ * were removed (a withdrawn message of another member). Authoritative: a count
+ * of 0 clears the badge. Runs on the same exclusive reconcile chain as the
+ * startup scan, so a live increment racing the read is re-read, never lost.
+ * Idempotent.
+ */
+export async function recomputeUnread(groupId: string, ownPubkey: string): Promise<void> {
+  await reconcileInit('counts', [groupId], countStoredUnread(ownPubkey), 'reread', undefined, undefined, undefined, true);
 }
 
 /**

@@ -25,12 +25,17 @@ import { set as idbSet } from 'idb-keyval';
 const {
   loadReactions,
   aggregateForMessage,
-  applyInboundRumor,
+  applyInboundRumor: applyInboundRumorReal,
   applyOptimistic,
   applyOptimisticRemoval,
   rollbackOptimistic,
   clearAllReactions,
 } = await import('@/src/lib/reactions/api');
+
+// A group-thread signal needs an explicit authenticated sender (the store never falls back to the forgeable
+// `rumor.pubkey`): these fixtures deliver each rumor as sent by its own pubkey. A DM thread keeps the default.
+const applyInboundRumor = ((thread: Parameters<typeof applyInboundRumorReal>[0], rumor: Parameters<typeof applyInboundRumorReal>[1], sender?: Parameters<typeof applyInboundRumorReal>[2]) =>
+  applyInboundRumorReal(thread, rumor, sender ?? (thread.kind === 'group' ? { pubkey: rumor.pubkey, authenticity: 'mls' as const } : undefined))) as typeof applyInboundRumorReal;
 
 const GROUP = { kind: 'group' as const, groupId: 'g1' };
 const DM = { kind: 'dm' as const, peerPubkeyHex: 'aabbccdd' };

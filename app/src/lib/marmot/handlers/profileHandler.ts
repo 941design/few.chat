@@ -15,7 +15,9 @@
 import { PROFILE_RUMOR_KIND, parseProfilePayload, payloadToMemberProfile } from '@/src/lib/marmot/profileSync';
 import { createOneShotGate, type OneShotGate } from '@/src/lib/marmot/envelopeVerifier';
 import type { MemberProfile, ProfileAvatar } from '@/src/types';
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/handlers/types';
+import { assertPorts, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
+import type { GroupRumorInput } from '@/src/lib/marmot/history';
 
 export interface ProfileHandlerDeps {
   mergeMemberProfile: (groupId: string, profile: MemberProfile) => Promise<boolean>;
@@ -66,7 +68,18 @@ export function buildAcceptedAnnouncementContent(pubkeyHex: string): string {
   });
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileHandlerDeps, oneShot: OneShotGate): Promise<void> {
+/**
+ * Sink-path hooks of `handle`. Absent on the legacy path (which sends the
+ * announcement inline and keeps a consumed inner id consumed).
+ */
+interface SinkHooks {
+  /** Receives the 'accepted' announcement content instead of sending it; the sink wrapper enqueues the send (non-awaited) at once, so no later step can lose it. */
+  announce: (content: string) => void;
+  /** Un-consumes an inner id when the apply failed, so the sink's retry is not mistaken for a duplicate delivery. */
+  release: (innerEventId: string) => void;
+}
+
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileHandlerDeps, oneShot: OneShotGate, sink?: SinkHooks): Promise<void> {
   const profilePayload = parseProfilePayload(rumor.content);
   if (!profilePayload) return;
 
@@ -98,6 +111,24 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // journal-ack-before-durable-side-effects). Intentionally not wrapped in
   // try/catch — see S7-F3.
 
+  try {
+    await applyProfile(profilePayload, ctx, sender, deps, sink?.announce);
+  } catch (err) {
+    // The sink retries a rejected row; without this the retry would find its
+    // inner id consumed and finish as a silent no-op, losing the profile.
+    if (sink && profilePayload.signedEvent) sink.release(profilePayload.signedEvent.id);
+    throw err;
+  }
+}
+
+/** The effects of a verified, newly consumed profile payload. `announce`: sink path (see SinkHooks). */
+async function applyProfile(
+  profilePayload: NonNullable<ReturnType<typeof parseProfilePayload>>,
+  ctx: DispatcherContext,
+  sender: AuthenticatedSender,
+  deps: ProfileHandlerDeps,
+  announce?: (content: string) => void,
+): Promise<void> {
   // sig verified by parseProfilePayload. For relay-on-behalf the MLS sender is
   // the relayer, not the author — signedEvent.pubkey is authoritative.
   const authorPubkey = profilePayload.signedEvent?.pubkey ?? sender.pubkey;
@@ -130,14 +161,7 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // marker via the pre-existing clearPendingDirectInvite, it just never gates
   // a post on the marker's existence.
   const isOwnJoin = Boolean(profilePayload.signedEvent && sender.pubkey === authorPubkey);
-  let isFirstGenuineOwnJoin = false;
-  if (isOwnJoin) {
-    try {
-      isFirstGenuineOwnJoin = await deps.consumePendingDirectInviteMarker(ctx.groupId, authorPubkey);
-    } catch (err) {
-      console.warn(`[Marmot] consumePendingDirectInviteMarker failed for ${ctx.groupId}:${authorPubkey}:`, err);
-    }
-  } else if (profilePayload.signedEvent) {
+  if (!isOwnJoin && profilePayload.signedEvent) {
     // AC-MARKER-5/6: clear the pending-direct-invite marker when a signed
     // profile arrives via relay-on-behalf. Merge-result-independent — a
     // stale/duplicate resend that loses the LWW race is still proof the
@@ -150,22 +174,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
       await deps.clearPendingDirectInvite(ctx.groupId, authorPubkey);
     } catch (err) {
       console.warn(`[Marmot] clearPendingDirectInvite failed for ${ctx.groupId}:${authorPubkey}:`, err);
-    }
-  }
-
-  // AC-PROD-3: post 'accepted' at most once — only on the first genuine
-  // own-join transition (a pending marker existed AND this profile rumor was
-  // published by B itself, not relayed). A duplicate/reconnect redelivery of
-  // B's own profile finds no pending marker (already consumed by the first
-  // delivery's consumePendingDirectInviteMarker call above) and is a silent
-  // no-op (AC-PROD-5). Never fires on a third-member relay (AC-PROD-4,
-  // captured by isFirstGenuineOwnJoin staying false) or on a generic marker
-  // removal where no marker existed in the first place.
-  if (isFirstGenuineOwnJoin) {
-    try {
-      await deps.sendAnnouncement(buildAcceptedAnnouncementContent(authorPubkey));
-    } catch (err) {
-      console.warn(`[Marmot] accepted-producer sendAnnouncement failed for ${ctx.groupId}:${authorPubkey}:`, err);
     }
   }
 
@@ -197,6 +205,37 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
     avatar: memberProfile.avatar ?? null,
     updatedAt: memberProfile.updatedAt,
   });
+
+  // Last, so that nothing after the marker's consumption can fail or be lost: the own-join check and the
+  // marker clear are ONE atomic step (consumePendingDirectInviteMarker), and the 'accepted' announcement
+  // follows it synchronously. A crash or throw before this point leaves the marker in place, so the replay
+  // (the sink re-runs the row; the merge above is idempotent) finds it and announces; once it is consumed
+  // nothing but the announcement remains.
+  // A throw propagates: the row stays undispatched, the sink retries it, the marker is still there (the consume is
+  // atomic: it either cleared it or did not run) and the retry announces exactly once.
+  const isFirstGenuineOwnJoin = isOwnJoin ? await deps.consumePendingDirectInviteMarker(ctx.groupId, authorPubkey) : false;
+
+  // AC-PROD-3: post 'accepted' at most once — only on the first genuine
+  // own-join transition (a pending marker existed AND this profile rumor was
+  // published by B itself, not relayed). A duplicate/reconnect redelivery of
+  // B's own profile finds no pending marker (already consumed by the first
+  // delivery's consumePendingDirectInviteMarker call above) and is a silent
+  // no-op (AC-PROD-5). Never fires on a third-member relay (AC-PROD-4,
+  // captured by isFirstGenuineOwnJoin staying false) or on a generic marker
+  // removal where no marker existed in the first place.
+  if (isFirstGenuineOwnJoin) {
+    if (announce) {
+      // Sink path: the send is a client write — handed to the caller, which
+      // enqueues it on the FIFO as its last action (never awaited here).
+      announce(buildAcceptedAnnouncementContent(authorPubkey));
+    } else {
+      try {
+        await deps.sendAnnouncement(buildAcceptedAnnouncementContent(authorPubkey));
+      } catch (err) {
+        console.warn(`[Marmot] accepted-producer sendAnnouncement failed for ${ctx.groupId}:${authorPubkey}:`, err);
+      }
+    }
+  }
 }
 
 export function createProfileHandler(deps: ProfileHandlerDeps): RumorHandler {
@@ -212,5 +251,91 @@ export function createProfileHandler(deps: ProfileHandlerDeps): RumorHandler {
   return {
     kind: PROFILE_RUMOR_KIND,
     handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps, oneShot),
+  };
+}
+
+
+/** Deps of the history-sink path. `enqueue` and the `retractProfile`-free contract are REQUIRED / documented below. */
+export interface ProfileGroupHandlerDeps extends ProfileHandlerDeps {
+  /** The owned client FIFO (`ClientJobQueue['enqueue']`): the 'accepted' announcement send is queued on it. */
+  enqueue: (job: () => Promise<void>) => void;
+}
+
+/** Capacity of the sink path's one-shot gate (oldest entries are evicted). */
+const SINK_GATE_CAPACITY = 1024;
+
+const PROFILE_GROUP_PORTS = [
+  'mergeMemberProfile', 'clearPendingDirectInvite', 'notifyProfileObserved', 'recordRequestAnswered',
+  'writeContactEntry', 'setProfileVersion', 'consumePendingDirectInviteMarker', 'sendAnnouncement', 'enqueue',
+] as const;
+
+/**
+ * Kind-0 handler on the history-sink path (sender = the MLS-authenticated
+ * account). dispatch is the legacy core: the merge is last-writer-wins, the
+ * pending-invite marker is an atomic compare-and-clear, so a redelivery
+ * converges; a failed apply un-consumes its inner id so the sink's retry
+ * applies it. The one follow-up WRITE, the 'accepted' announcement, is
+ * enqueued on the client FIFO as the call's last action (re-entrancy rule), after the pending-invite
+ * marker was consumed as the handler's last step — so nothing can fail between consuming the marker and
+ * enqueueing the announcement; a send failure is warned (the announcement is best-effort, as before).
+ *
+ * retract is a deliberate no-op: a stored member profile is the sender's
+ * last-writer-wins self-description, so the withdrawn rumor's effect cannot be
+ * told apart from earlier ones, and the contact cache / profile observer have
+ * already been fed (effects already emitted are never undone, AC-WDR-6). The
+ * sender's next profile supersedes it.
+ */
+export function createProfileGroupHandler(deps: ProfileGroupHandlerDeps): GroupKindHandler & RumorHandler {
+  assertPorts('createProfileGroupHandler', deps, PROFILE_GROUP_PORTS);
+  // The sink path's gate: same one-shot semantics, plus release-on-failure.
+  // The handler serves ALL groups, so the key is `${groupId}:${innerId}` (the
+  // same signed profile legitimately arrives once per group). Bounded LRU.
+  const consumed = new Set<string>();
+  const gateKey = (groupId: string, id: string) => `${groupId}:${id}`;
+  const makeGate = (groupId: string): OneShotGate => ({
+    tryConsume(id) {
+      const key = gateKey(groupId, id);
+      if (consumed.has(key)) return false;
+      consumed.add(key);
+      while (consumed.size > SINK_GATE_CAPACITY) {
+        const oldest = consumed.values().next().value as string;
+        consumed.delete(oldest);
+      }
+      return true;
+    },
+  });
+  return {
+    ...createProfileHandler(deps),
+    async dispatch(input: GroupRumorInput, env) {
+      const { ctx, sender } = toHandlerArgs(input, env);
+      // The 'accepted' announcement is a client write: it is captured here and enqueued as the LAST action of
+      // this call (after every await of the handler, also when a step threw), never earlier: an account-scope
+      // call from a job that starts inside the still-live library frame rejects with `reentrant`. The marker is
+      // consumed as the handler's last step, so once it is gone nothing but this enqueue remains; a row that
+      // failed earlier left the marker in place and its retry announces (a replay never adds a second one).
+      let announcement: string | undefined;
+      try {
+        await handle(input.rumor as ApplicationRumor, ctx, sender, deps, makeGate(ctx.groupId), {
+          announce: (content) => {
+            announcement = content;
+          },
+          release: (id) => void consumed.delete(gateKey(ctx.groupId, id)),
+        });
+      } finally {
+        if (announcement !== undefined) {
+          const content = announcement;
+          deps.enqueue(async () => {
+            try {
+              await deps.sendAnnouncement(content);
+            } catch (err) {
+              console.warn(`[Marmot] accepted-producer sendAnnouncement failed for ${ctx.groupId}:`, err);
+            }
+          });
+        }
+      }
+    },
+    async retract() {
+      // See the doc comment: nothing to undo.
+    },
   };
 }

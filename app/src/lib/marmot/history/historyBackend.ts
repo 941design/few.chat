@@ -24,13 +24,34 @@
  *                   legitimate retry, so it re-runs the handlers; success marks the
  *                   row dispatched (clearing `abandoned`), failure rejects and leaves
  *                   it abandoned (recovery still skips it).
- *  withdraw(...)    first waits (one settle bound) for a still-running dispatch of a
- *                   withdrawn id; one that outlives the bound retracts itself on
- *                   completion. Then per existing row: `handlers.retract`, then the row is
- *                   deleted. An id with no row is a no-op (also when the
- *                   withdraw came BEFORE the append: no tombstone is kept).
- *                   Retract runs before the delete so a failed retract is
- *                   retried with the row still present.
+ *  withdraw(...)    (1) durably MARKS every existing row of the batch `withdrawing` (such a row is
+ *                   already gone for `remaining()` and `list()`); (2) first-touch recovery (below);
+ *                   (3) waits (one settle bound) for a still-running dispatch of a withdrawn id (one
+ *                   that outlives the bound retracts itself on completion); (4) finishes the marked
+ *                   rows in `seq` order with INCREMENTAL progress: each row is retracted and then
+ *                   deleted at once, each step under its own settle bound (the call as a whole may
+ *                   therefore outlast one bound when many aggregates need a recompute). A timeout or
+ *                   a failing retract leaves the earlier rows deleted and the rest marked; the next
+ *                   `append` / `withdraw` of the group in this instance finishes them first, and a
+ *                   restart finds them by first-touch recovery. An id with no row is a no-op (also
+ *                   when the withdraw came BEFORE the append: no tombstone is kept). Retract is an
+ *                   idempotent recompute, so repeating one is safe. `RetractInput.batch` names every
+ *                   row of the finish, so a dispatch layer can run ONE recompute per aggregate.
+ *                   Retract receives `remaining()`: the group's rows that are `dispatched` and not
+ *                   `withdrawing`, in `seq` order, each with its persisted `receivedAt`. It is
+ *                   read once per batch and memoised, so every retract of a batch (and a late
+ *                   retract, which reads it at its own start) sees one snapshot that includes
+ *                   none of the batch's rows. Rows that were never dispatched (or were abandoned)
+ *                   are never in it. Handlers of dependent kinds (5, edit-marked 9, 7, 10-12)
+ *                   recompute their aggregate from it (recompute-on-retract); a `purged` retract
+ *                   removes outright and never reads it. A row that is still `dispatched:false` is
+ *                   not in it: a recompute before its (re-)dispatch resets that row's effects and the
+ *                   re-dispatch applies them again (accepted).
+ *                   `receivedAt` is the first-append wall clock (set once, persisted): the
+ *                   deterministic clock of a recompute AND of the row's own dispatch
+ *                   (`GroupRumorInput.receivedAt`), so a late dispatch and a later fold of the row
+ *                   decide the same way. A row without one (written before it existed) reads as
+ *                   `rumor.created_at * 1000`.
  *  list(groupId)    entries in `seq` order.
  *  purge(groupId)   every row of that group, nothing of any other group. First waits (one settle
  *                   bound) for dispatches still running for the group; one that outlives the bound
@@ -53,6 +74,10 @@
  * yet (the bootstrap calls it after `groups.list()`, before `inbox.start()`:
  * the library starts each group's history drain during `groups.list()`, so
  * the first-touch recovery is what keeps recovered rows ahead of live ones).
+ * Recovery FIRST finishes every `withdrawing` row of the group (retract, then delete), so a
+ * crash anywhere inside a withdraw converges before any re-dispatch (a withdrawing row is
+ * never re-dispatched, and a live append of its id finishes the withdrawal first, then
+ * stores a fresh row).
  * A recovery failure leaves the row `dispatched:false`, does not stop the
  * group's later rows or other groups, and never rejects the triggering call.
  * Each recovery attempt is bounded by the settle timeout on its own, so a
@@ -108,6 +133,48 @@ export interface GroupRumorInput {
   rumor: Rumor;
   /** `HistoryEntry.orderingKey.account`: the authenticated sender. */
   sender: string;
+  /**
+   * The row's persisted first-append time (ms): THE clock of a dispatch, identical to the clock a recompute folds
+   * the same row with (`RemainingRow.receivedAt`), so a late dispatch (a recovered row) and a later fold of that row
+   * decide the same way. Absent only on inputs built by tests / the late retract of a vanished row; handlers then
+   * fall back to the wall clock.
+   */
+  receivedAt?: number;
+  /**
+   * Retract only. Absent means `'withdrawn'`: the library withdrew the entry (a fork rewind). `'purged'` is a late
+   * retract of a dispatch that outlived a group purge (the group was left): the group's data is going away, so a
+   * handler must REMOVE what the dispatch wrote — in particular an own message must not be parked as failed/retry
+   * in a group that is no longer held.
+   */
+  reason?: 'withdrawn' | 'purged';
+}
+
+/** Why a retract runs; see `GroupRumorInput.reason`. */
+type RetractReason = 'withdrawn' | 'purged';
+
+/** A history row that survives a withdraw: what a recompute folds (dispatched, not withdrawing). */
+export interface RemainingRow {
+  entry: HistoryEntry;
+  /** Per-group delivery counter (the fold order). */
+  seq: number;
+  /** Wall-clock ms the row was first appended (persisted); the deterministic clock of a recompute. */
+  receivedAt: number;
+}
+
+/**
+ * What a retract receives: the withdrawn rumor plus `remaining()`, the group's dispatched, non-withdrawing rows in
+ * `seq` order. Read ONCE per withdraw batch and memoised, so every retract of a batch sees the same snapshot (no
+ * intermediate state of the batch is ever folded). Handlers of dependent kinds (5, edit-marked 9, 7, 10, 11, 12)
+ * recompute their aggregate from it; `reason: 'purged'` retracts remove outright and never read it.
+ */
+export interface RetractInput extends GroupRumorInput {
+  remaining: () => Promise<readonly RemainingRow[]>;
+  /**
+   * Every row withdrawn together with this one (the whole finish batch, this row included, in `seq` order). All of
+   * them are absent from `remaining()`, so ONE recompute of an aggregate accounts for every withdrawn row naming
+   * it; a handler uses this to drop the state keyed to ALL of them (e.g. pinned revs). Absent on a late retract.
+   */
+  batch?: readonly GroupRumorInput[];
 }
 
 /**
@@ -116,11 +183,15 @@ export interface GroupRumorInput {
  *    failure so the library retries;
  *  - `retract` of an unseen event id is a no-op and undoes the stored effects
  *    of a withdrawn message (effects already emitted, e.g. a bell, stay);
- *  - neither awaits an account-scope client call.
+ *  - neither awaits an account-scope client call;
+ *  - rows still `dispatched:false` (undispatched, recovering or abandoned) are NOT in `remaining()`: a recompute
+ *    that runs before they are (re-)dispatched resets their effects, and the re-dispatch applies them again
+ *    (accepted: no row is folded before its own dispatch completed, so a recompute never applies an effect the
+ *    sink has not committed to).
  */
 export interface GroupHistoryHandlers {
   dispatch: (input: GroupRumorInput) => Promise<void>;
-  retract: (input: GroupRumorInput) => Promise<void>;
+  retract: (input: RetractInput) => Promise<void>;
 }
 
 /** Matches the library's `HISTORY_BACKEND_TIMEOUT_MS`. */
@@ -272,8 +343,21 @@ function assertEntry(entry: HistoryEntry): void {
 const REGISTERED_KINDS: readonly number[] = APP_RUMOR_KINDS;
 const isRegisteredKind = (entry: HistoryEntry): boolean => REGISTERED_KINDS.includes(entry.rumor.kind);
 
-function inputOf(entry: HistoryEntry): GroupRumorInput {
-  return { groupId: entry.groupId, eventId: entry.eventId, rumor: entry.rumor, sender: entry.orderingKey.account };
+/** The row's clock: its persisted first-append time; a row written before it existed reads as `rumor.created_at * 1000`. */
+const receivedAtOf = (row: HistoryRow): number => row.receivedAt ?? row.entry.rumor.created_at * 1000;
+
+const toRemaining = (row: HistoryRow): RemainingRow => ({ entry: row.entry, seq: row.seq, receivedAt: receivedAtOf(row) });
+
+function inputOf(entry: HistoryEntry, reason?: RetractReason, receivedAt?: number): GroupRumorInput {
+  const input: GroupRumorInput = {
+    groupId: entry.groupId,
+    eventId: entry.eventId,
+    rumor: entry.rumor,
+    sender: entry.orderingKey.account,
+    ...(receivedAt !== undefined ? { receivedAt } : {}),
+  };
+  // Only the non-default reason is carried, so a plain withdraw keeps the original input shape.
+  return reason === 'purged' ? { ...input, reason } : input;
 }
 
 export function createHistoryBackend(options: HistoryBackendOptions): AppHistoryBackend {
@@ -295,7 +379,13 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
    * Ids withdrawn while their dispatch was still running past the bound: the row is gone, so the late dispatch's
    * effects would never be retracted. The dispatch's completion retracts them instead (and marks nothing).
    */
-  const retractOnSettle = new Set<Promise<void>>();
+  const retractOnSettle = new Map<Promise<void>, RetractReason>();
+  /**
+   * Groups whose withdrawal finish did not complete in this instance (a timeout, a failing retract): marked rows are
+   * left behind. The next `append` / `withdraw` of the group finishes them first; a restart finds them by first-touch
+   * recovery. In-memory only, so the common path never re-reads the group's rows.
+   */
+  const leftover = new Set<string>();
   let disposed = false;
   let disposal: Promise<void> | undefined;
   const disposedError = () => new Error('history sink: backend is disposed');
@@ -327,20 +417,21 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
   };
 
   /** Starts the handlers for a row, or joins the dispatch of the same id that is still running. */
-  const runDispatch = (entry: HistoryEntry): Promise<void> => {
+  const runDispatch = (entry: HistoryEntry, receivedAt: number): Promise<void> => {
     const key = `${entry.groupId}:${entry.eventId}`;
     let running = inFlight.get(key);
     if (running) {
       // The id is wanted again (a re-append / recovery joined it): a pending late retract no longer applies.
       retractOnSettle.delete(running);
     } else {
-      const started = Promise.resolve().then(() => handlers.dispatch(inputOf(entry)));
+      const started = Promise.resolve().then(() => handlers.dispatch(inputOf(entry, undefined, receivedAt)));
       running = started;
       inFlight.set(key, started);
       const settle = () => {
         if (inFlight.get(key) === started) inFlight.delete(key);
-        if (!retractOnSettle.delete(started)) return;
-        scheduleLateRetract(entry);
+        const reason = retractOnSettle.get(started);
+        if (reason === undefined || !retractOnSettle.delete(started)) return;
+        scheduleLateRetract(entry, reason);
       };
       started.then(settle, settle);
     }
@@ -351,7 +442,7 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
    * Waits (at most one settle bound, errors ignored) for the dispatches still running under these `groupId:eventId`
    * keys. Dispatches still running at the bound are registered for a retract once they finish; their keys are returned.
    */
-  const awaitInFlight = async (keys: readonly string[]): Promise<Set<string>> => {
+  const awaitInFlight = async (keys: readonly string[], reason: RetractReason): Promise<Set<string>> => {
     const pending = keys
       .map((key) => ({ key, running: inFlight.get(key) }))
       .filter((p): p is { key: string; running: Promise<void> } => p.running !== undefined);
@@ -371,8 +462,62 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
       }),
     ]);
     clearTimeout(timer);
-    for (const p of pending) if (stillRunning.has(p.key)) retractOnSettle.add(p.running);
+    for (const p of pending) if (stillRunning.has(p.key)) retractOnSettle.set(p.running, reason);
     return stillRunning;
+  };
+
+  /** `remaining()` of a retract: dispatched, non-withdrawing rows of the group in `seq` order; read once (memoised). */
+  const remainingReader = (groupId: string): (() => Promise<readonly RemainingRow[]>) => {
+    let cached: Promise<readonly RemainingRow[]> | undefined;
+    return () => (cached ??= store.listRows(groupId).then((rows) => rows.filter((r) => r.dispatched && !r.withdrawing).map(toRemaining)));
+  };
+
+  /**
+   * Finishes every `withdrawing` row of the group, in `seq` order, with INCREMENTAL progress: each row is retracted
+   * (registered kinds, except ids whose still-running dispatch retracts itself on completion) and then deleted
+   * right away, each step under its own settle bound. Safe because `remaining()` already excludes every still-marked
+   * row and a retract is an idempotent recompute: a failure or timeout at row k leaves rows before k deleted and the
+   * rest marked, and the next append / withdraw / restart of the group continues from there. All retracts of the call
+   * share one memoised `remaining()` read (taken after every mark of the batch was written) and see the whole batch
+   * through `RetractInput.batch`, so a handler can recompute an aggregate ONCE for every withdrawn row naming it.
+   * MUST run inside the group's serialised job. `parent` (an enclosing bounded call) stops the loop when it timed out.
+   */
+  const finishWithdrawing = async (
+    groupId: string,
+    parent?: CallState,
+    lateRetract: ReadonlySet<string> = new Set(),
+    skipEventIds: ReadonlySet<string> = new Set(),
+  ): Promise<void> => {
+    // `skipEventIds`: rows another step of the same call finishes itself (they stay marked, so `remaining()` omits them).
+    const marked = (await store.listRows(groupId))
+      .filter((row) => row.withdrawing && !skipEventIds.has(row.entry.eventId))
+      .sort((a, b) => a.seq - b.seq);
+    if (marked.length === 0) {
+      if (skipEventIds.size === 0) leftover.delete(groupId);
+      return;
+    }
+    const remaining = remainingReader(groupId);
+    const batch = marked.map((row) => inputOf(row.entry, undefined, receivedAtOf(row)));
+    try {
+      for (const [i, row] of marked.entries()) {
+        if (parent?.abandoned || disposed) {
+          leftover.add(groupId);
+          return;
+        }
+        await bounded(`withdraw ${row.entry.eventId}`, settleMs, async (state) => {
+          // A still-running dispatch retracts itself when it finishes (retractOnSettle); retracting now would be a no-op.
+          if (isRegisteredKind(row.entry) && !lateRetract.has(rowKey(groupId, row.entry.eventId))) {
+            await handlers.retract({ ...batch[i], remaining, batch });
+          }
+          if (state.abandoned || parent?.abandoned) return; // the row stays marked; a retried withdraw retracts again
+          await store.deleteRow(groupId, row.entry.eventId);
+        });
+      }
+    } catch (error) {
+      leftover.add(groupId);
+      throw error;
+    }
+    if (skipEventIds.size === 0) leftover.delete(groupId);
   };
 
   /**
@@ -380,7 +525,7 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
    * job. Skipped when a row for the id exists again (the branch became canonical: the row's owner handles it).
    * Retried a bounded number of times, each attempt bounded by the settle timeout, then reported.
    */
-  const scheduleLateRetract = (entry: HistoryEntry): void => {
+  const scheduleLateRetract = (entry: HistoryEntry, reason: RetractReason): void => {
     const ctx = { groupId: entry.groupId, eventId: entry.eventId };
     serial
       .run(entry.groupId, async () => {
@@ -391,7 +536,7 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
             await bounded(`late retract ${entry.eventId}`, settleMs, async (state) => {
               if (await store.getRow(entry.groupId, entry.eventId)) return;
               if (state.abandoned) return;
-              await handlers.retract(inputOf(entry));
+              await handlers.retract({ ...inputOf(entry, reason), remaining: remainingReader(entry.groupId) });
             });
             return;
           } catch (error) {
@@ -413,9 +558,9 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
 
   /** Runs the handlers for a persisted, undispatched row and marks it dispatched. */
   const dispatchRow = async (row: HistoryRow, state: CallState): Promise<void> => {
-    if (isRegisteredKind(row.entry)) await runDispatch(row.entry);
+    if (isRegisteredKind(row.entry)) await runDispatch(row.entry, receivedAtOf(row));
     if (state.abandoned) return;
-    await store.putRow({ entry: row.entry, seq: row.seq, dispatched: true });
+    await store.putRow({ entry: row.entry, seq: row.seq, dispatched: true, ...(row.receivedAt !== undefined ? { receivedAt: row.receivedAt } : {}) });
   };
 
   /** Counts a failed recovery on the row; at the cap the row is abandoned and reported once. */
@@ -446,14 +591,24 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
    * First-touch recovery of one group. MUST run inside the group's serialised job. Marks the group touched only
    * once its rows were read, so an unreadable store leaves it for the next call.
    */
-  const recoverGroup = async (groupId: string, skipEventIds?: ReadonlySet<string>): Promise<SweepResult> => {
+  const recoverGroup = async (groupId: string, ownBatch?: ReadonlySet<string>): Promise<SweepResult> => {
     const result: SweepResult = { redispatched: 0, failed: 0 };
     if (touched.has(groupId)) return result;
-    // `skipEventIds`: rows a withdraw is about to retract and delete; their irreversible effects must not fire.
-    const rows = (await store.listRows(groupId)).filter(
-      (row) => !row.dispatched && !row.abandoned && !skipEventIds?.has(row.entry.eventId),
-    );
+    const all = await store.listRows(groupId);
     touched.add(groupId);
+    // Withdrawals first: a row marked `withdrawing` (a crash inside a withdraw, or this very call's own batch) is
+    // retracted and deleted BEFORE anything is re-dispatched, and is never re-dispatched itself (its irreversible
+    // effects must not fire). A failure leaves the rows marked for the next withdraw / sweep and does not abort recovery.
+    if (all.some((row) => row.withdrawing && !ownBatch?.has(row.entry.eventId))) {
+      try {
+        await finishWithdrawing(groupId, undefined, undefined, ownBatch);
+      } catch (error) {
+        result.failed += 1;
+        if (disposed) return result;
+        report(error, { groupId, eventId: '' });
+      }
+    }
+    const rows = all.filter((row) => !row.dispatched && !row.abandoned && !row.withdrawing);
     for (const row of rows) {
       if (disposed) break;
       try {
@@ -469,8 +624,16 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
   };
 
   const appendInner = async (entry: HistoryEntry, state: CallState): Promise<void> => {
-    const existing = await store.getRow(entry.groupId, entry.eventId);
+    let existing = await store.getRow(entry.groupId, entry.eventId);
     if (state.abandoned) return;
+    if (existing?.withdrawing) {
+      // The library re-appends an id whose branch became canonical again while its withdrawal never finished: finish
+      // it (the old effects are retracted) and treat this as a fresh row.
+      await finishWithdrawing(entry.groupId, state);
+      if (state.abandoned) return;
+      existing = await store.getRow(entry.groupId, entry.eventId);
+      if (existing?.withdrawing) throw new Error('history sink: a withdrawing row could not be finished');
+    }
     if (existing) {
       if (existing.dispatched) return;
       await dispatchRow(existing, state);
@@ -479,29 +642,22 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
     const seq = await store.nextSeq(entry.groupId);
     if (state.abandoned) return;
     if (!isRegisteredKind(entry)) {
-      await store.putRow({ entry, seq, dispatched: true });
+      await store.putRow({ entry, seq, dispatched: true, receivedAt: Date.now() });
       return;
     }
-    const row: HistoryRow = { entry, seq, dispatched: false };
+    const row: HistoryRow = { entry, seq, dispatched: false, receivedAt: Date.now() };
     await store.putRow(row);
     if (state.abandoned) return; // the undispatched row stays; recovery runs it
     await dispatchRow(row, state);
   };
 
-  const withdrawInner = async (
-    groupId: string,
-    eventIds: readonly string[],
-    state: CallState,
-    lateRetract: ReadonlySet<string>,
-  ): Promise<void> => {
-    for (const eventId of new Set(eventIds)) {
+  /** Step 1 of a withdraw: durably marks every existing row of the batch `withdrawing`. */
+  const markWithdrawing = async (groupId: string, ids: readonly string[], state: CallState): Promise<void> => {
+    for (const eventId of ids) {
       if (state.abandoned) return;
       const row = await store.getRow(groupId, eventId);
       if (!row || state.abandoned) continue;
-      // A still-running dispatch retracts itself when it finishes (retractOnSettle); retracting now would be a no-op.
-      if (isRegisteredKind(row.entry) && !lateRetract.has(rowKey(groupId, eventId))) await handlers.retract(inputOf(row.entry));
-      if (state.abandoned) return; // the row stays; a retried withdraw retracts again (retract is idempotent)
-      await store.deleteRow(groupId, eventId);
+      if (!row.withdrawing) await store.putRow({ ...row, withdrawing: true });
     }
   };
 
@@ -515,7 +671,18 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
       }
       return serial.run(entry.groupId, async () => {
         if (disposed) throw disposedError();
+        const wasTouched = touched.has(entry.groupId);
         await recoverGroup(entry.groupId);
+        // A withdrawal this instance left unfinished (timeout / failing retract) finishes before anything newer is
+        // dispatched; a failure is reported and never fails the append.
+        if (wasTouched && leftover.has(entry.groupId)) {
+          try {
+            await finishWithdrawing(entry.groupId);
+          } catch (error) {
+            if (disposed) throw disposedError();
+            report(error, { groupId: entry.groupId, eventId: entry.eventId });
+          }
+        }
         return bounded(`append ${entry.eventId}`, settleMs, (state) => appendInner(entry, state));
       });
     },
@@ -525,16 +692,23 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
       return serial.run(groupId, async () => {
         if (disposed) throw disposedError();
         const ids = [...new Set(eventIds)];
+        // Recorded before marking: a mark step that fails part-way leaves some rows marked (hidden from list() and
+        // remaining()); the leftover entry makes the group's next append finish them, not only a later withdraw.
+        leftover.add(groupId);
+        await bounded(`mark withdrawing in ${groupId}`, settleMs, (state) => markWithdrawing(groupId, ids, state));
+        // First-touch recovery finishes OTHER marked rows (an earlier interrupted withdraw) before it re-dispatches
+        // anything; this batch's rows stay marked (never re-dispatched) and are finished below.
         await recoverGroup(groupId, new Set(ids));
-        const lateRetract = await awaitInFlight(ids.map((id) => rowKey(groupId, id)));
-        return bounded(`withdraw in ${groupId}`, settleMs, (state) => withdrawInner(groupId, ids, state, lateRetract));
+        const lateRetract = await awaitInFlight(ids.map((id) => rowKey(groupId, id)), 'withdrawn');
+        // Every marked row of the group (this batch and any leftover), one bounded step per row.
+        return finishWithdrawing(groupId, undefined, lateRetract);
       });
     },
 
     async list(groupId) {
       if (disposed) throw disposedError();
       const rows = await serial.run(groupId, () => store.listRows(groupId));
-      return rows.map((row) => row.entry);
+      return rows.filter((row) => !row.withdrawing).map((row) => row.entry);
     },
 
     purge(groupId) {
@@ -546,7 +720,7 @@ export function createHistoryBackend(options: HistoryBackendOptions): AppHistory
         if (keys.length > 0) {
           // Dispatches still running would otherwise write effects for rows that no longer exist: wait one bound,
           // let the rest retract themselves on completion, and drop every in-flight entry so a re-join never joins one.
-          await awaitInFlight(keys);
+          await awaitInFlight(keys, 'purged');
           for (const key of keys) inFlight.delete(key);
         }
         return bounded(`purge ${groupId}`, settleMs, () => store.purgeGroup(groupId));

@@ -110,7 +110,7 @@ Reconciliation note (Mode 1): AC text names new modules (`client/`, `history/`, 
 
 **AC-HIST-4** — The entry's own dispatch in `append` MUST be bounded by 10 s: a handler that never resolves MUST cause `append` to reject within 10 s of fake-time after its own dispatch starts (not hang), leaving `dispatched:false`. On a group's first touch, the bounded recovery of older undispatched rows (AC-HIST-7, each row bounded by 10 s) runs before it; that extra time occurs at most once per group per backend instance, and a library timeout of such an append is retried and joins the in-flight dispatch. [L: unit (fake timers)]
 
-**AC-HIST-5** — `withdraw(groupId, eventIds)` MUST delete the matching `few-group-history` rows and invoke the handlers' retract path once per withdrawn row of a registered kind (rows of unregistered kinds were never dispatched, AC-HIST-9, so they are deleted without retract); ids with no row MUST be a no-op (no retract call, no throw). [L: unit]
+**AC-HIST-5** — `withdraw(groupId, eventIds)` MUST delete the matching `few-group-history` rows and invoke the handlers' retract path once per withdrawn row of a registered kind (rows of unregistered kinds were never dispatched, AC-HIST-9, so they are deleted without retract); ids with no row MUST be a no-op (no retract call, no throw). `withdraw` MUST first durably mark every matching row `withdrawing`, then retract and delete each marked row IN TURN (a row is deleted right after its own retract, each step under its own settle bound; a failure or timeout leaves the earlier rows deleted and the rest marked, and the next `append`/`withdraw` of the group or a restart finishes them); a `withdrawing` row found at first-touch recovery or sweep MUST be retracted and deleted before any re-dispatch. Handlers receive `remaining()` = the group's dispatched, non-withdrawing rows in `seq` order (with persisted `receivedAt`; a row still `dispatched:false` is not in it, accepted), and the retract names the whole batch (`batch`) so one recompute per aggregate serves every withdrawn row naming it. A dispatch input carries the row's `receivedAt`, the clock a later recompute folds it with. [L: unit]
 
 **AC-HIST-6** — `purge(groupId)` MUST delete every row for that group and no rows of any other group. [L: unit]
 
@@ -118,13 +118,13 @@ Reconciliation note (Mode 1): AC text names new modules (`client/`, `history/`, 
 
 **AC-HIST-8** — The sink MUST NOT use idb-keyval `update()`: no `update(` call from `idb-keyval` appears in any file under `app/src/lib/marmot/history/`. [L: structural (existing repo-wide ban test)]
 
-**AC-HIST-9** — Handlers for chat (kind 9), reaction (7), delete (5), edit (10/11/12 as registered), poll (as registered), profile (0), profile-request (30) and announcement rumors MUST each be reachable from `append` via the rumor kind; an unregistered kind MUST be stored and marked `dispatched:true` with no handler call and no throw. Asserted per kind with a stub store: the corresponding store receives the row. [L: unit]
+**AC-HIST-9** — Handlers for chat (kind 9, incl. edit-marked kind 9), reaction (7), delete (5), polls (10 open, 11 vote, 12 close), profile (0), profile-request (30) and announcement rumors MUST each be reachable from `append` via the rumor kind; an unregistered kind MUST be stored and marked `dispatched:true` with no handler call and no throw. Asserted per kind against the real stores: the corresponding store receives the row. [L: unit]
 
 **AC-HIST-10** — Message-type store bumps (chat, reaction, poll, delete/edit) MUST be driven from handler completion inside `append`/`withdraw`; `group.onNotification` MUST drive only member, admin, name and disband resync. A test emitting a `message` notification only MUST leave message stores unchanged; a test emitting `members` MUST NOT bump message stores. [L: unit]
 
 **AC-HIST-11** — Roster and admin gates inside handlers (announcement roster gate, profile-request gate, admin-only signals) MUST read live `group.members()` / `group.admins` accessors, never the overlay. A test where overlay and live accessor disagree MUST gate by the live accessor. Handlers obtain the group handle through an injected `groupOf(groupId)` backed by `client.groups.get`. When it resolves `undefined` (group no longer held) the gate MUST fail closed (gated effect not applied, no throw); when it rejects, the handler MUST reject so the row stays `dispatched:false`. A test with `groupOf` resolving `undefined` MUST show the gated effect absent and the row marked `dispatched:true`. [L: unit]
 
-**AC-HIST-12** — The existing behavioural handler suites (chat, reactions, delete/edit, polls, profile, profile-request, announcement roster gate) MUST be re-pointed at the new handler signature `{groupId, eventId, rumor, sender}` and pass; `handlersRumorPubkeyBoundary` MUST be re-expressed asserting that a handler given `sender ≠ rumor.pubkey` attributes the content to `sender`. [L: unit]
+**AC-HIST-12** — Every behavioural handler family (chat, reactions, delete/edit, polls, profile, profile-request, announcement roster gate) MUST have a passing behavioural suite against the sink-path factories and the input `{groupId, eventId, rumor, sender}`; the legacy suites may keep exercising the legacy factories until S22 deletes both (S22 MUST port any behaviour covered only by a legacy suite before deleting it). `handlersRumorPubkeyBoundary` MUST be re-expressed asserting that a handler given `sender ≠ rumor.pubkey` attributes the content to `sender`. [L: unit]
 
 **AC-IDEM-1** — Replaying `append` for an event id whose row is `dispatched:true` MUST leave exactly one stored row, exactly one chat/reaction/poll row in the app store, and handler spies called once total. Re-appending a row with `dispatched:false` MUST re-run the handlers. [L: unit]
 
@@ -151,6 +151,12 @@ Reconciliation note (Mode 1): AC text names new modules (`client/`, `history/`, 
 **AC-WDR-5** — Harness: a fork rewind in the library that abandons another member's message causes the sink's `withdraw` to remove its chat row from the app store (A2). [L: harness (smoke spec covers the real-relay equivalent)]
 
 **AC-WDR-6** — Effects already emitted (bell, known-peers additions, follow-up sends) MUST NOT be undone by `withdraw`: a test that appended then withdrew a message from a new peer MUST still find the peer in known-peers, and MUST NOT show a user-facing notice (no toast call). [L: unit]
+
+**AC-WDR-7** — After any sequence of withdraws, the stored state of delete/edit slots, reactions and polls MUST equal the state produced by dispatching only the remaining history rows, in `seq` order, into empty stores (the oracle), for every withdraw order and with duplicate carriers. Plain kind-9 chat rows keep carrier accounting (AC-WDR-1/2). [L: unit, property]
+
+**AC-WDR-8** — Withdrawing a row whose rumor is byte-identical to another member's remaining row MUST NOT change the effect of the remaining row; an effect is attributed only to `orderingKey.account` of a remaining row. [L: unit]
+
+**AC-WDR-9** — A withdraw interrupted at any step MUST converge to AC-WDR-7 on the next backend start; recompute MUST be deterministic (persisted `receivedAt`, not wall clock) and MUST NOT emit bell, unread, known-peers or send effects. [L: unit]
 
 ## Outbound send and media (S3)
 

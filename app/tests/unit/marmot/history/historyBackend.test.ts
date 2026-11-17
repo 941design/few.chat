@@ -125,8 +125,8 @@ describe('AC-HIST-1: append persists, dispatches once, marks dispatched', () => 
     await sink.append(e);
 
     expect(seenDuringDispatch).toEqual([{ seq: 1, dispatched: false }]);
-    expect(row(G1, 'e1')).toEqual({ entry: e, seq: 1, dispatched: true });
-    expect(fx.dispatchCalls).toEqual([{ groupId: G1, eventId: 'e1', rumor: e.rumor, sender: ALICE }]);
+    expect(row(G1, 'e1')).toEqual({ entry: e, seq: 1, dispatched: true, receivedAt: expect.any(Number) });
+    expect(fx.dispatchCalls).toEqual([{ groupId: G1, eventId: 'e1', rumor: e.rumor, sender: ALICE, receivedAt: expect.any(Number) }]);
     expect(fx.chat.get('rumor-e1')).toBe(ALICE);
     // the order of writes: row (false) then rewrite (true); counter written first
     expect(writeLog.filter((w) => w.key === rowKey(G1, 'e1')).map((w) => w.dispatched)).toEqual([false, true]);
@@ -193,12 +193,12 @@ describe('AC-HIST-3: a throwing handler rejects append and leaves the row for re
     const sink = createHistoryBackend({ accountPubkey: ALICE, handlers: fx.handlers });
     const e = entry({ eventId: 'e1' });
     await expect(sink.append(e)).rejects.toThrow('disk full');
-    expect(row(G1, 'e1')).toEqual({ entry: e, seq: 1, dispatched: false });
+    expect(row(G1, 'e1')).toEqual({ entry: e, seq: 1, dispatched: false, receivedAt: expect.any(Number) });
 
     fail = false;
     await sink.append(e);
     expect(fx.dispatchCalls).toHaveLength(2);
-    expect(row(G1, 'e1')).toEqual({ entry: e, seq: 1, dispatched: true });
+    expect(row(G1, 'e1')).toEqual({ entry: e, seq: 1, dispatched: true, receivedAt: expect.any(Number) });
   });
 
   it('a synchronous handler throw also rejects the call; other rows of the group are untouched', async () => {
@@ -299,7 +299,9 @@ describe('AC-HIST-5: withdraw deletes rows and retracts once per withdrawn row',
     await sink.append(entry({ eventId: 'e2' }));
     await sink.withdraw(G1, ['e1', 'never-seen']);
 
-    expect(fx.retractCalls).toEqual([{ groupId: G1, eventId: 'e1', rumor: e1.rumor, sender: ALICE }]);
+    expect(fx.retractCalls).toEqual([
+      { groupId: G1, eventId: 'e1', rumor: e1.rumor, sender: ALICE, receivedAt: expect.any(Number), remaining: expect.any(Function), batch: [expect.objectContaining({ eventId: 'e1' })] },
+    ]);
     expect(row(G1, 'e1')).toBeUndefined();
     expect(row(G1, 'e2')).toBeDefined();
     expect(fx.chat.has('rumor-e1')).toBe(false);

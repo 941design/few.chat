@@ -27,6 +27,11 @@
  * without reading it in code — those are correctly ignored, which is why the
  * production allow-list can be EMPTY (the ban is absolute; see ALLOWLIST).
  *
+ * S5 (AC-HIST-12) re-expresses the boundary behaviourally as well: the bottom describe block hands
+ * every sink-path handler a rumor whose own `pubkey` field differs from the sink's `sender` and
+ * asserts the content is attributed to `sender`. The static scan stays as the tripwire for the
+ * handler files; the behavioural block proves the attribution.
+ *
  * Known limitation (accepted): this is a literal-name regression tripwire, not
  * an adversarial guarantee. It matches the textual token `rumor.pubkey`, so it
  * is defeatable by aliasing (`const r = rumor; r.pubkey`), destructuring
@@ -35,10 +40,15 @@
  * direct `rumor.pubkey` attribution read reintroduced by a non-adversarial
  * edit — and is not relied upon to stop a determined author working around it.
  */
+import 'fake-indexeddb/auto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadMemberProfiles } from '@/src/lib/marmot/groupStorage';
+import { ALICE, BOB, buildRealApp, installLocalStorage, MALLORY, type RealApp } from './handlers/realApp';
+
+vi.mock('react', () => ({ useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot() }));
 
 const handlersDir = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../src/lib/marmot/handlers');
 
@@ -152,6 +162,34 @@ describe('handlers/ rumor.pubkey boundary (epic: group-message-author-auth-app-l
     expect(unallowed, `Unallow-listed rumor.pubkey reads found:\n${unallowed.join('\n')}`).toEqual([]);
   });
 
+  it('the poll recompute path (core, fold, pure store rules, persistence) never reads rumor.pubkey either (AC-WDR: sender is the row\'s authenticated account)', () => {
+    const marmotDir = path.resolve(handlersDir, '..');
+    const polls = ['pollCore.ts', 'pollFold.ts', 'pollStoreCore.ts', 'pollPersistence.ts'];
+    for (const file of polls) {
+      const violations = scanForViolations(readFileSync(path.join(marmotDir, file), 'utf8'));
+      expect(violations.map((v) => `${file}:${v.line}: ${v.text.trim()}`), file).toEqual([]);
+    }
+  });
+
+  it('the slot recompute path (fold core, recompute, slot-id extraction) never reads rumor.pubkey: the sender is the row\'s authenticated account', () => {
+    // messageEdits/api.ts is shared with the DM path (`applyDeleteEditSignal` falls back to rumor.pubkey for a seal-authenticated DM
+    // sender), so only the group recompute path is scanned: from the fold core up to the aux-state drop and the oracle snapshot.
+    const source = readFileSync(path.resolve(handlersDir, '../../messageEdits/api.ts'), 'utf8');
+    const from = source.indexOf('async function foldClassifiedSignal(');
+    const applyAt = source.indexOf('export function applyDeleteEditSignal(');
+    const slotIdsAt = source.indexOf('export function deleteEditSlotIds(');
+    const to = source.indexOf('export function snapshotMessageEditsState(');
+    expect(from).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(from);
+    expect(slotIdsAt).toBeGreaterThan(applyAt);
+    expect(to).toBeGreaterThan(slotIdsAt);
+    // the fold core, then (skipping the live dispatch entry point, which owns the DM fallback) slot ids + recompute + aux drop
+    const scanned = [source.slice(from, applyAt), source.slice(slotIdsAt, to)];
+    for (const part of scanned) expect(scanForViolations(part).map((v) => v.text.trim())).toEqual([]);
+    // the handlers that call it
+    for (const file of ['deleteEditHandler.ts', 'chatHandler.ts']) expect(scanForViolations(readSource(file)), file).toEqual([]);
+  });
+
   it('every allow-list entry actually matches at least one real line (no stale exemption)', () => {
     for (const entry of ALLOWLIST) {
       const source = readSource(entry.file);
@@ -231,5 +269,85 @@ describe('scanForViolations / isAllowed (self-test — proves the scanner has te
     const fixture = ['const a = rumor.pubkey;', 'const b = 1;', 'const c = rumor.pubkey;', ''].join('\n');
     const violations = scanForViolations(fixture);
     expect(violations.map((v) => v.line)).toEqual([1, 3]);
+  });
+});
+
+
+// ─── Behavioural re-expression (AC-HIST-12): sender ≠ the rumor's own pubkey -> attributed to sender ──
+
+describe('a handler given sender ≠ the rumor\'s own pubkey attributes the content to the sender (AC-HIST-12)', () => {
+  let apps: RealApp[] = [];
+  const make = () => {
+    const app = buildRealApp();
+    apps.push(app);
+    return app;
+  };
+  beforeEach(() => {
+    installLocalStorage();
+    apps = [];
+  });
+  afterEach(async () => {
+    for (const app of apps) await app.sink.dispose();
+  });
+  // the rumor CLAIMS to be from CLAIMED; the MLS-authenticated sender is MALLORY
+  const CLAIMED = ALICE;
+  const forged = (app: RealApp, o: { eventId: string; kind: number; content?: string; tags?: string[][]; at?: number }) =>
+    app.entry({ ...o, account: MALLORY, pubkey: CLAIMED });
+  const poll = JSON.stringify({ id: 'p1', title: 'T', options: [{ id: 'A', label: 'a' }, { id: 'B', label: 'b' }], pollType: 'singlechoice', creatorPubkey: CLAIMED });
+
+  it('chat (9): the row is stored under the sender', async () => {
+    const app = make();
+    await app.sink.append(forged(app, { eventId: 'e1', kind: 9, content: 'claim' }));
+    expect((await app.messages()).map((m) => m.senderPubkey)).toEqual([MALLORY]);
+  });
+
+  it('reaction (7): the reactor is the sender', async () => {
+    const app = make();
+    await app.sink.append(app.entry({ eventId: 'e1', account: BOB, content: 'target' }));
+    await app.sink.append(forged(app, { eventId: 'e2', kind: 7, content: '+', tags: [['e', 'rumor-e1']] }));
+    expect((await app.reactionRows()).map((r) => r.reactorPubkey)).toEqual([MALLORY]);
+  });
+
+  it('delete (5): a delete claiming the target author\'s pubkey but sent by another member does not tombstone it', async () => {
+    const app = make();
+    await app.sink.append(app.entry({ eventId: 'e1', account: CLAIMED, content: 'alice says' }));
+    await app.sink.append(forged(app, { eventId: 'e2', kind: 5, content: '', tags: [['e', 'rumor-e1']] }));
+    expect((await app.messages())[0].tombstoned).toBeFalsy();
+  });
+
+  it('poll open / vote (10 / 11): creator and voter are the sender, never the claimed pubkey or the payload\'s creatorPubkey', async () => {
+    const app = make();
+    await app.sink.append(forged(app, { eventId: 'e1', kind: 10, content: poll }));
+    await app.sink.append(forged(app, { eventId: 'e2', kind: 11, content: JSON.stringify({ pollId: 'p1', responses: ['A'], seq: 1 }) }));
+    expect((await app.polls()).map((p) => p.creatorPubkey)).toEqual([MALLORY]);
+    expect((await app.votes('p1')).map((v) => v.voterPubkey)).toEqual([MALLORY]);
+  });
+
+  it('poll close (12): a close claiming the creator\'s pubkey but sent by another member does not close the poll', async () => {
+    const app = make();
+    await app.sink.append(app.entry({ eventId: 'e1', kind: 10, account: CLAIMED, content: poll }));
+    await app.sink.append(forged(app, { eventId: 'e2', kind: 12, content: JSON.stringify({ pollId: 'p1', results: [], totalVoters: 0 }) }));
+    expect((await app.polls()).map((p) => p.closed)).toEqual([false]);
+  });
+
+  it('profile (0): the member profile is keyed under the sender', async () => {
+    const app = make();
+    await app.sink.append(forged(app, { eventId: 'e1', kind: 0, content: JSON.stringify({ nickname: 'Eve', avatar: null, updatedAt: '2026-01-01T00:00:00.000Z' }) }));
+    expect((await loadMemberProfiles(app.groupId)).map((p) => p.pubkeyHex)).toEqual([MALLORY]);
+  });
+
+  it('profile-request (30): the roster gate judges the sender, not the claimed pubkey of a member', async () => {
+    const app = make();
+    app.live.members = [CLAIMED]; // the claimed identity is a member, the real sender is not
+    await app.sink.append(forged(app, { eventId: 'e1', kind: 30, content: JSON.stringify({ type: 'profile_request', targetPubkey: BOB, nonce: 'n' }) }));
+    expect(app.spies.recordRequestEmitted).not.toHaveBeenCalled();
+    expect(app.jobs).toEqual([]);
+  });
+
+  it('announcement (9, structured): the admin gate judges the sender, not the claimed pubkey of an admin', async () => {
+    const app = make();
+    app.live.admins = [CLAIMED];
+    await app.sink.append(forged(app, { eventId: 'e1', kind: 9, content: JSON.stringify({ type: 'group_renamed', name: 'x' }) }));
+    expect(await app.messages()).toEqual([]);
   });
 });

@@ -29,8 +29,8 @@
  */
 import type { GroupNotification } from '@941design/marmot';
 import { APP_RUMOR_KINDS } from '@/src/lib/marmot/kinds';
-import type { GroupHistoryHandlers, GroupRumorInput } from '@/src/lib/marmot/history';
-import type { AuthenticatedSender, DispatcherContext } from '@/src/lib/marmot/handlers/types';
+import type { GroupHistoryHandlers, GroupRumorInput, RetractInput } from '@/src/lib/marmot/history';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 
 /** Account-level facts a handler needs besides the rumor itself. */
 export interface GroupHandlerEnv {
@@ -57,7 +57,37 @@ export interface GroupKindHandler {
    * stored row goes only when its last carrier is withdrawn and the stored
    * sender matches the withdrawing sender.
    */
-  retract(input: GroupRumorInput, env: GroupHandlerEnv): Promise<void>;
+  retract(input: RetractInput, env: GroupHandlerEnv): Promise<void>;
+  /**
+   * The aggregate this retract RECOMPUTES (kind family + aggregate key, e.g. `reactions:<target>`), or undefined
+   * when the retract is per row (carrier accounting, purge, malformed rumor). A recompute reads the batch's one
+   * `remaining()` snapshot, which already omits every withdrawn row, so within one withdraw batch the second and
+   * later retracts of a key would repeat the first one's work: the dispatch layer runs ONE retract per key and
+   * batch (the handler sees the whole batch in `RetractInput.batch`) and lets the other rows of the key pass.
+   */
+  retractKey?(input: RetractInput): string | undefined;
+}
+
+/**
+ * The remaining history rows of the group (`input.remaining()`) that `accept` selects, as recompute signals in
+ * `seq` order. `sender` is the row's `orderingKey.account`; the rumor's own pubkey is never read.
+ */
+export async function remainingSignals(
+  input: RetractInput,
+  accept: (rumor: ApplicationRumor) => boolean,
+): Promise<RecomputeSignal[]> {
+  const rows = await input.remaining();
+  return rows
+    .filter((row) => accept(row.entry.rumor as ApplicationRumor))
+    .slice()
+    .sort((a, b) => a.seq - b.seq)
+    .map((row) => ({
+      rumor: row.entry.rumor as ApplicationRumor,
+      sender: row.entry.orderingKey.account,
+      eventId: row.entry.eventId,
+      seq: row.seq,
+      receivedAt: row.receivedAt,
+    }));
 }
 
 /** The old-path handler arguments for a sink input: `ctx` from the env, `sender` bound to `input.sender`. */
@@ -106,12 +136,38 @@ export function createGroupRumorDispatch(options: GroupRumorDispatchOptions): Gr
     }
   }
   const matching = (input: GroupRumorInput) => handlers.filter((h) => h.kind === input.rumor.kind);
+  // One retract per aggregate key (family + key) per withdraw batch. A batch shares ONE `remaining` function, so it
+  // identifies the batch; the entry is a settled-or-pending promise and a failed retract is dropped again (the
+  // withdraw rejects and the retry starts a new batch).
+  const retracted = new WeakMap<object, Map<string, Promise<void>>>();
   return {
     async dispatch(input) {
       for (const handler of matching(input)) await handler.dispatch(input, env);
     },
     async retract(input) {
-      for (const handler of matching(input)) await handler.retract(input, env);
+      for (const handler of matching(input)) {
+        const key = handler.retractKey?.(input);
+        if (key === undefined || typeof input.remaining !== 'function') {
+          await handler.retract(input, env);
+          continue;
+        }
+        let done = retracted.get(input.remaining);
+        if (!done) retracted.set(input.remaining, (done = new Map()));
+        const scoped = key; // keys name their own family (`slot:`, `reactions:`, `poll:`), so kinds of one family share it
+        const earlier = done.get(scoped);
+        if (earlier) {
+          await earlier;
+          continue;
+        }
+        const running = handler.retract(input, env);
+        done.set(scoped, running);
+        try {
+          await running;
+        } catch (error) {
+          done.delete(scoped);
+          throw error;
+        }
+      }
     },
   };
 }

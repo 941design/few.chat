@@ -26,7 +26,7 @@ import type { MarmotGroup } from '@941design/marmot';
 import { bootstrapAccountClient, type AccountClient } from '@/src/lib/marmot/client';
 import { openAccountStores } from '@/src/lib/marmot/client/storage';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
-import { createHistoryBackend, createIdbHistoryStore, type GroupRumorInput } from '@/src/lib/marmot/history';
+import { createHistoryBackend, createIdbHistoryStore, type GroupRumorInput, type RetractInput } from '@/src/lib/marmot/history';
 import { createGroupRumorDispatch } from '@/src/lib/marmot/handlers/groupRumorDispatch';
 import { createChatGroupHandler } from '@/src/lib/marmot/handlers/chatHandler';
 import { appendMessage, appendOrAddCarrier, hasMessage, loadMessages, retractMessageCarrier } from '@/src/lib/marmot/chatPersistence';
@@ -71,8 +71,7 @@ async function startPeer(secretHex: string, label: string): Promise<Peer> {
     setChatVersion: () => undefined,
     applyDeleteEditSignal: unexpected('applyDeleteEditSignal') as never,
     resolvePendingSignalsForSlot: async () => ({ thread: { kind: 'group', groupId: '' }, slotId: null, kind: 'noop' }),
-    isGroupAdmin: unexpected('isGroupAdmin') as never,
-    isGroupMember: unexpected('isGroupMember') as never,
+    groupOf: async () => undefined,
     getPoll: unexpected('getPoll') as never,
     loadVotes: unexpected('loadVotes') as never,
     saveVoteIfNewer: unexpected('saveVoteIfNewer') as never,
@@ -83,12 +82,16 @@ async function startPeer(secretHex: string, label: string): Promise<Peer> {
     removePendingCloseAnnouncements: unexpected('removePendingCloseAnnouncements') as never,
     appendOrAddCarrier: (g, m, e) => appendOrAddCarrier(ns(g), { ...m, groupId: ns(g) }, e),
     retractMessageCarrier: (g, r, e, snd) => retractMessageCarrier(ns(g), r, e, snd),
+    removeMessages: async () => 0,
+    releaseHeldReactions: async () => false,
+    setReactionsVersion: () => undefined,
     hasMessage: (g, id) => hasMessage(ns(g), id),
     recomputeUnread: () => undefined,
     rememberKnownPeer: () => undefined,
     onOwnEcho: () => undefined,
     onOwnWithdrawn: () => undefined,
-    retractDeleteEditSignal: async () => undefined,
+    recomputeSlot: async () => undefined,
+    recomputeMessageReactions: async () => false,
   });
   const dispatcher = createGroupRumorDispatch({ handlers: [chat], env: { selfPubkeyHex: pubkey, getActiveGroupId: () => null } });
   const recording = {
@@ -96,7 +99,7 @@ async function startPeer(secretHex: string, label: string): Promise<Peer> {
       dispatched.push(input);
       await dispatcher.dispatch(input);
     },
-    retract: (input: GroupRumorInput) => dispatcher.retract(input),
+    retract: (input: RetractInput) => dispatcher.retract(input),
   };
   const app = createHistoryBackend({ handlers: recording, store: createIdbHistoryStore(`forgery-${label}-${++dbCounter}`) });
 

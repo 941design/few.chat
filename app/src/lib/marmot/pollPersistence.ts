@@ -18,6 +18,44 @@
 import { get, set, del, keys, delMany, createStore, promisifyRequest } from 'idb-keyval';
 import type { UseStore } from 'idb-keyval';
 import { postStoreChanged } from '@/src/lib/crossTab';
+import type { RecomputeSignal } from '@/src/lib/marmot/handlers/types';
+import { foldPollSignals } from './pollFold';
+import {
+  isNewerVote,
+  MAX_VOTES_KEPT_PER_VOTER,
+  keptVotes,
+  voteAsOf,
+  PENDING_VOTE_TTL_MS,
+  MAX_PENDING_VOTES_PER_GROUP,
+  MAX_PENDING_VOTES_PER_VOTER,
+  MAX_PENDING_CLOSES_PER_SENDER,
+  MAX_PENDING_CLOSES_PER_GROUP,
+  isPendingShaped,
+  isPendingCloseShaped,
+  samePendingVote as samePending,
+  liveEntries,
+  liveCloseCutoffs,
+  snapshotOf,
+  mergeVoteRows,
+  queueVoteEntries,
+  addBoundedEntry,
+  upsertOpenPoll,
+  writeClosedPoll,
+  dropSuperseded,
+} from './pollStoreCore';
+
+// The public surface the order / cap helpers always had here (moved to pollStoreCore).
+export {
+  isNewerVote,
+  MAX_VOTES_KEPT_PER_VOTER,
+  keptVotes,
+  voteAsOf,
+  PENDING_VOTE_TTL_MS,
+  MAX_PENDING_VOTES_PER_GROUP,
+  MAX_PENDING_VOTES_PER_VOTER,
+  MAX_PENDING_CLOSES_PER_SENDER,
+  MAX_PENDING_CLOSES_PER_GROUP,
+};
 
 // ---- Types ----
 
@@ -105,112 +143,6 @@ export interface VoteOrderKey {
   rumorId?: string;
 }
 
-/**
- * Total order on a voter's votes for one poll: seq, then created_at
- * (votedAt), then rumor id (lexicographic). Returns true when `a` is strictly
- * newer than `b`. Every member applies the same order, so all converge on the
- * same vote regardless of delivery order (bug:
- * poll-vote-ordering-and-early-close).
- *
- * Legacy votes (no seq) rank as seq 0 and with rumor id '' when absent, so a
- * vote carrying seq >= 1 always beats a legacy vote of the same voter — the
- * transitional case where one device still runs an old client: its later
- * vote cannot override a seq-carrying one. Legacy-vs-legacy falls back to
- * created_at, then id.
- */
-export function isNewerVote(a: VoteOrderKey, b: VoteOrderKey): boolean {
-  const seqA = a.seq ?? 0;
-  const seqB = b.seq ?? 0;
-  if (seqA !== seqB) return seqA > seqB;
-  if (a.votedAt !== b.votedAt) return a.votedAt > b.votedAt;
-  return (a.rumorId ?? '') > (b.rumorId ?? '');
-}
-
-/**
- * Upper bound on the votes of one voter for one poll kept for "as of a close"
- * tallies (stored row + superseded, and the early-vote queue). Pruning beyond
- * it is held-close aware (bug: poll-followups): the vote each held close of
- * the poll would count (voteAsOf at its receipt time) and the newest vote are
- * always kept, so the set can exceed the cap by at most one vote per held
- * close (one per poll and sender, MAX_PENDING_CLOSES_PER_GROUP per group);
- * the remaining room goes to the latest-received others. Only when the held
- * closes cannot be read at the write does it fall back to dropping the
- * earliest received — then a held close received before ALL kept votes of a
- * voter does not count that voter (residual, needs a read failure AND more
- * than this many vote changes after the close).
- */
-export const MAX_VOTES_KEPT_PER_VOTER = 20;
-
-const receivedRank = (v: { receivedAt?: number }) => v.receivedAt ?? -Infinity;
-
-/**
- * The votes that can still decide a tally "as of" some receipt time: a vote
- * is dropped when another one is at least as new by isNewerVote AND arrived
- * no later (for any cut-off where the dropped one counts, the other counts
- * and wins). Identical votes (same order key) collapse to the earliest
- * received. Sorted by receipt, which is then also ascending by the order —
- * the last one is the newest vote. Bounded to MAX_VOTES_KEPT_PER_VOTER, except
- * that the vote each `cutoffs` receipt time selects (voteAsOf) and the newest
- * are never dropped.
- */
-export function keptVotes<T extends VoteOrderKey & { receivedAt?: number }>(votes: T[], cutoffs: readonly number[] = []): T[] {
-  return capKept(undominated(votes), cutoffs);
-}
-
-function undominated<T extends VoteOrderKey & { receivedAt?: number }>(votes: T[]): T[] {
-  const kept = votes.filter((e, i) =>
-    !votes.some((f, j) => {
-      if (j === i || receivedRank(f) > receivedRank(e)) return false;
-      if (isNewerVote(f, e)) return true;
-      if (isNewerVote(e, f)) return false;
-      return receivedRank(f) < receivedRank(e) || j < i;
-    }),
-  );
-  kept.sort((a, b) => receivedRank(a) - receivedRank(b));
-  return kept;
-}
-
-/** `sorted` is undominated(): ascending by receipt and by the order. */
-function capKept<T extends { receivedAt?: number }>(sorted: T[], cutoffs: readonly number[]): T[] {
-  const required = new Set<T>(sorted.slice(-1));
-  for (const cutoff of cutoffs) {
-    // The newest vote received no later than the cut-off = the last such one.
-    const asOf = sorted.filter((v) => receivedRank(v) <= cutoff).pop();
-    if (asOf) required.add(asOf);
-  }
-  const room = Math.max(MAX_VOTES_KEPT_PER_VOTER - required.size, 0);
-  const others = sorted.filter((v) => !required.has(v));
-  const extras = new Set(others.slice(Math.max(others.length - room, 0)));
-  return sorted.filter((v) => required.has(v) || extras.has(v));
-}
-
-/**
- * The vote of a stored row that counts for a close this member received at
- * `cutoff`: the newest of the row and its superseded votes that arrived no
- * later than the cut-off, or null when none did. Without a cut-off the row
- * itself counts.
- */
-export function voteAsOf(row: PollVote, cutoff: number): PollVote | null {
-  let best: VoteSnapshot | null = null;
-  for (const v of [row, ...(row.superseded ?? [])]) {
-    if (receivedRank(v) > cutoff) continue;
-    if (best === null || isNewerVote(v, best)) best = v;
-  }
-  if (best === null) return null;
-  return best === row ? row : { ...row, ...snapshotOf(best) };
-}
-
-function snapshotOf(v: VoteSnapshot): VoteSnapshot {
-  return {
-    responses: v.responses,
-    votedAt: v.votedAt,
-    ...(v.seq === undefined ? {} : { seq: v.seq }),
-    ...(v.rumorId === undefined ? {} : { rumorId: v.rumorId }),
-    ...(v.receivedAt === undefined ? {} : { receivedAt: v.receivedAt }),
-  };
-}
-
-const canonical = (vs: VoteSnapshot[]) => JSON.stringify(vs.map(snapshotOf));
 
 /**
  * A vote received before its poll-open (AC-9). Responses are kept RAW: they
@@ -350,9 +282,11 @@ function seedReceiptClock(): Promise<void> {
  * poll-residual-ordering-and-close-retry). A failed lease write is logged; the
  * clock stays monotonic in this page.
  */
-export async function receiptNow(): Promise<number> {
+export async function receiptNow(atLeast?: number): Promise<number> {
   await seedReceiptClock();
-  lastReceipt = Math.max(Date.now(), lastReceipt + 1);
+  // `atLeast` (a history row's `receivedAt`) replaces the wall clock as the floor: a dispatch of a row stamps by the
+  // row's own time, exactly as `recomputePoll` folds it, while the high-water mark keeps receipts strictly increasing.
+  lastReceipt = Math.max(atLeast !== undefined && Number.isFinite(atLeast) ? atLeast : Date.now(), lastReceipt + 1);
   const t = lastReceipt;
   if (t >= leasedUntil) {
     leasedUntil = t + RECEIPT_LEASE_MS;
@@ -510,11 +444,7 @@ export async function savePoll(poll: Poll): Promise<Poll | null> {
       wrote = await pollTxn<boolean>((txn, done) => {
         if (purgedGroups.has(poll.groupId)) return;
         txn.read(key, (value) => {
-          const list = Array.isArray(value) ? (value as Poll[]) : [];
-          const idx = list.findIndex((p) => p.id === poll.id);
-          if (idx >= 0) list[idx] = poll;
-          else list.push(poll);
-          txn.put(key, list);
+          txn.put(key, upsertOpenPoll(Array.isArray(value) ? (value as Poll[]) : [], poll));
           done(true);
         });
       }, false);
@@ -535,14 +465,12 @@ export async function savePoll(poll: Poll): Promise<Poll | null> {
   await enqueue(key, async () => {
     stored = await pollTxn<Poll | null>((txn, done) => {
       txn.read(key, (value) => {
-        const list = Array.isArray(value) ? (value as Poll[]) : [];
-        const idx = list.findIndex((p) => p.id === poll.id);
-        if (idx < 0) return done(null);
-        if (list[idx].closed) return done(list[idx]);
-        list[idx] = poll;
-        txn.put(key, list);
-        wrote = true;
-        done(poll);
+        const result = writeClosedPoll(Array.isArray(value) ? (value as Poll[]) : [], poll);
+        if (result.wrote) {
+          txn.put(key, result.list);
+          wrote = true;
+        }
+        done(result.stored);
       });
     }, null);
   });
@@ -565,7 +493,7 @@ function dropSupersededVotes(groupId: string, pollId: string): Promise<void> {
     await pollTxn<void>((txn) => {
       txn.read(key, (existing) => {
         if (!Array.isArray(existing) || !existing.some((v: PollVote) => v.superseded !== undefined)) return;
-        txn.put(key, (existing as PollVote[]).map(({ superseded: _dropped, ...row }) => row));
+        txn.put(key, dropSuperseded(existing as PollVote[]));
       });
     }, undefined);
   });
@@ -738,43 +666,23 @@ export async function saveVoteIfNewer(vote: PollVote, opts: { requirePoll?: bool
     wrote = await pollTxn<boolean>((txn, done) => {
       const merge = (stored: unknown) => {
         const existing = Array.isArray(stored) ? (stored as PollVote[]) : [];
-        const idx = existing.findIndex((v) => v.id === vote.id);
-        if (idx < 0) {
-          existing.push(stamped);
-          txn.put(key, existing);
-          return done(true);
-        }
-        const { superseded: _old, ...current } = existing[idx];
-        // The stored set as is (it may exceed the cap by held-close votes).
-        const before = undominated<VoteSnapshot>([current, ...(existing[idx].superseded ?? [])]);
-        const candidates = undominated<VoteSnapshot>([...before, stamped]);
-        const finish = (cutoffs: number[]) => {
-          const after = capKept(candidates, cutoffs);
-          if (canonical(after) === canonical(before)) return;
-          const newest = after[after.length - 1];
-          const { superseded: _s, ...base } = stamped;
-          const older = after.slice(0, -1).map(snapshotOf);
-          existing[idx] = {
-            ...base,
-            responses: newest.responses,
-            votedAt: newest.votedAt,
-            seq: newest.seq,
-            rumorId: newest.rumorId,
-            receivedAt: newest.receivedAt,
-            ...(older.length > 0 ? { superseded: older } : {}),
-          };
-          txn.put(key, existing);
+        const apply = (cutoffs: number[] | null) => {
+          const next = mergeVoteRows(existing, stamped, cutoffs);
+          if (next === 'unchanged') return;
+          if (next === 'need-cutoffs') {
+            return txn.read(
+              `${PENDING_CLOSES_PREFIX}${vote.groupId}`,
+              (closes) => apply(liveCloseCutoffs(closes, vote.pollId, Date.now())),
+              () => {
+                console.warn('[pollPersistence] reading held closes for vote pruning failed; earliest-received votes may be dropped');
+                apply([]);
+              },
+            );
+          }
+          txn.put(key, next);
           done(true);
         };
-        if (candidates.length <= MAX_VOTES_KEPT_PER_VOTER) return finish([]);
-        txn.read(
-          `${PENDING_CLOSES_PREFIX}${vote.groupId}`,
-          (closes) => finish(liveCloseCutoffs(closes, vote.pollId, Date.now())),
-          () => {
-            console.warn('[pollPersistence] reading held closes for vote pruning failed; earliest-received votes may be dropped');
-            finish([]);
-          },
-        );
+        apply(null);
       };
       if (purgedGroups.has(vote.groupId)) return; // group purged: write nothing
       if (!opts.requirePoll) return txn.read(key, merge);
@@ -863,39 +771,6 @@ export async function allocateVoteSeq(groupId: string, pollId: string, voterPubk
   return assigned;
 }
 
-// ---- Pending (early) votes — AC-9 ----
-
-/**
- * Persisted (IDB), not in-memory: an MLS application message is decrypted
- * once — after a reload it is not re-delivered to the dispatcher — so an
- * early vote held only in memory would be lost if the page reloads before
- * its poll-open arrives.
- */
-export const PENDING_VOTE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-/** Upper bound on queued early votes per group (oldest-received evicted). */
-export const MAX_PENDING_VOTES_PER_GROUP = 200;
-/**
- * Upper bound on distinct early polls one voter may hold in a group's queue.
- * New entries beyond it are dropped (not evicting others), so a single member
- * cannot flush other members' early votes out of the queue.
- */
-export const MAX_PENDING_VOTES_PER_VOTER = 10;
-
-function isPendingShaped(e: unknown): e is PendingPollVote {
-  if (!e || typeof e !== 'object') return false;
-  const o = e as Record<string, unknown>;
-  return (
-    typeof o.pollId === 'string' &&
-    typeof o.voterPubkey === 'string' &&
-    Array.isArray(o.responses) &&
-    typeof o.receivedAt === 'number'
-  );
-}
-
-/** The live (well-formed, unexpired) entries of a raw queue value. */
-function liveEntries<T extends { receivedAt: number }>(raw: unknown, isShaped: (e: unknown) => e is T, now: number): T[] {
-  return (Array.isArray(raw) ? raw : []).filter((e): e is T => isShaped(e) && now - e.receivedAt <= PENDING_VOTE_TTL_MS);
-}
 
 async function loadLivePending(key: string, now: number): Promise<PendingPollVote[]> {
   return liveEntries(await get<unknown>(key), isPendingShaped, now);
@@ -946,37 +821,25 @@ export async function queuePendingVote(
       if (purgedGroups.has(vote.groupId)) return;
       txn.read(key, (raw) => {
         const entries = liveEntries(raw, isPendingShaped, at);
-        const entry: PendingPollVote = { ...vote, receivedAt: at };
-        const mine = (e: PendingPollVote) => e.pollId === vote.pollId && e.voterPubkey === vote.voterPubkey;
-        const own = entries.filter(mine);
-        const otherPolls = new Set(entries.filter((e) => e.voterPubkey === vote.voterPubkey && !mine(e)).map((e) => e.pollId));
-        if (own.length === 0 && otherPolls.size >= MAX_PENDING_VOTES_PER_VOTER) {
-          writeQueue(txn, key, raw, entries);
-          return;
-        }
-        const sorted = undominated([...own, entry]);
-        const finish = (kept: PendingPollVote[]) => {
-          const next = [...entries.filter((e) => !mine(e)), ...kept];
-          next.sort((a, b) => a.receivedAt - b.receivedAt);
-          const stored = next.slice(-MAX_PENDING_VOTES_PER_GROUP);
-          writeQueue(txn, key, raw, stored);
-          // Dominated: an equal-or-newer vote of the voter received no later
-          // is kept, so this one could never change a tally.
-          const dominated = !sorted.includes(entry);
-          done(stored.includes(entry) || (dominated && stored.some(mine)));
+        const apply = (cutoffs: number[] | null) => {
+          const result = queueVoteEntries(entries, vote, at, cutoffs);
+          if (result === 'need-cutoffs') {
+            // The cap bites: keep the vote each held close of the poll would
+            // count (every sender's close; extra cut-offs only keep more). A
+            // failed read falls back to the plain cap — it must not fail the write.
+            return txn.read(
+              `${PENDING_CLOSES_PREFIX}${vote.groupId}`,
+              (closes) => apply(liveCloseCutoffs(closes, vote.pollId, Date.now())),
+              () => {
+                console.warn('[pollPersistence] reading held closes for vote pruning failed; earliest-received votes may be dropped');
+                apply([]);
+              },
+            );
+          }
+          writeQueue(txn, key, raw, result.stored);
+          done(result.held);
         };
-        if (sorted.length <= MAX_VOTES_KEPT_PER_VOTER) return finish(sorted);
-        // The cap bites: keep the vote each held close of the poll would
-        // count (every sender's close; extra cut-offs only keep more). A
-        // failed read falls back to the plain cap — it must not fail the write.
-        txn.read(
-          `${PENDING_CLOSES_PREFIX}${vote.groupId}`,
-          (closes) => finish(capKept(sorted, liveCloseCutoffs(closes, vote.pollId, Date.now()))),
-          () => {
-            console.warn('[pollPersistence] reading held closes for vote pruning failed; earliest-received votes may be dropped');
-            finish(capKept(sorted, []));
-          },
-        );
+        apply(null);
       });
     }, false);
   });
@@ -993,8 +856,6 @@ export async function loadPendingVotes(
   return entries.filter((e) => e.pollId === pollId);
 }
 
-const samePending = (a: PendingPollVote, b: PendingPollVote) =>
-  a.pollId === b.pollId && a.voterPubkey === b.voterPubkey && a.receivedAt === b.receivedAt;
 
 /**
  * Remove exactly the given queue entries (matched by poll, voter and receipt
@@ -1023,10 +884,6 @@ export function removePendingVotes(
 
 // ---- Pending (early) closes and close announcements — AC-9 ----
 
-/** Upper bound on distinct early polls one sender may hold in a group's close queue. */
-export const MAX_PENDING_CLOSES_PER_SENDER = 10;
-/** Upper bound on queued early closes per group (oldest-received evicted). */
-export const MAX_PENDING_CLOSES_PER_GROUP = 50;
 
 interface BoundedQueueSpec<T> {
   prefix: string;
@@ -1058,14 +915,7 @@ function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: Bo
   };
   return {
     queue(groupId: string, entry: T, now: number): Promise<void> {
-      return modify(groupId, now, (entries) => {
-        const who = spec.sender(entry);
-        const own = entries.filter((e) => spec.sender(e) === who);
-        if (own.some((e) => e.pollId === entry.pollId) || own.length >= MAX_PENDING_CLOSES_PER_SENDER) return entries;
-        const next = [...entries, entry];
-        next.sort((a, b) => a.receivedAt - b.receivedAt);
-        return next.slice(-MAX_PENDING_CLOSES_PER_GROUP);
-      });
+      return modify(groupId, now, (entries) => addBoundedEntry(entries, entry, spec.sender));
     },
     async load(groupId: string, pollId: string, now: number): Promise<T[]> {
       return (await loadLive(keyOf(groupId), now)).filter((e) => e.pollId === pollId);
@@ -1079,23 +929,6 @@ function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: Bo
   };
 }
 
-function isPendingCloseShaped(e: unknown): e is PendingPollClose {
-  if (!e || typeof e !== 'object') return false;
-  const o = e as Record<string, unknown>;
-  return (
-    typeof o.pollId === 'string' &&
-    typeof o.closerPubkey === 'string' &&
-    typeof o.closedAt === 'number' &&
-    typeof o.receivedAt === 'number'
-  );
-}
-
-/** Receipt times of the live held closes of one poll in a raw close-queue value. */
-function liveCloseCutoffs(raw: unknown, pollId: string, now: number): number[] {
-  return (Array.isArray(raw) ? raw : [])
-    .filter((e): e is PendingPollClose => isPendingCloseShaped(e) && e.pollId === pollId && now - e.receivedAt <= PENDING_VOTE_TTL_MS)
-    .map((e) => e.receivedAt);
-}
 
 const closeQueue = boundedQueue<PendingPollClose>({
   prefix: PENDING_CLOSES_PREFIX,
@@ -1256,4 +1089,142 @@ export async function clearAllPollData(): Promise<void> {
   migration = null;
   // Account-wide reset/restore: any group may be live again.
   purgedGroups.clear();
+}
+
+// ---- Withdrawal: recompute-on-retract ----
+//
+// The history sink withdraws a rumor when the library rewinds a fork. The poll
+// stores do NOT undo that rumor's effect incrementally: they REBUILD the one
+// aggregate it belongs to — a poll (its row, every voter's row with the
+// superseded snapshots, the tally, and the poll's held votes / held closes) —
+// from the kind-10/11/12 rows that remain in the history, by folding them in
+// `seq` order through the same apply core as dispatch (pollCore, effect-free:
+// pollFold.ts) over in-memory ports that use the same pure store rules
+// (pollStoreCore). So after any sequence of withdraws the stores equal what
+// dispatching only the remaining rows into empty stores would have produced
+// (AC-WDR-7), whatever the withdraw order and however many carriers/senders.
+//
+// Accepted residual: gates that depend on LIVE state rather than on the rows
+// (e.g. an admin-only delete of an announcement, AC-HIST-11) are re-evaluated
+// against the live roster at recompute and fail closed.
+
+/** What a user can observe of a poll aggregate, without receipt times (the "did it change" comparison). */
+function visibleState(poll: Poll | undefined, rows: readonly PollVote[]): string {
+  const bare = (v: VoteSnapshot) => ({ responses: v.responses, votedAt: v.votedAt, seq: v.seq ?? null, rumorId: v.rumorId ?? null });
+  return JSON.stringify({
+    poll: poll ?? null,
+    votes: rows.map((v) => ({ id: v.id, voter: v.voterPubkey, ...bare(v), superseded: (v.superseded ?? []).map(bare) })),
+  });
+}
+
+/**
+ * Rebuild one poll from the remaining history signals. `signals` are the
+ * group's remaining rows (any kinds); those of kinds 10 / 11 / 12 naming
+ * `pollId` are folded in `seq` order, each judged under its own
+ * (rumor id, authenticated sender). Everything the aggregate owns is reset
+ * first — the poll row, its vote rows and its held votes / closes — and the new
+ * state is written in ONE readwrite transaction, inside the store's per-key
+ * queues (polls, the poll's votes, held votes, held closes — always taken in
+ * that order), reading each of them once. A crash before the commit leaves the
+ * old state; the retried retract recomputes the same result. Resolves true iff
+ * the visible state (poll row or votes) changed.
+ */
+export async function recomputePoll(
+  groupId: string,
+  pollId: string,
+  signals: readonly RecomputeSignal[],
+  selfPubkeyHex = '',
+): Promise<boolean> {
+  await settleVotesMigration();
+  const pollsK = pollsKey(groupId);
+  const votesK = votesKey(groupId, pollId);
+  const pendingK = pendingKey(groupId);
+  const closesK = `${PENDING_CLOSES_PREFIX}${groupId}`;
+  let changed = false;
+  await enqueue(pollsK, () =>
+    enqueue(votesK, () =>
+      enqueue(pendingK, () =>
+        enqueue(closesK, async () => {
+          if (purgedGroups.has(groupId)) return;
+          const [rawPolls, rawVotes, rawPending, rawCloses] = await Promise.all([
+            get<unknown>(pollsK),
+            get<unknown>(votesK),
+            get<unknown>(pendingK),
+            get<unknown>(closesK),
+          ]);
+          const storedPolls = Array.isArray(rawPolls) ? (rawPolls as Poll[]) : [];
+          const storedVotes = (Array.isArray(rawVotes) ? (rawVotes as PollVote[]) : []).filter(
+            (v) => v.groupId === groupId && v.pollId === pollId,
+          );
+          const before = visibleState(storedPolls.find((p) => p.id === pollId), storedVotes);
+
+          const folded = await foldPollSignals(
+            groupId,
+            pollId,
+            {
+              polls: storedPolls,
+              pendingVotes: Array.isArray(rawPending) ? (rawPending as PendingPollVote[]) : [],
+              pendingCloses: Array.isArray(rawCloses) ? (rawCloses as PendingPollClose[]) : [],
+            },
+            signals,
+            selfPubkeyHex,
+          );
+          const after = visibleState(folded.polls.find((p) => p.id === pollId), folded.votes);
+          changed = before !== after;
+
+          await pollTxn<void>((txn) => {
+            if (purgedGroups.has(groupId)) return; // purged meanwhile: write nothing
+            if (folded.polls.length === 0) {
+              if (rawPolls !== undefined) txn.delete(pollsK);
+            } else if (JSON.stringify(folded.polls) !== JSON.stringify(storedPolls) || !Array.isArray(rawPolls)) {
+              txn.put(pollsK, folded.polls);
+            }
+            if (folded.votes.length === 0) {
+              if (rawVotes !== undefined) txn.delete(votesK);
+            } else {
+              txn.put(votesK, folded.votes);
+            }
+            writeQueue(txn, pendingK, rawPending, folded.pendingVotes);
+            writeQueue(txn, closesK, rawCloses, folded.pendingCloses);
+          }, undefined);
+          if (changed) postStoreChanged('polls', groupId);
+        }),
+      ),
+    ),
+  );
+  return changed;
+}
+
+const withoutTimes = <T extends object>(e: T): Omit<T, 'receivedAt'> => {
+  const { receivedAt: _t, ...rest } = e as T & { receivedAt?: unknown };
+  return rest as Omit<T, 'receivedAt'>;
+};
+const byJson = (a: unknown, b: unknown) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+
+/**
+ * Everything the poll stores hold for a group — polls, EVERY vote row of every
+ * poll id of the group (with superseded snapshots), held votes, held closes and
+ * held close announcements — without receipt times, in a canonical order. For
+ * the recompute oracle (tests): two groups with the same history compare equal.
+ */
+export async function snapshotPollState(groupId: string): Promise<unknown> {
+  await settleVotesMigration();
+  const groupVotesPrefix = `${VOTES_PREFIX}${groupId}:`;
+  const voteKeys = (await keys()).filter((k): k is string => typeof k === 'string' && k.startsWith(groupVotesPrefix)).sort();
+  const votes: Record<string, unknown[]> = {};
+  for (const k of voteKeys) {
+    const rows = ((await get<PollVote[]>(k)) ?? []).map((v) => ({
+      ...withoutTimes(v),
+      ...(v.superseded ? { superseded: v.superseded.map(withoutTimes) } : {}),
+    }));
+    votes[k.slice(groupVotesPrefix.length)] = rows.sort(byJson);
+  }
+  const list = async (key: string) => (((await get<unknown[]>(key)) ?? []) as object[]).map(withoutTimes).sort(byJson);
+  return {
+    polls: ((await get<Poll[]>(pollsKey(groupId))) ?? []).slice().sort(byJson),
+    votes,
+    pendingVotes: await list(pendingKey(groupId)),
+    pendingCloses: await list(`${PENDING_CLOSES_PREFIX}${groupId}`),
+    pendingCloseAnnouncements: await list(`${PENDING_ANNOUNCEMENTS_PREFIX}${groupId}`),
+  };
 }

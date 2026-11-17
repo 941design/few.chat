@@ -51,7 +51,7 @@ const { appendMessage, loadMessages, filterVisibleMessages, clearMessages, purge
   '@/src/lib/marmot/chatPersistence'
 );
 const {
-  applyDeleteEditSignal,
+  applyDeleteEditSignal: applyDeleteEditSignalReal,
   resolvePendingSignalsForSlot,
   clearAllMessageEditsState,
   registerGroupAdminsProvider,
@@ -59,6 +59,11 @@ const {
   PENDING_SIGNAL_TTL_MS,
   MAX_REV_SKEW_SECONDS,
 } = await import('@/src/lib/messageEdits/api');
+
+// A group-thread signal needs an explicit authenticated sender (the store never falls back to the forgeable
+// `rumor.pubkey`): these fixtures deliver each rumor as sent by its own pubkey. A DM thread keeps the default.
+const applyDeleteEditSignal = ((thread: Parameters<typeof applyDeleteEditSignalReal>[0], rumor: Parameters<typeof applyDeleteEditSignalReal>[1], sender?: Parameters<typeof applyDeleteEditSignalReal>[2], options?: Parameters<typeof applyDeleteEditSignalReal>[3]) =>
+  applyDeleteEditSignalReal(thread, rumor, sender ?? (thread.kind === 'group' ? { pubkey: rumor.pubkey, authenticity: 'mls' as const } : undefined), options)) as typeof applyDeleteEditSignalReal;
 const { getPublicKey, generateSecretKey } = await import('nostr-tools/pure');
 const { buildDeleteRumor, buildEditReplacementRumor, buildEditMarkedCompanionKind5, hasEditMarkerTag } = await import(
   '@/src/lib/messageEdits/rumor'

@@ -196,7 +196,10 @@
         "AC-HIST-11",
         "AC-HIST-12",
         "AC-WDR-1",
-        "AC-WDR-2"
+        "AC-WDR-2",
+        "AC-WDR-7",
+        "AC-WDR-8",
+        "AC-WDR-9"
       ],
       "scope": {
         "includes": [
@@ -209,7 +212,15 @@
           "app/src/lib/marmot/pollReplay.ts",
           "app/src/lib/marmot/profileRequestStorage.ts",
           "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
-          "app/tests/unit/** handler/poll/profile/roster-gate suites (re-pointed)"
+          "app/tests/unit/** handler/poll/profile/roster-gate suites (re-pointed)",
+          "app/src/lib/marmot/handlers/{groupGates,types}.ts",
+          "app/src/lib/marmot/{pollCore,pollFold,pollStoreCore}.ts",
+          "app/src/lib/messageEdits/api.ts",
+          "app/src/lib/reactions/api.ts",
+          "app/src/lib/unreadStore.ts",
+          "app/src/lib/marmot/history/* (receivedAt, withdrawing, remaining(), batch dedupe — decider ruling)",
+          "app/src/lib/marmot/handlers/{chatHandler,reactionHandler,deleteEditHandler}.ts (retract for every kind)",
+          "app/tsconfig.tests-marmot.json"
         ],
         "excludes": [
           "Chat/reaction/delete-edit (S4)"
@@ -218,7 +229,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "completed",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
@@ -226,7 +237,7 @@
         "ClientJobQueue",
         "AppKinds"
       ],
-      "notes": "Follow-up sends (profile-request responses, announcements) are queued on the owned FIFO (seam ClientJobQueue), never awaited inside the handler.",
+      "notes": "Follow-up sends (profile-request responses, announcements) are queued on the owned FIFO (seam ClientJobQueue), never awaited inside the handler. Scope extended by the recompute-on-retract decider ruling (2026-11-17).",
       "owning_module": "handlers",
       "story_dir": "S5-handlers-domain-completion"
     },
@@ -506,7 +517,7 @@
         "ClientJobQueue",
         "KeyPackageInvite"
       ],
-      "notes": "Existing AC-AUTO rules apply unchanged. Auto-accept lives here (not in invitations) because it correlates outbound join requests. Remove the React import from outboundJoinRequests.ts and delete its LEGACY_REACT_IMPORTERS exemption in app/tests/unit/marmot/client/importBoundary.test.ts (AC-BOUND-1).",
+      "notes": "Existing AC-AUTO rules apply unchanged. Auto-accept lives here (not in invitations) because it correlates outbound join requests. Remove the React import from outboundJoinRequests.ts and delete its LEGACY_REACT_IMPORTERS exemption in app/tests/unit/marmot/client/importBoundary.test.ts (AC-BOUND-1). Flaky: tests/unit/marmot/joinRequestSender.test.ts:305 failed twice in full-suite runs (2026-11-17) and passes alone — investigate (likely shared module state / concurrent dynamic-import mock race, see memory) while touching joinRequestSender.",
       "owning_module": "joinRequests",
       "story_dir": "S12-join-requests-inbox-split"
     },
@@ -892,7 +903,7 @@
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
-      "notes": "Run make build and typecheck after deletion. app/src/lib/testHooks/groupLibrary.ts imports the OLD @/src/lib/marmot/signerAdapter (createPrivateKeySigner); repoint or note S27 deletes the hook first.",
+      "notes": "Run make build and typecheck after deletion. app/src/lib/testHooks/groupLibrary.ts imports the OLD @/src/lib/marmot/signerAdapter (createPrivateKeySigner); repoint or note S27 deletes the hook first. Delete the legacy handler factories AND their legacy behavioural suites (chatHandler/reactionHandler/profileHandler/pollHandler/profileRequestHandler/groupMessageEdits tests); port any behaviour covered only by a legacy suite to the sink-path suites first (AC-HIST-12). Remove registerHandlers.ts (its enqueueLeave no-op fallback dies with it).",
       "owning_module": "MarmotContext",
       "story_dir": "S22-sweep-old-modules"
     },

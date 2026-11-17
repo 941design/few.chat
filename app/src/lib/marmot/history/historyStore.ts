@@ -56,6 +56,18 @@ export interface HistoryRow {
   recoveryFailures?: number;
   /** Set after `MAX_RECOVERY_FAILURES` failed recoveries: never recovered again (still listed, still withdrawable). */
   abandoned?: boolean;
+  /**
+   * Wall-clock ms of the FIRST append (set once, unchanged by a re-append or by the dispatched rewrite). It is the
+   * deterministic clock of a recompute (skew gate, poll receipt order), never the wall clock at recompute time.
+   * Absent on rows written before it existed (the sink then falls back to `rumor.created_at * 1000`).
+   */
+  receivedAt?: number;
+  /**
+   * Durable mark written for EVERY row of a withdraw batch before any retract runs: such a row is already gone as
+   * far as `remaining()` / `list()` are concerned, and recovery / sweep finish it (retract, then delete) before they
+   * re-dispatch anything. Cleared only by deleting the row.
+   */
+  withdrawing?: boolean;
 }
 
 export interface HistoryStore {
@@ -93,6 +105,8 @@ function isRow(value: unknown): value is HistoryRow {
     typeof v.dispatched === 'boolean' &&
     (v.recoveryFailures === undefined || (typeof v.recoveryFailures === 'number' && Number.isFinite(v.recoveryFailures))) &&
     (v.abandoned === undefined || typeof v.abandoned === 'boolean') &&
+    (v.receivedAt === undefined || (typeof v.receivedAt === 'number' && Number.isFinite(v.receivedAt))) &&
+    (v.withdrawing === undefined || typeof v.withdrawing === 'boolean') &&
     !!entry &&
     typeof entry.groupId === 'string' &&
     typeof entry.eventId === 'string' &&

@@ -1,0 +1,156 @@
+{
+  "module_name": "handlers",
+  "purpose": "Completes the sink-path handler set: poll (10/11/12), profile (0) and profile-request (30) join chat/reaction/delete-edit on {groupId,eventId,rumor,sender}; every kind gets a retract path (other members' content removed and unread recomputed; own chat to failed/retry via onOwnWithdrawn; own reactions/votes/edit/delete dropped); announcement, profile-request and admin gates read live group.members()/group.admins through an injected groupOf (undefined fails closed with the row marked dispatched, a rejection rejects the handler); follow-up client writes (profile-request replies, 'accepted' announcement) are enqueued on the owned FIFO as the handler's last action; a late retract caused by purge removes an own row instead of marking it failed/retry.",
+  "public_api": [
+    {
+      "name": "createGroupGates",
+      "signature": "(groupOf: GroupOf) => { isGroupAdmin(groupId, pubkeyHex): Promise<boolean>; isGroupMember(groupId, pubkeyHex): Promise<boolean>; adminsOf(groupId): Promise<string[]> }",
+      "description": "Live-accessor gates (group.members()/group.admins). groupOf resolving undefined => false/[] (fail closed); a rejection propagates."
+    },
+    {
+      "name": "createGroupAdminsProvider",
+      "signature": "(groupOf: GroupOf) => GroupAdminsProvider",
+      "description": "Provider for messageEdits.registerGroupAdminsProvider backed by live group.admins (admin-only delete of announcements)."
+    },
+    {
+      "name": "GroupOf",
+      "signature": "(groupId: string) => Promise<{ members(): readonly string[]; readonly admins: readonly string[] } | undefined>",
+      "description": "Injected, backed by client.groups.get."
+    },
+    {
+      "name": "createPollOpenGroupHandler / createPollVoteGroupHandler / createPollCloseGroupHandler",
+      "signature": "(deps: PollGroupHandlerDeps) => GroupKindHandler & RumorHandler",
+      "description": "Kinds 10/11/12 on the sink path with retract ports (retractPoll, retractVote, retractClose)."
+    },
+    {
+      "name": "createProfileGroupHandler",
+      "signature": "(deps: ProfileGroupHandlerDeps) => GroupKindHandler & RumorHandler",
+      "description": "Kind 0; the 'accepted' announcement send is enqueued on the FIFO as the last action; retract is a documented no-op (LWW identity metadata)."
+    },
+    {
+      "name": "createProfileRequestGroupHandler",
+      "signature": "(deps: ProfileRequestGroupHandlerDeps) => GroupKindHandler & RumorHandler",
+      "description": "Kind 30; sender must be a live current member (groupOf), replies enqueued on the FIFO as the last action; retract is a no-op (replies are emitted effects)."
+    },
+    {
+      "name": "createChatGroupHandler",
+      "signature": "(deps: ChatGroupHandlerDeps) => GroupKindHandler & RumorHandler",
+      "description": "Now takes groupOf (announcement gates from live accessors; lookup rejection rejects the row), releaseHeldReactions + setReactionsVersion (target landed), removeMessage (purged retract)."
+    },
+    {
+      "name": "GroupRumorInput.reason",
+      "signature": "reason?: 'withdrawn' | 'purged'",
+      "description": "Absent = withdrawn. A late retract caused by purge carries 'purged': an own row is removed instead of failed/retry."
+    },
+    {
+      "name": "unreadStore.recomputeUnread",
+      "signature": "(groupId: string, ownPubkey: string) => Promise<void>",
+      "description": "Count of non-own rows after lastRead over stored rows (shared predicate with initUnreadCounts); authoritative (0 clears)."
+    },
+    {
+      "name": "recomputeSlot",
+      "signature": "recomputeSlot(thread: MessageEditsThreadKey, slotIds: readonly string[], signals: readonly RecomputeSignal[], options?: {withdrawnRumorIds?: readonly string[]}): Promise<void>",
+      "description": "messageEdits/api.ts: reset slots to the ChatMessage.original base and fold the remaining kind-5/edit-9 signals through the dispatch core (effect-free)."
+    },
+    {
+      "name": "recomputeMessageReactions",
+      "signature": "recomputeMessageReactions(thread: ReactionThreadKey, targetMessageId: string, signals: readonly RecomputeSignal[]): Promise<boolean>",
+      "description": "reactions/api.ts: reset a message's reactions (keeping own unconfirmed optimistic rows) and fold remaining kind-7 signals; holds when the target is absent."
+    },
+    {
+      "name": "recomputePoll",
+      "signature": "recomputePoll(groupId: string, pollId: string, signals: readonly RecomputeSignal[]): Promise<boolean>",
+      "description": "pollPersistence.ts (fold in pollFold.ts over pollCore): rebuild one poll from empty using kinds 10/11/12 with the receivedAt receipt clock."
+    },
+    {
+      "name": "remainingSignals",
+      "signature": "remainingSignals(input: RetractInput, accept: (rumor) => boolean): Promise<RecomputeSignal[]>",
+      "description": "groupRumorDispatch.ts: remaining() rows as seq-ordered signals, sender = orderingKey.account."
+    },
+    {
+      "name": "RetractInput / RemainingRow",
+      "signature": "RetractInput = GroupRumorInput & {remaining(): Promise<readonly RemainingRow[]>}; RemainingRow = {entry, seq, receivedAt}",
+      "description": "history sink retract contract (dispatched && !withdrawing rows, memoised per batch)."
+    },
+    {
+      "name": "purgeHeldReactionsForGroup",
+      "signature": "purgeHeldReactionsForGroup(groupId: string): Promise<void>",
+      "description": "reactions/api.ts: drops the group's held reactions; for S13 leave."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/handlers/groupGates.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/pollCore.ts",
+    "app/src/lib/marmot/pollFold.ts",
+    "app/src/lib/marmot/pollStoreCore.ts"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "app/src/lib/marmot/history (GroupHistoryHandlers/GroupRumorInput types)",
+    "app/src/lib/marmot/kinds.ts",
+    "app/src/lib/marmot/{chatPersistence,pollPersistence,pollReplay,pollTally,pollSync,profileSync,profileRequestSync,envelopeVerifier,parseStructured}.ts",
+    "app/src/lib/{messageEdits,reactions,unreadStore}",
+    "app/src/lib/marmot/client (ClientJobQueue type only)"
+  ],
+  "dependencies_forbidden": [
+    "app/src/context/**",
+    "react (unreadStore excepted: pre-existing)",
+    "ts-mls",
+    "@internet-privacy/marmot-ts",
+    "idb-keyval update()",
+    "rumor.pubkey reads in handlers/",
+    "awaiting an account-scope client call inside a handler (follow-up writes enqueue on the FIFO as the last action)"
+  ],
+  "external_ports": [
+    "groupOf (client.groups.get)",
+    "enqueue (ClientJobQueue['enqueue'])",
+    "poll retract ports (retractPoll/retractVote/retractClose)",
+    "releaseHeldReactions / holdReaction / retractReaction",
+    "retractDeleteEditSignal",
+    "recomputeUnread"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "GroupHistoryHandlers.dispatch/retract"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts",
+    "app/tests/unit/marmot/handlers/domainHandlers.test.ts",
+    "app/tests/unit/marmot/handlers/pollGroupHandler*.test.ts",
+    "app/tests/unit/marmot/handlers/reactionHold*.test.ts",
+    "app/tests/unit/marmot/handlers/deleteEditRetract*.test.ts",
+    "app/tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts",
+    "app/tests/unit/unreadRecompute.test.ts"
+  ],
+  "seam": {
+    "name": "GroupHistoryHandlers",
+    "cross_story": true,
+    "consumed_by": [
+      "S6",
+      "S13",
+      "S18"
+    ],
+    "role": "consumer"
+  },
+  "consumed_seams": [
+    {
+      "name": "GroupHistoryHandlers",
+      "producer": "S3",
+      "cross_story": true
+    },
+    {
+      "name": "ClientJobQueue",
+      "producer": "S1",
+      "cross_story": true
+    },
+    {
+      "name": "AppKinds",
+      "producer": "S2",
+      "cross_story": true
+    }
+  ]
+}

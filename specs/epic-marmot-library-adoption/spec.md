@@ -381,6 +381,8 @@ No manual-validation rows are claimed; all ACs are automated (unit, library-back
 
 ## Amendments
 
+- 2026-11-17 (S5 reviews + Fable decider): retract of dependent kinds (5, edit-marked 9, 7, 10, 11, 12) recomputes the affected aggregate (message slot / a message's reactions / a poll) from base state plus the history sink's remaining dispatched rows, through the same apply/authorisation core as dispatch (effect-free). Sink adds durable `withdrawing` marks, `receivedAt`, and a `remaining()` port. Plain kind-9 rows keep carrier accounting. New AC-WDR-7/8/9; AC-HIST-5 extended.
+
 - 2026-11-17 (S3 examiners): the history store is per account (`few-group-history:<pubkey>`), matching the per-account library store and lease; a device-wide store would let one account's dispatched rows suppress another's. AC-HIST-4 bounds the entry's own dispatch (first-touch recovery may precede it once per group); AC-HIST-5 retracts registered kinds only.
 
 - 2026-11-17 (S3 review + Fable decider): history sweep moved after `groups.list()` (before `inbox.start()`); ordering of recovered rows enforced in the sink by per-group first-touch recovery, because the library starts history drain and sync for each group during `groups.list()` (group-runtime.js:1221,1302,1308). Poisoned rows abandoned after 5 failed recoveries. Handlers reach group handles via injected `groupOf` (fail closed when the group is no longer held). AC-HIST-7, AC-BOOT-1, AC-HIST-11, AC-WDR-4 amended.

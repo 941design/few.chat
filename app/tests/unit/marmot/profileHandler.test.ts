@@ -722,7 +722,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     expect(deps.writeContactEntry).toHaveBeenCalledOnce();
   });
 
-  it('a consumePendingDirectInviteMarker failure is best-effort, fails closed (no accepted post), and does not abort the rest of handle()', async () => {
+  it('a consumePendingDirectInviteMarker failure fails closed (no accepted post) and propagates, after the rest of handle() ran, so the rumor is retried', async () => {
     const deps = makeMarkerAwareDeps(true);
     deps.pendingMarkers.set(`${GROUP_ID}:${AUTHOR_PUBKEY}`, true);
     deps.consumePendingDirectInviteMarker = vi.fn(async () => {
@@ -732,7 +732,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     const rumor = makeSignedProfileRumor({ rumorSenderPubkey: AUTHOR_PUBKEY, authorPubkey: AUTHOR_PUBKEY });
     const ctx = makeCtx();
 
-    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).resolves.not.toThrow();
+    await expect(handler.handle(rumor, ctx, makeSender(rumor.pubkey))).rejects.toThrow('idb read failed');
     expect(deps.sendAnnouncement).not.toHaveBeenCalled();
     expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
   });

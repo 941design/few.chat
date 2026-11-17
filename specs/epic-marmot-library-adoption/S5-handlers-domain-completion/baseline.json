@@ -1,0 +1,9 @@
+{
+  "story_id": "S5",
+  "baseline_commit": "e1e9949",
+  "captured_at": "2026-11-17",
+  "tests": { "status": "PASS", "command": "cd app && npx vitest run", "files": 308, "passed": 6905, "skipped": 1, "failed": 0 },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": ["cd app && npx tsc --noEmit", "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"]
+}

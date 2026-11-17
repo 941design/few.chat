@@ -20,6 +20,7 @@ import React, {
   useState,
 } from 'react';
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
+import type { AuthenticatedSender } from '@/src/lib/marmot/handlers/types';
 import {
   CHAT_MESSAGE_KIND,
   appendMessage,
@@ -104,6 +105,13 @@ async function buildChatRumor(
   rumor.id = getEventHash(rumor);
   return rumor;
 }
+
+/**
+ * The author of an own optimistic group delete/edit: the local account itself. A group-thread signal needs an explicit
+ * sender (the store never falls back to the forgeable `rumor.pubkey`); there is no MLS authentication step for our own
+ * send, hence 'claimed'.
+ */
+const ownSender = (pubkey: string): AuthenticatedSender => ({ pubkey, authenticity: 'claimed' });
 
 /**
  * S5 (epic-feature-request-message-edit-and-delete): group render-substitution
@@ -260,7 +268,7 @@ export async function performGroupDeleteMessage(messageId: string, deps: GroupSe
 
     const thread: MessageEditsThreadKey = { kind: 'group', groupId };
     try {
-      await applyDeleteEditSignal(thread, rumor);
+      await applyDeleteEditSignal(thread, rumor, ownSender(pubkey));
     } catch (err) {
       console.warn('[chat-store] delete durable apply failed (published ok):', err);
     }
@@ -340,7 +348,7 @@ export async function performGroupEditMessage(
 
     const thread: MessageEditsThreadKey = { kind: 'group', groupId };
     try {
-      await applyDeleteEditSignal(thread, replacement);
+      await applyDeleteEditSignal(thread, replacement, ownSender(pubkey));
     } catch (err) {
       console.warn('[chat-store] edit durable apply failed (published ok):', err);
     }

@@ -97,9 +97,13 @@ const malloryPubHex = getPublicKey(malloryPrivBytes);
 
 // ── Module imports (after mocks) ────────────────────────────────────────────
 
-const { applyDeleteEditSignal, resolvePendingSignalsForSlot, clearAllMessageEditsState, registerGroupAdminsProvider } = await import(
+const { applyDeleteEditSignal: applyDeleteEditSignalReal, resolvePendingSignalsForSlot, clearAllMessageEditsState, registerGroupAdminsProvider } = await import(
   '@/src/lib/messageEdits/api'
 );
+// A group-thread signal needs an explicit authenticated sender (the store never falls back to the forgeable
+// `rumor.pubkey`): these fixtures deliver each rumor as sent by its own pubkey. A DM thread keeps the default.
+const applyDeleteEditSignal = ((thread: Parameters<typeof applyDeleteEditSignalReal>[0], rumor: Parameters<typeof applyDeleteEditSignalReal>[1], sender?: Parameters<typeof applyDeleteEditSignalReal>[2], options?: Parameters<typeof applyDeleteEditSignalReal>[3]) =>
+  applyDeleteEditSignalReal(thread, rumor, sender ?? (thread.kind === 'group' ? { pubkey: rumor.pubkey, authenticity: 'mls' as const } : undefined), options)) as typeof applyDeleteEditSignalReal;
 const { buildDeleteRumor, buildEditReplacementRumor, buildEditMarkedCompanionKind5, DELETE_EDIT_RUMOR_KIND } =
   await import('@/src/lib/messageEdits/rumor');
 const { appendMessage, loadMessages, clearAllMessages, CHAT_MESSAGE_KIND } = await import(

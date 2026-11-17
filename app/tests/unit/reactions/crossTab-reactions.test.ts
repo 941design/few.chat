@@ -127,7 +127,11 @@ async function bootTab(): Promise<Tab> {
       },
     }),
   );
-  return { api, posts, stop };
+  // A group-thread signal needs an explicit authenticated sender (no fallback to the forgeable `rumor.pubkey`): these
+  // fixtures deliver each rumor as sent by its own pubkey.
+  const applyInboundRumor: Api['applyInboundRumor'] = (thread, rumor, sender) =>
+    api.applyInboundRumor(thread, rumor, sender ?? (thread.kind === 'group' ? { pubkey: rumor.pubkey, authenticity: 'mls' } : undefined));
+  return { api: { ...api, applyInboundRumor }, posts, stop };
 }
 
 /** Lets queued bus deliveries and queued refreshes run to completion. */

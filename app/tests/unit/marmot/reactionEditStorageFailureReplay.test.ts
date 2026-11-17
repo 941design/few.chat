@@ -258,7 +258,8 @@ const SCENARIOS: Scenario[] = [
     name: 'reaction removal',
     seed: async (m) => {
       await m.chat.appendMessage(GROUP, original());
-      await m.reactions.applyInboundRumor({ kind: 'group', groupId: GROUP }, reaction({ id: 'earlier-' + 'dd'.repeat(28) }));
+      const earlier = reaction({ id: 'earlier-' + 'dd'.repeat(28) });
+      await m.reactions.applyInboundRumor({ kind: 'group', groupId: GROUP }, earlier, { pubkey: earlier.pubkey, authenticity: 'mls' });
     },
     rumor: () => reaction({ content: '-', tags: [['e', ORIG], ['emoji', '👍']] }),
   },

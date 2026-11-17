@@ -3,7 +3,7 @@
   "status": "in_progress",
   "phase": "IMPLEMENTING",
   "created_at": "2026-11-17T08:07:10Z",
-  "updated_at": "2026-11-17T13:35:17Z",
+  "updated_at": "2026-11-17T16:02:17Z",
   "pre_existing_dirty_files": [
     ".clauded.yaml",
     "package.json.copy",
@@ -13,7 +13,8 @@
     "S1",
     "S2",
     "S3",
-    "S4"
+    "S4",
+    "S5"
   ],
   "escalated_stories": [],
   "phase_history": [
@@ -44,6 +45,14 @@
       "gate_id": "s1_relay_bucket_baseline",
       "outcome": "passed",
       "detail": "make test-e2e on wiped relay: 356 passed, 19 skipped, 0 failed, smoke A1-A3 green mid-bucket"
+    },
+    {
+      "gate_id": "s5_decider_recompute_on_retract",
+      "outcome": "fired_remediated"
+    },
+    {
+      "gate_id": "s3_decider_sweep_placement",
+      "outcome": "fired_remediated"
     }
   ],
   "ownership_ledger_path": "ownership-ledger.json",
@@ -61,6 +70,8 @@
   "deferred_human_review_runtime": [
     "Library issue for @941design/nostr-events maintainers: the simple-pool transport de-duplicates by event id BEFORE signature verification, so a relay sending a forged event that reuses a genuine event id first gets the forgery rejected AND the genuine event dropped as a duplicate (message-suppression by a hostile relay). Found by app/tests/unit/marmot/client/transport.forgery.harness.test.ts. Not fixable in-app without a custom verifier (AC-TRANS-1 forbids one).",
     "Pre-existing gap (not caused by this epic): call signaling signs inner kinds 25050-25055 with the account signer, but neither the old nor the new NIP-46 permission set requests them — calls may fail under permission-enforcing bunkers. AC-SIGN-3 fixes the app-added set to exactly {0,20602,30078,10050}; adding call kinds needs a spec change.",
-    "S3 accepted residual: if the account is torn down (sign-out/signer change) while a withdrawn message dispatch is still running past its 10 s bound, its late retract is dropped and the withdrawn message stays in the chat store. Requires a fork-withdraw + >10 s handler + teardown in the same window."
+    "S3 accepted residual: if the account is torn down (sign-out/signer change) while a withdrawn message dispatch is still running past its 10 s bound, its late retract is dropped and the withdrawn message stays in the chat store. Requires a fork-withdraw + >10 s handler + teardown in the same window.",
+    "S5 decider (recompute-on-retract): after a fork rewind, edits/deletes/reactions/poll results are rebuilt from retained group history — a withdrawn delete or edit makes earlier content visible again, admin-gated deletes are re-judged against the CURRENT admin list, and the original text of an edited/deleted message stays on the device (in the history store and the slot base snapshot) until the group is left.",
+    "S5 accepted residual: votes are keyed by poll id, so if a poll open is withdrawn while ANOTHER member open for the same poll id remains (requires deliberate id reuse), earlier votes count toward the surviving poll. Live dispatch behaves the same."
   ]
 }

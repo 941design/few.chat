@@ -1,0 +1,188 @@
+{
+  "story_id": "S5",
+  "status": "done",
+  "remediation_rounds": 1,
+  "files_created": [
+    "app/src/lib/marmot/handlers/groupGates.ts",
+    "app/tests/unit/marmot/handlers/realApp.ts",
+    "app/tests/unit/marmot/handlers/domainHandlers.test.ts",
+    "app/tests/unit/marmot/handlers/groupGates.test.ts",
+    "app/tests/unit/marmot/handlers/pollGroupHandler.test.ts",
+    "app/tests/unit/marmot/handlers/reactionHold.test.ts",
+    "app/tests/unit/marmot/handlers/deleteEditRetract.test.ts",
+    "app/tests/unit/marmot/handlers/deleteEditRetractReplay.test.ts",
+    "app/tests/unit/marmot/pollRetract.test.ts",
+    "app/tests/unit/unreadRecompute.test.ts",
+    "app/src/lib/marmot/pollCore.ts",
+    "app/src/lib/marmot/pollFold.ts",
+    "app/src/lib/marmot/pollStoreCore.ts",
+    "app/tests/unit/marmot/handlers/oracle.ts",
+    "app/tests/unit/marmot/handlers/slotRecompute.test.ts",
+    "app/tests/unit/marmot/handlers/slotRecomputeReads.test.ts",
+    "app/tests/unit/marmot/handlers/reactionRecompute.test.ts",
+    "app/tests/unit/marmot/handlers/pollRecompute.test.ts",
+    "app/tests/unit/marmot/history/historyWithdrawRecompute.test.ts",
+    "app/tests/unit/marmot/handlers/carrierSenderBinding.test.ts",
+    "app/tests/unit/marmot/handlers/withdrawBatchDedupe.test.ts",
+    "app/tests/unit/marmot/history/withdrawIncremental.test.ts",
+    "app/tests/unit/marmot/history/dispatchReceivedAt.test.ts",
+    "app/tests/unit/marmot/handlers/receivedAtClock.test.ts",
+    "app/tests/unit/marmot/handlers/slotOriginalRetention.test.ts",
+    "app/tests/unit/marmot/handlers/reactionRowIdentity.test.ts",
+    "app/tests/unit/marmot/handlers/profileGateConstruction.test.ts",
+    "app/tests/unit/marmot/handlers/pollSelfKey.test.ts",
+    "app/tests/unit/marmot/handlers/examinerFindings.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/handlers/chatHandler.ts",
+    "app/src/lib/marmot/handlers/pollHandler.ts",
+    "app/src/lib/marmot/handlers/profileHandler.ts",
+    "app/src/lib/marmot/handlers/profileRequestHandler.ts",
+    "app/src/lib/marmot/handlers/reactionHandler.ts",
+    "app/src/lib/marmot/history/historyBackend.ts",
+    "app/src/lib/marmot/pollPersistence.ts",
+    "app/src/lib/marmot/chatPersistence.ts",
+    "app/src/lib/messageEdits/api.ts",
+    "app/src/lib/reactions/api.ts",
+    "app/src/lib/unreadStore.ts",
+    "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts",
+    "app/tests/unit/marmot/forgery.harness.test.ts",
+    "app/tests/unit/marmot/handlersRumorPubkeyBoundary.test.ts",
+    "app/tsconfig.tests-marmot.json",
+    "app/src/lib/marmot/history/historyStore.ts",
+    "app/src/lib/marmot/history/index.ts",
+    "app/src/lib/marmot/history/sweep.ts",
+    "app/src/lib/marmot/handlers/types.ts",
+    "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+    "app/src/lib/marmot/handlers/deleteEditHandler.ts",
+    "app/tests/unit/marmot/history/historyBackend.test.ts",
+    "specs/epic-marmot-library-adoption/architecture.md",
+    "app/tests/unit/reactions/stamp-floor.test.ts",
+    "app/tests/unit/marmot/handlers/pollRecompute.test.ts",
+    "app/tests/unit/marmot/handlers/pollGroupHandler.test.ts",
+    "app/tests/unit/marmot/history/historyWithdrawRecompute.test.ts",
+    "specs/epic-marmot-library-adoption/acceptance-criteria.md",
+    "app/src/context/ChatStoreContext.tsx",
+    "app/tests/unit/marmot/handlers/realApp.ts",
+    "app/tests/unit/marmot/handlers/domainHandlers.test.ts",
+    "app/tests/unit/marmot/handlers/pollSelfKey.test.ts",
+    "app/tests/unit/marmot/profileHandler.test.ts",
+    "app/tests/unit/marmot/groupMessageEdits.test.ts",
+    "app/tests/unit/marmot/groupReactions.test.ts",
+    "app/tests/unit/marmot/reactionEditStorageFailureReplay.test.ts",
+    "app/tests/unit/marmot/handlers/slotOriginalRetention.test.ts",
+    "app/tests/unit/reactions/api.test.ts",
+    "app/tests/unit/reactions/api-property.test.ts",
+    "app/tests/unit/reactions/crossTab-reactions.test.ts",
+    "app/tests/unit/reactions/readd-after-removal.test.ts",
+    "app/src/lib/marmot/pollFold.ts"
+  ],
+  "tests_added": {
+    "unit": "domainHandlers (34+: AC-HIST-9 per kind, AC-HIST-11 live gates/undefined/reject, AC-WDR-1 3->2->0 unread with chat+reaction+poll, AC-WDR-2, AC-WDR-6, FIFO last-action, purge-after-leave, port checks), groupGates, pollGroupHandler (13), pollRetract (6), reactionHold (25), deleteEditRetract (14), deleteEditRetractReplay (2), unreadRecompute (6), handlersRumorPubkeyBoundary behavioural block (8); groupRumorDispatch updated (held reactions, groupOf)",
+    "recompute_remediation": "Recompute-on-retract (Fable ruling): slotRecompute (75, seeded property vs oracle + matrix 2-6,9,10,13-15), slotRecomputeReads (2), deleteEditRetract (17) / deleteEditRetractReplay (22, crash replay at mark/reset/fold-write/retract-before-delete), reactionRecompute (46, property + matrix 5-7,9,10,13,14), reactionHold (29, per-sender held cap, purgeHeldReactionsForGroup), pollRecompute (65, property + matrix 5,6,8,10-15, re-open), pollRetract (12), historyWithdrawRecompute (17: receivedAt, mark-all/retract-all/delete-all, remaining() snapshot, crash replay, late retract, purged), domainHandlers (+ profile gate per group/LRU, announcement last-action/unlosable), unreadRecompute (7), pubkey boundary scans.",
+    "gate_remediation_2": "carrierSenderBinding (5), withdrawBatchDedupe (10), withdrawIncremental (7), dispatchReceivedAt (2), receivedAtClock (8), slotOriginalRetention (8), reactionRowIdentity (4), profileGateConstruction (1), pollSelfKey (3); each fails when its fix is reverted in isolation",
+    "examiner_remediation": "examinerFindings (27: group sender required / DM fallback kept for reactions and delete-edit, pending entries stamped with the row clock under two wall clocks, reaction and poll withdraw crash convergence in a new sink instance, holdReaction rejection retried, own-withdraw sender binding); domainHandlers (+1 marker consume throws -> retry announces once); pollGroupHandler (+replayHeldCloseAnnouncements port required, legacy optional); profileHandler legacy test now pins the propagating throw."
+  },
+  "test_counts": {
+    "baseline": 6905,
+    "final": 7363
+  },
+  "mocks": [],
+  "implementation_summary": "Sink-path handlers added beside legacy ones: poll 10/11/12, profile 0, profile-request 30 (assertPorts-validated), chat takes injected groupOf (live group.members()/admins via groupGates.ts; undefined fails closed, rejection rejects the row; legacy path keeps catch-false). Retract for every kind: chat carrier removal + recomputeUnread (new unreadStore.recomputeUnread, shared predicate with initUnreadCounts, exact semantics), own chat -> onOwnWithdrawn; reactions held until target lands (holdReaction/releaseHeldReactions, released after every kind-9 delivery) and retractReaction; delete/edit signals recompute their slot on retract (write-once ChatMessage.original base, reset, refold of the remaining rows); poll retractPollOpen/Vote/Close. Follow-up writes (profile-request replies, accepted announcement) enqueued on the FIFO as the last action. GroupRumorInput.reason 'purged' makes a late retract after leave remove an own row instead of failed/retry. handlersRumorPubkeyBoundary re-expressed behaviourally (sender != rumor pubkey). GATE REMEDIATION (Fable ruling): incremental-undo retracts replaced by recompute-on-retract. Sink: HistoryRow.receivedAt (first append) and withdrawing marks (mark all, retract all, delete all; recovery/sweep finish marked rows before any re-dispatch; a live re-append of a marked id finishes it first); RetractInput.remaining() = dispatched && !withdrawing rows in seq order, memoised per batch, also on the late-retract path. Stores: recomputeSlot (write-once ChatMessage.original base, shared foldClassifiedSignal core, pins re-derived from receivedAt, (rumorId, author) identity), recomputeMessageReactions (shared foldInboundRumor, sender-scoped dedup, own unconfirmed optimistic rows carried over, re-hold when target absent), recomputePoll (pollCore shared by dispatch and an effect-free in-memory fold in pollFold, receivedAt receipt clock). Handlers derive the aggregate key, call remainingSignals + the store, bump. Base-message last carrier withdrawn recomputes its slot and reactions with the target absent. Independent findings fixed: profile sink gate keyed per group (bounded 1024); accepted announcement: marker consumed as the last step and the announcement enqueued as the last action (finally); unread recompute tracks reads during the reconcile and keeps the count on a read failure; held reactions per-sender cap, sender-matched removal, purgeHeldReactionsForGroup.",
+  "verification": {
+    "unit_full": "make test-unit: tsc -p tsconfig.tests-marmot.json clean; 331 files, 7363 passed, 1 skipped, 0 failed (after examiner remediation)",
+    "typecheck": "tsc --noEmit clean",
+    "lint": "NO_LINT"
+  },
+  "decisions": [
+    "Purge-after-leave: chose a retract reason (GroupRumorInput.reason 'purged', absent=withdrawn) over ordering leave cleanup; only the purge late-retract sets it; chat purged retract removes the row via removeMessages, own rows included.",
+    "Reactions are held (bounded queue: 7 d TTL, 200/thread, deduped by rumor id) and released after every kind-9 delivery; dispatch re-checks after holding to close the race.",
+    "Profile (0) and profile-request (30) retract are deliberate no-ops: LWW identity metadata / already-emitted replies (AC-WDR-6). Profile is not roster-gated (profileSync exempts it by design).",
+    "profile-request gate: requester must be a live current member; own request echo is ignored; replies enqueue on the FIFO.",
+    "Kind 13 is retired in kinds.ts: no sink handler; leaveHandler.ts stays legacy-only until S22; leave announcement is the kind-9 leave_intent gate in chat.",
+    "messageEdits withdraw is recompute-on-retract, not an undo: the slot is reset to the row's write-once `original` (captured for every group-thread write) and the remaining kind-5/9 rows are refolded in seq order through the same fold core as dispatch (recomputeSlot); pending entries are re-buffered with the folded row's receivedAt (deterministic under any wall clock, AC-WDR-9). A group-thread signal without an authenticated sender throws (never falls back to rumor.pubkey); the local account's own optimistic send passes itself as sender.",
+    "Poll retract is recompute-on-retract: the remaining kind-10/11/12 rows naming the poll are refolded in seq order into the poll's stores in one transaction (recomputePoll / pollFold, receivedAt receipt clock), so a withdrawn open, vote or close needs no per-kind undo rule; a close re-opens only when no remaining creator close exists, and a poll group handler requires the held close-announcement replay port at construction (the legacy factory may omit it).",
+    "AC-HIST-12: legacy suites stay on the legacy factories until S22; sink-path equivalents added per kind plus behavioural boundary tests.",
+    "Recompute-on-retract per the Fable ruling; RemainingRow.receivedAt falls back to rumor.created_at*1000 for rows written before receivedAt existed (deterministic, keeps the number type).",
+    "Withdraw marks before first-touch recovery; recovery finishes OTHER marked rows (an earlier interrupted batch) and never re-dispatches marked rows; the batch itself is finished by the withdraw.",
+    "Profile accepted announcement: consumePendingDirectInviteMarker moved to the handler's last step and the enqueue to the dispatch call's finally, honouring the ClientJobQueue last-action rule (an earlier enqueue mid-handler would risk reentrant). A throw of consumePendingDirectInviteMarker propagates (the row stays undispatched, the sink retries it, the marker is still present, the retry announces once).",
+    "Carrier sender binding: appendOrAddCarrier compares message.senderPubkey (= the authenticated sender the handler builds the row from) to the stored row's sender instead of taking a separate sender argument; addMessageCarrier takes an optional sender for the same check.",
+    "Withdraw is incremental (retract then delete per row, per-step settle bound; leftover marked rows are finished at the start of the next append/withdraw of the group, tracked in memory); aggregate dedupe lives in createGroupRumorDispatch via GroupKindHandler.retractKey + the batch's shared remaining() function, and RetractInput.batch carries the whole withdrawn set (pins of every batch row go with the one recompute).",
+    "One clock: GroupRumorInput.receivedAt (row's persisted first-append time) drives applyDeleteEditSignal's classification (options.receivedAt) and the poll receipt stamps (receiptNow(atLeast) port); recomputeMessageReactions' doc now says the wall clock is read only for the held queue's heldAt bookkeeping.",
+    "Reaction rows keep id = rumor id; identity is scoped instead: optimisticAddRows matches by (id, reactor), rollbackOptimistic matches only the in-flight (eventId '') row, optionally pinned to a reactor.",
+    "Slot base capture: ChatMessage.original is captured for every group-thread signal write (sink-delivered and own optimistic, so AC-WDR-2 holds for own edits/deletes), never for DM threads."
+  ],
+  "limitations": [
+    "No production wiring yet (S6/S18): groupOf, enqueue, onOwnEcho/onOwnWithdrawn, recomputeUnread(ownPubkey), registerGroupAdminsProvider(createGroupAdminsProvider(groupOf)), holdReaction ports.",
+    "Withdrawn profile does not restore the previous profile.",
+    "Live-state gates (admin delete of an announcement) are re-evaluated against the live roster at recompute, failing closed (accepted residual, documented in each store).",
+    "Slot oracle equivalence is modulo ghost pending entries: a multi-e-tag delete buffers entries for prior-replacement ids that never become rows; their survival depends on arrival history (tests strip only those).",
+    "Held poll votes are keyed by poll id: if the original open is withdrawn and another member already opened the same poll id, the oracle (and recompute) apply the held votes to that poll; the creator binding only stops the original creator's close.",
+    "A recompute does not re-gate already-accepted poll_close chat announcements (kind 9) against a changed tally.",
+    "An optimistic removal of an already-confirmed own reaction reverts to the live add during a recompute until its echo is folded.",
+    "Accepted announcement: a hard kill between the marker commit and the synchronous enqueue (no await in between) can still lose it; no persisted pending-announcement record.",
+    "A withdrawing row whose retract keeps failing or times out stays marked (hidden from remaining()/list()) while the rows before it are already deleted (incremental progress); the next append/withdraw of the group in the same instance, first-touch recovery after a restart, or sweep finishes the rest.",
+    "A recompute that runs while a row of the group is still dispatched:false (undispatched, recovering, abandoned) does not see it in remaining(): that row's effects are reset by the recompute and applied again when the row is (re-)dispatched (accepted; documented in the GroupHistoryHandlers seam and the historyBackend doc).",
+    "Production wiring owes two new ports: PollGroupHandlerDeps.receiptNow (pollPersistence.receiptNow(atLeast)) and the 4th selfPubkeyHex argument of recomputePoll; handlers fall back to the wall clock only for an input without receivedAt (hand-built inputs).",
+    "Withdraw dedupe is per aggregate: plain kind-9 retracts (carrier accounting, recomputeUnread) still run per row; a batch of many withdrawn plain messages repeats the unread recompute per row.",
+    "A hung (timed-out) retract may still complete after its call was abandoned and overwrite a newer recompute of the same aggregate with its older snapshot (pre-existing residual of the abandon model; the store serialises, it does not version).",
+    "A forged byte-identical copy of a kind-9 message whose real sender's delivery is withdrawn leaves no row (the copy's own history row is not re-applied as the forger's message): plain kind-9 rows keep carrier accounting outside the AC-WDR-7 oracle.",
+    "Recovered out-of-seq dispatch: a dependent row whose first dispatch failed and is recovered after later rows is applied live after them (receiptNow high-water mark), while the fold places it at its seq/receivedAt; live and fold re-converge at the next recompute of that aggregate (accepted residual).",
+    "A retract that outlives its per-row 10 s bound keeps running with the batch's memoised remaining(); a row of the same aggregate dispatched meanwhile can be reset until the next recompute of that aggregate (needs a >10 s retract; accepted residual).",
+    "Plain kind-9 forged copies: a byte-identical copy by another member registers no carrier and stores no effect; when the real author's entry is withdrawn the row is removed and the copy is not re-applied as the copier's message (attribution-safe; AC-WDR-7 exempts plain kind-9).",
+    "Forger-first plain kind-9 copy: if a byte-identical copy from another member were delivered before the author's, the row would carry the first deliverer's sender and its withdraw would remove the row - unreachable through the library, which binds rumor.pubkey to the MLS sender and drops such forgeries at receive (forgery.harness.test.ts); defence-in-depth only.",
+    "Legacy behavioural suites still exercise the legacy factories until S22 deletes them (sink-path equivalents exist).",
+    "A recompute re-buffers pending delete/edit entries with the folded row's receivedAt: a row older than the pending TTL re-buffers an entry the next thread activity's sweep may already expire (deterministic by design, AC-WDR-9)."
+  ],
+  "decisions_needed": [
+    {
+      "question": "When a poll-open is withdrawn while another member's open for the same poll id remains, should votes cast for the original be applied to the surviving poll (current: yes, same as live dispatch, held votes are keyed by poll id)?",
+      "default": "Keep current behaviour (matches dispatch-only-remaining oracle); bind held votes to the creator only if product wants it."
+    }
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The recompute oracle compares aux state (pending signals, markers, held queues) that is order-dependent in ways the ruling did not anticipate: tombstone-hidden content and ghost pending entries for never-row ids differed by arrival path and were found only by seeded property loops. Parallel workers on shared fixtures (realApp.ts) also broke each other's runs for minutes.",
+    "surprised_by": "realApp nextGroupId wrapped at 256 and could equal fixed account pubkeys (aa..), silently corrupting textual group-id normalisation in oracle snapshots; fixed with a non-wrapping 4-hex counter.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [
+      {
+        "agent": "dev",
+        "spawn_index": 1,
+        "note": "poll retract stores/handlers: no flags"
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 2,
+        "note": "reaction hold/retract and delete-edit retract: residuals noted (no-snapshot edit not undoable, one-level prior)"
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 3,
+        "note": "slots: ghost pending entries make exact aux equality history-dependent; tombstone base canonicalised via opt-in restoreBase"
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 4,
+        "note": "reactions: optimistic removal of confirmed row indistinguishable; nextGroupId collision with account pubkeys"
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 5,
+        "note": "polls: held votes keyed by poll id carry to a re-open by another member; recomputePoll implemented in pollFold to avoid an import cycle"
+      },
+      {
+        "agent": "dev",
+        "spawn_index": 6,
+        "note": "profile: worker enqueued the announcement mid-handler (reentrant risk); lead moved consume last and enqueue to finally"
+      }
+    ],
+    "lead_clarifications": []
+  },
+  "modules_touched": [
+    "handlers",
+    "history"
+  ]
+}

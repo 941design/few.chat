@@ -55,17 +55,23 @@
  * DMs remain independently seal-signature bound.
  */
 
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/handlers/types';
-import type { ChangeResult, InboundDeleteEditRumor, MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RecomputeSignal, RumorHandler } from '@/src/lib/marmot/handlers/types';
+import { deleteEditSlotIds, type ApplyDeleteEditOptions, type ChangeResult, type InboundDeleteEditRumor, type MessageEditsThreadKey } from '@/src/lib/messageEdits/api';
 import { DELETE_EDIT_RUMOR_KIND } from '@/src/lib/messageEdits/rumor';
-import { assertPorts, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
-import type { GroupRumorInput } from '@/src/lib/marmot/history';
+import { assertPorts, remainingSignals, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
+import type { GroupRumorInput, RetractInput } from '@/src/lib/marmot/history';
 
 /** Kind-5 rumor kind, narrowed to its literal type for `RumorHandler<5>`. */
 const KIND: 5 = DELETE_EDIT_RUMOR_KIND as 5;
 
 export interface DeleteEditHandlerDeps {
-  applyDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<ChangeResult>;
+  /** `options.receivedAt` (sink path only): the row's clock, the same one a recompute folds it with. */
+  applyDeleteEditSignal: (
+    thread: MessageEditsThreadKey,
+    rumor: InboundDeleteEditRumor,
+    sender: AuthenticatedSender,
+    options?: ApplyDeleteEditOptions,
+  ) => Promise<ChangeResult>;
   /**
    * Reused, not duplicated: the SAME setter chatHandler.ts already receives
    * via HandlerDeps (architecture.md seam #3's explicit 'reuse setChatVersion'
@@ -76,7 +82,7 @@ export interface DeleteEditHandlerDeps {
   setChatVersion: (updater: (v: number) => number) => void;
 }
 
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: DeleteEditHandlerDeps): Promise<void> {
+async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: DeleteEditHandlerDeps, receivedAt?: number): Promise<void> {
   const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
 
   // Storage failures propagate (bug: reaction-storage-failures): the
@@ -86,7 +92,9 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   // recorded rumor id or re-writes the same tombstone/content at the same
   // rev. Invalid input never throws: it resolves 'discarded' / 'pending'.
   try {
-    await deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender);
+    await (receivedAt === undefined
+      ? deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender)
+      : deps.applyDeleteEditSignal(thread, rumor as InboundDeleteEditRumor, sender, { receivedAt }));
   } finally {
     // S5 gate-remediation (finding 5): bump unconditionally for ANY
     // outcome, not only 'delete'/'edit'. applyDeleteEditSignal's sweep
@@ -114,10 +122,48 @@ export function createDeleteEditHandler(deps: DeleteEditHandlerDeps): RumorHandl
   };
 }
 
-/** Deps of the history-sink path; the retract port is REQUIRED (an unwired port must fail at construction). */
+/** Deps of the history-sink path; the recompute port is REQUIRED (an unwired port must fail at construction). */
 export interface DeleteEditGroupHandlerDeps extends DeleteEditHandlerDeps {
-  /** Drops the stored effect of a withdrawn delete/edit signal (own or another member's). */
-  retractDeleteEditSignal: (thread: MessageEditsThreadKey, rumor: InboundDeleteEditRumor, sender: AuthenticatedSender) => Promise<void>;
+  /**
+   * Recomputes the slots `slotIds` from the remaining signals (messageEdits/api `recomputeSlot`): reset to base,
+   * fold in seq order through the dispatch core. `withdrawnRumorIds` names the withdrawn rumors (their pins go).
+   */
+  recomputeSlot: (
+    thread: MessageEditsThreadKey,
+    slotIds: readonly string[],
+    signals: readonly RecomputeSignal[],
+    options?: { withdrawnRumorIds?: readonly string[] },
+  ) => Promise<void>;
+}
+
+/**
+ * Recomputes the slots the withdrawn rumor names (every bare e-tag id of a kind-5, the marked e-tag id of an
+ * edit-marked kind-9) from the remaining history rows. Exported for chatHandler's edit-marked branch. A rumor
+ * naming no slot (a discarded signal, an edit-marked kind-5 companion) recomputes nothing and never reads history.
+ */
+export async function recomputeNamedSlots(
+  recompute: DeleteEditGroupHandlerDeps['recomputeSlot'],
+  thread: MessageEditsThreadKey,
+  input: RetractInput,
+): Promise<void> {
+  const slotIds = deleteEditSlotIds(input.rumor as InboundDeleteEditRumor);
+  if (slotIds.length === 0) return;
+  const named = new Set(slotIds);
+  const signals = await remainingSignals(input, (r) => deleteEditSlotIds(r as InboundDeleteEditRumor).some((id) => named.has(id)));
+  // ONE recompute serves every withdrawn row of the batch that names these slots (the dispatch layer runs a single
+  // retract per `slotRetractKey`), so the pins of all of them go with it, not only this row's.
+  const withdrawn = (input.batch ?? [input]).filter((w) => deleteEditSlotIds(w.rumor as InboundDeleteEditRumor).some((id) => named.has(id)));
+  await recompute(thread, slotIds, signals, { withdrawnRumorIds: [...new Set([input.rumor.id, ...withdrawn.map((w) => w.rumor.id)])] });
+}
+
+/**
+ * The retract key of a rumor that recomputes delete/edit slots: the sorted slot ids it names (a kind-5 and an
+ * edit-marked kind-9 naming the same slots share it), or undefined for a rumor naming none and for a purged retract.
+ */
+export function slotRetractKey(input: RetractInput): string | undefined {
+  if (input.reason === 'purged') return undefined;
+  const slotIds = deleteEditSlotIds(input.rumor as InboundDeleteEditRumor);
+  return slotIds.length === 0 ? undefined : `slot:${JSON.stringify([...new Set(slotIds)].sort())}`;
 }
 
 /**
@@ -129,17 +175,21 @@ export interface DeleteEditGroupHandlerDeps extends DeleteEditHandlerDeps {
  * directions bump the chat version unconditionally (see `handle`).
  */
 export function createDeleteEditGroupHandler(deps: DeleteEditGroupHandlerDeps): GroupKindHandler & RumorHandler<5> {
-  assertPorts('createDeleteEditGroupHandler', deps, ['applyDeleteEditSignal', 'setChatVersion', 'retractDeleteEditSignal']);
+  assertPorts('createDeleteEditGroupHandler', deps, ['applyDeleteEditSignal', 'setChatVersion', 'recomputeSlot']);
   return {
     ...createDeleteEditHandler(deps),
     async dispatch(input: GroupRumorInput, env) {
       const { ctx, sender } = toHandlerArgs(input, env);
-      await handle(input.rumor as ApplicationRumor, ctx, sender, deps);
+      await handle(input.rumor as ApplicationRumor, ctx, sender, deps, input.receivedAt);
     },
-    async retract(input: GroupRumorInput, env) {
-      const { ctx, sender } = toHandlerArgs(input, env);
+    retractKey: slotRetractKey,
+    async retract(input: RetractInput, env) {
+      const { ctx } = toHandlerArgs(input, env);
       try {
-        await deps.retractDeleteEditSignal({ kind: 'group', groupId: ctx.groupId }, input.rumor as InboundDeleteEditRumor, sender);
+        // A purged retract (the group was left) does no fold: its data is going away.
+        if (input.reason !== 'purged') {
+          await recomputeNamedSlots(deps.recomputeSlot, { kind: 'group', groupId: ctx.groupId }, input);
+        }
       } finally {
         deps.setChatVersion((v) => v + 1);
       }

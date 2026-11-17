@@ -20,6 +20,7 @@
 
 import type { Reaction, ReactionThreadKey } from '@/src/lib/reactions/types';
 import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { ApplicationRumor, RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 import * as walledGarden from '@/src/lib/walledGarden';
 import { postStoreChanged } from '@/src/lib/crossTab';
 
@@ -418,7 +419,9 @@ function optimisticAddRows(current: Reaction[], row: Reaction): Reaction[] | nul
   // removal). A retry reuses the same rumor id when the clock has not moved, so
   // it revives that tombstone instead of leaving the local view removed while
   // the published rumor makes peers show the reaction live.
-  const sameId = current.findIndex((r) => r.id === row.id);
+  // Scoped to the reactor: a row id is a RUMOR id, and byte-identical copies of one rumor under two reactors are two
+  // rows (contribution identity is (rumor id, reactor)); another reactor's row must never stand in for this one.
+  const sameId = current.findIndex((r) => r.id === row.id && r.reactorPubkey === row.reactorPubkey);
   if (sameId !== -1) {
     const prev = current[sameId];
     const rolledBackPending =
@@ -601,19 +604,179 @@ export async function prepareOwnReaction<R extends { id: string; created_at: num
 export function rollbackOptimistic(
   thread: ReactionThreadKey,
   optimisticId: string,
+  reactorPubkey?: string,
 ): Promise<Reaction[] | null> {
   const key = idbKeyFor(thread);
   return enqueue(key, async (current) => {
-    const target = current.find((r) => r.id === optimisticId);
+    // A row id is a rumor id, so two reactors may hold a row with the same id (a forged copy another member
+    // delivered): only the IN-FLIGHT row (eventId '') is an optimistic row, and `reactorPubkey` (when given) pins
+    // it to its reactor. Another reactor's confirmed row of the same id must never shadow it.
+    const target = current.find((r) => r.id === optimisticId && r.eventId === '' && (reactorPubkey === undefined || r.reactorPubkey === reactorPubkey));
     // Only roll back if the row is still in-flight
-    if (!target || target.eventId !== '') return null;
+    if (!target) return null;
     // A pending add that merged into an earlier tombstone goes back to being
     // that tombstone; a plain pending insert is dropped.
     if (target.removedAt !== undefined) {
-      return current.map((r) => (r.id === optimisticId ? { ...r, removed: true, createdAt: 0 } : r));
+      return current.map((r) => (r === target ? { ...r, removed: true, createdAt: 0 } : r));
     }
-    return current.filter((r) => r.id !== optimisticId);
+    return current.filter((r) => r !== target);
   });
+}
+
+/**
+ * THE reaction-application core: folds one inbound kind-7 rumor of `senderPubkey` into `current` (the thread's
+ * rows). Pure and effect-free (no I/O, no clock, no listener): the live dispatch (`applyInboundRumor`) and the
+ * recompute (`recomputeMessageReactions`) both run it, so a recompute can never disagree with a dispatch.
+ * `rows` is the next rows array (null = no write); `visible` is true iff the visible state changed.
+ */
+function foldInboundRumor(
+  current: Reaction[],
+  rumor: { id: string; created_at: number; content: string; tags: string[][] },
+  senderPubkey: string,
+  messageId: string,
+): { rows: Reaction[] | null; visible: boolean } {
+  // Extract emoji from content (for the upsert key)
+  const emoji = rumor.content;
+  const isRemoval = emoji === '-';
+  /** ms timestamp of this rumor (created_at is unix seconds). */
+  const rumorMs = rumor.created_at * 1000;
+  const removalMs = rumorMs;
+  let visible = false;
+  const rows = ((): Reaction[] | null => {
+      // Pre-work fix (story-07): the leaf module always upserts — the "silent discard if
+      // message unknown" rule (spec §2.4, AC-11) is enforced by the dispatcher, not here.
+      // MarmotContext case 7: gates on loadMessages(groupId); ContactChat kind-7 dispatch
+      // gates on the in-memory messages array. Removing the check here lets the first
+      // reaction to any message land correctly (the prior check falsely discarded it when
+      // no prior reaction row existed for that messageId).
+
+      // Dedup by eventId (AC-09)
+      // Scoped to the sender: a contribution is identified by (rumor id, sender), so a
+      // byte-identical copy another member forges neither shadows nor is shadowed by the real one.
+      if (current.some((r) => r.eventId === rumor.id && r.reactorPubkey === senderPubkey && rumor.id !== '')) {
+        // no visible change, no write
+        return null;
+      }
+
+      if (isRemoval) {
+        // AC-10, D2: the removal names (messageId, reactorPubkey, emoji) via an
+        // ["emoji", glyph] tag (case-insensitive tag name; glyph case-sensitive).
+        // An ambiguous rumor is silently discarded.
+        const emojiTags = rumor.tags
+          .filter((t) => typeof t[0] === 'string' && t[0].toLowerCase() === 'emoji' && typeof t[1] === 'string' && t[1].length > 0)
+          .map((t) => t[1] as string);
+        const distinctEmojis = [...new Set(emojiTags)];
+
+        if (distinctEmojis.length > 1) {
+          // Multiple distinct emoji tags — out-of-spec rumor, silent discard (§2.4).
+          return null;
+        }
+
+        if (distinctEmojis.length === 1) {
+          // Always remembered, even with no row yet: an add that arrives later
+          // (out of order) must see this removal.
+          const targetEmoji = distinctEmojis[0];
+          const idx = findTripleIdx(current, messageId, senderPubkey, targetEmoji);
+          if (idx === -1) {
+            // Removal-only tombstone: never rendered or counted (removed: true,
+            // createdAt 0 = no add seen). No visible change.
+            return [
+              ...current,
+              {
+                id: rumor.id,
+                messageId,
+                reactorPubkey: senderPubkey,
+                emoji: targetEmoji,
+                eventId: rumor.id,
+                createdAt: 0,
+                removed: true,
+                removedAt: removalMs,
+              },
+            ];
+          }
+          const prev = current[idx];
+          if (isLegacyTombstone(prev)) return null; // removal already wins
+          const removedAt = Math.max(prev.removedAt ?? -1, removalMs);
+          const removed = isRemovedAt(prev.createdAt, removedAt);
+          if (removedAt === prev.removedAt && removed === prev.removed) return null;
+          const updated = [...current];
+          updated[idx] = {
+            ...prev,
+            removed,
+            removedAt,
+            // A removal that leaves the row live (an even newer add) must not take
+            // its event id: a pending re-add keeps '' so its rollback still works.
+            eventId: removed ? rumor.id : prev.eventId,
+          };
+          if (removed !== prev.removed) visible = true;
+          return updated;
+        }
+
+        // No emoji tag present: the triple cannot be named. Tombstone only if
+        // exactly one live row exists for (messageId, reactorPubkey) — the
+        // unambiguous single-emoji case — and the removal is not older than that
+        // row's add. Otherwise silent discard (§2.4, D2 safety); such a removal
+        // is not remembered, so it cannot guard against a later out-of-order add.
+        const candidates = current.filter(
+          (r) =>
+            r.messageId === messageId &&
+            r.reactorPubkey === senderPubkey &&
+            !r.removed &&
+            isRemovedAt(r.createdAt, removalMs),
+        );
+        if (candidates.length !== 1) {
+          return null;
+        }
+        const idx = current.indexOf(candidates[0]);
+        const updated = [...current];
+        updated[idx] = {
+          ...updated[idx],
+          removed: true,
+          removedAt: Math.max(updated[idx].removedAt ?? -1, removalMs),
+          eventId: rumor.id,
+        };
+        visible = true;
+        return updated;
+      }
+
+      // Add: fold into the triple's single row.
+      const idx = findTripleIdx(current, messageId, senderPubkey, emoji);
+      if (idx === -1) {
+        visible = true;
+        return [
+          ...current,
+          {
+            id: rumor.id,
+            messageId,
+            reactorPubkey: senderPubkey,
+            emoji,
+            eventId: rumor.id,
+            createdAt: rumorMs, // Reaction.createdAt is ms
+            removed: false,
+          },
+        ];
+      }
+      const prev = current[idx];
+      if (isLegacyTombstone(prev)) return null; // removal wins over any add
+      const createdAt = Math.max(prev.createdAt, rumorMs);
+      const removed = isRemovedAt(createdAt, prev.removedAt);
+      // The add's event id is recorded only when it confirms the optimistic row
+      // it created (id match), or when it is not older than the newest add (it
+      // then legitimately owns the live row). A late echo of an OLDER add never
+      // takes over the row, so a pending re-add keeps its '' eventId (rollback
+      // works). A removed row keeps the removal's event id.
+      let eventId = prev.eventId;
+      if (removed) eventId = prev.eventId;
+      else if (prev.id === rumor.id) eventId = rumor.id;
+      else if (rumorMs >= Math.floor(prev.createdAt / 1000) * 1000) eventId = rumor.id;
+      if (createdAt === prev.createdAt && removed === prev.removed && eventId === prev.eventId) return null;
+      const updated = [...current];
+      updated[idx] = { ...prev, createdAt, removed, eventId };
+      // Visible change = the add took the row (revival, confirmation, newest add).
+      if (eventId !== prev.eventId) visible = true;
+      return updated;
+  })();
+  return { rows, visible };
 }
 
 /**
@@ -654,6 +817,11 @@ export async function applyInboundRumor(
   },
   sender?: AuthenticatedSender,
 ): Promise<{ messageId: string } | null> {
+  // A GROUP thread's reactor is the MLS-authenticated sender only: a missing sender throws instead of falling back
+  // to the forgeable `rumor.pubkey` (a DM thread is seal-signature-authenticated and reads it).
+  if (!sender?.pubkey && thread.kind === 'group') {
+    throw new TypeError('applyInboundRumor: a group-thread reaction requires an authenticated sender');
+  }
   const senderPubkey = sender?.pubkey ?? rumor.pubkey;
 
   // Extract the e-tag value (first occurrence)
@@ -662,151 +830,269 @@ export async function applyInboundRumor(
   if (!eTag || !eTag[1]) return null;
   const messageId = eTag[1];
 
-  // Extract emoji from content (for the upsert key)
-  const emoji = rumor.content;
-  const isRemoval = emoji === '-';
-  /** ms timestamp of this rumor (created_at is unix seconds). */
-  const rumorMs = rumor.created_at * 1000;
-  const removalMs = rumorMs;
-
   const key = idbKeyFor(thread);
 
   let result: { messageId: string } | null = null;
 
   await enqueue(key, async (current) => {
-    // Pre-work fix (story-07): the leaf module always upserts — the "silent discard if
-    // message unknown" rule (spec §2.4, AC-11) is enforced by the dispatcher, not here.
-    // MarmotContext case 7: gates on loadMessages(groupId); ContactChat kind-7 dispatch
-    // gates on the in-memory messages array. Removing the check here lets the first
-    // reaction to any message land correctly (the prior check falsely discarded it when
-    // no prior reaction row existed for that messageId).
-
-    // Dedup by eventId (AC-09)
-    if (current.some((r) => r.eventId === rumor.id && rumor.id !== '')) {
-      // result stays null — no write
-      return null;
-    }
-
-    if (isRemoval) {
-      // AC-10, D2: the removal names (messageId, reactorPubkey, emoji) via an
-      // ["emoji", glyph] tag (case-insensitive tag name; glyph case-sensitive).
-      // An ambiguous rumor is silently discarded.
-      const emojiTags = rumor.tags
-        .filter((t) => typeof t[0] === 'string' && t[0].toLowerCase() === 'emoji' && typeof t[1] === 'string' && t[1].length > 0)
-        .map((t) => t[1] as string);
-      const distinctEmojis = [...new Set(emojiTags)];
-
-      if (distinctEmojis.length > 1) {
-        // Multiple distinct emoji tags — out-of-spec rumor, silent discard (§2.4).
-        return null;
-      }
-
-      if (distinctEmojis.length === 1) {
-        // Always remembered, even with no row yet: an add that arrives later
-        // (out of order) must see this removal.
-        const targetEmoji = distinctEmojis[0];
-        const idx = findTripleIdx(current, messageId, senderPubkey, targetEmoji);
-        if (idx === -1) {
-          // Removal-only tombstone: never rendered or counted (removed: true,
-          // createdAt 0 = no add seen). No visible change, so no result.
-          return [
-            ...current,
-            {
-              id: rumor.id,
-              messageId,
-              reactorPubkey: senderPubkey,
-              emoji: targetEmoji,
-              eventId: rumor.id,
-              createdAt: 0,
-              removed: true,
-              removedAt: removalMs,
-            },
-          ];
-        }
-        const prev = current[idx];
-        if (isLegacyTombstone(prev)) return null; // removal already wins
-        const removedAt = Math.max(prev.removedAt ?? -1, removalMs);
-        const removed = isRemovedAt(prev.createdAt, removedAt);
-        if (removedAt === prev.removedAt && removed === prev.removed) return null;
-        const updated = [...current];
-        updated[idx] = {
-          ...prev,
-          removed,
-          removedAt,
-          // A removal that leaves the row live (an even newer add) must not take
-          // its event id: a pending re-add keeps '' so its rollback still works.
-          eventId: removed ? rumor.id : prev.eventId,
-        };
-        if (removed !== prev.removed) result = { messageId };
-        return updated;
-      }
-
-      // No emoji tag present: the triple cannot be named. Tombstone only if
-      // exactly one live row exists for (messageId, reactorPubkey) — the
-      // unambiguous single-emoji case — and the removal is not older than that
-      // row's add. Otherwise silent discard (§2.4, D2 safety); such a removal
-      // is not remembered, so it cannot guard against a later out-of-order add.
-      const candidates = current.filter(
-        (r) =>
-          r.messageId === messageId &&
-          r.reactorPubkey === senderPubkey &&
-          !r.removed &&
-          isRemovedAt(r.createdAt, removalMs),
-      );
-      if (candidates.length !== 1) {
-        return null;
-      }
-      const idx = current.indexOf(candidates[0]);
-      const updated = [...current];
-      updated[idx] = {
-        ...updated[idx],
-        removed: true,
-        removedAt: Math.max(updated[idx].removedAt ?? -1, removalMs),
-        eventId: rumor.id,
-      };
-      result = { messageId };
-      return updated;
-    }
-
-    // Add: fold into the triple's single row.
-    const idx = findTripleIdx(current, messageId, senderPubkey, emoji);
-    if (idx === -1) {
-      result = { messageId };
-      return [
-        ...current,
-        {
-          id: rumor.id,
-          messageId,
-          reactorPubkey: senderPubkey,
-          emoji,
-          eventId: rumor.id,
-          createdAt: rumorMs, // Reaction.createdAt is ms
-          removed: false,
-        },
-      ];
-    }
-    const prev = current[idx];
-    if (isLegacyTombstone(prev)) return null; // removal wins over any add
-    const createdAt = Math.max(prev.createdAt, rumorMs);
-    const removed = isRemovedAt(createdAt, prev.removedAt);
-    // The add's event id is recorded only when it confirms the optimistic row
-    // it created (id match), or when it is not older than the newest add (it
-    // then legitimately owns the live row). A late echo of an OLDER add never
-    // takes over the row, so a pending re-add keeps its '' eventId (rollback
-    // works). A removed row keeps the removal's event id.
-    let eventId = prev.eventId;
-    if (removed) eventId = prev.eventId;
-    else if (prev.id === rumor.id) eventId = rumor.id;
-    else if (rumorMs >= Math.floor(prev.createdAt / 1000) * 1000) eventId = rumor.id;
-    if (createdAt === prev.createdAt && removed === prev.removed && eventId === prev.eventId) return null;
-    const updated = [...current];
-    updated[idx] = { ...prev, createdAt, removed, eventId };
-    // Visible change = the add took the row (revival, confirmation, newest add).
-    if (eventId !== prev.eventId) result = { messageId };
-    return updated;
+    const folded = foldInboundRumor(current, rumor, senderPubkey, messageId);
+    if (folded.visible) result = { messageId };
+    return folded.rows;
   });
 
   return result;
+}
+
+// ─── Held reactions (target message not stored yet) ──────────────────────────
+//
+// A reaction whose target message has not landed yet is held per thread under
+// its own key and applied when the target arrives (releaseHeldReactions). The
+// queue is bounded (TTL, a per-sender share and a per-thread cap) and deduped
+// by (rumor id, sender). The account-wide wipes (clearAllReactions) and the
+// DM wipes (clearDmReactionsForPeer / purgeStrangerDmReactions) remove it with
+// its thread; a GROUP's queue is removed by nothing above, only by
+// purgeHeldReactionsForGroup (the group-leave purge).
+
+const HELD_PREFIX = 'few:reactions:held:';
+
+/** How long an unapplied held reaction is kept. */
+export const HELD_REACTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Per-thread bound on held reactions; past it the sender holding the most loses its oldest. */
+export const HELD_REACTION_CAP = 200;
+/** One sender's share of the held queue: past it that sender's own oldest is dropped, nobody else's. */
+export const HELD_REACTION_SENDER_CAP = 50;
+
+interface HeldReaction {
+  rumor: ApplicationRumor;
+  sender: AuthenticatedSender;
+  heldAt: number;
+}
+
+/** Per-held-key promise queue: serialises the read-modify-write of one held queue. */
+const heldQueues = new Map<string, Promise<unknown>>();
+
+function heldKeyFor(thread: ReactionThreadKey): string {
+  return `${HELD_PREFIX}${idbKeyFor(thread).slice('few:reactions:'.length)}`;
+}
+
+function firstETag(rumor: { tags: string[][] }): string | undefined {
+  const tag = rumor.tags?.find((t) => Array.isArray(t) && t[0] === 'e' && typeof t[1] === 'string' && t[1].length > 0);
+  return tag?.[1];
+}
+
+/**
+ * Adds an entry to a held queue (the next array; the input is not mutated). Idempotent by contribution
+ * identity (rumor id, sender): a copy of the same rumor id from ANOTHER sender is a separate entry. Bounds:
+ * the sender's share first (it loses its own oldest), then the thread cap (the sender holding the most loses its
+ * oldest; a tie goes to the sender whose oldest entry is oldest), so one member can never evict another's.
+ */
+function addHeldEntry(entries: HeldReaction[], entry: HeldReaction): HeldReaction[] {
+  if (entries.some((e) => e.rumor.id === entry.rumor.id && e.sender.pubkey === entry.sender.pubkey)) return entries;
+  let next = [...entries, entry];
+  const own = next.filter((e) => e.sender.pubkey === entry.sender.pubkey);
+  if (own.length > HELD_REACTION_SENDER_CAP) next = next.filter((e) => e !== own[0]);
+  while (next.length > HELD_REACTION_CAP) {
+    const counts = new Map<string, number>();
+    for (const e of next) counts.set(e.sender.pubkey, (counts.get(e.sender.pubkey) ?? 0) + 1);
+    const most = Math.max(...counts.values());
+    const victim = next.find((e) => counts.get(e.sender.pubkey) === most)!;
+    next = next.filter((e) => e !== victim);
+  }
+  return next;
+}
+
+/**
+ * Runs `task` on the thread's live (unexpired) held entries inside the held
+ * queue. `task` returns the next entries (null = unchanged). Expired entries
+ * are dropped whenever the queue is accessed.
+ */
+function modifyHeld<R>(
+  hkey: string,
+  task: (entries: HeldReaction[]) => Promise<{ next: HeldReaction[] | null; result: R }>,
+  idle: R,
+): Promise<R> {
+  if (clearingInProgress) return Promise.resolve(idle);
+  const prev = heldQueues.get(hkey) ?? Promise.resolve();
+  const next = prev.then(async (): Promise<R> => {
+    if (clearingInProgress) return idle;
+    const { get, set, del } = await import('idb-keyval');
+    const stored = (await get<HeldReaction[]>(hkey)) ?? [];
+    const cutoff = Date.now() - HELD_REACTION_TTL_MS;
+    const live = stored.filter((e) => e.heldAt > cutoff);
+    const { next: written, result } = await task(live);
+    const finalEntries = written ?? (live.length !== stored.length ? live : null);
+    if (finalEntries !== null) {
+      if (finalEntries.length === 0) await del(hkey);
+      else await set(hkey, finalEntries);
+    }
+    return result;
+  });
+  const settled = next.then(() => {}, () => {});
+  heldQueues.set(hkey, settled);
+  settled.then(() => {
+    if (heldQueues.get(hkey) === settled) heldQueues.delete(hkey);
+  });
+  return next;
+}
+
+/**
+ * Keeps an inbound reaction whose target message is not stored yet, with its
+ * authenticated sender, until `releaseHeldReactions` applies it. Idempotent by
+ * (rumor id, sender); a rumor without an e-tag is not held.
+ */
+export function holdReaction(
+  thread: ReactionThreadKey,
+  rumor: ApplicationRumor,
+  sender: AuthenticatedSender,
+): Promise<void> {
+  if (!firstETag(rumor)) return Promise.resolve();
+  return modifyHeld<void>(
+    heldKeyFor(thread),
+    async (entries) => {
+      const next = addHeldEntry(entries, { rumor, sender, heldAt: Date.now() });
+      return { next: next === entries ? null : next, result: undefined };
+    },
+    undefined,
+  );
+}
+
+/**
+ * Applies every held reaction that targets `messageId` (the message just
+ * stored), in held order, through `applyInboundRumor` (dedups by (rumor id, sender), so a
+ * retry after a failure is safe). An entry leaves the held queue only after it
+ * was applied; a failure rejects and leaves the unapplied ones held. Resolves
+ * true iff at least one produced a visible change.
+ */
+export function releaseHeldReactions(thread: ReactionThreadKey, messageId: string): Promise<boolean> {
+  const sameEntry = (a: HeldReaction, b: HeldReaction) => a.rumor.id === b.rumor.id && a.sender.pubkey === b.sender.pubkey;
+  return modifyHeld<boolean>(
+    heldKeyFor(thread),
+    async (entries) => {
+      const mine = entries.filter((e) => firstETag(e.rumor) === messageId);
+      if (mine.length === 0) return { next: null, result: false };
+      let visible = false;
+      const applied: HeldReaction[] = [];
+      try {
+        for (const e of mine) {
+          const r = await applyInboundRumor(thread, e.rumor, e.sender);
+          applied.push(e);
+          if (r !== null) visible = true;
+        }
+      } catch (err) {
+        // Persist the progress made before the failure, then reject.
+        const { set, del } = await import('idb-keyval');
+        const rest = entries.filter((e) => !applied.some((a) => sameEntry(a, e)));
+        if (rest.length === 0) await del(heldKeyFor(thread));
+        else await set(heldKeyFor(thread), rest);
+        throw err;
+      }
+      return { next: entries.filter((e) => !applied.some((a) => sameEntry(a, e))), result: visible };
+    },
+    false,
+  );
+}
+
+/** Sorted signature of the LIVE reactions of one message: what a reader can see (emoji, reactor, order key). */
+function visibleSignature(rows: Reaction[], messageId: string): string {
+  return rows
+    .filter((r) => r.messageId === messageId && !r.removed)
+    .map((r) => `${r.emoji}\u0000${r.reactorPubkey}\u0000${r.createdAt}`)
+    .sort()
+    .join('\u0001');
+}
+
+/** Whether the target message is stored. DM threads have no stored-message gate on this path (always true). */
+async function targetMessageStored(thread: ReactionThreadKey, messageId: string): Promise<boolean> {
+  if (thread.kind !== 'group') return true;
+  const { loadMessages } = await import('@/src/lib/marmot/chatPersistence');
+  return (await loadMessages(thread.groupId)).messages.some((m) => m.id === messageId);
+}
+
+/**
+ * RECOMPUTES every reaction of one message from the group's surviving history (AC-WDR-1..9, replacing the
+ * per-rumor undo a withdraw used to apply). The result equals dispatching only `signals` (the surviving kind-7
+ * rumors, `seq` order) into an empty store, whatever was withdrawn, in whatever order.
+ *
+ * Inside the thread's serialisation (held queue, then the rows queue; rows read ONCE):
+ *   1. RESET the aggregate to its base: no reaction row for `targetMessageId` and none of its held entries,
+ *      except the local user's own optimistic rows that no sink delivery confirmed yet (eventId ''), which are
+ *      carried over unchanged. Known residual: an optimistic REMOVAL of an already confirmed row is not
+ *      distinguishable from a confirmed one and reverts to the add until the removal's echo is folded.
+ *   2. FOLD the signals naming the target (kind 7, first e-tag) in `seq` order through `foldInboundRumor`, the
+ *      same core as dispatch; the sender is the signal's (the history row's account), never the rumor's pubkey.
+ *      A contribution is (rumor id, sender): duplicate carriers of one rumor fold once, and a forged copy of
+ *      another member's reaction neither shadows nor is shadowed by the real one.
+ *   3. If the target message is NOT stored (its base was withdrawn, or never arrived) nothing is folded: the
+ *      reactions are HELD instead, and `releaseHeldReactions` applies them when the base is stored again.
+ *
+ * The fold reads no clock: it orders by the rumors' own created_at and the history order. The wall clock is read
+ * only for the held queue's own bookkeeping (`heldAt`, TTL expiry), never to decide a fold. Nothing but the
+ * two stores is touched: no listener beyond the store's own, no bell, no unread, no send (AC-WDR-6).
+ * Resolves true iff the visible reactions of the message changed. Live-state gates do not apply to reactions.
+ */
+export async function recomputeMessageReactions(
+  thread: ReactionThreadKey,
+  targetMessageId: string,
+  signals: readonly RecomputeSignal[],
+): Promise<boolean> {
+  const mine = signals
+    .filter((s) => s.rumor.kind === 7 && firstETag(s.rumor) === targetMessageId)
+    .slice()
+    .sort((a, b) => a.seq - b.seq);
+  const stored = await targetMessageStored(thread, targetMessageId);
+  return modifyHeld<boolean>(
+    heldKeyFor(thread),
+    async (entries) => {
+      let held = entries.filter((e) => firstETag(e.rumor) !== targetMessageId);
+      let visible = false;
+      await enqueue(idbKeyFor(thread), async (current) => {
+        const before = visibleSignature(current, targetMessageId);
+        let rows = current.filter((r) => r.messageId !== targetMessageId || r.eventId === '');
+        if (stored) {
+          for (const s of mine) {
+            const folded = foldInboundRumor(rows, s.rumor, s.sender, targetMessageId);
+            if (folded.rows) rows = folded.rows;
+          }
+        } else {
+          for (const s of mine) {
+            held = addHeldEntry(held, { rumor: s.rumor, sender: { pubkey: s.sender, authenticity: 'mls' }, heldAt: Date.now() });
+          }
+        }
+        visible = visibleSignature(rows, targetMessageId) !== before;
+        return JSON.stringify(rows) === JSON.stringify(current) ? null : rows;
+      });
+      return { next: JSON.stringify(held) === JSON.stringify(entries) ? null : held, result: visible };
+    },
+    false,
+  );
+}
+
+/**
+ * Removes the held-reaction queue of one group (reactions whose target message never arrived). The group-leave
+ * purge (S13) calls it: no account-wide wipe covers a single group, and without it a left group's reactions
+ * (reactor pubkeys, emoji, message ids) would outlive the group until their TTL. Serialised with the queue's
+ * other turns; resolves once the key is gone. Idempotent.
+ */
+export async function purgeHeldReactionsForGroup(groupId: string): Promise<void> {
+  await modifyHeld<void>(heldKeyFor({ kind: 'group', groupId }), async () => ({ next: [], result: undefined }), undefined);
+}
+
+/**
+ * Test/oracle port: the held queue of one group without its time fields (`heldAt`), as `{ rumor, sender }`,
+ * grouped by target message (targets in name order) and in held order within a target. The order ACROSS targets
+ * is not part of the queue's meaning (a release applies one target's entries, in their held order, and nothing
+ * else) and differs between a live hold and a recompute, so the port does not expose it. Waits for the queue's
+ * in-flight turns first.
+ */
+export async function snapshotHeldReactions(groupId: string): Promise<unknown> {
+  const hkey = heldKeyFor({ kind: 'group', groupId });
+  await heldQueues.get(hkey);
+  const { get } = await import('idb-keyval');
+  const entries = ((await get<HeldReaction[]>(hkey)) ?? []).map(({ rumor, sender }) => ({ target: firstETag(rumor) ?? '', rumor, sender }));
+  return entries
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => (a.e.target < b.e.target ? -1 : a.e.target > b.e.target ? 1 : a.i - b.i))
+    .map(({ e: { rumor, sender } }) => ({ rumor, sender }));
 }
 
 /**
@@ -822,7 +1108,7 @@ export async function clearAllReactions(): Promise<void> {
   try {
     const { keys, delMany } = await import('idb-keyval');
     // Drain in-flight queues that were already enqueued before the flag was set.
-    const inflight = Array.from(writeQueues.values());
+    const inflight = [...writeQueues.values(), ...heldQueues.values()];
     await Promise.allSettled(inflight);
     writeQueues.clear();
     cache.clear();
@@ -830,8 +1116,11 @@ export async function clearAllReactions(): Promise<void> {
     const targets = allKeys.filter(
       (k): k is string =>
         typeof k === 'string' &&
-        (k.startsWith('few:reactions:group:') || k.startsWith('few:reactions:dm:')),
+        (k.startsWith('few:reactions:group:') ||
+          k.startsWith('few:reactions:dm:') ||
+          k.startsWith(HELD_PREFIX)),
     );
+    heldQueues.clear();
     if (targets.length > 0) {
       await delMany(targets);
     }
@@ -872,20 +1161,40 @@ export async function clearDmReactionsForPeer(peerPubkeyHex: string): Promise<vo
   const { keys, delMany } = await import('idb-keyval');
 
   const allKeys = await keys();
+  const heldDmPrefix = `${HELD_PREFIX}dm:`;
   const matchingKeys = allKeys.filter(
     (k): k is string =>
       typeof k === 'string' &&
       k.startsWith(dmReactionPrefix) &&
       k.slice(dmReactionPrefix.length).toLowerCase() === targetLower,
   );
+  const heldKeys = allKeys.filter(
+    (k): k is string =>
+      typeof k === 'string' &&
+      k.startsWith(heldDmPrefix) &&
+      k.slice(heldDmPrefix.length).toLowerCase() === targetLower,
+  );
 
-  if (matchingKeys.length === 0) return;
+  if (matchingKeys.length === 0 && heldKeys.length === 0) return;
   beginWipe(matchingKeys);
   try {
-    await wipeDmReactionKeys(matchingKeys, delMany);
+    await wipeHeldKeys(heldKeys, delMany);
+    if (matchingKeys.length > 0) await wipeDmReactionKeys(matchingKeys, delMany);
   } finally {
     endWipe(matchingKeys);
   }
+}
+
+/** Deletes held-reaction keys after draining their in-flight queue turns. */
+async function wipeHeldKeys(
+  heldKeys: string[],
+  delMany: (keys: string[]) => Promise<void>,
+): Promise<void> {
+  if (heldKeys.length === 0) return;
+  const inflight = heldKeys.map((k) => heldQueues.get(k)).filter((p): p is Promise<unknown> => p !== undefined);
+  if (inflight.length > 0) await Promise.allSettled(inflight);
+  for (const k of heldKeys) heldQueues.delete(k);
+  await delMany(heldKeys);
 }
 
 async function wipeDmReactionKeys(
@@ -947,6 +1256,16 @@ export async function purgeStrangerDmReactions(
       strangerKeys.push(key);
     }
   }
+
+  // Held reactions of a stranger peer never outlive the peer's thread.
+  const heldDmPrefix = `${HELD_PREFIX}dm:`;
+  const strangerHeldKeys = allKeys.filter(
+    (k): k is string =>
+      typeof k === 'string' &&
+      k.startsWith(heldDmPrefix) &&
+      !isAllowedDmSender(k.slice(heldDmPrefix.length), groups, knownPeers, ownPubkeyHex),
+  );
+  await wipeHeldKeys(strangerHeldKeys, delMany);
 
   // Optimization guard: delMany([]) is a no-op; this guard avoids the call.
   if (strangerKeys.length > 0) {

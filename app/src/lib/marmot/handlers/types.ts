@@ -54,3 +54,17 @@ export interface DispatchMeta {
    */
   replayed: boolean;
 }
+
+/**
+ * One surviving history row as a recompute folds it. `sender` is ALWAYS the row's
+ * `orderingKey.account` (the MLS-authenticated sender), never `rumor.pubkey`;
+ * `receivedAt` (ms) is the row's persisted first-append time, the deterministic clock of the fold.
+ */
+export interface RecomputeSignal {
+  rumor: ApplicationRumor;
+  sender: string;
+  /** kind-445 event id of the carrier row. */
+  eventId: string;
+  seq: number;
+  receivedAt: number;
+}

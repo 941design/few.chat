@@ -13,9 +13,13 @@
  *              rumor.id: one row, no unread, no bell.
  *  AC-HIST-12  handlers take the `{groupId, eventId, rumor, sender}` input.
  *
- * Real collaborators: the app HistoryBackend (idb store), chatPersistence and knownPeers over
- * fake-indexeddb / an in-memory localStorage. The reactions / edit-reconciliation cores are the
- * S5 boundary and are fixtures here; the handler logic around them is the SUT.
+ * Real collaborators: the app HistoryBackend (idb store), chatPersistence and knownPeers
+ * over fake-indexeddb / an in-memory localStorage. The reactions / edit-reconciliation cores are
+ * fixtures here (their real behaviour is covered by the reactionHold / deleteEditRetract suites and
+ * domainHandlers.test.ts); the handler logic around them is the SUT.
+ *
+ * S5 additions: AC-HIST-11 (announcement gates read the live group handle through groupOf),
+ * reactions held until their target lands, and the purged-retract rule (a late retract after leave removes an own row instead of failed/retry).
  */
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,10 +31,11 @@ import {
   type GroupKindHandler,
   type GroupResyncTargets,
 } from '@/src/lib/marmot/handlers/groupRumorDispatch';
-import { createChatGroupHandler, createChatHandler, createPollCloseAnnouncementReplayer, type ChatGroupHandlerDeps } from '@/src/lib/marmot/handlers/chatHandler';
+import { createChatGroupHandler, createChatHandler, createPollCloseAnnouncementReplayer, type ChatGroupHandlerDeps, type ChatHandlerDeps } from '@/src/lib/marmot/handlers/chatHandler';
+import type { GateGroup } from '@/src/lib/marmot/handlers/groupGates';
 import { createReactionGroupHandler, type ReactionGroupHandlerDeps } from '@/src/lib/marmot/handlers/reactionHandler';
 import { createDeleteEditGroupHandler, type DeleteEditGroupHandlerDeps } from '@/src/lib/marmot/handlers/deleteEditHandler';
-import { appendMessage, appendOrAddCarrier, hasMessage, loadMessages, retractMessageCarrier, type ChatMessage } from '@/src/lib/marmot/chatPersistence';
+import { appendMessage, appendOrAddCarrier, hasMessage, loadMessages, removeMessages, retractMessageCarrier, type ChatMessage } from '@/src/lib/marmot/chatPersistence';
 import { isKnownPeer, rememberKnownPeer } from '@/src/lib/knownPeers';
 import type { ApplicationRumor } from '@/src/lib/marmot/handlers/types';
 import type { PendingCloseAnnouncement, Poll } from '@/src/lib/marmot/pollPersistence';
@@ -81,6 +86,14 @@ function build(opts: { activeGroup?: string | null } = {}) {
   // one-shot hook fired synchronously right after the sink path invokes the carrier-aware write
   const hooks: { afterAppend?: () => void } = {};
   const reactionStore = new Map<string, { id: string; sender: string; target: string }>();
+  // reactions held until their target lands (fixture of the reactions hold queue)
+  const heldReactions = new Map<string, { rumor: ApplicationRumor; sender: string }>();
+  // the live library group handle the announcement gates read; `held:false` = the group is no longer held
+  const live: { held: boolean; admins: string[]; members: string[]; failure: boolean } = { held: true, admins: [], members: [], failure: false };
+  const groupOf = vi.fn(async (): Promise<GateGroup | undefined> => {
+    if (live.failure) throw new Error('groups.get failed');
+    return live.held ? { admins: live.admins, members: () => live.members } : undefined;
+  });
 
   const chatDeps: ChatGroupHandlerDeps = {
     appendMessage: track('appendMessage', async (g, m) => {
@@ -92,8 +105,7 @@ function build(opts: { activeGroup?: string | null } = {}) {
     setChatVersion: track('setChatVersion', (u) => void (versions.chat = u(versions.chat))),
     applyDeleteEditSignal: vi.fn(async () => ({ thread: { kind: 'group' as const, groupId: G }, slotId: null, kind: 'noop' as const })),
     resolvePendingSignalsForSlot: track('resolvePendingSignalsForSlot', async () => ({ thread: { kind: 'group', groupId: G } as never, slotId: null, kind: 'noop' as const })),
-    isGroupAdmin: unexpected('isGroupAdmin') as never,
-    isGroupMember: unexpected('isGroupMember') as never,
+    groupOf,
     getPoll: unexpected('getPoll') as never,
     loadVotes: unexpected('loadVotes') as never,
     saveVoteIfNewer: unexpected('saveVoteIfNewer') as never,
@@ -111,15 +123,32 @@ function build(opts: { activeGroup?: string | null } = {}) {
       return pending;
     }),
     retractMessageCarrier: track('retractMessageCarrier', (g, r, e, snd) => retractMessageCarrier(g, r, e, snd)),
+    removeMessages: track('removeMessages', (g, ids) => removeMessages(g, ids)),
+    releaseHeldReactions: vi.fn(async (_g: string, messageId: string) => reactionDepsRelease(messageId)),
+    setReactionsVersion: (u: (v: number) => number) => void (versions.reactions = u(versions.reactions)),
     hasMessage: (g, id) => hasMessage(g, id),
     recomputeUnread: vi.fn(track('recomputeUnread', () => undefined)),
     rememberKnownPeer: track('rememberKnownPeer', (hex) => rememberKnownPeer(hex)),
     onOwnEcho: vi.fn(track('onOwnEcho', () => undefined)),
     onOwnWithdrawn: vi.fn(track('onOwnWithdrawn', () => undefined)),
-    retractDeleteEditSignal: vi.fn(async () => undefined),
+    recomputeSlot: vi.fn(async () => undefined),
+    recomputeMessageReactions: vi.fn(async () => false),
+  };
+  // applies the held reactions of a landed target, like reactions/api releaseHeldReactions
+  const reactionDepsRelease = (messageId: string): boolean => {
+    let changed = false;
+    for (const [id, held] of [...heldReactions]) {
+      if (held.rumor.tags.find((t) => t[0] === 'e')?.[1] !== messageId) continue;
+      heldReactions.delete(id);
+      reactionStore.set(id, { id, sender: held.sender, target: messageId });
+      changed = true;
+    }
+    return changed;
   };
   const reactionDeps: ReactionGroupHandlerDeps = {
     loadMessages: (g) => loadMessages(g),
+    holdReaction: vi.fn(async (_t, rumor, sender) => void heldReactions.set(rumor.id, { rumor: rumor as ApplicationRumor, sender: sender.pubkey })),
+    releaseHeldReactions: vi.fn(async (_t, messageId) => reactionDepsRelease(messageId)),
     applyInboundRumor: vi.fn(async (_t, rumor, sender) => {
       const target = rumor.tags.find((t: string[]) => t[0] === 'e')![1];
       if (reactionStore.has(rumor.id)) return null; // dedup by rumor id, like the real core
@@ -127,12 +156,22 @@ function build(opts: { activeGroup?: string | null } = {}) {
       return { id: rumor.id };
     }),
     setReactionsVersion: track('setReactionsVersion', (u) => void (versions.reactions = u(versions.reactions))),
-    retractReaction: vi.fn(async (_t, rumor) => reactionStore.delete(rumor.id)),
+    // recompute fixture: reset the target's rows and held entries, then fold the surviving signals
+    recomputeMessageReactions: vi.fn(async (_t, target, signals) => {
+      const ids = () => [...reactionStore.values()].filter((r) => r.target === target).map((r) => r.id).sort().join();
+      const before = ids();
+      for (const [id, r] of [...reactionStore]) if (r.target === target) reactionStore.delete(id);
+      for (const [id, h] of [...heldReactions]) if (h.rumor.tags.find((t) => t[0] === 'e')?.[1] === target) heldReactions.delete(id);
+      for (const sig of signals) {
+        if (sig.rumor.tags.find((t: string[]) => t[0] === 'e')?.[1] === target) reactionStore.set(sig.rumor.id, { id: sig.rumor.id, sender: sig.sender, target });
+      }
+      return ids() !== before;
+    }),
   };
   const deleteEditDeps: DeleteEditGroupHandlerDeps = {
     applyDeleteEditSignal: chatDeps.applyDeleteEditSignal,
     setChatVersion: chatDeps.setChatVersion,
-    retractDeleteEditSignal: chatDeps.retractDeleteEditSignal,
+    recomputeSlot: chatDeps.recomputeSlot,
   };
   const handlers: GroupKindHandler[] = [
     createChatGroupHandler(chatDeps),
@@ -144,7 +183,7 @@ function build(opts: { activeGroup?: string | null } = {}) {
     env: { selfPubkeyHex: SELF, getActiveGroupId: () => opts.activeGroup ?? null },
   });
   const sink: AppHistoryBackend = createHistoryBackend({ handlers: dispatcher, store: createIdbHistoryStore(`s4-${G}`) });
-  return { sink, dispatcher, chatDeps, reactionDeps, deleteEditDeps, versions, failure, hooks, reactionStore, calls };
+  return { sink, dispatcher, chatDeps, reactionDeps, deleteEditDeps, versions, failure, hooks, reactionStore, heldReactions, live, groupOf, calls };
 }
 
 let sinks: AppHistoryBackend[] = [];
@@ -162,6 +201,8 @@ const make = (o?: Parameters<typeof build>[0]) => {
   return app;
 };
 const rows = async () => (await loadMessages(G)).messages;
+// the legacy (old-dispatcher) factory still takes isGroupAdmin/isGroupMember instead of groupOf
+const legacyDeps = (deps: ChatGroupHandlerDeps): ChatHandlerDeps => ({ ...deps, isGroupAdmin: unexpected('isGroupAdmin') as never, isGroupMember: unexpected('isGroupMember') as never });
 
 describe('AC-HIST-10: message-store bumps are driven from handler completion', () => {
   it('a sink append of a peer chat message bumps the chat version once, rings the bell once and stores one row', async () => {
@@ -288,11 +329,42 @@ describe('idempotency by event id', () => {
     expect(app.chatDeps.incrementUnread).toHaveBeenCalledTimes(1);
   });
 
-  it('a reaction whose target never arrived completes without writing (dependent kinds tolerate a missing target)', async () => {
+  it('a reaction whose target has not arrived is HELD, not dropped: it applies when the target lands (dependent kinds tolerate a missing target)', async () => {
     const app = make();
-    await expect(app.sink.append(entry({ eventId: 'e2', kind: 7, account: BOB, content: '+', tags: [['e', 'missing']] }))).resolves.toBeUndefined();
+    await expect(app.sink.append(entry({ eventId: 'e2', kind: 7, account: BOB, content: '+', tags: [['e', 'rumor-e1']] }))).resolves.toBeUndefined();
     expect(app.reactionStore.size).toBe(0);
     expect(app.versions.reactions).toBe(0);
+    expect(app.heldReactions.size).toBe(1);
+    expect(app.reactionDeps.holdReaction).toHaveBeenCalledTimes(1);
+
+    await app.sink.append(entry({ eventId: 'e1', account: ALICE, content: 'the target' })); // the target lands
+    expect([...app.reactionStore.values()].map((r) => [r.sender, r.target])).toEqual([[BOB, 'rumor-e1']]);
+    expect(app.heldReactions.size).toBe(0);
+    expect(app.versions.reactions).toBe(1); // the reactions UI re-reads
+    expect(app.chatDeps.releaseHeldReactions).toHaveBeenCalledWith(G, 'rumor-e1');
+  });
+
+  it('a held reaction that is withdrawn before its target lands is not revived by the target', async () => {
+    const app = make();
+    await app.sink.append(entry({ eventId: 'e2', kind: 7, account: BOB, content: '+', tags: [['e', 'rumor-e1']] }));
+    await app.sink.withdraw(G, ['e2']);
+    expect(app.heldReactions.size).toBe(0);
+    await app.sink.append(entry({ eventId: 'e1', account: ALICE, content: 'the target' }));
+    expect(app.reactionStore.size).toBe(0);
+    expect(app.versions.reactions).toBe(0);
+  });
+
+  it('a held-reaction release failure rejects the target row (retried) after its own bookkeeping; the retry releases', async () => {
+    const app = make();
+    await app.sink.append(entry({ eventId: 'e2', kind: 7, account: BOB, content: '+', tags: [['e', 'rumor-e1']] }));
+    (app.chatDeps.releaseHeldReactions as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('held store down'));
+    const target = entry({ eventId: 'e1', account: ALICE, content: 'the target' });
+    await expect(app.sink.append(target)).rejects.toThrow('held store down');
+    expect(isKnownPeer(ALICE)).toBe(true);
+    expect((await rows()).map((m) => m.id)).toEqual(['rumor-e1']);
+    await app.sink.append(target);
+    expect(app.reactionStore.size).toBe(1);
+    expect(app.chatDeps.incrementUnread).toHaveBeenCalledTimes(1);
   });
 
   it('createGroupRumorDispatch refuses a handler for a kind outside the app registry', () => {
@@ -369,7 +441,7 @@ describe('AC-WDR-6: withdraw keeps the effects already emitted', () => {
 
   it('a retract of a rumor whose row is already gone removes nothing and still runs the idempotent tail', async () => {
     const app = make();
-    const input = { groupId: G, eventId: 'e9', rumor: entry({ eventId: 'e9', account: BOB }).rumor, sender: BOB };
+    const input = { groupId: G, eventId: 'e9', rumor: entry({ eventId: 'e9', account: BOB }).rumor, sender: BOB, remaining: async () => [] };
     await app.dispatcher.retract(input);
     expect(await rows()).toEqual([]);
     expect(app.chatDeps.recomputeUnread).toHaveBeenCalledTimes(1);
@@ -388,8 +460,11 @@ describe('AC-WDR-6: withdraw keeps the effects already emitted', () => {
 
     expect(app.reactionStore.size).toBe(0);
     expect(app.versions.reactions).toBe(reactionsBefore + 1);
-    expect(app.deleteEditDeps.retractDeleteEditSignal).toHaveBeenCalledTimes(1);
-    expect((app.deleteEditDeps.retractDeleteEditSignal as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ pubkey: BOB, authenticity: 'mls' });
+    expect(app.deleteEditDeps.recomputeSlot).toHaveBeenCalledTimes(1);
+    const [thread, slotIds, signals] = (app.deleteEditDeps.recomputeSlot as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(thread).toEqual({ kind: 'group', groupId: G });
+    expect(slotIds).toEqual(['rumor-e1']);
+    expect(signals).toEqual([]); // the withdrawn signal is not among the remaining rows (their senders are the rows' accounts)
     expect(app.versions.chat).toBe(chatBefore + 1);
   });
 
@@ -398,7 +473,8 @@ describe('AC-WDR-6: withdraw keeps the effects already emitted', () => {
     await app.sink.append(entry({ eventId: 'e1', account: BOB }));
     (app.chatDeps.recomputeUnread as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('unread store down'));
     await expect(app.sink.withdraw(G, ['e1'])).rejects.toThrow('unread store down');
-    expect((await app.sink.list(G)).length).toBe(1);
+    // the row stays, marked `withdrawing` (hidden from list(), finished by the retried withdraw)
+    expect(await app.sink.list(G)).toEqual([]);
     expect(await rows()).toEqual([]); // the removal itself committed before the recompute threw
 
     // retry: the removal is a no-op now, but the tail must still run
@@ -436,7 +512,7 @@ describe('carriers: the unit of withdrawal is (groupId, eventId) (AC-WDR-1, AC-H
   it('a retract whose sender differs from the stored row sender removes nothing', async () => {
     const app = make();
     await app.sink.append(same('e1'));
-    await app.dispatcher.retract({ groupId: G, eventId: 'e1', rumor: same('e1').rumor, sender: MALLORY });
+    await app.dispatcher.retract({ groupId: G, eventId: 'e1', rumor: same('e1').rumor, sender: MALLORY , remaining: async () => [] });
     expect(await rows()).toHaveLength(1);
   });
 
@@ -446,29 +522,28 @@ describe('carriers: the unit of withdrawal is (groupId, eventId) (AC-WDR-1, AC-H
     let retracting: Promise<void> | undefined;
     // the retract of E1 is queued right behind the duplicate's store write
     app.hooks.afterAppend = () => {
-      retracting = app.dispatcher.retract({ groupId: G, eventId: 'e1', rumor: same('e1').rumor, sender: BOB });
+      retracting = app.dispatcher.retract({ groupId: G, eventId: 'e1', rumor: same('e1').rumor, sender: BOB , remaining: async () => [] });
     };
     await app.dispatcher.dispatch({ groupId: G, eventId: 'e2', rumor: same('e2').rumor, sender: BOB });
     await retracting;
     const stored = await rows();
     expect(stored.map((m) => m.id)).toEqual(['shared-rumor']);
     expect(stored[0].carrierEventIds).toEqual(['e2']);
-    await app.dispatcher.retract({ groupId: G, eventId: 'e2', rumor: same('e2').rumor, sender: BOB });
+    await app.dispatcher.retract({ groupId: G, eventId: 'e2', rumor: same('e2').rumor, sender: BOB , remaining: async () => [] });
     expect(await rows()).toEqual([]);
   });
 
   it('a legacy row (no carrier field) is removed by any retract', async () => {
     const app = make();
     await appendMessage(G, { id: 'legacy', content: 'old', senderPubkey: BOB, groupId: G, createdAt: 1 });
-    await app.dispatcher.retract({ groupId: G, eventId: 'whatever', rumor: entry({ eventId: 'x', rumorId: 'legacy', account: BOB }).rumor, sender: BOB });
+    await app.dispatcher.retract({ groupId: G, eventId: 'whatever', rumor: entry({ eventId: 'x', rumorId: 'legacy', account: BOB }).rumor, sender: BOB , remaining: async () => [] });
     expect(await rows()).toEqual([]);
   });
 });
 
 describe('own echo and own withdraw edge cases', () => {
   it('an own rejected announcement still confirms the optimistic row', async () => {
-    const app = make();
-    (app.chatDeps as { isGroupAdmin: unknown }).isGroupAdmin = async () => false;
+    const app = make(); // the live group lists no admins: a group_renamed announcement is rejected
     await app.sink.append(entry({ eventId: 'e1', account: SELF, content: JSON.stringify({ type: 'group_renamed', name: 'x' }) }));
     expect(app.chatDeps.onOwnEcho).toHaveBeenCalledTimes(1);
     expect(await rows()).toEqual([]);
@@ -483,7 +558,7 @@ describe('own echo and own withdraw edge cases', () => {
 
   it('an own retract of a rumor that was never applied is a no-op (no hand-back, no bump)', async () => {
     const app = make();
-    await app.dispatcher.retract({ groupId: G, eventId: 'e9', rumor: entry({ eventId: 'e9', account: SELF }).rumor, sender: SELF });
+    await app.dispatcher.retract({ groupId: G, eventId: 'e9', rumor: entry({ eventId: 'e9', account: SELF }).rumor, sender: SELF , remaining: async () => [] });
     expect(app.chatDeps.onOwnWithdrawn).not.toHaveBeenCalled();
     expect(app.versions.chat).toBe(0);
   });
@@ -547,7 +622,7 @@ describe('a withdrawn poll_close announcement is dropped from the hold queue (AC
     expect(held).toEqual([]);
     held.pollKnown = true; // the poll-open arrives
     const ctx = { groupId: G, selfPubkeyHex: SELF, getActiveGroupId: () => null };
-    await createPollCloseAnnouncementReplayer(app.chatDeps)({ ...poll, groupId: G }, ctx);
+    await createPollCloseAnnouncementReplayer(legacyDeps(app.chatDeps))({ ...poll, groupId: G }, ctx);
     expect(await rows()).toEqual([]);
   });
 
@@ -558,7 +633,7 @@ describe('a withdrawn poll_close announcement is dropped from the hold queue (AC
     expect(held).toHaveLength(1);
     held.pollKnown = true; // the poll-open arrives
     const ctx = { groupId: G, selfPubkeyHex: SELF, getActiveGroupId: () => null };
-    await createPollCloseAnnouncementReplayer(app.chatDeps)({ ...poll, groupId: G }, ctx);
+    await createPollCloseAnnouncementReplayer(legacyDeps(app.chatDeps))({ ...poll, groupId: G }, ctx);
     expect((await rows()).map((m) => m.id)).toEqual(['rumor-e1']);
   });
 });
@@ -592,7 +667,7 @@ describe('resolvePendingSignalsForSlot failure policy', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const rumor = entry({ eventId: 'e1', account: BOB }).rumor as ApplicationRumor;
     await expect(
-      createChatHandler(app.chatDeps).handle(rumor, { groupId: G, selfPubkeyHex: SELF, getActiveGroupId: () => null }, { pubkey: BOB, authenticity: 'mls' }),
+      createChatHandler(legacyDeps(app.chatDeps)).handle(rumor, { groupId: G, selfPubkeyHex: SELF, getActiveGroupId: () => null }, { pubkey: BOB, authenticity: 'mls' }),
     ).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
@@ -602,12 +677,13 @@ describe('resolvePendingSignalsForSlot failure policy', () => {
 describe('required ports are enforced at construction', () => {
   const CHAT_PORTS = [
     'appendMessage', 'incrementUnread', 'markAsRead', 'setChatVersion', 'applyDeleteEditSignal', 'resolvePendingSignalsForSlot',
-    'isGroupAdmin', 'isGroupMember', 'getPoll', 'loadVotes', 'saveVoteIfNewer', 'loadPendingVotes', 'removePendingVotes',
+    'groupOf', 'getPoll', 'loadVotes', 'saveVoteIfNewer', 'loadPendingVotes', 'removePendingVotes',
     'queuePendingCloseAnnouncement', 'loadPendingCloseAnnouncements', 'removePendingCloseAnnouncements', 'appendOrAddCarrier',
-    'retractMessageCarrier', 'hasMessage', 'recomputeUnread', 'rememberKnownPeer', 'onOwnEcho', 'onOwnWithdrawn', 'retractDeleteEditSignal',
+    'retractMessageCarrier', 'removeMessages', 'hasMessage', 'recomputeUnread', 'rememberKnownPeer', 'onOwnEcho', 'onOwnWithdrawn', 'recomputeSlot', 'recomputeMessageReactions',
+    'releaseHeldReactions', 'setReactionsVersion',
   ];
-  const REACTION_PORTS = ['loadMessages', 'applyInboundRumor', 'setReactionsVersion', 'retractReaction'];
-  const DELETE_EDIT_PORTS = ['applyDeleteEditSignal', 'setChatVersion', 'retractDeleteEditSignal'];
+  const REACTION_PORTS = ['loadMessages', 'applyInboundRumor', 'setReactionsVersion', 'recomputeMessageReactions', 'holdReaction', 'releaseHeldReactions'];
+  const DELETE_EDIT_PORTS = ['applyDeleteEditSignal', 'setChatVersion', 'recomputeSlot'];
 
   it('the chat port list covers every dep the fixture wires', () => {
     expect(Object.keys(build().chatDeps).sort()).toEqual([...CHAT_PORTS].sort());
