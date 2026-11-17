@@ -1,0 +1,9 @@
+{
+  "story_id": "S7",
+  "baseline_commit": "eb715ef",
+  "captured_at": "2026-11-17",
+  "tests": { "status": "PASS", "command": "make test-unit", "passed": 7519, "skipped": 1, "failed": 0, "files": 341 },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": ["cd app && npx tsc --noEmit", "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"]
+}

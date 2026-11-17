@@ -190,11 +190,11 @@ describe('put', () => {
 
     // Body byte-length matches the view, not the backing buffer.
     expect(capturedBody).not.toBeNull();
-    expect((capturedBody as ArrayBuffer).byteLength).toBe(4);
-    expect(Array.from(new Uint8Array(capturedBody as ArrayBuffer))).toEqual([5, 6, 7, 8]);
+    expect((capturedBody as unknown as ArrayBuffer).byteLength).toBe(4);
+    expect(Array.from(new Uint8Array(capturedBody as unknown as ArrayBuffer))).toEqual([5, 6, 7, 8]);
 
     // Auth event 'x' tag must hash only the view bytes.
-    const tags = (capturedAuth as { tags: string[][] }).tags;
+    const tags = (capturedAuth as unknown as { tags: string[][] }).tags;
     const xTag = tags.find((t) => t[0] === 'x');
     expect(xTag).toBeDefined();
 
@@ -538,5 +538,78 @@ describe('assertAllowedBlossomUrl', () => {
     const mismatchedPort = canonical.port === '8443' ? '8444' : '8443';
     const wrongPortUrl = `${canonical.protocol}//${canonical.hostname}:${mismatchedPort}/abc`;
     expect(() => assertAllowedBlossomUrl(wrongPortUrl)).toThrow(BlossomOriginError);
+  });
+});
+
+describe('get: redirects and idle timeout', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const streamResponse = (body: ReadableStream<Uint8Array>, url: string): Response =>
+    ({ ok: true, status: 200, statusText: '200', url, headers: { get: () => null }, body }) as unknown as Response;
+  const oneShot = (bytes: number[]) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array(bytes));
+        c.close();
+      },
+    });
+
+  it('follows redirects (default fetch behaviour: no redirect:"error")', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(streamResponse(oneShot([1, 2]), canonicalUrl('/abc')));
+    vi.stubGlobal('fetch', fetchMock);
+    await get(canonicalUrl('/abc'));
+    expect((fetchMock.mock.calls[0][1] as RequestInit).redirect).not.toBe('error');
+  });
+
+  it('accepts a download whose final URL (after a redirect) is on another allowlisted origin', async () => {
+    vi.stubEnv('NEXT_PUBLIC_BLOSSOM_TRUSTED_HOSTS', 'https://cdn.allowed.example');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(streamResponse(oneShot([7, 8]), 'https://cdn.allowed.example/abc')));
+    expect(Array.from(await get(canonicalUrl('/abc')))).toEqual([7, 8]);
+    vi.unstubAllEnvs();
+  });
+
+  it('rejects, without returning content, a download redirected to a non-allowlisted origin', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(streamResponse(oneShot([7, 8]), 'https://attacker.example/abc')));
+    await expect(get(canonicalUrl('/abc'))).rejects.toBeInstanceOf(BlossomOriginError);
+  });
+
+  it('a slow but steady body (each gap under the idle timeout, total over it) succeeds', async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (c) =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            if (n++ < 4) c.enqueue(new Uint8Array([n]));
+            else c.close();
+            resolve();
+          }, 20000);
+        }),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(streamResponse(body, canonicalUrl('/abc'))));
+    const p = get(canonicalUrl('/abc'));
+    await vi.advanceTimersByTimeAsync(100000);
+    expect(Array.from(await p)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('a body that stalls mid-stream times out', async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (c) => {
+        if (n++ === 0) {
+          c.enqueue(new Uint8Array([1]));
+          return;
+        }
+        return new Promise<void>(() => undefined); // never delivers again
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(streamResponse(body, canonicalUrl('/abc'))));
+    const captured = get(canonicalUrl('/abc')).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(31000);
+    expect(await captured).toBeInstanceOf(BlossomTimeoutError);
   });
 });

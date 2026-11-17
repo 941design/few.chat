@@ -381,6 +381,8 @@ No manual-validation rows are claimed; all ACs are automated (unit, library-back
 
 ## Amendments
 
+- 2026-11-17 (S7 review): AC-SIGN-3 requested NIP-46 permissions extended to every kind the app signs with the account key — added 24242 (Blossom upload auth, needed for group images) and 25050–25055 (call signaling, a pre-existing gap) — so permission-enforcing bunkers do not break image sending or calls.
+
 - 2026-11-17 (S6 reviews): own-send failure triggers narrowed to avoid spurious failed/retry and duplicate resends: intentFailed only for the send's own bound intent, the 60 s clock starts once the group is synced, a still-queued rumor stays sending, retry re-sends the identical rumor; group op waits are bounded and abortable, commit-pending retried only for library-cleared reasons. AC-WDR-3 and AC-SEND-5 amended.
 
 - 2026-11-17 (S5 reviews + Fable decider): retract of dependent kinds (5, edit-marked 9, 7, 10, 11, 12) recomputes the affected aggregate (message slot / a message's reactions / a poll) from base state plus the history sink's remaining dispatched rows, through the same apply/authorisation core as dispatch (effect-free). Sink adds durable `withdrawing` marks, `receivedAt`, and a `remaining()` port. Plain kind-9 rows keep carrier accounting. New AC-WDR-7/8/9; AC-HIST-5 extended.

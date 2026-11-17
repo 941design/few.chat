@@ -1,0 +1,102 @@
+{
+  "story_id": "S7",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T18:30:00Z",
+  "files_created": [
+    "app/tests/unit/media/groupMediaFixtures.ts",
+    "app/tests/unit/media/groupImeta.test.ts",
+    "app/tests/unit/media/groupBlossom.test.ts",
+    "app/tests/unit/media/groupImageService.test.ts",
+    "app/tests/unit/media/groupImageService.reload.test.ts",
+    "app/tests/unit/marmot/media.harness.test.ts",
+    "specs/epic-marmot-library-adoption/S7-media-encrypted/architecture.json",
+    "specs/epic-marmot-library-adoption/S7-media-encrypted/baseline.json",
+    "app/src/lib/calls/callKinds.ts",
+    "app/src/lib/media/blossomAuthKind.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/media/imetaTag.ts",
+    "app/src/lib/media/imageMessage.ts",
+    "app/src/lib/media/blossomClient.ts",
+    "app/src/lib/marmot/mediaPersistence.ts",
+    "app/tsconfig.tests-marmot.json",
+    "specs/epic-marmot-library-adoption/S7-media-encrypted/verification.json",
+    "app/src/lib/nip46Perms.ts",
+    "app/tests/unit/nip46Perms.test.ts",
+    "app/src/lib/calls/callSignaling.ts"
+  ],
+  "adjacent_fixes": [],
+  "tests_added": {
+    "unit": "groupImeta (22: buildGroupImetaTag incl. http/loopback/cache-only/legacy/blurhash rejection, extractGroupAttachmentsByRole, fingerprint), groupBlossom (8: allowlist gate, hash-verified bytes, locator fallthrough, not-found), groupImageService (31: construction validation, encrypt options, ciphertext-only upload, one kind-9 rumor via the S6 sender, failure paths, hostile input)",
+    "reload": "groupImageService.reload (5: real mediaPersistence over fake-indexeddb, fresh service + group handle serves from cache with zero decrypt/download, forged nonce falls through, clearGroupMedia forces a decrypt)",
+    "harness": "media.harness (3: real Alice/Bob MLS clients, real group.encryptMedia/decryptMedia, real S6 sender, real blossomClient put/get over a fake Blossom via stubbed fetch: round trip bytes equal, uploaded blob != plaintext and sha256 = locator, imeta has no plaintext; tampered Blossom bytes rejected; reload serves from cache)",
+    "remediation": "groupBlossom (+10: bounded get: Content-Length rejected unread, streamed over-limit aborted early, stalled body times out, redirect:'error'; 3-locator cap, limit passed, over-limit bytes never returned), groupImageService (+22: thumb vs full cap, hung download times out and frees the slot, svg refused on receive miss/hit and on send, allowlist, derivation from imeta incl. mis-paired ref and async rejection, in-flight messageId, up-front size checks, canonical cache type, origin binding, epoch re-encrypt / epoch-advanced), media.harness (+2: forged nonce rejected by the real decryptMedia with nothing cached; real commit between upload and send), nip46Perms (+1 guard, exact set updated). Verified each fix with a scratch-copy mutation (16 mutants, all killed)."
+  },
+  "test_counts": {
+    "baseline": 7519,
+    "final": 7588
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": [
+    "media"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "Built beside the legacy marmot-ts media path (legacy exports untouched; S18 rewires useImageSend/useDecryptedImage, S22 deletes the old code). imetaTag.ts: buildGroupImetaTag (the library imeta tag of one group.encryptMedia result plus a `role` field; throws before any upload unless it is one valid encrypted-media-v1 tag with a blossom-v1 locator). imageMessage.ts: extractGroupAttachmentsByRole (library codec, invalid/legacy tags skipped, first tag per role wins, original tag kept for decryptMedia), groupAttachmentFingerprint (ciphertext+plaintext hash+nonce+version), createGroupImageService (required ports validated at construction): sendImage = group.encryptMedia x2 -> upload CIPHERTEXT only (refuses ciphertext equal to the input/empty, validates tags before uploading, verifies the server stored the blob the locator names) -> ONE kind-9 rumor through sender.prepare().send() (S6 seam) -> best-effort plaintext cache write; loadImage = cache hit serves with no download/decrypt, miss = refuse non-image media type -> trusted-locator download -> size cap -> group.decryptMedia -> cache, concurrent loads share one download+decrypt. blossomClient.ts: getAttachmentCiphertext (only blossom-v1 locators on the operator allowlist, only bytes whose SHA-256 equals ciphertextSha256), blossomMediaPorts(signer), groupBlossomServers(). mediaPersistence.ts: groupMediaCachePort over the unchanged few-media-blobs / few-media-meta stores (no idb update()).",
+  "verification": {
+    "unit_full": "make test-unit: tsc -p tsconfig.tests-marmot.json clean, 346 files, 7588 passed, 1 skipped, 0 failed",
+    "typecheck": "tsc --noEmit clean",
+    "lint": "NO_LINT",
+    "mutation_spot_checks": "3 mutants killed: upload(plaintext) instead of ciphertext (service + harness fail), cache lookup skipped (AC-MEDIA-2 unit, reload and harness tests fail), decryptMedia replaced by identity (harness and reload fail)"
+  },
+  "decisions": [
+    "Image messages are plain kind-9 chat rows sent through sender.prepare(group, 9, content, [fullTag, thumbTag]).send() (the S6 seam); prepare is used instead of sendGroupRumor so the result can return created_at for the optimistic row. Signal handling is unaffected (kind 9 without edit marker is not a signal).",
+    "The imeta tag is the library tag verbatim plus one trailing `role full|thumb` field (the codec ignores unknown fields; only blurhash and duplicated single-occurrence fields are rejected). Role stays explicit, never inferred from filename or index.",
+    "Locators are computed by the library at encrypt time from the blossomServers option (`<server>/<ciphertext sha256>`); the Blossom upload response is only verified (its last path segment, extension stripped, must equal the ciphertext hash) rather than used to build the tag.",
+    "New decrypted-cache fingerprint is `${ciphertextSha256}:${plaintextSha256}:${nonce}:${version}` (groupAttachmentFingerprint). It differs from the legacy attachmentFingerprint on purpose: new-format attachments cannot collide with legacy cache entries, and a forged record differing in any field is cache-distinct. Cache stores (few-media-blobs / few-media-meta) and the group:fingerprint key shape are unchanged.",
+    "Receive hardening (untrusted sender input): only image/* media types are loaded, ciphertext is capped at MAX_OUTPUT_BYTES+1 KiB before decrypting, locators off the operator allowlist are never requested, downloaded bytes must hash to ciphertextSha256.",
+    "A cache write failure never fails a send (a retry would publish a duplicate) or a load; it is reported through an injectable warn (default console.warn).",
+    "The library mediaCache client option is NOT configured by this story: the app's own persistent decrypted-plaintext cache is what AC-MEDIA-2 names, and group.decryptMedia is always handed the ciphertext the app downloaded.",
+    "Production wiring lives in blossomMediaPorts(signer) and groupMediaCachePort so the pure service (imageMessage.ts) imports neither blossomClient nor idb; S18 composes them with the real sender.",
+    "processImage still produces a blurhash; the encrypted-media-v1 codec rejects `blurhash`, so S18 must pass a thumbhash (or none) in GroupImageBlob.thumbhash instead.",
+    "Remediation round (security review): downloads are bounded. blossomClient.get(url, maxBytes) rejects a Content-Length over the limit without reading the body, streams the body and aborts once the running total exceeds the limit, applies a 30 s IDLE timeout (armed for the headers, re-armed per body chunk), and follows redirects with a final-origin check (see the get() behaviour-change decision below). The download port is now download(attachment, maxBytes); at most 3 allowlisted blossom-v1 locators are tried per attachment (MAX_LOCATORS_TRIED); thumbs get a smaller cap (MAX_GROUP_THUMB_CIPHERTEXT_BYTES, 512 KiB + slack) than full images. The service additionally races the download against loadTimeoutMs (default 60 s, code load-timeout) so a custom port that hangs cannot wedge the in-flight map.",
+    "Media-type gate is an explicit raster allowlist (GROUP_IMAGE_MEDIA_TYPES: webp, jpeg, png, gif) instead of startsWith('image/'): applied on receive before the cache lookup (hit and miss), on send before encrypting, and to the library's returned tag before the upload. image/svg+xml is refused everywhere.",
+    "loadImage takes LoadGroupImageRef = {imeta, messageId?} only and derives the attachment (and thumb role) by parsing imeta with the library codec; a missing or invalid tag rejects with code invalid-attachment. loadImage is a fully async function, so malformed refs reject instead of throwing synchronously, and a second caller that joins an in-flight load has its messageId recorded after the shared load settles.",
+    "Epoch race: GroupMediaGroup has a required epoch (the library MarmotGroup.epoch bigint getter, confirmed in the typings). sendImage captures it before encryptMedia and compares before sender.prepare; if it advanced it re-encrypts and re-uploads both blobs once, then fails with the retryable GroupMediaError code epoch-advanced. A group handle without a bigint epoch is refused with a TypeError before any encryption. Harness test: a real rename commit between the first upload and the send forces the second round and Bob still decrypts.",
+    "sendImage validates up front with the receive constants: full plaintext <= MAX_GROUP_IMAGE_BYTES (MAX_OUTPUT_BYTES), thumb plaintext <= MAX_GROUP_THUMB_BYTES, media type in the allowlist; the cache is written under each attachment's canonical mediaType, not the caller string. locatorMatchesUpload now also requires the uploaded URL's origin to equal the locator's origin.",
+    "NIP-46 (AC-SIGN-3 amended): APP_SIGN_EVENT_KINDS in nip46Perms.ts adds BLOSSOM_AUTH_KIND (24242, newly exported from blossomClient and used by buildBlossomAuthEvent) and the six CALL_*_KIND constants (25050-25055) imported from the dependency-free constant modules calls/callKinds and media/blossomAuthKind (re-exported by callSignaling / blossomClient); the exact-set test is updated and a guard test derives the app-signed kinds from those constants. Stored sessions recorded with the previous set are discarded by shouldDiscardStoredNip46Session (reconnect once), as AC-SIGN-4 intends.",
+    "blossomClient.get() behaviour change for ALL callers, including the legacy DM and group image paths that call it without maxBytes (directMessages.ts, useDecryptedImage.ts): (1) redirects are followed again (the remediation round's redirect:'error' broke Blossom servers that 307/308 to a CDN, which BUD-01 allows); after the response arrives its final URL (response.url) must pass the same trusted-origin allowlist (assertDownloadableBlobUrl) as the requested URL, else BlossomOriginError, and a response with no url (not network-fetched) is not checked. The redirected request itself is still issued to the redirect target; the allowlist is enforced on what is accepted, and content stays hash-checked by callers. (2) The 30 s timeout is now an idle timeout (armed for the headers, re-armed on every body chunk) instead of a total headers+body budget, so slow but steady mobile links no longer fail permanently; a stalled connection or body still times out after 30 s. Overall caps stay with callers (the group image service's loadTimeoutMs, 60 s). Legacy callers are otherwise unchanged (no maxBytes means no size limit, as before).",
+    "Review fixes: the in-flight dedupe key of loadImage includes the role so a thumb-role request cannot impose its 512 KiB cap on a concurrent full load of the same ciphertext; one groupImageRoleOf(tag) (imetaTag.ts, first role field wins) classifies tags for extraction and loading; sendImage canonicalises the media type (trim, lower-case, image/jpg to image/jpeg) before the allowlist check; progress is monotonic across an epoch retry (reaches 100 once).",
+    "nip46Perms.test.ts gains a structural scan of app/src for account-signer signEvent(<draft>) call sites: the draft's kind (inline literal, or the building function's literal / const constant) must be in the requested set (library permissions plus APP_SIGN_EVENT_KINDS); kind 30051 is allow-listed (removed by S16, AC-REL-3); sites whose draft is a parameter (callSignaling innerDraft) are listed explicitly and a new unresolved site fails the test."
+  ],
+  "limitations": [
+    "The pre-existing legacy exports in imageMessage.ts / imetaTag.ts / mediaPersistence.ts (marmot-ts types, attachmentFingerprint) are untouched and still used by the old hooks until S18/S22; imageMessage.ts therefore imports both marmot-ts (legacy) and marmot-engine/core (new).",
+    "No call site is migrated and no behaviour doc changed (no user-visible change yet; S18 cutover, S28 docs).",
+    "The library's own mediaCache (ciphertext) is not wired; a media-less reload with Blossom unavailable and no decrypted-cache entry cannot render the image.",
+    "Partial-failure orphans are an accepted residual: when the thumb upload, the epoch recheck or the publish fails after a ciphertext was uploaded (also the superseded round of an epoch retry), that ciphertext stays on the Blossom server. blossomClient has no authenticated DELETE (BUD-02 delete auth) today, so no best-effort cleanup was added; the orphan is ciphertext only and referenced by no message.",
+    "nip46Perms.ts imports only the dependency-free constant modules calls/callKinds and media/blossomAuthKind (no NDK, config or logger load), so it stays a light, pure module.",
+    "The epoch recheck narrows but cannot close the race: a commit landing between the recheck and the library's send encryption is not detected here (the library send itself handles epoch staleness for the rumor, not for the media key)."
+  ],
+  "decisions_needed": [
+    {
+      "question": "The encrypted-media-v1 codec only accepts https Blossom locators on a routable host (http, loopback and private hosts are dropped on receive), while the e2e Blossom mock and local dev Blossom are http://localhost. buildGroupImetaTag now fails loudly before any upload when the configured server is not https. How should S24/S25 (e2e) and local dev handle this?",
+      "default": "Keep the library's rule (it is a host-safety control, not ours to relax). For e2e, serve the Blossom mock behind an https routable-looking origin or stub the app's Blossom base URL to an https hostname via the existing NEXT_PUBLIC_BLOSSOM_BASE_URL + NEXT_PUBLIC_BLOSSOM_TRUSTED_HOSTS plumbing; decide in S24. Not changed here (no e2e in this story)."
+    },
+    {
+      "question": "Should S18 keep the 5 MB MAX_OUTPUT_BYTES ciphertext cap (+1 KiB) for receivers, or derive it from the group's encrypted-media policy?",
+      "default": "Keep the constant cap (MAX_GROUP_IMAGE_CIPHERTEXT_BYTES); revisit only if the library exposes a per-group policy value."
+    }
+  ],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "Nothing in the spec says the new encrypted-media-v1 codec drops http Blossom locators and blurhash fields (found only by reading marmot-engine's imeta.js), which silently conflicts with the http e2e Blossom mock and the existing blurhash image pipeline; the planner's AC text assumed the old attachment shape.",
+    "surprised_by": "Both harness peers share one process IndexedDB, so the real few-media-blobs cache is shared between 'Alice' and 'Bob': Bob's first load was served from Alice's send-side cache until the test cleared it, which would also mask a missing decrypt in any two-peer media test.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}

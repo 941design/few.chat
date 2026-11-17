@@ -1,16 +1,29 @@
 /**
  * NIP-46 requested permissions and stored-session discard (AC-SIGN-3, AC-SIGN-4).
  */
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { permissions } from '@941design/marmot';
+import { BLOSSOM_AUTH_KIND } from '@/src/lib/media/blossomClient';
 import {
+  CALL_ANSWER_KIND,
+  CALL_HANGUP_KIND,
+  CALL_ICE_KIND,
+  CALL_OFFER_KIND,
+  CALL_REJECT_KIND,
+  CALL_RENEGOTIATE_KIND,
+} from '@/src/lib/calls/callSignaling';
+import {
+  APP_SIGN_EVENT_KINDS,
   buildNip46Permissions,
   buildNip46PermsParam,
   shouldDiscardStoredNip46Session,
 } from '@/src/lib/nip46Perms';
 
 const libPerms = permissions.toNip46Perms().split(',');
-const APP = ['sign_event:0', 'sign_event:20602', 'sign_event:30078', 'sign_event:10050'];
+const APP_KINDS = [0, 20602, 30078, 10050, 24242, 25050, 25051, 25052, 25053, 25054, 25055];
+const APP = APP_KINDS.map((k) => `sign_event:${k}`);
 
 const OLD_SET = [
   'sign_event:0', 'sign_event:5', 'sign_event:443', 'sign_event:444', 'sign_event:445',
@@ -19,7 +32,7 @@ const OLD_SET = [
 ];
 
 describe('AC-SIGN-3 requested permissions', () => {
-  it('equals exactly the union of the library set and the four app kinds', () => {
+  it('equals exactly the union of the library set and the app-signed kinds (incl. 24242 and 25050-25055)', () => {
     const got = buildNip46Permissions();
     expect([...got].sort()).toEqual([...new Set([...libPerms, ...APP])].sort());
     expect(new Set(got).size).toBe(got.length);
@@ -29,6 +42,87 @@ describe('AC-SIGN-3 requested permissions', () => {
     const got = buildNip46Permissions();
     for (const k of [443, 444, 445, 1059, 10051, 30051]) {
       expect(got).not.toContain(`sign_event:${k}`);
+    }
+  });
+
+  it('guard: the app-signed kinds are derived from the code\'s kind constants (Blossom auth, call signaling)', () => {
+    const fromConstants = [
+      0, 20602, 30078, 10050,
+      BLOSSOM_AUTH_KIND,
+      CALL_OFFER_KIND, CALL_ANSWER_KIND, CALL_ICE_KIND, CALL_HANGUP_KIND, CALL_REJECT_KIND, CALL_RENEGOTIATE_KIND,
+    ];
+    expect([...APP_SIGN_EVENT_KINDS].sort((a, b) => a - b)).toEqual([...fromConstants].sort((a, b) => a - b));
+    expect([...fromConstants].sort((a, b) => a - b)).toEqual([...APP_KINDS].sort((a, b) => a - b));
+    for (const k of fromConstants) expect(buildNip46Permissions()).toContain(`sign_event:${k}`);
+  });
+
+  it('guard (structural scan): every account-signer signEvent() call site over app/src signs a requested kind', () => {
+    // Scans app/src for `signEvent(<draft>)` call sites and resolves the draft's `kind:` (an inline object
+    // literal, or the function that builds it) to a number, through literals and `const NAME = <number>`
+    // constants. Each resolved kind must be requested from the bunker (library set or APP_SIGN_EVENT_KINDS), so a
+    // new account-signed kind cannot ship unrequested. Sites whose draft is a parameter cannot be resolved
+    // statically: they must be listed in UNRESOLVED_SITES (a new unresolved site fails here).
+    const SRC = join(__dirname, '..', '..', 'src');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(e.name)) files.push(full);
+      }
+    };
+    walk(SRC);
+    const text = new Map(files.map((f) => [f, readFileSync(f, 'utf8')]));
+
+    const constantValue = (name: string, own: string): number | undefined => {
+      const re = new RegExp(`(?:export\\s+)?const\\s+${name}\\s*(?::[^=]+)?=\\s*(\\d+)\\b`);
+      const m = re.exec(own) ?? [...text.values()].map((t) => re.exec(t)).find(Boolean);
+      return m ? Number(m[1]) : undefined;
+    };
+    const kindIn = (body: string, own: string): number | undefined => {
+      const m = /\bkind:\s*(\d+|[A-Z][A-Z0-9_]*)/.exec(body);
+      if (!m) return undefined;
+      return /^\d+$/.test(m[1]) ? Number(m[1]) : constantValue(m[1], own);
+    };
+
+    // Drafts that arrive as a parameter: kind constants are guarded by the constants test above.
+    const UNRESOLVED_SITES = new Set(['lib/calls/callSignaling.ts:innerDraft']);
+    // Kind 30051 is still signed by MarmotContext today; it is not requested and is removed by S16 (AC-REL-3).
+    const ALLOW_UNREQUESTED = new Set([30051]);
+
+    const requested = new Set<number>([
+      ...APP_SIGN_EVENT_KINDS,
+      ...libPerms.filter((p) => p.startsWith('sign_event:')).map((p) => Number(p.slice('sign_event:'.length))),
+    ]);
+    const callRe = /(?<!async )\bsignEvent\(\s*(\w+)(?:\s+as\s+\w+)?\s*\)/g;
+    const found: Array<{ site: string; kind?: number }> = [];
+    for (const [file, src] of text) {
+      let m: RegExpExecArray | null;
+      while ((m = callRe.exec(src))) {
+        const id = m[1];
+        const site = `${file.slice(SRC.length + 1)}:${id}`;
+        const before = src.slice(0, m.index);
+        const decl = new RegExp(`(?:const|let)\\s+${id}\\b[^=]*=\\s*(?:await\\s+)?(\\{|\\w+\\()`, 'g');
+        let last: RegExpExecArray | null = null;
+        for (let d = decl.exec(before); d; d = decl.exec(before)) last = d;
+        let kind: number | undefined;
+        if (last) {
+          if (last[1] === '{') kind = kindIn(src.slice(last.index + last[0].length), src);
+          else {
+            const fn = new RegExp(`function\\s+${last[1].slice(0, -1)}\\b`).exec(src);
+            if (fn) kind = kindIn(src.slice(fn.index), src);
+          }
+        }
+        found.push({ site, kind });
+      }
+    }
+
+    expect(found.length).toBeGreaterThanOrEqual(8); // the scan found the known call sites
+    const unresolved = found.filter((f) => f.kind === undefined).map((f) => f.site);
+    expect(new Set(unresolved)).toEqual(UNRESOLVED_SITES);
+    for (const { site, kind } of found) {
+      if (kind === undefined || ALLOW_UNREQUESTED.has(kind)) continue;
+      expect(requested.has(kind), `${site} signs kind ${kind}, which is not requested`).toBe(true);
     }
   });
 

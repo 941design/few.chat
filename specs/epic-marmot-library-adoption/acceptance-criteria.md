@@ -72,7 +72,7 @@ Reconciliation note (Mode 1): AC text names new modules (`client/`, `history/`, 
 
 **AC-SIGN-2** — Given a signer lacking `nip44`, the adapter factory MUST report `unsupported` with reason `nip44` and MUST NOT construct a client; the i18n string MUST exist (en and de entries both present and non-empty, different from each other). No fallback encryption path MUST exist. [L: unit (factory + i18n key presence)] The `useMarmot()` `unsupported` state and the UI rendering of that string are verified in S18 (cut-over) — see AC-SIGN-2b.
 
-**AC-SIGN-3** — The NIP-46 requested-permission list MUST equal the union of `permissions.toNip46Perms()` and exactly `sign_event:0`, `sign_event:20602`, `sign_event:30078`, `sign_event:10050`; it MUST NOT contain `sign_event` for 443, 444, 445, 1059, 10051 or 30051. [L: unit (exact set equality)]
+**AC-SIGN-3** — The NIP-46 requested-permission list MUST equal the union of `permissions.toNip46Perms()` and `sign_event` for every kind the app itself signs with the account key: 0, 20602, 30078, 10050, 24242 (Blossom upload auth) and 25050–25055 (call signaling inner events); it MUST NOT contain `sign_event` for 443, 444, 445, 1059, 10051 or 30051. A guard test MUST derive the app-signed kinds from the code's kind constants (Blossom auth kind, call kinds) so a new account-signed kind cannot be added without updating the set. [L: unit (exact set equality)]
 
 **AC-SIGN-4** — A stored NIP-46 session whose granted perms equal the old set (including 30051/443/444) MUST be discarded on load (stored session cleared, user routed to reconnect); a stored session whose granted perms cover the new set MUST be kept. [L: unit]
 

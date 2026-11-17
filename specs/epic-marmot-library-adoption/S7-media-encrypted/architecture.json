@@ -1,0 +1,48 @@
+{
+  "module_name": "media",
+  "purpose": "Group image attachments over the library: send encrypts each blob with group.encryptMedia, uploads ONLY the ciphertext to Blossom and sends one kind-9 rumor (through the S6 sender) whose imeta tags are the library's encrypted-media-v1 tags plus a role field; receive parses the imeta with the library codec, fetches the ciphertext by a trusted blossom-v1 locator, decrypts with group.decryptMedia and keeps the plaintext in the app's decrypted cache (few-media-blobs / few-media-meta) so a reload serves it without decrypting again. Built beside the old marmot-ts media path (useImageSend / useDecryptedImage are rewired by S18, the old exports are deleted by S22).",
+  "public_api": [
+    { "name": "buildGroupImetaTag", "signature": "(libraryImeta: readonly (readonly string[])[], role: 'full' | 'thumb') => string[]", "description": "The library imeta tag of one EncryptedMedia plus ` role <role>`; throws TypeError unless it is exactly one valid encrypted-media-v1 tag with a blossom-v1 locator (http / unsafe-host / cache-only locators fail here, loudly, before anything is sent)." },
+    { "name": "extractGroupAttachmentsByRole", "signature": "(tags: string[][]) => { full: GroupImageAttachment | null; thumb: GroupImageAttachment | null }", "description": "Parses imeta tags with the library codec (invalid / legacy tags skipped; missing role = full; first tag per role wins); keeps the original tag for decryptMedia." },
+    { "name": "groupAttachmentFingerprint", "signature": "(a: { ciphertextSha256; plaintextSha256; nonce; version }) => string", "description": "Cache identity of one attachment record; a forged record that differs in any of the four fields is cache-distinct." },
+    { "name": "createGroupImageService", "signature": "(deps: { sender: Pick<GroupRumorSender,'prepare'>; upload(ciphertext): Promise<string>; download(attachment): Promise<Uint8Array>; cache: GroupMediaCachePort; blossomServers: readonly string[]; warn?; maxCiphertextBytes? }) => { sendImage(group, input): Promise<{rumorId; createdAt; full; thumb}>; loadImage(group, ref): Promise<{bytes; type}> }", "description": "Send and receive orchestration. Required ports are validated at construction (TypeError)." },
+    { "name": "getAttachmentCiphertext", "signature": "(attachment: GroupMediaAttachment, fetchBlob?: typeof get) => Promise<Uint8Array>", "description": "Tries the attachment's blossom-v1 locators in order, skipping origins off the operator allowlist, accepting only bytes whose SHA-256 equals ciphertextSha256." },
+    { "name": "blossomMediaPorts", "signature": "(signer: EventSigner) => { upload; download; blossomServers }", "description": "Production wiring of the service's Blossom ports; upload verifies the server stored the blob the locator names." },
+    { "name": "groupMediaCachePort", "signature": "{ getBlob; setBlob; addMessageRef }", "description": "The existing few-media-blobs / few-media-meta persistence as the service's cache port." }
+  ],
+  "private_files": [],
+  "owned_data": ["few-media-blobs (decrypted plaintext by group:fingerprint)", "few-media-meta (message refs per cached blob)"],
+  "dependencies_allowed": [
+    "@941design/marmot (EncryptedMedia / MarmotGroup types only)",
+    "@941design/marmot-engine/core (parseMediaImetaTag, MediaAttachment: the imeta codec)",
+    "app/src/lib/marmot/send (GroupRumorSender / SendableGroup types, via its index.ts)",
+    "@/src/config/blossom, @/src/lib/publicEnv (operator Blossom origin allowlist)",
+    "idb-keyval (existing cache stores; update() is not used)"
+  ],
+  "dependencies_forbidden": [
+    "ts-mls",
+    "@internet-privacy/marmot-ts (in NEW code; the pre-existing old exports keep their import until S22)",
+    "any React context or 'react'",
+    "idb-keyval update()",
+    "uploading plaintext, or any bytes other than the library's ciphertext"
+  ],
+  "external_ports": [
+    "group.encryptMedia / group.decryptMedia (library group handle)",
+    "sender.prepare(...).send() (SendGroupRumor seam, S6)",
+    "upload(ciphertext) -> blob URL (Blossom PUT /upload)",
+    "download(attachment) -> ciphertext bytes (Blossom GET by locator)",
+    "cache: getBlob / setBlob / addMessageRef"
+  ],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/media/groupImeta.test.ts",
+    "app/tests/unit/media/groupBlossom.test.ts",
+    "app/tests/unit/media/groupImageService.test.ts",
+    "app/tests/unit/media/groupImageService.reload.test.ts",
+    "app/tests/unit/marmot/media.harness.test.ts"
+  ],
+  "seams": [
+    { "name": "SendGroupRumor (consumed: sender.prepare)", "seam": { "cross_story": true, "consumed_by": [] } }
+  ]
+}

@@ -102,3 +102,9 @@ export async function clearGroupMedia(groupId: string): Promise<void> {
 export async function clearAllMedia(): Promise<void> {
   await Promise.all([clear(blobStore), clear(metaStore)]);
 }
+
+/**
+ * The decrypted-media cache as the group image service's cache port. Serves an already-decrypted image
+ * after a reload without the service decrypting again.
+ */
+export const groupMediaCachePort = { getBlob, setBlob, addMessageRef };

@@ -44,7 +44,7 @@
       "phase": "pre-impl",
       "category": "SPEC",
       "ac_id": "AC-MEDIA-1",
-      "question": "AC-MEDIA-1: Image send MUST call `group.encryptMedia` and upload the ciphertext to Blossom; the published imeta tags MUST carry the library's media metadata and MUST NOT contain the plaintext bytes. Receive MUST call `group.decryptMedia` and render a blob equal to the sent bytes. Harness round trip with a fake Blossom: bytes in = bytes out, uploaded blob ≠ plaintext. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness + unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+      "question": "AC-MEDIA-1: Image send MUST call `group.encryptMedia` and upload the ciphertext to Blossom; the published imeta tags MUST carry the library's media metadata and MUST NOT contain the plaintext bytes. Receive MUST call `group.decryptMedia` and render a blob equal to the sent bytes. Harness round trip with a fake Blossom: bytes in = bytes out, uploaded blob \u2260 plaintext. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [harness + unit] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
     },
     {
       "question_id": "VQ-S7-008",
@@ -52,6 +52,30 @@
       "category": "SPEC",
       "ac_id": "AC-MEDIA-2",
       "question": "AC-MEDIA-2: The decrypted-media cache (`few-media-blobs`, `few-media-meta`) MUST keep serving an already-decrypted image after reload without re-calling `decryptMedia`. Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit; e2e:groups-image-sharing (kept)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S7-009",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "In app/src/lib/media/imageMessage.ts createGroupImageService.sendImage (encryptAndUpload), is `upload` ever handed anything other than the ciphertext returned by group.encryptMedia? Show the guard that refuses a ciphertext equal to the input or empty (plaintext-upload-refused) and the test that mutates `upload(enc.ciphertext)` to `upload(blob.bytes)` and fails (groupImageService.test.ts, media.harness.test.ts)."
+    },
+    {
+      "question_id": "VQ-S7-010",
+      "phase": "post-impl",
+      "category": "SECURITY",
+      "question": "loadImage in imageMessage.ts and getAttachmentCiphertext in blossomClient.ts consume attacker-controlled imeta: show that (a) locators off the operator Blossom allowlist are never requested, (b) bytes not matching ciphertextSha256 are never returned, (c) non-image media types and ciphertexts over maxCiphertextBytes are refused before decrypt, and (d) a forged record (other nonce) cannot hit an honest record's decrypted-cache slot (groupAttachmentFingerprint)."
+    },
+    {
+      "question_id": "VQ-S7-011",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "The library codec rejects http Blossom locators (only https on a routable host is valid), while the e2e Blossom mock and local dev use http://localhost. Does buildGroupImetaTag fail loudly BEFORE any upload when the configured Blossom server is not https, and is the consequence for S24/S25 (e2e blossom mock must be https/routable, or the codec path must be adapted) recorded as a decision?"
+    },
+    {
+      "question_id": "VQ-S7-012",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "imageMessage.ts and imetaTag.ts now import @941design/marmot-engine/core beside the pre-existing @internet-privacy/marmot-ts imports of the legacy path. Confirm the new code imports no marmot-ts/ts-mls, that the legacy exports are untouched (old hooks still compile, S22 deletes them), and that no module outside media imports the new exports yet (S18 wires useImageSend/useDecryptedImage)."
     }
   ]
 }

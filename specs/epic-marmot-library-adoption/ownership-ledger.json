@@ -431,6 +431,19 @@
         "S19": "A3 second half: an own send abandoned before publish ack surfaces ONLY as send() rejection (publish-failed); intentFailed/groupBranchSwitched do not fire",
         "S8/S13/S14": "all commit ops go through groupOpQueue (bounded synced wait, abort signal); never from a library frame (enqueue); leave uses skipSync offline; S13 calls tracker.forgetGroup on purge"
       }
+    },
+    {
+      "id": "S7",
+      "concepts_owned": [
+        "media.group"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "processImage produces a blurhash which the encrypted-media-v1 codec rejects — pass a thumbhash; new decrypted-cache fingerprint differs from legacy deliberately; wire createGroupImageService into useImageSend/useDecryptedImage",
+        "S24": "serve the Blossom mock over https (library refuses http/loopback locators); configure NEXT_PUBLIC_BLOSSOM_BASE_URL / TRUSTED_HOSTS for e2e",
+        "S16": "MarmotContext.tsx (~1628, ~2958) still signs kind 30051 with the account key; it is NOT in the NIP-46 requested set (AC-SIGN-3) — S16 must remove that publish (AC-REL-3); until then it is silently refused under permission-enforcing bunkers",
+        "S18/S22": "consider a media/index.ts public surface; nip46Perms imports dependency-free kind constant modules (calls/callKinds.ts, media/blossomAuthKind.ts)"
+      }
     }
   ],
   "reviewer_state": {

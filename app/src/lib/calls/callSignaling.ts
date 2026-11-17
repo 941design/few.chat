@@ -24,12 +24,16 @@ import type { CallSignalingParams, IncomingCallEvent, CallKind } from '@/src/typ
 
 // ── Kind constants ──────────────────────────────────────────────────────────────
 
-export const CALL_OFFER_KIND = 25050 as const;
-export const CALL_ANSWER_KIND = 25051 as const;
-export const CALL_ICE_KIND = 25052 as const;
-export const CALL_HANGUP_KIND = 25053 as const;
-export const CALL_REJECT_KIND = 25054 as const;
-export const CALL_RENEGOTIATE_KIND = 25055 as const;
+import {
+  CALL_OFFER_KIND,
+  CALL_ANSWER_KIND,
+  CALL_ICE_KIND,
+  CALL_HANGUP_KIND,
+  CALL_REJECT_KIND,
+  CALL_RENEGOTIATE_KIND,
+} from './callKinds';
+
+export { CALL_OFFER_KIND, CALL_ANSWER_KIND, CALL_ICE_KIND, CALL_HANGUP_KIND, CALL_REJECT_KIND, CALL_RENEGOTIATE_KIND };
 
 /** Kind used for the outer gift-wrap envelope (ephemeral variant of NIP-59's 1059). */
 export const CALL_GIFT_WRAP_KIND = 21059 as const;

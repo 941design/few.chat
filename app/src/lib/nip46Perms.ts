@@ -2,18 +2,42 @@
  * NIP-46 requested-permission set and stored-session discard check (D2).
  *
  * The requested set is the union of the library's own signer needs
- * (`permissions.toNip46Perms()`) and the few app-signed kinds (0 existing
- * app behaviour, 20602 pairing card, 30078 backup,
- * 10050 inbox relay list). Kinds 443/444/445/1059/10051/30051 are no longer
+ * (`permissions.toNip46Perms()`) and the app-signed kinds (see {@link APP_SIGN_EVENT_KINDS}). Kinds 443/444/445/1059/10051/30051 are no longer
  * requested. Requesting `sign_event:0` does not publish anything: kind 0 is
  * never broadcast (privacy invariant).
  *
  * Pure: no React, no storage access; wiring lives in NostrIdentityContext (S18).
  */
 import { permissions } from '@941design/marmot';
+import { BLOSSOM_AUTH_KIND } from '@/src/lib/media/blossomAuthKind';
+import {
+  CALL_ANSWER_KIND,
+  CALL_HANGUP_KIND,
+  CALL_ICE_KIND,
+  CALL_OFFER_KIND,
+  CALL_REJECT_KIND,
+  CALL_RENEGOTIATE_KIND,
+} from '@/src/lib/calls/callKinds';
 
-/** App-signed kinds requested on top of the library's set. */
-export const APP_SIGN_EVENT_KINDS = [0, 20602, 30078, 10050] as const;
+/**
+ * App-signed kinds requested on top of the library's set: 0 (profile; never broadcast), 20602 (pairing card),
+ * 30078 (backup), 10050 (inbox relay list), the Blossom upload authorization (24242), and the call signaling inner
+ * events (25050-25055). The last two groups come from the code's own kind constants so a new account-signed kind
+ * cannot be added without it showing here.
+ */
+export const APP_SIGN_EVENT_KINDS = [
+  0,
+  20602,
+  30078,
+  10050,
+  BLOSSOM_AUTH_KIND,
+  CALL_OFFER_KIND,
+  CALL_ANSWER_KIND,
+  CALL_ICE_KIND,
+  CALL_HANGUP_KIND,
+  CALL_REJECT_KIND,
+  CALL_RENEGOTIATE_KIND,
+] as const;
 
 function splitPerms(list: string): string[] {
   return list.split(',').map((p) => p.trim()).filter((p) => p.length > 0);

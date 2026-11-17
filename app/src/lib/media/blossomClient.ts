@@ -1,4 +1,5 @@
 import type { EventSigner } from 'applesauce-core';
+import type { MediaAttachment as EngineMediaAttachment } from '@941design/marmot-engine/core';
 import { BLOSSOM_BASE_URL } from '@/src/config/blossom';
 import { createLogger } from '@/src/lib/logger';
 import { getNextPublicBlossomTrustedHosts } from '@/src/lib/publicEnv';
@@ -116,6 +117,18 @@ export const RETRY_DELAYS = [500, 1500, 5000];
  */
 export const REQUEST_TIMEOUT_MS = 30000;
 
+/** A response body larger than the caller's byte limit (declared by Content-Length, or counted while streaming). */
+export class BlossomTooLargeError extends Error {
+  constructor(public readonly limit: number) {
+    super(`Blossom download exceeds the ${limit} byte limit`);
+    this.name = 'BlossomTooLargeError';
+  }
+}
+
+/** Kind of the Blossom (BUD-02) upload authorization event the app signs with the account key. */
+import { BLOSSOM_AUTH_KIND } from './blossomAuthKind';
+export { BLOSSOM_AUTH_KIND };
+
 export class BlossomTimeoutError extends Error {
   constructor(operation: 'upload' | 'download') {
     super(`Blossom ${operation} timed out after ${REQUEST_TIMEOUT_MS}ms`);
@@ -150,7 +163,7 @@ export async function buildBlossomAuthEvent(
   const pubkey = await signer.getPublicKey();
   const now = Math.floor(Date.now() / 1000);
   const draft = {
-    kind: 24242,
+    kind: BLOSSOM_AUTH_KIND,
     created_at: now,
     content: 'few image upload',
     tags: [
@@ -285,29 +298,86 @@ export async function put(
   throw new BlossomUploadError(String(lastError));
 }
 
-export async function get(blobUrl: string): Promise<Uint8Array> {
+/**
+ * Downloads a blob, never holding more than `maxBytes` of it.
+ *
+ * A declared Content-Length over the limit is rejected without reading the body; otherwise the body is read as a
+ * stream and aborted as soon as the running total exceeds the limit. The timeout is an IDLE timeout: armed for the
+ * headers and re-armed on every body chunk, so a slow but steady link succeeds while a stalled connection or body
+ * times out. Overall caps belong to the callers. Redirects are followed (BUD-01 lets a server 307/308 to a CDN), but
+ * the FINAL response URL must be on the same trusted-origin allowlist as the requested one, else the download is
+ * rejected with {@link BlossomOriginError}; callers hash-check the content.
+ */
+export async function get(blobUrl: string, maxBytes: number = Number.POSITIVE_INFINITY): Promise<Uint8Array> {
   const validated = assertDownloadableBlobUrl(blobUrl);
-  const response = await fetchWithTimeout(
-    validated.toString(),
-    {},
-    REQUEST_TIMEOUT_MS,
-    'download',
-  );
+  const controller = new AbortController();
+  const timeout = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new BlossomTimeoutError('download')));
+  });
+  timeout.catch(() => undefined); // an unconsumed rejection (success path) is not an unhandled one
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  };
+  arm();
+  try {
+    const work = (async (): Promise<Uint8Array> => {
+      const response = await fetch(validated.toString(), { signal: controller.signal });
 
-  if (response.status === 404) {
-    const sha256 = validated.pathname.split('/').pop() ?? blobUrl;
-    throw new BlossomNotFoundError(sha256);
+      // A redirect may have led anywhere: the final origin must be allowlisted too (an empty url is a response
+      // that was not fetched over the network, so there is nothing to check).
+      if (typeof response.url === 'string' && response.url !== '') assertDownloadableBlobUrl(response.url);
+
+      if (response.status === 404) {
+        const sha256 = validated.pathname.split('/').pop() ?? blobUrl;
+        throw new BlossomNotFoundError(sha256);
+      }
+      if (!response.ok) {
+        throw new BlossomUploadError(`Download failed: ${response.status} ${response.statusText}`, response.status);
+      }
+
+      const declared = response.headers?.get?.('content-length');
+      if (declared != null && declared !== '' && Number(declared) > maxBytes) {
+        await response.body?.cancel?.().catch(() => undefined);
+        throw new BlossomTooLargeError(maxBytes);
+      }
+
+      if (!response.body || typeof response.body.getReader !== 'function') {
+        const buffer = await response.arrayBuffer();
+        if (buffer.byteLength > maxBytes) throw new BlossomTooLargeError(maxBytes);
+        return new Uint8Array(buffer);
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        arm();
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new BlossomTooLargeError(maxBytes);
+        }
+        chunks.push(value);
+      }
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return out;
+    })();
+    work.catch(() => undefined); // when the timeout wins the race, the abandoned work's rejection is not unhandled
+    return await Promise.race([work, timeout]);
+  } catch (err) {
+    if (controller.signal.aborted && !(err instanceof BlossomTimeoutError)) throw new BlossomTimeoutError('download');
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  if (!response.ok) {
-    throw new BlossomUploadError(
-      `Download failed: ${response.status} ${response.statusText}`,
-      response.status,
-    );
-  }
-
-  const buffer = await response.arrayBuffer();
-  return new Uint8Array(buffer);
 }
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
@@ -318,4 +388,74 @@ async function sha256Hex(data: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+// ---------------------------------------------------------------------------
+// Group media (encrypted-media-v1): ports of the group image service.
+// ---------------------------------------------------------------------------
+
+/** The Blossom servers written into new attachments' locators: the operator's server, no trailing slash. */
+export function groupBlossomServers(): string[] {
+  return [BLOSSOM_BASE_URL.replace(/\/+$/, '')];
+}
+
+/** Most `blossom-v1` locators (on allowed origins) tried for one attachment. */
+export const MAX_LOCATORS_TRIED = 3;
+
+/**
+ * Fetches the ciphertext of a group attachment, at most `maxBytes` of it per locator.
+ *
+ * Only `blossom-v1` locators on the operator allowlist are tried (a locator on any other origin is
+ * skipped without a request: the SSRF / IP-disclosure gate of {@link assertDownloadableBlobUrl}), in the
+ * order the sender listed them. Bytes are accepted only when their SHA-256 is the attachment's
+ * `ciphertextSha256`: a server answering with other bytes counts as a failed locator, never as content.
+ * Throws {@link BlossomNotFoundError} when every tried locator was missing, otherwise the last failure,
+ * and {@link BlossomOriginError} when no locator was on an allowed origin.
+ */
+export async function getAttachmentCiphertext(
+  attachment: Pick<EngineMediaAttachment, 'locators' | 'ciphertextSha256'>,
+  maxBytes: number,
+  fetchBlob: (blobUrl: string, maxBytes: number) => Promise<Uint8Array> = get,
+): Promise<Uint8Array> {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) throw new TypeError('getAttachmentCiphertext: maxBytes must be a positive number');
+  let lastError: unknown;
+  let tried = 0;
+  let missing = 0;
+  for (const locator of attachment.locators) {
+    if (locator.kind !== 'blossom-v1') continue;
+    // The sender lists the locators: bound the requests one attachment can make a receiver issue.
+    if (tried >= MAX_LOCATORS_TRIED) break;
+    try {
+      assertDownloadableBlobUrl(locator.value);
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+    tried++;
+    try {
+      const bytes = await fetchBlob(locator.value, maxBytes);
+      if (bytes.length > maxBytes) throw new BlossomTooLargeError(maxBytes);
+      if ((await sha256Hex(bytes)) === attachment.ciphertextSha256) return bytes;
+      lastError = new BlossomUploadError(`Blob at ${locator.value} does not match its content address`);
+    } catch (err) {
+      if (err instanceof BlossomNotFoundError) missing++;
+      lastError = err;
+    }
+  }
+  if (tried > 0 && missing === tried) throw new BlossomNotFoundError(attachment.ciphertextSha256);
+  if (lastError instanceof Error) throw lastError;
+  throw new BlossomOriginError(attachment.locators.map((l) => l.value).join(','));
+}
+
+/** Production wiring of the group image service's Blossom ports (ciphertext only goes through `upload`). */
+export function blossomMediaPorts(signer: EventSigner): {
+  upload: (ciphertext: Uint8Array) => Promise<string>;
+  download: (attachment: EngineMediaAttachment, maxBytes: number) => Promise<Uint8Array>;
+  blossomServers: string[];
+} {
+  return {
+    upload: (ciphertext) => put(ciphertext, signer),
+    download: (attachment, maxBytes) => getAttachmentCiphertext(attachment, maxBytes),
+    blossomServers: groupBlossomServers(),
+  };
 }
