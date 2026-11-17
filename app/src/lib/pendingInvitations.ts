@@ -24,8 +24,10 @@ import { createLogger } from '@/src/lib/logger';
 const logger = createLogger('pendingInvitations');
 
 const PENDING_INVITES_KEY = 'lp_pendingInvitations_v1';
-const GLOBAL_CAP = 256;
-const PER_INVITER_CAP = 8;
+/** Total cap (AC-CAP-1): reused by `marmot/invitations/caps.ts`, which enforces it on `invitations.pending()`. */
+export const GLOBAL_CAP = 256;
+/** Per-inviter cap (AC-CAP-1): reused by `marmot/invitations/caps.ts`. */
+export const PER_INVITER_CAP = 8;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 

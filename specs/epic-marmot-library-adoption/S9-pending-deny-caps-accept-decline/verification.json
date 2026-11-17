@@ -31,7 +31,7 @@
       "question_id": "VQ-S9-005",
       "phase": "pre-impl",
       "category": "SPEC",
-      "question": "Does the delivered S9 implementation match the intent of its scope (invitations.pending() as the only pending store (lp_pendingInvitations_v1 not read/written by new code), ADR-002 pull-only behaviour, native accept/decline (no 21063), blocked-sender drop with decline(id,{declineRumor:false}), 256/8 caps with silent declines, pending view model feeding InvitationCar) and respect its exclusions (Invite-context rumor handler and join-request handler internals (S10, S12) — they consume the deny predicate; UI wiring (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
+      "question": "Does the delivered S9 implementation match the intent of its scope (invitations.pending() as the only pending store (lp_pendingInvitations_v1 not read/written by new code), ADR-002 pull-only behaviour, native accept/decline (no 21063), blocked-sender drop with decline(id,{declineRumor:false}), 256/8 caps with silent declines, pending view model feeding InvitationCar) and respect its exclusions (Invite-context rumor handler and join-request handler internals (S10, S12) \u2014 they consume the deny predicate; UI wiring (S18))? Identify any capability owned by a later story that was built ahead, or any in-scope capability left unimplemented."
     },
     {
       "question_id": "VQ-S9-006",
@@ -87,6 +87,36 @@
       "category": "SPEC",
       "ac_id": "AC-CAP-1",
       "question": "AC-CAP-1: With 257 pending invitations the 257th MUST be declined (retained total = 256); with 9 from one inviter the 9th MUST be declined (retained per inviter = 8). Declines are silent (no bell, no toast) and made with the library decline. The caps MUST equal the constants of `lib/pendingInvitations.ts` (256 / 8). Provide evidence of (a) the production code satisfying this (file:line), (b) the test(s) at level [unit (stubbed pending list)] that exercise it end-to-end and would fail for a stub/no-op, and (c) confirmation that those tests are not pure mock-spy proxies."
+    },
+    {
+      "question_id": "VQ-S9-014",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "Library `invitations.decline(id)` sends the decline rumor ONLY when `declineRumor === true` (welcome-processor.js:1050-1078); the default is NO rumor, contrary to marmot-lib-api.md. Confirm acceptDecline.ts passes `{declineRumor:true}` for a user decline (so the sponsor's welcomeDeclined fires, AC-INV-3), pendingView.ts passes `{declineRumor:false}` explicitly for blocked and over-cap entries, and that mutating the user-decline flag to false fails pendingDeny.harness.test.ts (decline test) and the unit decline test."
+    },
+    {
+      "question_id": "VQ-S9-015",
+      "phase": "post-impl",
+      "category": "TEST",
+      "question": "AC-BLK-1 harness asserts nothing leaves Bob for a blocked sponsor: kind-1059 wrap count equals the count right after the Welcome was published, Alice's client emits no welcomeDeclined within a 600 ms settle window, Bob's library pending() is empty, and the view never announced an arrival; a control sponsor (Carol) in the same run is shown. Confirm the mutation results: forcing `hostile=false` in pendingView.ts fails 5 tests (4 unit + the harness), replacing applyPendingCaps with identity fails 5 (caps unit + view ordering), and flipping the user-decline flag fails 2."
+    },
+    {
+      "question_id": "VQ-S9-016",
+      "phase": "post-impl",
+      "category": "ARCHITECTURE",
+      "question": "Re-entrancy: pendingView.onInboxDisposition (a client listener) makes no client call and only enqueues scheduleRefresh as its last action; all invitations.pending()/decline() calls run in the queued job or in refresh() called from UI/startup. Verify with pendingView.test.ts 're-entrancy' tests (zero pending() calls before the job runs, triggers collapse into one job) and that the harness wires enqueue to AccountClientHandle.enqueue of a real client with no `reentrant` error (onError throws in the harness)."
+    },
+    {
+      "question_id": "VQ-S9-017",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "Caps order: the retained set is the OLDEST invitations (receivedAt asc, tie id), so the 257th arrival / 9th from one inviter is declined and an already shown card is never displaced. The old lp_pendingInvitations_v1 module dropped the OLDEST on overflow; confirm this deliberate inversion matches AC-CAP-1 ('the 257th MUST be declined') and is idempotent (property test over 40 seeded random lists)."
+    },
+    {
+      "question_id": "VQ-S9-018",
+      "phase": "post-impl",
+      "category": "SPEC",
+      "question": "`GLOBAL_CAP` / `PER_INVITER_CAP` are now exported from app/src/lib/pendingInvitations.ts and re-exported by caps.ts. S22/S23 delete that module: confirm the sweep story moves the two constants into caps.ts (caps.test.ts asserts equality with the old constants and will then need to assert 256 / 8 literally)."
     }
   ]
 }

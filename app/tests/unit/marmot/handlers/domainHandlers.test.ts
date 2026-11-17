@@ -531,7 +531,7 @@ describe('profile sink gate keyed per group; accepted announcement unlosable', (
     expect(deps.mergeMemberProfile.mock.calls.length).toBe(before + 1);
     await send('g1', signed(1024)); // newest still held -> deduped
     expect(deps.mergeMemberProfile.mock.calls.length).toBe(before + 1);
-  });
+  }, 30_000); // signs 1025 events: exceeds the 5 s default under full-suite load
 
   it.each(['notifyProfileObserved', 'writeContactEntry'] as const)(
     'a throw in %s leaves the marker for the retry, which announces exactly once; a further replay adds none',

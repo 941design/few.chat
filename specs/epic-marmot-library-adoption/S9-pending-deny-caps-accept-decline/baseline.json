@@ -1,0 +1,9 @@
+{
+  "story_id": "S9",
+  "baseline_commit": "1c34ae5",
+  "captured_at": "2026-11-17",
+  "tests": { "status": "PASS", "command": "make test-unit", "passed": 7682, "skipped": 1, "failed": 0, "files": 348, "note": "S8 final count (7682 passed / 1 skipped / 348 files) is the committed baseline at 1c34ae5. A raw run started after the first S9 source file existed showed 1 failure (kinds.test.ts AC-KIND-2: a comment in the new acceptDecline.ts contained the literal 4462); that was caused by the in-progress S9 file, not pre-existing, and was fixed before the final run." },
+  "lint": "NO_LINT",
+  "typecheck": "clean",
+  "typecheck_commands": ["cd app && npx tsc --noEmit", "cd app && npx tsc -p tsconfig.tests-marmot.json --noEmit"]
+}

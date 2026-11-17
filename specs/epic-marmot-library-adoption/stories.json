@@ -385,7 +385,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "completed",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -769,7 +769,7 @@
         "ClientJobQueue",
         "GroupOpQueue"
       ],
-      "notes": "Single largest story by design (D15). Subset: groups-lifecycle, groups-welcome, groups-pull-only-invitation-accept/-decline, groups-leave-intent, groups-remove-member, groups-dispatch-isolation, dm-walled-garden-group-member-allowed. Reconnects the S16 ensure port and S17 lifecycle. Some subset specs fail until S25 rewrites; report, do not gate. Keep the dev-only groupLibrary smoke-hook effect in MarmotContext.tsx (variable-guarded) until S27. Pass an AbortSignal from effect cleanup to bootstrapAccountClient; handle aborted / signer-timeout / unsupported(storage) results; treat lease-held right after a same-tab abort as retryable.",
+      "notes": "Single largest story by design (D15). Subset: groups-lifecycle, groups-welcome, groups-pull-only-invitation-accept/-decline, groups-leave-intent, groups-remove-member, groups-dispatch-isolation, dm-walled-garden-group-member-allowed. Reconnects the S16 ensure port and S17 lifecycle. Some subset specs fail until S25 rewrites; report, do not gate. Keep the dev-only groupLibrary smoke-hook effect in MarmotContext.tsx (variable-guarded) until S27. Pass an AbortSignal from effect cleanup to bootstrapAccountClient; handle aborted / signer-timeout / unsupported(storage) results; treat lease-held right after a same-tab abort as retryable. Invitation view wiring (S9): call view.seed() BEFORE routing inboxDisposition (else the first recompute announces the whole list); isTrustedSponsor fails toward stranger when knownPeers storage is unavailable — keep storage available or treat storage failure as trusted for contacts.",
       "owning_module": "MarmotContext",
       "story_dir": "S18-marmot-context-cutover"
     },
@@ -921,7 +921,8 @@
         "includes": [
           "app/src/** (key/store references)",
           "scripts/unused-exports check (added to gate)",
-          "app/src/context/MarmotContext.tsx (dead state)"
+          "app/src/context/MarmotContext.tsx (dead state)",
+          "app/src/lib/pendingInvitations.ts (delete) — first move GLOBAL_CAP (256) / PER_INVITER_CAP (8) into app/src/lib/marmot/invitations/caps.ts and repoint caps.test.ts"
         ],
         "excludes": [
           "Legacy store cleanup code for existing devices (explicitly not shipped)"
@@ -934,7 +935,7 @@
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
-      "notes": "",
+      "notes": "Owns deleting lib/pendingInvitations.ts after moving its two cap constants into invitations/caps.ts (S9 handoff); grep for the module and lp_pendingInvitations_v1 must return none.",
       "owning_module": "MarmotContext",
       "story_dir": "S23-sweep-keys-stores-deadcode"
     },
@@ -1095,7 +1096,7 @@
       "creates_seam": false,
       "lighter_path": true,
       "consumes_seams": [],
-      "notes": "Pure markdown, all targets exist: eligible for lighter_path.",
+      "notes": "Pure markdown, all targets exist: eligible for lighter_path. docs/behavior/groups.md §5.1 must describe trust-ordered invitation caps with the 14-day stranger TTL (S9 decider), replacing 'oldest discarded'.",
       "owning_module": "MarmotContext",
       "story_dir": "S28-docs-behavior"
     },

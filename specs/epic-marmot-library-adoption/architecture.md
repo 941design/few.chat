@@ -161,7 +161,7 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
 - Invariants:
   - invitations.pending() is the only source; lp_pendingInvitations_v1 never read
   - blocked-sender entries never appear
-  - retained set respects 256 total / 8 per inviter
+  - retention (AC-CAP-1, D14): stranger invitations expire after 14 days (trusted = own account or ever-known peer never expire); 8 per inviter; 256 total ranked trusted-first, then already-shown, then oldest; all declines silent ({declineRumor:false}); `seed()`/`refresh()`/`onInboxDisposition` entries, injected `isTrustedSponsor` and `now`
 
 ### `DenyLayer` — Block predicate for invitations, contexts and join requests
 - Producer: S9 `app/src/lib/marmot/invitations/denyLayer.ts` -> Consumer: S10 `app/src/lib/marmot/invitations/inviteContextHandler.ts`

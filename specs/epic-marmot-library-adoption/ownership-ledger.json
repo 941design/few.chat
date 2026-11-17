@@ -311,6 +311,20 @@
       "owning_module": "send",
       "type": "invariant",
       "added_by_story": "S6"
+    },
+    {
+      "id": "invitations.caps",
+      "name": "Trust-ordered caps: deny → stranger TTL 14 d → per-inviter 8 → total 256 trusted-first then oldest; shown ids keep their place; all declines silent",
+      "owning_module": "invitations",
+      "type": "validation_rule",
+      "added_by_story": "S9"
+    },
+    {
+      "id": "invitations.decline-rumor",
+      "name": "Library sends the decline rumor ONLY when declineRumor===true; user decline gated on visibility (never rumors a blocked/hidden sponsor)",
+      "owning_module": "invitations",
+      "type": "invariant",
+      "added_by_story": "S9"
     }
   ],
   "stories": [
@@ -458,10 +472,26 @@
         "S18": "build the lookup from the client transport requestWithDeadline + configured relays; allowLocalAdvertised only in e2e builds",
         "S22": "delete legacy src/lib/marmot/inviteeKeyPackageLookup.ts (double owner with invitations/keyPackageLookup.ts until cut-over)"
       }
+    },
+    {
+      "id": "S9",
+      "concepts_owned": [
+        "invitations.pendingView",
+        "invitations.denyLayer",
+        "invitations.caps"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S10/S12": "call denyLayer.isBlocked on the sender before storing anything or ringing a bell; auto-accept job must call view.scheduleRefresh()",
+        "S11": "only the user decline (declineRumor:true) needs durability; silent declines are local",
+        "S13": "leave path calls view.scheduleRefresh()",
+        "S18": "call view.seed() once after bootstrap; route clientEvents.inboxDisposition to view.onInboxDisposition; hook scheduleRefresh to block-set changes; inject isTrustedSponsor (own account or isKnownPeer) and now(); accept/decline only from UI handlers; bell count from view.pending().length; view disposed/recreated with the handle",
+        "S22/S23": "move GLOBAL_CAP/PER_INVITER_CAP into invitations/caps.ts when deleting lib/pendingInvitations.ts"
+      }
     }
   ],
   "reviewer_state": {
-    "last_story_reviewed": "S8",
+    "last_story_reviewed": "S9",
     "model_at": "2026-11-17T08:15:41Z"
   }
 }

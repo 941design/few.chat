@@ -1,0 +1,109 @@
+{
+  "module_name": "invitations",
+  "purpose": "Invitee side of the invitation flow on the library: the pending view over invitations.pending() (the only pending store), the deny layer (blocked sponsors), the 256/8 caps with silent declines, and native accept/decline. S8 added the invite side; S10/S11 add the invite context.",
+  "public_api": [
+    {
+      "name": "createDenyLayer",
+      "signature": "(deps: { loadBlockedPeers: () => ReadonlySet<string> }) => DenyLayer",
+      "description": "Seam DenyLayer. isBlocked(pubkey) = lib/blockedPeers isBlockedPeer over the loader's CURRENT set (read per call, no cache). Throws TypeError at construction when the loader is missing."
+    },
+    {
+      "name": "DenyLayer.isBlocked",
+      "signature": "(pubkey: string) => boolean",
+      "description": "Consumed by the pending view (S9) and by S10 (invite context) / S12 (join request) which drop a blocked sender before storing anything."
+    },
+    {
+      "name": "applyPendingCaps",
+      "signature": "<T extends {id; sponsorAccount; receivedAt}>(list: readonly T[], limits?: {total; perInviter}) => { retained: T[]; excess: T[] }",
+      "description": "Pure. Oldest first (receivedAt, then id); a later arrival never displaces a retained one. Defaults are PENDING_TOTAL_CAP / PENDING_PER_INVITER_CAP."
+    },
+    {
+      "name": "PENDING_TOTAL_CAP / PENDING_PER_INVITER_CAP",
+      "signature": "number (256 / 8)",
+      "description": "Re-exports of GLOBAL_CAP / PER_INVITER_CAP of lib/pendingInvitations.ts (AC-CAP-1: equal by construction)."
+    },
+    {
+      "name": "createPendingInvitationView",
+      "signature": "(deps: { invitations: {pending, decline}; denyLayer: DenyLayer; enqueue: (job) => void; onError?: (e) => void }) => PendingInvitationView",
+      "description": "Seam PendingInvitationView. pending(): PendingInvitation[] (synchronous snapshot, oldest first, copy); onChange(cb) => unsubscribe; plus onArrival(cb) (bell source, only for newly visible, never on first load), onInboxDisposition(d) (frame-safe: only enqueues a refresh), refresh() (outside frames), scheduleRefresh(), isVisible(id), dispose(). Blocked sponsors: decline(id,{declineRumor:false}); excess over caps: decline(id,{declineRumor:false}); neither is ever shown."
+    },
+    {
+      "name": "createInvitationActions",
+      "signature": "(deps: { invitations: {pending, decline, accept}; view: {refresh, isVisible}; attachGroup: (g) => void; onError? }) => { accept(id): Promise<MarmotGroup>; decline(id): Promise<void> }",
+      "description": "accept(id) re-reads the list, refuses (InvitationActionError 'unknown-invitation') an id the view hides, calls invitations.accept, attaches the group, refreshes. decline(id) calls invitations.decline(id,{declineRumor:true}) (the native decline rumor, no kind 21063), then refreshes."
+    }
+  ],
+  "private_files": [
+    "app/src/lib/marmot/invitations/pendingView.ts",
+    "app/src/lib/marmot/invitations/denyLayer.ts",
+    "app/src/lib/marmot/invitations/caps.ts",
+    "app/src/lib/marmot/invitations/acceptDecline.ts"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "@941design/marmot (types only: PendingInvitation, MarmotGroup)",
+    "app/src/lib/blockedPeers.ts (isBlockedPeer; read-only)",
+    "app/src/lib/pendingInvitations.ts (GLOBAL_CAP, PER_INVITER_CAP constants only)",
+    "client (ClientJobQueue.enqueue passed in by injection, no import)",
+    "app/src/lib/knownPeers.ts"
+  ],
+  "dependencies_forbidden": [
+    "localStorage lp_pendingInvitations_v1 and every function of the old pending store",
+    "client/ construction (the MarmotClient slice is injected)",
+    "any React context under src/context",
+    "@internet-privacy/marmot-ts",
+    "ts-mls",
+    "keyPackages.offer / invitations.expectWelcome (D8: S12 owns the single auto-accept path)",
+    "idb-keyval update()"
+  ],
+  "external_ports": [
+    "invitations.pending() (library, account scope: only from a queued job or UI handler)",
+    "invitations.decline(id, {declineRumor}) (library)",
+    "invitations.accept(id) (library)",
+    "enqueue: AccountClientHandle.enqueue",
+    "loadBlockedPeers: lib/blockedPeers loadBlockedPeers"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "inboxDisposition (client listener; kinds pending / joined / already-member / branch-switched trigger a queued refresh)"
+  ],
+  "seams": [
+    {
+      "name": "PendingInvitationView",
+      "role": "producer",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S10"
+        ]
+      }
+    },
+    {
+      "name": "DenyLayer",
+      "role": "producer",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S10",
+          "S12"
+        ]
+      }
+    },
+    {
+      "name": "ClientJobQueue",
+      "role": "consumer",
+      "seam": {
+        "cross_story": true,
+        "consumed_by": [
+          "S1"
+        ]
+      }
+    }
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/invitations/caps.test.ts",
+    "app/tests/unit/marmot/invitations/denyLayer.test.ts",
+    "app/tests/unit/marmot/invitations/pendingView.test.ts",
+    "app/tests/unit/marmot/invitations/pendingDeny.harness.test.ts"
+  ]
+}

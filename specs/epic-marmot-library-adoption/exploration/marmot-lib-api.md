@@ -240,3 +240,6 @@ Logout/switch: `client.dispose(); await stores.close();` (+ `stores.account.wipe
 - Exact auto-start of sync in `groups.get()` (vs only `list()`): code shows `startGroupSync` in create, join, load paths (group-runtime.js ~945/1107/1308) — I assumed `get` and `list` share the "load" path.
 - `group.destroy()` vs `abandon()` difference not fully read (teardown.d.ts: kinds 'leave'|'abandon'|'destroy').
 - `MarmotGroup.history()` ordering/withdraw semantics with a custom backend inferred from interface docs only.
+
+
+> Correction (2026-11-17, S9): `invitations.decline(id, opts)` sends the decline rumor ONLY when `opts.declineRumor === true` (welcome-processor.js ~1050–1078); the default is silent. Any statement above implying the opposite default is wrong.

@@ -197,7 +197,7 @@ Ratified by a Fable decider 2026-11-17 (D1 ratified, D2–D12 amended, D13–D16
   - Roster and admin gates inside handlers read the live library accessors (`group.members()`, `group.admins`), never the overlay.
 - **D14 Deny layer on the library inbox.** ADR-008 is re-applied on the new path.
   - A pending invitation, invite-context rumor or join request from a blocked peer is dropped; invitations use `decline(id,{declineRumor:false})`.
-  - The existing total and per-inviter pending-invitation caps (256 total / 8 per inviter, from `lib/pendingInvitations.ts`) are kept by silently declining the excess.
+  - The 256 total / 8 per-inviter caps are kept by silently declining the excess; retention is trusted-sponsor-first (own account or ever-known peer, incl. contacts), and stranger invitations expire after 14 days.
   - `invitations.pending()` is the only pending store; `lp_pendingInvitations_v1` is deleted.
 - **D15 Run sequencing.**
   - Story 1 ends with a bundling proof: `make build` green, plus a temporary relay-bucket spec `groups-library-smoke.spec.ts` that creates a group and observes its own message through the history sink, via a dev-only `__fewTest` hook. The spec also exercises the library assumptions (A1–A3) for `append`, including a thrown-failure retry, and for `withdraw`. Both are deleted in the last story. If the proof fails, the run aborts with the old flow intact.
@@ -329,7 +329,7 @@ The planner expands these into `acceptance-criteria.md`. Every behavioral AC mus
   - Re-appending an undispatched row re-runs the handlers.
   - `list` returns rows in `seq` order.
 - **AC-BLK-1 (D14).** An invitation, invite context or join request from a blocked peer yields no pending entry and no bell. The invitation is declined with `declineRumor:false`.
-- **AC-CAP-1 (D14).** When pending invitations exceed the total or per-inviter cap, the excess is declined and the retained set equals the cap.
+- **AC-CAP-1 (D14).** Excess invitations are declined silently; trusted sponsors are retained first, stranger invitations expire after 14 days, and a stranger flood cannot displace a trusted invitation.
 - **AC-AUTO-1 (D8).** An invitation matching an unexpired outbound join request is auto-accepted exactly once; a non-matching one stays pending.
 - **AC-LEAVE-1/2 (D9).**
   - The sole admin is blocked from leaving; the last member abandons.
@@ -380,6 +380,8 @@ The planner splits these. Expected seams:
 No manual-validation rows are claimed; all ACs are automated (unit, library-backed two-client harness, or e2e).
 
 ## Amendments
+
+- 2026-11-17 (S9 review + Fable decider): invitation caps are trust-ordered (trusted = own account or ever-known peer, incl. contacts) with a 14-day stranger TTL, so a stranger flood cannot lock out invitations from people the user knows; all cap/expiry declines stay silent. AC-CAP-1 and D14 amended.
 
 - 2026-11-17 (S8 reviews): invite falls through only on per-candidate rejections, throws group-level errors, caps candidates at 6, and refuses an invitee who already holds a leaf (`already-member`); invitee-advertised relays are restricted to public wss hosts (max 3 per list). AC-KP-1 and AC-KP-2 amended.
 

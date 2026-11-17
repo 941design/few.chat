@@ -1,6 +1,6 @@
 /**
  * invitations — invite side of the invitation flow (S8). Public surface of the module; other modules
- * import only from here. Later stories (S9-S11) add the pending view, deny layer and invite context.
+ * import only from here. S9 adds the pending view, deny layer, caps and accept/decline; S10-S11 add the invite context.
  */
 export {
   createKeyPackageLookup,
@@ -28,3 +28,23 @@ export {
   type NoUsableKeyPackage,
 } from './invite';
 export { isPublicDnsHost } from './relayUrlPolicy';
+export { createDenyLayer, type DenyLayer, type DenyLayerDeps } from './denyLayer';
+export {
+  applyPendingCaps,
+  createTrustedSponsorPredicate,
+  STRANGER_INVITATION_TTL_MS,
+  DEFAULT_CAP_LIMITS,
+  PENDING_PER_INVITER_CAP,
+  PENDING_TOTAL_CAP,
+  type CapContext,
+  type CapLimits,
+  type CappedInvitation,
+  type CapSplit,
+} from './caps';
+export {
+  createPendingInvitationView,
+  type PendingInvitationsApi,
+  type PendingInvitationView,
+  type PendingInvitationViewDeps,
+} from './pendingView';
+export { createInvitationActions, InvitationActionError, type InvitationActions, type InvitationActionsDeps } from './acceptDecline';

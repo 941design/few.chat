@@ -1,0 +1,81 @@
+{
+  "story_id": "S9",
+  "status": "done",
+  "final_outcome": "completed",
+  "completed_at": "2026-11-17T20:00:00Z",
+  "files_created": [
+    "app/src/lib/marmot/invitations/pendingView.ts",
+    "app/src/lib/marmot/invitations/denyLayer.ts",
+    "app/src/lib/marmot/invitations/caps.ts",
+    "app/src/lib/marmot/invitations/acceptDecline.ts",
+    "app/tests/unit/marmot/invitations/caps.test.ts",
+    "app/tests/unit/marmot/invitations/denyLayer.test.ts",
+    "app/tests/unit/marmot/invitations/pendingView.test.ts",
+    "app/tests/unit/marmot/invitations/pendingDeny.harness.test.ts",
+    "specs/epic-marmot-library-adoption/S9-pending-deny-caps-accept-decline/architecture.json",
+    "specs/epic-marmot-library-adoption/S9-pending-deny-caps-accept-decline/baseline.json",
+    "specs/epic-marmot-library-adoption/S9-pending-deny-caps-accept-decline/result.json"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/invitations/index.ts",
+    "app/src/lib/pendingInvitations.ts",
+    "specs/epic-marmot-library-adoption/S9-pending-deny-caps-accept-decline/verification.json",
+    "specs/epic-marmot-library-adoption/architecture.md"
+  ],
+  "adjacent_fixes": [],
+  "tests_added": {
+    "unit": "caps.test.ts (26): trust-ordered retention incl. all ruling cases, TTL boundary, retention stability, properties, view retention behaviour; denyLayer.test.ts (7); pendingView.test.ts (29): ports, re-entrancy, snapshot/events, actions incl. decline-mirrors-accept, explicit seeding, queued-flag reset, structural scan.",
+    "harness": "pendingDeny.harness.test.ts (3): AC-INV-2; AC-INV-3 (+ double user decline: exactly one extra wrap); AC-BLK-1 (+ full relay delta pinned to the key-package rotation; onError collected and asserted empty in teardown)."
+  },
+  "test_counts": {
+    "baseline": 7682,
+    "final": 7721
+  },
+  "mocks": [],
+  "remediation_rounds": 0,
+  "architect_skipped": false,
+  "modules_touched": [
+    "invitations"
+  ],
+  "escalation_history": [],
+  "implementation_summary": "New invitee-side files in app/src/lib/marmot/invitations. denyLayer.ts: createDenyLayer({loadBlockedPeers}) (seam DenyLayer, isBlocked via lib/blockedPeers isBlockedPeer, set read on every call). caps.ts: PENDING_TOTAL_CAP/PENDING_PER_INVITER_CAP re-export the now-exported GLOBAL_CAP/PER_INVITER_CAP of lib/pendingInvitations.ts; applyPendingCaps is a pure oldest-first split into retained/excess. pendingView.ts: createPendingInvitationView({invitations,denyLayer,enqueue,onError?}) keeps a synchronous snapshot of invitations.pending() minus blocked sponsors and cap excess (seam PendingInvitationView: pending(), onChange; plus onArrival as the bell source, onInboxDisposition, refresh, scheduleRefresh, isVisible, dispose). Blocked and excess entries are declined with {declineRumor:false}; refreshes are serialised, collapse, and from the listener only enqueue on the job queue as the last action (re-entrancy rule). acceptDecline.ts: createInvitationActions: accept(id) re-reads the list, refuses hidden/unknown ids, calls invitations.accept, attaches the group and refreshes; decline(id) calls invitations.decline(id,{declineRumor:true}). index.ts exports it all. No new code reads or writes lp_pendingInvitations_v1.",
+  "verification": {
+    "unit_full": "make test-unit: tsc -p tsconfig.tests-marmot.json clean, 352 files, 7721 passed, 1 skipped, 0 failed",
+    "typecheck": "tsc --noEmit clean; tsc -p tsconfig.tests-marmot.json --noEmit clean",
+    "lint": "NO_LINT (no ESLint config; next lint prompts for setup)",
+    "mutation_spot_checks": "3 in-place mutants of the new files (restored after): hostile=false in pendingView fails 5 (4 unit + harness AC-BLK-1); applyPendingCaps replaced by identity fails 5; user decline flag true->false fails 2 (harness AC-INV-3 + unit)."
+  },
+  "decisions": [
+    "Library fact: invitations.decline sends the decline rumor ONLY when declineRumor === true (welcome-processor.js:1050-1078); its default is no rumor (marmot-lib-api.md says the opposite). User decline therefore passes {declineRumor:true} (needed for the sponsor's welcomeDeclined, AC-INV-3); blocked and over-cap declines pass {declineRumor:false} explicitly.",
+    "Cap declines are silent toward the sponsor too (no rumor): AC-CAP-1 says silent, and a flood sender gets no reply. The sponsor keeps a stale leaf until its own cleanup; accepted.",
+    "Caps keep the OLDEST invitations (the 257th / 9th arrival is declined), the inverse of the old drop-oldest module; matches AC-CAP-1 wording and never displaces a shown card.",
+    "The seam's synchronous pending() is a snapshot refreshed by refresh(); account-scope calls run only in a queued job or a UI/startup refresh(). S18 must call refresh() once after bootstrap and route clientEvents.inboxDisposition to view.onInboxDisposition.",
+    "onArrival (not in the seam) is the bell source so 'no bell for blocked/over-cap' is guaranteed here; the first refresh seeds the snapshot without arrivals.",
+    "GLOBAL_CAP and PER_INVITER_CAP were exported from lib/pendingInvitations.ts (scope: 'caps constants reused'); S22/S23 must move them into caps.ts when deleting that module.",
+    "Seam AppKinds (listed in consumes_seams) is not used: no kind constant is needed by S9; the legacy 21063 absence is asserted at the relay in the harness.",
+    "Baseline note: a raw test run taken while the first S9 file existed failed kinds.test.ts (AC-KIND-2 forbids the literal for the 446x kinds under app/src; my comment contained it). Fixed; the committed baseline is S8's 7682.",
+    "Decider ruling (AC-CAP-1, D14): trust-ordered retention. Order: deny layer, stranger TTL (strictly > STRANGER_INVITATION_TTL_MS = 14*86_400_000 in caps.ts; trusted never expire), per-inviter cap 8 (oldest kept), total 256 ranked trusted-first then receivedAt asc, ties by id. isTrustedSponsor(sponsorAccount) and now() are injected and required; evaluated per refresh, no cache. Production predicate: createTrustedSponsorPredicate(ownPubkey, isKnownPeer). All declines silent.",
+    "Retention stability: the view passes the currently shown ids as keepFirst; shown entries rank ahead of new ones within their trust class, so a clock-stepped arrival never displaces a shown card; a trusted arrival still displaces the newest retained stranger.",
+    "acceptDecline.decline mirrors accept: view.refresh() first; an id not visible makes no library call (the refresh already declined it silently, or it is gone) and resolves; a library failure for an id no longer pending counts as done, otherwise rethrown.",
+    "Seeding is explicit: view.seed() (startup) and a first refresh() load without arrivals; a recompute triggered by onInboxDisposition/scheduleRefresh always announces new entries, even as the first.",
+    "S18 wiring notes: call view.seed() once after bootstrap; hook view.scheduleRefresh() to block-set changes, the leave path and the auto-accept job; route clientEvents.inboxDisposition to view.onInboxDisposition; build isTrustedSponsor with createTrustedSponsorPredicate(ownPubkey) and now with Date.now; the 256/8 constants (GLOBAL_CAP/PER_INVITER_CAP) move into caps.ts at the deletion story (S22/S23).",
+    "enqueue contract: the seam type of AccountClientHandle.enqueue is pinned as void (bootstrap.sequence type test), so it is not changed; the view accepts void | boolean, resets its collapse flag when enqueue returns false or throws, and documents that the view is disposed and recreated together with the account handle (the real fifo drops silently once disposed)."
+  ],
+  "limitations": [
+    "BLK-1's invite-context and join-request legs are covered only by the DenyLayer predicate here; S10/S12 must call it in their handlers.",
+    "accept(id) re-reads the pending list, so it is not for use inside a library frame.",
+    "Residual signal of a silent decline: declineRumor:false sends no rumor and no gift wrap, but the library still rotates the consumed key package (welcome-processor rotateInBackground), a public replacement key-package publish (kind 30443, timing only, no profile data). The harness pins the full relay delta after a blocked decline to exactly [30443].",
+    "A stranger invitation is declined silently when it expires or is displaced; the sponsor keeps a stale leaf until its own cleanup."
+  ],
+  "decisions_needed": [],
+  "retrospective": {
+    "skipped": false,
+    "harder_than_needed": "The exploration report said decline() sends a rumor unless declineRumor:false, but the library only sends it when declineRumor === true; found only because the harness expected welcomeDeclined. Spec text derived from the report (AC-BLK-1 'declineRumor:false') is consistent, but the default-semantics claim should be corrected in marmot-lib-api.md.",
+    "surprised_by": "A kinds.test.ts source-scan forbids the literals 4460-4462 anywhere under app/src, including comments.",
+    "scope": "project_specific",
+    "outcome": "merged",
+    "commits_made": [],
+    "absorbed_from": [],
+    "lead_clarifications": []
+  }
+}
