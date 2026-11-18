@@ -126,6 +126,60 @@ describe('group session membership composition', () => {
     expect((await loadGroup(group.id, deps.handle.pubkey))?.name).toBe('Renamed');
     session.dispose(); jobs.dispose();
   });
+
+  it('skips unchanged overlays and refreshes persisted or live admin changes', async () => {
+    const write = vi.spyOn(groupStorage, 'saveGroup');
+    const { session, deps, group, jobs } = setup();
+    group.id = 'overlay-refresh';
+    const own = deps.handle.pubkey;
+    const row = { id: group.id, accountPubkey: own, name: group.name, memberPubkeys: [own], relays: group.relays, createdAt: 1 };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const componentChanged = { type: 'applied', kind: 'componentChanged' } as Parameters<typeof session.onGroupNotification>[1];
+
+    try {
+      await saveGroup(row);
+      write.mockClear();
+      await session.syncListed([group as never]);
+      expect(session.listLiveGroups()).toEqual([group]);
+      session.onGroupNotification(group as never, componentChanged);
+      await jobs.idle();
+      expect(write).not.toHaveBeenCalled();
+      expect(deps.onGroupsChanged).not.toHaveBeenCalled();
+
+      group.activeAdmins = () => [own, 'cd'.repeat(32)];
+      session.onGroupNotification(group as never, componentChanged);
+      await jobs.idle();
+      expect(deps.onGroupsChanged).toHaveBeenCalledTimes(1);
+      expect(write).not.toHaveBeenCalled();
+
+      group.name = 'Renamed';
+      session.onGroupNotification(group as never, componentChanged);
+      await jobs.idle();
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(await loadGroup(group.id, own)).toMatchObject({ name: 'Renamed' });
+      expect(deps.onGroupsChanged).toHaveBeenCalledTimes(2);
+
+      session.onGroupNotification(group as never, componentChanged);
+      await jobs.idle();
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(deps.onGroupsChanged).toHaveBeenCalledTimes(2);
+
+      session.onGroupNotification(group as never, {
+        type: 'own-change-lost', intentId: 'intent',
+        change: { type: 'admin', account: own, admin: true }, reason: 'concurrent-change',
+      });
+      await jobs.idle();
+      expect(warn).toHaveBeenCalledWith('[membership] own-change-lost', group.id, 'admin', 'concurrent-change');
+      expect(deps.onGroupsChanged).toHaveBeenCalledTimes(3);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      write.mockRestore();
+      warn.mockRestore();
+      await session.dispose();
+      jobs.dispose();
+    }
+  });
+
   it('updates invitation cards for context changes and preserves cancellation result', async () => {
     const { session, deps, group, jobs } = setup();
     await session.start();

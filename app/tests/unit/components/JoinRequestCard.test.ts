@@ -148,11 +148,12 @@ describe('JoinRequestCard.tsx — scope and boundary (VQ-S1-002, VQ-S1-005, VQ-S
   });
 
   it('guards the send handler with the same isJoinRequestDisabled predicate used for the button\'s isDisabled prop (defense-in-depth against a bypassed click/Enter — VQ-S1-006; full runtime coverage is e2e-only, S5)', () => {
-    expect(CARD_SOURCE).toMatch(/isDisabled=\{?requestDisabled\}?/);
+    expect(CARD_SOURCE).toMatch(/isDisabled=\{!ready \|\| requestDisabled\}/);
     // The async send handler must early-return when the gate says disabled,
     // not rely solely on the DOM disabled attribute.
     const handlerMatch = CARD_SOURCE.match(/async function handleSendRequest\(\)[\s\S]*?\n\}/);
     expect(handlerMatch).not.toBeNull();
     expect(handlerMatch?.[0]).toMatch(/requestDisabled/);
+    expect(handlerMatch?.[0]).toMatch(/if \([^)]*!ready[^)]*\) return;/);
   });
 });

@@ -373,15 +373,22 @@ export async function handlePairingAck(
   ownPrivateKeyHex: string,
   opts?: { nowSec?: number; ndk?: NDK },
 ): Promise<HandlePairingAckResult> {
+  let rumor: UnsignedRumor;
   try {
-    // Verify the rumor sender against the authenticated seal (AC-SEC-2).
-    let rumor: UnsignedRumor;
-    try {
-      rumor = await unwrapAndOpen(giftWrapEvent as never, ownPrivateKeyHex);
-    } catch {
-      return { status: 'unwrap-failed' };
-    }
+    rumor = await unwrapAndOpen(giftWrapEvent as never, ownPrivateKeyHex);
+  } catch {
+    return { status: 'unwrap-failed' };
+  }
+  return handleAuthenticatedPairingAck(rumor, ownPrivateKeyHex, opts);
+}
 
+/** Admit an ack only after unwrapAndOpen has authenticated its seal and bound the rumor sender. */
+export async function handleAuthenticatedPairingAck(
+  rumor: UnsignedRumor,
+  ownPrivateKeyHex: string,
+  opts?: { nowSec?: number; ndk?: NDK },
+): Promise<HandlePairingAckResult> {
+  try {
     // Step 2: kind gate — caller falls through to its existing dispatch.
     if (rumor.kind !== PAIRING_ACK_KIND) {
       return { status: 'wrong-kind' };

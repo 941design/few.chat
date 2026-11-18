@@ -42,7 +42,7 @@ export async function rebuildAccountForRelays(
       async ensure(context) {
         if (!matchesAccount) return input.inboxRelayList.ensure(context);
         try {
-          await ensureInboxRelayList(context);
+          await ensureInboxRelayList({ ...context, republish: true });
         } catch (error) {
           inboxRelayListFailure = { error };
           throw error;
@@ -54,23 +54,6 @@ export async function rebuildAccountForRelays(
   if (bootstrap.status !== 'ready' || !matchesAccount) return { bootstrap, rotationErrors, inboxRelayListFailure };
 
   const { account } = bootstrap;
-  // Bootstrap starts the inbox before ensuring the list. A successful ensure may
-  // have replaced a Few-owned list, so resolve the inbox plane again using the
-  // library's public lifecycle ports. On an incomplete lookup keep the existing
-  // subscription: choosing new targets would bypass the ownership check.
-  if (account.ensure.inboxRelayList === 'ok') {
-    try {
-      await account.handle.client.inbox.stop();
-      if (input.signal?.aborted || !account.handle.leaseHeld()) {
-        await account.teardown();
-        return { bootstrap: { status: 'aborted' }, rotationErrors, inboxRelayListFailure };
-      }
-      await account.handle.client.inbox.start();
-    } catch (error) {
-      await account.teardown();
-      throw error;
-    }
-  }
   const { keyPackages } = account.handle.client;
   const isLive = () => !input.signal?.aborted && account.handle.leaseHeld();
   rotatingKeyPackages = true;

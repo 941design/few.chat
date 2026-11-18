@@ -160,6 +160,10 @@ export type Copy = {
     qrGenerationError: string;
     httpsRequired: string;
     httpsRequiredBody: string;
+    unavailableHeading: string;
+    startupRetrying: string;
+    startupUnavailable: string;
+    storageUnavailable: string;
     inviteLinkButton: string;
     inviteLinkTitle: string;
     inviteLinkCopy: string;
@@ -867,6 +871,10 @@ const copy: Record<LanguageCode, Copy> = {
       qrGenerationError: 'Failed to generate QR code.',
       httpsRequired: 'HTTPS required',
       httpsRequiredBody: 'Encrypted groups require a secure connection (HTTPS). Please access this site over HTTPS to use groups.',
+      unavailableHeading: 'Groups unavailable',
+      startupRetrying: 'Groups could not start. Few will retry automatically.',
+      startupUnavailable: 'Groups could not start. Reload this page to try again.',
+      storageUnavailable: 'Group storage is unavailable in this browser.',
       inviteLinkButton: 'Invite Link',
       inviteLinkTitle: 'Generate Invite Link',
       inviteLinkCopy: 'Copy Link',
@@ -1153,7 +1161,7 @@ const copy: Record<LanguageCode, Copy> = {
         discoverabilityNote: 'Existing groups\' relay lists are not changed.',
       },
       dangerZone: {
-        wipeError: 'Local data could not be cleared. Close other Few tabs and try again.',
+        wipeError: 'Local data could not be cleared. Close other Few tabs or reconnect your signer, then try again.',
         title: 'Danger Zone',
         wipeBtn: 'Wipe this device',
         wipeConfirmPrompt: 'Type WIPE to confirm',
@@ -1460,6 +1468,10 @@ const copy: Record<LanguageCode, Copy> = {
       qrGenerationError: 'QR-Code konnte nicht erstellt werden.',
       httpsRequired: 'HTTPS erforderlich',
       httpsRequiredBody: 'Verschlüsselte Gruppen erfordern eine sichere Verbindung (HTTPS). Bitte greife über HTTPS auf diese Seite zu, um Gruppen zu nutzen.',
+      unavailableHeading: 'Gruppen nicht verfügbar',
+      startupRetrying: 'Gruppen konnten nicht gestartet werden. Few versucht es automatisch erneut.',
+      startupUnavailable: 'Gruppen konnten nicht gestartet werden. Lade diese Seite neu, um es erneut zu versuchen.',
+      storageUnavailable: 'Der Gruppenspeicher ist in diesem Browser nicht verfügbar.',
       inviteLinkButton: 'Einladungslink',
       inviteLinkTitle: 'Einladungslink erstellen',
       inviteLinkCopy: 'Link kopieren',
@@ -1745,7 +1757,7 @@ const copy: Record<LanguageCode, Copy> = {
         discoverabilityNote: 'Relay-Listen bestehender Gruppen werden nicht geändert.',
       },
       dangerZone: {
-        wipeError: 'Lokale Daten konnten nicht gelöscht werden. Schließe andere Few-Tabs und versuche es erneut.',
+        wipeError: 'Lokale Daten konnten nicht gelöscht werden. Schließe andere Few-Tabs oder verbinde deinen Signer erneut und versuche es dann noch einmal.',
         title: 'Gefahrenzone',
         wipeBtn: 'Dieses Gerät löschen',
         wipeConfirmPrompt: 'Gib WIPE ein, um zu bestätigen',

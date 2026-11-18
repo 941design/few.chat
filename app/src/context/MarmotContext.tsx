@@ -1,9 +1,10 @@
 import {
-  createContext, useCallback, useContext, useEffect, useRef, useState,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react';
 import { useToast } from '@chakra-ui/react';
 import type { MarmotGroup, PendingInvitation } from '@941design/marmot';
+import type { WritableStores } from '@941design/marmot/storage';
 import { groupSessionWipeCheckpoint, resumeApplicationWipe, wipeApplicationGroups } from '@/src/lib/marmot/groupSessionWipeCheckpoint';
 import { startInviteExpirySweep } from '@/src/lib/marmot/inviteExpirySweep';
 import { clearAllGroupData } from '@/src/lib/marmot/groupSessionStores';
@@ -11,10 +12,10 @@ import { selectDmMembership } from '@/src/lib/walledGarden';
 import { useNostrIdentity } from './NostrIdentityContext';
 import { useProfile } from './ProfileContext';
 import { useCopy } from './LanguageContext';
-import type { Group, UserProfile } from '@/src/types';
+import { STORAGE_KEYS, type Group, type UserProfile } from '@/src/types';
 import {
   bootstrapAccountClient, inboxRelayList, reconcileOverlayGroups, openAccountStores,
-  rebuildAccountForRelays, startAccountLifecycle, type AccountClient, type AccountClientHandle, type AccountLifecycle, type BootstrapInput,
+  rebuildAccountForRelays, startAccountLifecycle, type AccountClient, type AccountClientHandle, type AccountLifecycle, type BootstrapInput, type LeaseState,
 } from '@/src/lib/marmot/client';
 import { readLiveMembers } from '@/src/lib/marmot/membership';
 import { buildInvitationCardViewModels } from '@/src/lib/marmot/invitations';
@@ -32,7 +33,9 @@ import { getPendingDirectInviteMarker } from '@/src/lib/marmot/pendingDirectInvi
 import type { GroupRumorSender } from '@/src/lib/marmot/send';
 import { getActiveGroupId } from '@/src/lib/activeViewStore';
 import { getEffectiveRelays } from '@/src/lib/relay';
-import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
+import { getDeviceResetGeneration } from '@/src/lib/storage';
+import { loadStoredIdentity, npubToPubkeyHex } from '@/src/lib/nostrKeys';
+import { loadVerifiedNip46Account, parseSignerAccountPubkey } from '@/src/lib/nip46Perms';
 import { loadKnownPeers, markKnownPeersMigrationComplete, rememberKnownPeers } from '@/src/lib/knownPeers';
 import { MAINTAINER_PUBKEYS_HEX } from '@/src/config/maintainer';
 import { purgeStrangerContacts } from '@/src/lib/contacts';
@@ -59,14 +62,34 @@ type RelayChange = {
   pubkey: string;
   previous: AccountClient | null;
   previousRelays: string[];
+  targetRelays: string[];
+  promise: Promise<void>;
   complete(error?: unknown): void;
 };
+type RelayChangeRetry = Pick<RelayChange, 'pubkey' | 'previousRelays' | 'targetRelays'> & { inboxOnly: boolean };
+type ExplicitWipe = {
+  owner: string;
+  run(stores: WritableStores): Promise<void>;
+  completed: boolean;
+  failure?: { error: unknown };
+};
+
+type UnavailableReason = Extract<LeaseState, { reason: string }>['reason'];
+
+function isStoredWipeAccount(mode: 'local' | 'nip07' | 'nip46', owner: string): boolean {
+  const storedMode = localStorage.getItem(STORAGE_KEYS.signerMode) ?? 'local';
+  if (storedMode !== mode) return false;
+  const storedOwner = mode === 'local' ? loadStoredIdentity()?.pubkeyHex
+    : mode === 'nip46' ? loadVerifiedNip46Account(localStorage)
+    : parseSignerAccountPubkey(localStorage.getItem(STORAGE_KEYS.nip07Account));
+  return storedOwner?.toLowerCase() === owner.toLowerCase();
+}
 
 interface MarmotContextValue {
   ready: boolean;
   waitingForLease: boolean;
   unsupported: boolean;
-  unsupportedNip44: boolean;
+  unavailableReason: UnavailableReason | null;
   whenReady(): Promise<void>;
   whenDmGroupsReady(): Promise<void>;
   getDmGroups(): readonly Pick<Group, 'memberPubkeys'>[];
@@ -101,7 +124,7 @@ interface MarmotContextValue {
   grantAdmin(groupId: string, pubkey: string): Promise<GroupActionResult>;
   renameGroup(groupId: string, name: string): Promise<GroupActionResult>;
   rebuildForRelays(relays: string[]): Promise<void>;
-  wipeLocalGroups(): Promise<void>;
+  wipeLocalGroups(resetAppData: () => Promise<void>): Promise<void>;
   knownPeersRevision: number;
   notifyKnownPeersChanged(): void;
   blockedPeersRevision: number;
@@ -130,7 +153,7 @@ function useVersion() {
 }
 
 export function MarmotProvider({ children }: { children: ReactNode }) {
-  const { pubkeyHex, privateKeyHex, signerMode, signerAvailable, hydrated } = useNostrIdentity();
+  const { pubkeyHex, privateKeyHex, signerMode, signerAccountPubkey, signerAvailable, hydrated } = useNostrIdentity();
   const { profile } = useProfile();
   const toast = useToast();
   const copy = useCopy();
@@ -140,8 +163,8 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<InvitationView[]>([]);
   const [pendingRequests, setPendingRequests] = useState<Record<string, PendingJoinRequest[]>>({});
-  const [status, setStatus] = useState<'loading' | 'held' | 'waiting' | 'unsupported'>('loading');
-  const [unsupportedNip44, setUnsupportedNip44] = useState(false);
+  const [status, setStatus] = useState<LeaseState['state'] | 'loading'>('loading');
+  const [unavailableReason, setUnavailableReason] = useState<UnavailableReason | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profileVersion, bumpProfiles] = useVersion();
   const [chatVersion, bumpChat] = useVersion();
@@ -160,13 +183,17 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
   const resolvedAccount = useRef<string | null>(null);
   const closing = useRef(Promise.resolve());
   const activeLifecycle = useRef<AccountLifecycle | null>(null);
-  const explicitWipe = useRef<string | null>(null);
-  const explicitWipeCompleted = useRef(false);
-  const explicitWipeError = useRef<unknown>(undefined);
+  const wipeIdentityKey = `${signerMode}:${pubkeyHex ?? ''}:${signerAccountPubkey ?? ''}`;
+  const wipeIdentity = useRef(wipeIdentityKey);
+  wipeIdentity.current = wipeIdentityKey;
+  const [deviceResetGeneration] = useState(getDeviceResetGeneration);
+  const [lifecycleRevision, restartLifecycle] = useVersion();
+  const explicitWipe = useRef<ExplicitWipe | null>(null);
   const gate = useRef<ReturnType<typeof readiness> | null>(null);
   gate.current ??= readiness();
   const [relays, setRelays] = useState<string[] | null>(null);
   const relayChange = useRef<RelayChange | null>(null);
+  const retryRelayChange = useRef<RelayChangeRetry | null>(null);
   const effectiveRelays = useRef<string[]>([]);
 
   const whenReady = useCallback(() => gate.current!.promise, []);
@@ -193,7 +220,7 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
     gate.current?.resolve();
     gate.current = ownGate;
     setStatus('loading');
-    setUnsupportedNip44(false);
+    setUnavailableReason(null);
     setSession(null);
     setGroups([]);
     setPendingInvitations([]);
@@ -202,7 +229,10 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
       if (hydrated) {
         if (signerMode === 'nip07' && !window.nostr?.nip44) {
           setStatus('unsupported');
-          setUnsupportedNip44(true);
+          setUnavailableReason('nip44');
+        } else if (pubkeyHex && !signerAvailable) {
+          setStatus('unsupported');
+          setUnavailableReason('startup');
         }
         ownGate.resolve();
         ownDmGate.resolve();
@@ -219,6 +249,7 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
       ownDmGate.resolve();
       changes?.complete(new Error('Group relay update requires a signer'));
       setStatus('unsupported');
+      setUnavailableReason('startup');
       return;
     }
 
@@ -236,6 +267,7 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         if (source && live && seq === latestOverlayRead && current.current === source && !publishedSession) {
           setStatus('unsupported');
+          setUnavailableReason('startup');
           ownGate.resolve();
           ownDmGate.resolve();
         }
@@ -275,21 +307,35 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
       return expiryDrain ?? Promise.resolve();
     };
     const lifecycle = startAccountLifecycle({
+      isCurrent: () => deviceResetGeneration === getDeviceResetGeneration(),
       async start(input) {
         await prior;
         if (input.signal?.aborted) return { status: 'aborted' };
         if (!changes || relayChange.current !== changes) return bootstrapAccountClient(input);
-        const result = await rebuildAccountForRelays(changes.previous, input, changes.previousRelays, changes.pubkey);
+        const finishChange = (error?: unknown, inboxOnly = false) => {
+          if (relayChange.current === changes) {
+            relayChange.current = null;
+            retryRelayChange.current = error === undefined ? null : {
+              pubkey: changes.pubkey, previousRelays: changes.previousRelays, targetRelays: changes.targetRelays, inboxOnly,
+            };
+          }
+          changes.complete(error);
+        };
+        let result: Awaited<ReturnType<typeof rebuildAccountForRelays>>;
+        try {
+          result = await rebuildAccountForRelays(changes.previous, input, changes.previousRelays, changes.pubkey);
+        } catch (error) {
+          if (!input.signal?.aborted) finishChange(error);
+          throw error;
+        }
         if (result.bootstrap.status === 'ready') {
           const errors = [...result.rotationErrors];
           if (result.inboxRelayListFailure) errors.push(result.inboxRelayListFailure.error);
           if (result.bootstrap.account.ensure.keyPackage === 'failed') errors.push(new Error('Key package ensure failed'));
-          if (errors.length) {
-            changes.complete(new AggregateError(errors, 'Group relay update was incomplete'));
-          } else {
-            if (relayChange.current === changes) relayChange.current = null;
-            changes.complete();
-          }
+          finishChange(
+            errors.length ? new AggregateError(errors, 'Group relay update was incomplete') : undefined,
+            errors.length === 1 && !!result.inboxRelayListFailure && result.rotationErrors.length === 0,
+          );
         }
         return result.bootstrap;
       },
@@ -411,17 +457,15 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
             await resumeApplicationWipe(stores, clearAllGroupData);
           },
           async beforeStoresClose(stores) {
-            if (!stores.lease.held || explicitWipe.current !== stores.account.account) return;
+            const wipe = explicitWipe.current;
+            if (!stores.lease.held || wipe?.owner !== stores.account.account) return;
             try {
-              if (!live || activeLifecycle.current !== lifecycle || resolvedAccount.current !== stores.account.account) {
-                throw new Error('The group account changed while waiting to wipe it');
-              }
-              await wipeApplicationGroups(stores, clearAllGroupData);
-              if (!live || activeLifecycle.current !== lifecycle || resolvedAccount.current !== stores.account.account) {
-                throw new Error('The group account changed while waiting to wipe it');
-              }
-              explicitWipeCompleted.current = true;
-            } catch (error) { explicitWipeError.current = error; throw error; }
+              await wipe.run(stores);
+              wipe.completed = true;
+            } catch (error) {
+              wipe.failure = { error };
+              throw error;
+            }
           },
           clientEvents: {
             groupRemoved: (event) => membership().onGroupRemoved(event),
@@ -445,12 +489,18 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
         if (!live) return;
         leaseSettled = true;
         if (changes && relayChange.current === changes && result.state !== 'held') {
+          if (result.state === 'unsupported') {
+            relayChange.current = null;
+            retryRelayChange.current = {
+              pubkey: changes.pubkey, previousRelays: changes.previousRelays, targetRelays: changes.targetRelays, inboxOnly: false,
+            };
+          }
           changes.complete(new Error(result.state === 'waiting'
             ? 'Group relay update is waiting for the account lease'
             : 'Group relay update could not start'));
         }
         setStatus(result.state);
-        setUnsupportedNip44(result.state === 'unsupported' && result.reason === 'nip44');
+        setUnavailableReason('reason' in result ? result.reason : null);
         if (result.state !== 'held' || !assembling) {
           void drainExpiry();
           removeTestHook?.();
@@ -500,7 +550,7 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
       activeLifecycle.current = null;
       closing.current = lifecycle.stop().catch(console.warn);
     };
-  }, [privateKeyHex, pubkeyHex, signerMode, signerAvailable, hydrated, relays, bumpChat, bumpGroups, bumpPolls, bumpProfiles, bumpReactions]);
+  }, [privateKeyHex, pubkeyHex, signerMode, signerAvailable, hydrated, relays, lifecycleRevision, deviceResetGeneration, bumpChat, bumpGroups, bumpPolls, bumpProfiles, bumpReactions]);
 
   useEffect(() => {
     if (process.env.NODE_ENV === 'production') return;
@@ -564,71 +614,129 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
     const markers = await Promise.all(members.map((member) => getPendingDirectInviteMarker(groupId, member, sponsor)));
     return new Map(markers.flatMap((marker) => marker && !marker.declined && !marker.viaJoinRequest ? [[marker.pubkey, marker.inviteeRef]] : []));
   }, [liveSession]);
-  const rebuildForRelays = useCallback((next: string[]) => new Promise<void>((resolve, reject) => {
+  const rebuildForRelays = useCallback((next: string[]): Promise<void> => {
     const owner = resolvedAccount.current;
     const pending = relayChange.current;
+    const sameAs = (relays: readonly string[]) => next.length === relays.length && next.every((relay, i) => relay === relays[i]);
+    if (pending && (owner === null || pending.pubkey === owner) && sameAs(pending.targetRelays)) return pending.promise;
     pending?.complete(new Error('Relay update superseded'));
+    if (!owner) {
+      relayChange.current = null;
+      if (!sameAs(effectiveRelays.current)) setRelays([...next]);
+      return Promise.reject(new Error('Group account is still resolving'));
+    }
+    let retry = retryRelayChange.current?.pubkey === owner ? retryRelayChange.current : null;
+    const active = account.current;
+    const unchanged = sameAs(effectiveRelays.current);
+    if (!pending && unchanged && (!retry || retry.inboxOnly) && active?.handle.leaseHeld() &&
+        active.retryLegacyInboxDiscovery && (active.legacyInboxDiscoveryPending || active.ensure.inboxRelayList === 'failed')) {
+      return active.retryLegacyInboxDiscovery().then(() => {
+        if (retryRelayChange.current === retry) retryRelayChange.current = null;
+      });
+    }
+    if (retry?.inboxOnly && sameAs(retry.targetRelays) && unchanged &&
+        active?.handle.leaseHeld() && active.ensure.inboxRelayList === 'ok') {
+      retryRelayChange.current = retry = null;
+    }
+    if (!pending && !retry && unchanged) return Promise.resolve();
     const carriedRelays = pending?.pubkey === owner ? pending.previousRelays : [];
-    relayChange.current = owner ? {
+    let complete!: RelayChange['complete'];
+    const promise = new Promise<void>((resolve, reject) => {
+      complete = (error) => error === undefined ? resolve() : reject(error);
+    });
+    relayChange.current = {
       pubkey: owner,
       previous: account.current,
-      previousRelays: [...new Set([...effectiveRelays.current, ...carriedRelays])],
-      complete: (error) => error === undefined ? resolve() : reject(error),
-    } : null;
+      previousRelays: [...new Set([...effectiveRelays.current, ...carriedRelays, ...(retry?.previousRelays ?? [])])],
+      targetRelays: [...next],
+      promise,
+      complete,
+    };
     setRelays([...next]);
-    if (!owner) reject(new Error('Group account is still resolving'));
-  }), []);
-  const wipeLocalGroups = useCallback(async () => {
-    if (!pubkeyHex) return;
-    const owner = resolvedAccount.current;
-    if (!owner) throw new Error('Group account is still resolving');
+    return promise;
+  }, []);
+  const wipeLocalGroups = useCallback(async (resetAppData: () => Promise<void>) => {
+    const sameDeviceGeneration = () => deviceResetGeneration === getDeviceResetGeneration();
+    if (!sameDeviceGeneration()) throw new Error('The device was already reset in another tab');
+    const owner = signerMode === 'local' ? pubkeyHex : signerAccountPubkey;
+    if (!owner) {
+      if (signerMode !== 'local') throw new Error('Reconnect the signer to verify which group account to wipe');
+      await resetAppData();
+      return;
+    }
     if (explicitWipe.current !== null) throw new Error('A group wipe is already in progress');
     const lifecycle = activeLifecycle.current;
+    const isCurrent = () => wipeIdentity.current === wipeIdentityKey &&
+      (resolvedAccount.current === null || resolvedAccount.current === owner) && activeLifecycle.current === lifecycle;
     const assertCurrent = () => {
-      if (resolvedAccount.current !== owner || activeLifecycle.current !== lifecycle) {
-        throw new Error('The group account changed while waiting to wipe it');
-      }
+      if (!isCurrent()) throw new Error('The group account changed while waiting to wipe it');
+    };
+    const assertBeforeReset = () => {
+      assertCurrent();
+      if (!sameDeviceGeneration()) throw new Error('The device was already reset in another tab');
+      if (!isStoredWipeAccount(signerMode, owner)) throw new Error('The stored signer account changed while waiting to wipe it');
+    };
+    const wipe: ExplicitWipe = {
+      owner,
+      completed: false,
+      async run(stores) {
+        assertBeforeReset();
+        if (!stores.lease.held || stores.account.account !== owner) throw new Error('Group account lease is unavailable');
+        await wipeApplicationGroups(stores, clearAllGroupData);
+        assertBeforeReset();
+        if (!stores.lease.held) throw new Error('Group account lease was lost during the wipe');
+        await resetAppData();
+      },
     };
     // Acquire the lease before stopping a waiting lifecycle: a refused wipe
     // must leave its retry loop alive for the eventual handoff.
-    const preopened = account.current?.handle.leaseHeld() ? undefined : await openAccountStores(owner);
+    assertBeforeReset();
+    let stopping = false;
     try {
-      assertCurrent();
-      if (explicitWipe.current !== null) throw new Error('A group wipe is already in progress');
-      if (preopened?.status === 'lease-held') throw new Error('Groups are active in another tab');
-      if (preopened?.status === 'unsupported') throw new Error('Group storage is unsupported');
-      explicitWipe.current = owner;
-      explicitWipeCompleted.current = false;
-      explicitWipeError.current = undefined;
-      current.current = null;
-      setSession(null);
+      const preopened = account.current?.handle.leaseHeld() ? undefined : await openAccountStores(owner);
       try {
-        await lifecycle?.stop();
-        assertCurrent();
-        if (explicitWipeError.current !== undefined) throw explicitWipeError.current;
-        if (!explicitWipeCompleted.current) {
-          const opened = preopened ?? await openAccountStores(owner);
-          try {
-            assertCurrent();
-            if (opened.status === 'lease-held') throw new Error('Groups are active in another tab');
-            if (opened.status === 'unsupported') throw new Error('Group storage is unsupported');
-            if (opened.status === 'opened') {
-              await wipeApplicationGroups(opened.stores, clearAllGroupData);
-              assertCurrent();
-            }
-          } finally {
-            if (!preopened && opened.status === 'opened') await opened.stores.close();
-          }
+        assertBeforeReset();
+        if (explicitWipe.current !== null) throw new Error('A group wipe is already in progress');
+        if (preopened?.status === 'lease-held') throw new Error('Groups are active in another tab');
+        if (preopened?.status === 'unsupported') throw new Error('Group storage is unsupported');
+        explicitWipe.current = wipe;
+        current.current = null;
+        setSession(null);
+        try {
+          stopping = lifecycle !== null;
+          await lifecycle?.stop();
           assertCurrent();
+          if (wipe.failure) throw wipe.failure.error;
+          if (!wipe.completed) {
+            assertBeforeReset();
+            const opened = preopened ?? await openAccountStores(owner);
+            try {
+              assertCurrent();
+              if (opened.status === 'lease-held') throw new Error('Groups are active in another tab');
+              if (opened.status === 'unsupported') throw new Error('Group storage is unsupported');
+              await wipe.run(opened.stores);
+            } finally {
+              if (!preopened && opened.status === 'opened') await opened.stores.close();
+            }
+          }
+        } finally {
+          explicitWipe.current = null;
         }
       } finally {
-        explicitWipe.current = null;
+        if (preopened?.status === 'opened') await preopened.stores.close();
       }
-    } finally {
-      if (preopened?.status === 'opened') await preopened.stores.close();
+      assertCurrent();
+    } catch (error) {
+      if (stopping && isCurrent()) {
+        if (sameDeviceGeneration() && isStoredWipeAccount(signerMode, owner)) restartLifecycle();
+        else {
+          setStatus('unsupported');
+          setUnavailableReason('startup');
+        }
+      }
+      throw error;
     }
-    assertCurrent();
-  }, [pubkeyHex]);
+  }, [pubkeyHex, signerMode, signerAccountPubkey, wipeIdentityKey, deviceResetGeneration, restartLifecycle]);
   const sendGroupNotice = useCallback(async (groupId: string, content: string) => {
     const active = liveSession();
     if (!active || active.handle.pubkey !== pubkeyHex) throw new Error('Group session unavailable');
@@ -645,26 +753,20 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
     await resolvePendingSignalsForSlot({ kind: 'group', groupId }, rumor.id, active.handle.pubkey).catch(console.warn);
   }, [liveSession, pubkeyHex]);
 
-  const action = async (op: (membership: Session['membership']) => Promise<unknown>): Promise<GroupActionResult> => {
+  const action = useCallback(async (op: (membership: Session['membership']) => Promise<unknown>): Promise<GroupActionResult> => {
     try {
       const result = await op(requireSession().membership);
       return typeof result === 'object' && result && 'ok' in result ? result as GroupActionResult : { ok: true };
     } catch (error) {
       return { ok: false, error: errorOf(error) };
     }
-  };
+  }, [requireSession]);
 
-  const value: MarmotContextValue = {
-    ready: status === 'held' && !!session?.handle.leaseHeld(),
-    waitingForLease: status === 'waiting',
-    unsupported: status === 'unsupported',
-    unsupportedNip44,
-    whenReady, whenDmGroupsReady, getDmGroups, groups, pendingInvitations, getGroup, getLiveMemberPubkeys, sendGroupNotice,
-    getMemberProfiles: loadMemberProfiles, getPendingDirectInvites,
-    groupSender: session?.inbound.sender ?? null,
-    groupImages: session?.images ?? null,
-    profileVersion, chatVersion, groupDataVersion, pollVersion, reactionsVersion,
-    pendingRequests, loadPendingRequestsForGroup, requestProfilesIfStale,
+  const membershipActions = useMemo<Pick<MarmotContextValue,
+    'createGroup' | 'inviteByNpub' | 'leaveGroup' | 'publishProfileUpdate' |
+    'approveJoinRequest' | 'denyJoinRequest' | 'sendJoinRequest' | 'acceptPendingInvitation' |
+    'declinePendingInvitation' | 'removeMember' | 'cancelPendingInvitation' | 'grantAdmin' | 'renameGroup'
+  >>(() => ({
     createGroup: async (name) => {
       const active = liveSession();
       if (!active) return null;
@@ -711,6 +813,20 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
     })),
     grantAdmin: (groupId, pubkey) => action((membership) => membership.grantAdmin(groupId, pubkey)),
     renameGroup: (groupId, name) => action(async (membership) => { await membership.rename(groupId, name); return { ok: true, changed: true }; }),
+  }), [action, liveSession, requireSession]);
+
+  const value: MarmotContextValue = {
+    ready: status === 'held' && !!session?.handle.leaseHeld(),
+    waitingForLease: status === 'waiting',
+    unsupported: status === 'unsupported',
+    unavailableReason,
+    whenReady, whenDmGroupsReady, getDmGroups, groups, pendingInvitations, getGroup, getLiveMemberPubkeys, sendGroupNotice,
+    getMemberProfiles: loadMemberProfiles, getPendingDirectInvites,
+    groupSender: session?.inbound.sender ?? null,
+    groupImages: session?.images ?? null,
+    profileVersion, chatVersion, groupDataVersion, pollVersion, reactionsVersion,
+    pendingRequests, loadPendingRequestsForGroup, requestProfilesIfStale,
+    ...membershipActions,
     rebuildForRelays, wipeLocalGroups,
     knownPeersRevision, notifyKnownPeersChanged, contactsRevision, notifyContactsChanged,
     blockedPeersRevision, notifyBlockedPeersChanged,
@@ -719,7 +835,7 @@ export function MarmotProvider({ children }: { children: ReactNode }) {
 }
 
 const DEFAULT_MARMOT: MarmotContextValue = {
-  ready: false, unsupported: false, unsupportedNip44: false, waitingForLease: false, whenReady: ignoreAsync, whenDmGroupsReady: ignoreAsync, getDmGroups: () => [], groups: [],
+  ready: false, unsupported: false, unavailableReason: null, waitingForLease: false, whenReady: ignoreAsync, whenDmGroupsReady: ignoreAsync, getDmGroups: () => [], groups: [],
   pendingInvitations: [], pendingRequests: {},
   groupSender: null, groupImages: null,
   profileVersion: 0, chatVersion: 0, groupDataVersion: 0, pollVersion: 0, reactionsVersion: 0,

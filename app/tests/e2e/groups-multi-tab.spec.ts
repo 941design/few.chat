@@ -32,10 +32,13 @@ test('a waiting tab lists groups and takes over the real lease without reload', 
     expect(groupId).toBeTruthy();
     await expect.poll(() => second.evaluate(async () => await (window as any).__fewTest?.marmotSession?.listGroupIds() ?? null),
       { timeout: 30_000 }).toBeNull();
+    await card.click();
+    await expect(second.getByRole('heading', { name, exact: true })).toBeVisible();
+    await expect(second.getByTestId('groups-lease-held')).toBeVisible();
+    await expect(second.getByTestId('group-detail-loading')).toHaveCount(0);
     await second.evaluate(() => { (window as any).__s25PageLifetime = 'same-document'; });
     await first.close();
     await expect(second.getByTestId('groups-lease-held')).toHaveCount(0, { timeout: 90_000 });
-    await card.click();
     await expect(second.getByTestId('chat-input')).toBeEnabled({ timeout: 90_000 });
     expect(await second.evaluate(() => (window as any).__s25PageLifetime)).toBe('same-document');
     const message = `lease-handoff-${Date.now()}`;

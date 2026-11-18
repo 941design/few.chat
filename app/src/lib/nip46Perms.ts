@@ -9,6 +9,8 @@
  * Session storage is injected by the identity provider.
  */
 import { permissions } from '@941design/marmot';
+import { NDKKind, type NDKNip46Signer } from '@nostr-dev-kit/ndk';
+import { verifyEvent } from 'nostr-tools/pure';
 import { STORAGE_KEYS } from '@/src/types';
 import { BLOSSOM_AUTH_KIND } from '@/src/lib/media/blossomAuthKind';
 import {
@@ -86,9 +88,27 @@ export function shouldDiscardStoredNip46Session(
   return buildNip46Permissions().some((perm) => !have.has(perm));
 }
 
-export function saveNip46Session(storage: Pick<Storage, 'setItem'>, payload: string): void {
+export function parseSignerAccountPubkey(value: unknown): string | null {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+type VerifiedNip46Account = { source: 'get_public_key'; pubkey: string };
+
+export function loadVerifiedNip46Account(storage: Pick<Storage, 'getItem'>): string | null {
+  try {
+    const binding = JSON.parse(storage.getItem(STORAGE_KEYS.nip46Account) ?? 'null');
+    return binding?.source === 'get_public_key' ? parseSignerAccountPubkey(binding.pubkey) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveNip46Session(storage: Pick<Storage, 'setItem' | 'removeItem'>, payload: string, account: VerifiedNip46Account): void {
+  // A partial session replacement must leave offline wipe unbound.
+  storage.removeItem(STORAGE_KEYS.nip46Account);
   storage.setItem(STORAGE_KEYS.nip46Session, payload);
   storage.setItem(STORAGE_KEYS.nip46Permissions, buildNip46PermsParam());
+  storage.setItem(STORAGE_KEYS.nip46Account, JSON.stringify(account));
 }
 
 export function loadNip46Session(storage: Pick<Storage, 'getItem' | 'removeItem'>): string | null {
@@ -100,9 +120,36 @@ export function loadNip46Session(storage: Pick<Storage, 'getItem' | 'removeItem'
   return null;
 }
 
+export async function requestVerifiedNip46Account(
+  signer: Pick<NDKNip46Signer, 'bunkerPubkey' | 'rpc'>,
+): Promise<VerifiedNip46Account> {
+  const bunker = parseSignerAccountPubkey(signer.bunkerPubkey);
+  if (!bunker) throw new Error('NIP-46 bunker public key is unavailable');
+
+  // NDK's getter can return a cached URI or session hint. Use its encrypted,
+  // request-ID-correlated RPC and authenticate the reply against the bunker.
+  return new Promise((resolve, reject) => {
+    void signer.rpc.sendRequest(bunker, 'get_public_key', [], NDKKind.NostrConnect, (reply) => {
+      try {
+        const { id, pubkey: sender, kind, created_at, tags, content, sig } = reply.event.rawEvent();
+        const pubkey = parseSignerAccountPubkey(reply.result);
+        // Check a fresh event object so cached signature verification cannot
+        // carry over from another representation.
+        const event = { id, pubkey: sender, kind, created_at, tags, content, sig };
+        if (reply.error || !pubkey || sender !== bunker || kind !== NDKKind.NostrConnect || !verifyEvent(event)) {
+          throw new Error('NIP-46 account response could not be verified');
+        }
+        resolve({ source: 'get_public_key', pubkey });
+      } catch (error) {
+        reject(error);
+      }
+    }).catch(reject);
+  });
+}
+
 /** Add permissions to the connect request made by NDK's bunker handshake. */
 export async function connectBunkerWithPermissions(
-  signer: Pick<import('@nostr-dev-kit/ndk').NDKNip46Signer, 'rpc' | 'blockUntilReady'>,
+  signer: Pick<NDKNip46Signer, 'rpc' | 'blockUntilReady'>,
 ) {
   const rpc = signer.rpc;
   const original = rpc.sendRequest;

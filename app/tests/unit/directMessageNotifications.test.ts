@@ -104,7 +104,12 @@ vi.mock('@/src/lib/unreadStore', () => ({
 
 vi.mock('@/src/lib/pairing/pairingAck', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/src/lib/pairing/pairingAck')>(),
-  handlePairingAck: vi.fn(),
+  handleAuthenticatedPairingAck: vi.fn(),
+}));
+
+vi.mock('@/src/lib/crossTab', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/src/lib/crossTab')>(),
+  notifyStoreChangedLocally: vi.fn(),
 }));
 
 // isPendingConfirmation defaults to false so every pre-existing test in this
@@ -132,7 +137,8 @@ const { rememberContact, isPendingConfirmation } = await import('@/src/lib/conta
 // ── Import SUT after mocks ─────────────────────────────────────────────────────
 
 const { subscribeDirectMessageNotifications } = await import('@/src/lib/directMessageNotifications');
-const { PAIRING_ACK_KIND, handlePairingAck } = await import('@/src/lib/pairing/pairingAck');
+const { PAIRING_ACK_KIND, handleAuthenticatedPairingAck } = await import('@/src/lib/pairing/pairingAck');
+const { notifyStoreChangedLocally } = await import('@/src/lib/crossTab');
 const {
   DM_PROFILE_REQUEST_KIND,
   DM_PROFILE_ANNOUNCE_KIND,
@@ -356,7 +362,7 @@ describe('subscribeDirectMessageNotifications', () => {
 
     await emitEvent(kind1059Sub, { id: 'group-wrap', kind: 1059, pubkey: 'any-key' });
 
-    expect(handlePairingAck).not.toHaveBeenCalled();
+    expect(handleAuthenticatedPairingAck).not.toHaveBeenCalled();
     expect(isAllowedSender).not.toHaveBeenCalled();
     expect(rememberContact).not.toHaveBeenCalled();
     expect(incrementDirectMessage).not.toHaveBeenCalled();
@@ -367,16 +373,19 @@ describe('subscribeDirectMessageNotifications', () => {
     expect(capturedLoggerError).not.toHaveBeenCalled();
   });
 
-  it('AC-INBOX-1 routes a pairing acknowledgement through the NDK listener without a DM bell', async () => {
-    vi.mocked(handlePairingAck).mockResolvedValue({ status: 'admitted', senderPubkeyHex: PEER_PUB });
-    vi.mocked(unwrapAndOpen).mockResolvedValue({
+  it('AC-INBOX-1 unwraps pairing acknowledgements once and notifies only on fresh admission', async () => {
+    vi.mocked(handleAuthenticatedPairingAck)
+      .mockResolvedValueOnce({ status: 'admitted', senderPubkeyHex: PEER_PUB })
+      .mockResolvedValueOnce({ status: 'already-admitted', senderPubkeyHex: PEER_PUB });
+    const rumor = {
       id: 'pairing-ack-rumor-id',
       pubkey: PEER_PUB,
       kind: PAIRING_ACK_KIND, // 21060 — not CHAT_MESSAGE_KIND (14)
       content: JSON.stringify({ type: 'pairing-ack', nonce: 'ab'.repeat(16), card: 'irrelevant' }),
       tags: [],
       created_at: 1_700_000_000,
-    });
+    };
+    vi.mocked(unwrapAndOpen).mockResolvedValue(rumor);
 
     const ndk = makeFakeNdk();
     const onContactChanged = vi.fn();
@@ -390,9 +399,18 @@ describe('subscribeDirectMessageNotifications', () => {
     const wrap = { id: 'pairing-ack-wrap', kind: 1059, pubkey: 'any-key', content: 'ciphertext', tags: [] };
     await emitEvent(kind1059Sub, wrap);
 
-    expect(handlePairingAck).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(wrap), OWN_PRIV, { ndk });
-    expect(isAllowedSender).not.toHaveBeenCalled();
+    expect(unwrapAndOpen).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(wrap), OWN_PRIV);
+    expect(handleAuthenticatedPairingAck).toHaveBeenCalledExactlyOnceWith(rumor, OWN_PRIV, { ndk });
+    expect(notifyStoreChangedLocally).toHaveBeenCalledExactlyOnceWith('known');
     expect(incrementPendingContact).toHaveBeenCalledExactlyOnceWith(PEER_PUB);
+    expect(onContactChanged).toHaveBeenCalledOnce();
+
+    await emitEvent(kind1059Sub, { ...wrap, id: 'replayed-wrap' });
+    expect(unwrapAndOpen).toHaveBeenCalledTimes(2);
+    expect(handleAuthenticatedPairingAck).toHaveBeenCalledTimes(2);
+    expect(notifyStoreChangedLocally).toHaveBeenCalledTimes(1);
+    expect(isAllowedSender).not.toHaveBeenCalled();
+    expect(incrementPendingContact).toHaveBeenCalledTimes(1);
     expect(onContactChanged).toHaveBeenCalledOnce();
     expect(rememberContact).not.toHaveBeenCalled();
     expect(incrementDirectMessage).not.toHaveBeenCalled();

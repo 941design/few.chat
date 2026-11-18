@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { ensureInboxRelayList } from '@/src/lib/marmot/client';
 import type { InboxRelayListEnsure } from '@/src/lib/marmot/client';
+import { createInboxRelayOwnership } from '@/src/lib/marmot/client/inboxRelayOwnership';
 
 const secret = new Uint8Array(32).fill(1);
 const pubkey = getPublicKey(secret);
@@ -9,13 +10,13 @@ const relays = ['wss://new.example', 'wss://other.example'];
 const foreignRelays = ['wss://foreign.example'];
 const oldRelays = ['wss://old.example'];
 
-function list(client?: string) {
+function list(client?: string, advertised = foreignRelays) {
   return finalizeEvent({
     kind: 10050,
     content: '',
     created_at: 42,
     tags: [
-      ['relay', foreignRelays[0]],
+      ...advertised.map((relay) => ['relay', relay]),
       ...(client ? [['client', client]] : []),
     ],
   }, secret);
@@ -57,10 +58,37 @@ describe('Few inbox relay list', () => {
     expect(signEvent).not.toHaveBeenCalled();
   });
 
+  it('skips signing and publishing on ordinary startup when Few already advertises the same relay set', async () => {
+    const { context, publish, signEvent } = setup([list('few', [...relays].reverse())]);
+    await expect(ensureInboxRelayList(context)).resolves.toEqual(relays);
+    expect(signEvent).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('republishes a matching Few list when explicitly migrating', async () => {
+    const { context, publish, signEvent } = setup([list('few', relays)]);
+    await expect(ensureInboxRelayList({ ...context, republish: true })).resolves.toEqual(relays);
+    expect(signEvent).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves the account untouched when the lookup is partial', async () => {
     const { context, publish, signEvent } = setup([list('few')], true);
     await expect(ensureInboxRelayList(context)).rejects.toThrow('lookup did not complete');
     expect(publish).not.toHaveBeenCalled();
     expect(signEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not publish when a verified foreign list is observed during signing', async () => {
+    const { context, publish, signEvent } = setup([]);
+    const observeInboxRelayList = createInboxRelayOwnership(pubkey);
+    signEvent.mockImplementationOnce(async (draft) => {
+      observeInboxRelayList([list()]);
+      return finalizeEvent(draft, secret);
+    });
+    await expect(ensureInboxRelayList({ ...context, observeInboxRelayList })).rejects.toThrow('ownership changed');
+    expect(publish).not.toHaveBeenCalled();
+    await expect(ensureInboxRelayList({ ...context, observeInboxRelayList })).resolves.toEqual(foreignRelays);
+    expect(signEvent).toHaveBeenCalledTimes(1);
   });
 });

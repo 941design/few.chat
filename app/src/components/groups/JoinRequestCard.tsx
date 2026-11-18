@@ -23,6 +23,7 @@ type JoinRequestCardProps = {
   nonce: string;
   adminNpub: string;
   groupName: string;
+  startupAlert?: React.ReactNode;
 };
 
 // Pure predicates for the name gate (S1) — kept outside the component so they
@@ -51,10 +52,10 @@ export function isWelcomeJoinRequestDisabled(draftName: string): boolean {
   return !hasShareableName(draftName);
 }
 
-export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinRequestCardProps) {
+export default function JoinRequestCard({ nonce, adminNpub, groupName, startupAlert }: JoinRequestCardProps) {
   const copy = useCopy();
   const { pubkeyHex, hydrated, isFreshIdentity } = useNostrIdentity();
-  const { groups, sendJoinRequest, ready } = useMarmot();
+  const { groups, sendJoinRequest, ready, waitingForLease } = useMarmot();
   const { profile, saveProfile } = useProfile();
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -81,17 +82,17 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
     : null;
 
   if (!hydrated) {
-    return (
+    return startupAlert ?? (
       <Box py={8} textAlign="center">
         <Text color="textMuted">{copy.groups.loading}</Text>
       </Box>
     );
   }
 
-  if (!pubkeyHex || !ready) {
+  if (!pubkeyHex) {
     // Identity not ready — the standard identity setup should run first
     // (handled by NostrIdentityProvider auto-generating on first mount)
-    return (
+    return startupAlert ?? (
       <Box py={8} textAlign="center">
         <Text color="textMuted">{copy.identity.notReady}</Text>
       </Box>
@@ -109,6 +110,13 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
     );
   }
 
+  const leaseStatus = waitingForLease ? (
+    <Alert status="info" borderRadius="md" maxW="md" mx="auto" data-testid="groups-lease-held">
+      <AlertIcon />
+      <AlertDescription>{copy.groups.activeInAnotherTab}</AlertDescription>
+    </Alert>
+  ) : startupAlert ?? (!ready ? <Text textAlign="center" color="textMuted">{copy.groups.loading}</Text> : null);
+
   if (alreadyMemberGroupId) {
     return (
       <Box py={8} data-testid="join-request-already-member">
@@ -123,6 +131,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
             </NextLink>
           </AlertDescription>
         </Alert>
+        {leaseStatus}
       </Box>
     );
   }
@@ -172,6 +181,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
           <AlertIcon />
           <AlertDescription>{copy.groups.joinRequestSent}</AlertDescription>
         </Alert>
+        {leaseStatus}
       </Box>
     );
   }
@@ -198,6 +208,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
   if (isFreshIdentity) {
     return (
       <Box py={8} data-testid="join-request-welcome-wrapper">
+        {leaseStatus}
         {error && (
           <Alert status="error" borderRadius="md" maxW="md" mx="auto" mb={4}>
             <AlertIcon />
@@ -209,7 +220,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
           nameValue={nameDraft}
           onNameChange={setNameDraft}
           primaryActionLabel={copy.groups.joinRequestButton}
-          primaryActionDisabled={welcomeRequestDisabled}
+          primaryActionDisabled={!ready || welcomeRequestDisabled}
           onPrimaryAction={() => void handleSendRequest()}
           primaryActionLoading={sending}
         />
@@ -229,6 +240,8 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
         <Text textAlign="center" color="textMuted">
           {copy.groups.joinRequestDescription}
         </Text>
+
+        {leaseStatus}
 
         {gateActive && (
           <Box data-testid="join-request-name-gate">
@@ -262,7 +275,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
         <Button
           onClick={() => void handleSendRequest()}
           isLoading={sending}
-          isDisabled={requestDisabled}
+          isDisabled={!ready || requestDisabled}
           size="lg"
           data-testid="join-request-send-btn"
         >

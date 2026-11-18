@@ -29,7 +29,7 @@ function fakeStores(held: () => boolean, trace: string[]) {
 }
 
 type Start = NonNullable<AccountLifecycleOptions['start']>;
-function rig(start: Start, clearAllGroupData = vi.fn(async (_pubkey: string) => {})) {
+function rig(start: Start, clearAllGroupData = vi.fn(async (_pubkey: string) => {}), isCurrent?: () => boolean) {
   const states: LeaseState[] = [];
   const onError = vi.fn();
   const intents = new Map<string, any>();
@@ -40,9 +40,12 @@ function rig(start: Start, clearAllGroupData = vi.fn(async (_pubkey: string) => 
     wipeGuard: createStoreWipeGuard(),
     onState: (state) => states.push(state),
     onError,
+    isCurrent,
     clearAllGroupData,
     wipeCheckpoint,
     pollMs,
+    startupRetryMs: 20,
+    keyPackageRetryMs: 50,
   });
   return { states, lifecycle, clearAllGroupData, onError };
 }
@@ -74,12 +77,86 @@ describe('Account lifecycle', () => {
     await second.lifecycle.whenReady();
     expect(first.states.map(({ state }) => state)).toEqual(['held']);
     expect(second.states).toEqual([{ state: 'waiting' }]);
+    await vi.advanceTimersByTimeAsync(4 * pollMs);
+    expect(second.states).toEqual([{ state: 'waiting' }]);
 
     await first.lifecycle.stop();
     await vi.advanceTimersByTimeAsync(pollMs);
     expect(second.states.map(({ state }) => state)).toEqual(['waiting', 'held']);
     await second.lifecycle.stop();
     expect(actions).toEqual(['dispose', 'close', 'dispose', 'close']);
+  });
+
+  it.each(['signer-timeout', 'startup'] as const)('recovers from a transient %s without a reload', async (reason) => {
+    vi.useFakeTimers();
+    const account = {
+      handle: { leaseHeld: () => true },
+      ensure: { keyPackage: 'present', inboxRelayList: 'ok' },
+      teardown: vi.fn(async () => {}),
+    } as unknown as AccountClient;
+    const start = vi.fn<Start>().mockResolvedValue({ status: 'ready', account });
+    if (reason === 'signer-timeout') start.mockResolvedValueOnce({ status: 'signer-timeout' });
+    else start.mockRejectedValueOnce(new Error('temporary startup failure'));
+
+    const { states, lifecycle } = rig(start);
+    await lifecycle.whenReady();
+    expect(states).toEqual([{ state: 'retrying', reason }]);
+    await vi.advanceTimersByTimeAsync(19);
+    expect(start).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(states).toEqual([{ state: 'retrying', reason }, { state: 'held', account }]);
+    await lifecycle.stop();
+    expect(account.teardown).toHaveBeenCalledOnce();
+  });
+
+  it('retries a failed inbox relay list while leased and stops trying once it succeeds', async () => {
+    vi.useFakeTimers();
+    const failure = new Error('relay lookup timed out');
+    const retryInboxRelayList = vi.fn<() => Promise<void>>().mockRejectedValueOnce(failure).mockResolvedValue(undefined);
+    const account = {
+      handle: { leaseHeld: () => true },
+      ensure: { keyPackage: 'present', inboxRelayList: 'failed' },
+      retryInboxRelayList,
+      teardown: vi.fn(async () => {}),
+    } as unknown as AccountClient;
+    const { lifecycle, onError } = rig(async () => ({ status: 'ready', account }));
+    await lifecycle.whenReady();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(retryInboxRelayList).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
+    await lifecycle.stop();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(retryInboxRelayList).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to construct a client when a device reset completes during lease acquisition', async () => {
+    vi.useFakeTimers();
+    let current = true;
+    let leaseAcquired = false;
+    const createClient = vi.fn();
+    const close = vi.fn();
+    const stores = fakeStores(() => leaseAcquired, []);
+    const start = vi.fn<Start>(async (input) => {
+      if (!leaseAcquired) return { status: 'lease-held' };
+      // A waiting tab may get the lease before its account-change event is delivered.
+      current = false;
+      try {
+        await input.beforeClientConstruction!(stores);
+        createClient();
+        return { status: 'aborted' };
+      } finally {
+        close();
+      }
+    });
+    const { lifecycle, states } = rig(start, undefined, () => current);
+    await lifecycle.whenReady();
+    leaseAcquired = true;
+    await vi.advanceTimersByTimeAsync(4 * pollMs);
+    expect(createClient).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(states).toEqual([{ state: 'waiting' }, { state: 'unsupported', reason: 'startup' }]);
+    await lifecycle.stop();
   });
 
   it('wipes after disposal and before lease release, restarts once, then reports unsupported', async () => {

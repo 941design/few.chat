@@ -3,7 +3,8 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { STORAGE_KEYS } from '@/src/types';
 import { permissions } from '@941design/marmot';
 import { BLOSSOM_AUTH_KIND } from '@/src/lib/media/blossomClient';
@@ -21,6 +22,8 @@ import {
   buildNip46PermsParam,
   shouldDiscardStoredNip46Session,
   loadNip46Session,
+  loadVerifiedNip46Account,
+  requestVerifiedNip46Account,
   saveNip46Session,
 } from '@/src/lib/nip46Perms';
 
@@ -181,6 +184,11 @@ describe('AC-SIGN-4 stored-session discard', () => {
 });
 
 describe('NIP-46 settings connect and reload', () => {
+  const userPubkey = 'ab'.repeat(32);
+  const bunkerPubkey = 'cd'.repeat(32);
+  const payload = JSON.stringify({ type: 'nip46', payload: { userPubkey: 'ef'.repeat(32), bunkerPubkey } });
+  const verified = { source: 'get_public_key', pubkey: userPubkey } as const;
+
   function storage() {
     const state = new Map<string, string>();
     return {
@@ -192,17 +200,73 @@ describe('NIP-46 settings connect and reload', () => {
 
   it('reopens a payload saved by the identity provider using the current permission list', () => {
     const persisted = storage();
-    saveNip46Session(persisted, 'current bunker payload');
+    saveNip46Session(persisted, payload, verified);
     expect(persisted.getItem(STORAGE_KEYS.nip46Permissions)).toBe(buildNip46PermsParam());
-    expect(loadNip46Session(persisted)).toBe('current bunker payload');
+    expect(loadVerifiedNip46Account(persisted)).toBe(userPubkey);
+    expect(loadNip46Session(persisted)).toBe(payload);
   });
 
-  it.each([undefined, OLD_SET.join(',')])('clears an old payload with permission record %s', (recorded) => {
+  it.each([STORAGE_KEYS.nip46Session, STORAGE_KEYS.nip46Permissions, STORAGE_KEYS.nip46Account])(
+    'clears the previous verified binding before a replacement interrupted at %s',
+    (failedKey) => {
+      const persisted = storage();
+      saveNip46Session(persisted, payload, verified);
+      const interrupted = {
+        ...persisted,
+        setItem(key: string, value: string) {
+          expect(loadVerifiedNip46Account(persisted)).toBeNull();
+          if (key === failedKey) throw new Error('storage write failed');
+          persisted.setItem(key, value);
+        },
+      };
+
+      expect(() => saveNip46Session(interrupted, 'replacement session', { ...verified, pubkey: '12'.repeat(32) }))
+        .toThrow('storage write failed');
+      expect(loadVerifiedNip46Account(persisted)).toBeNull();
+    },
+  );
+
+  it.each([undefined, OLD_SET.join(',')])('keeps a verified account when permission record %s invalidates the session', (recorded) => {
     const persisted = storage();
-    persisted.setItem(STORAGE_KEYS.nip46Session, 'legacy bunker payload');
+    saveNip46Session(persisted, payload, verified);
     if (recorded !== undefined) persisted.setItem(STORAGE_KEYS.nip46Permissions, recorded);
+    else persisted.removeItem(STORAGE_KEYS.nip46Permissions);
     expect(loadNip46Session(persisted)).toBeNull();
     expect(persisted.getItem(STORAGE_KEYS.nip46Session)).toBeNull();
     expect(persisted.getItem(STORAGE_KEYS.nip46Permissions)).toBeNull();
+    expect(loadVerifiedNip46Account(persisted)).toBe(userPubkey);
+    expect(loadNip46Session(persisted)).toBeNull();
+    expect(loadVerifiedNip46Account(persisted)).toBe(userPubkey);
+  });
+
+  it('ignores both a payload hint and an unversioned account during permission invalidation', () => {
+    const persisted = storage();
+    persisted.setItem(STORAGE_KEYS.nip46Session, payload);
+    persisted.setItem(STORAGE_KEYS.nip46Account, userPubkey);
+    expect(loadNip46Session(persisted)).toBeNull();
+    expect(loadVerifiedNip46Account(persisted)).toBeNull();
+  });
+
+  it.each(['expected bunker', 'wrong bunker', 'invalid signature', 'invalid result'])('validates the RPC account reply from %s', async (scenario) => {
+    const bunkerKey = new Uint8Array(32).fill(1);
+    const otherKey = new Uint8Array(32).fill(2);
+    const endpoint = getPublicKey(bunkerKey);
+    const event = finalizeEvent(
+      { kind: 24133, created_at: 1, tags: [], content: 'encrypted account reply' },
+      scenario === 'wrong bunker' ? otherKey : bunkerKey,
+    );
+    const sendRequest = vi.fn(async (_recipient, _method, _params, _kind, cb) => {
+      cb({
+        result: scenario === 'invalid result' ? 'bad' : userPubkey,
+        event: { rawEvent: () => ({ ...event, sig: scenario === 'invalid signature' ? '0'.repeat(128) : event.sig }) },
+      });
+    });
+    const account = requestVerifiedNip46Account({
+      bunkerPubkey: endpoint,
+      rpc: { sendRequest } as unknown as Parameters<typeof requestVerifiedNip46Account>[0]['rpc'],
+    });
+    if (scenario === 'expected bunker') await expect(account).resolves.toEqual(verified);
+    else await expect(account).rejects.toThrow('could not be verified');
+    expect(sendRequest).toHaveBeenCalledExactlyOnceWith(endpoint, 'get_public_key', [], 24133, expect.any(Function));
   });
 });

@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { canAddContactToGroup } from '@/pages/profile';
+import { canAddContactToGroup, resolveAdminGroupIds } from '@/pages/profile';
 
 /** Minimal contact shape the guard reads — only the two boolean axes matter. */
 function contact(overrides: { isArchived?: boolean; isPendingConfirmation?: boolean } = {}) {
@@ -46,5 +46,21 @@ describe('canAddContactToGroup', () => {
 
   it('refuses a null contact (no record)', () => {
     expect(canAddContactToGroup(null)).toBe(false);
+  });
+});
+
+describe('resolving groups that can admit a contact', () => {
+  it('keeps valid admin groups when another group was abandoned after lookup', async () => {
+    const ids = await resolveAdminGroupIds(
+      [{ id: 'gone' }, { id: 'admin' }, { id: 'member' }],
+      'aabb',
+      async (id) => ({
+        activeAdmins() {
+          if (id === 'gone') throw new Error('Group was abandoned');
+          return [id === 'admin' ? 'AABB' : 'ccdd'];
+        },
+      }),
+    );
+    expect([...ids]).toEqual(['admin']);
   });
 });

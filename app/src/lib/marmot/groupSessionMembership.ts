@@ -57,6 +57,7 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
   const { client, pubkey } = handle;
   const baseQueue = createGroupOpQueue();
   const live = new Map<string, MarmotGroup>();
+  const liveAdmins = new Map<string, string>();
   const hidden = new Set<string>();
   const joined = new Set<string>();
   let disposed = false;
@@ -141,7 +142,7 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
       const group = await loadGroup(id, pubkey);
       if (group) await saveOverlay({ ...group, accountPubkey: pubkey, unloadable: true });
     },
-    onPurged: (id) => { if (!disposed && handle.leaseHeld()) { live.delete(id); hidden.delete(id); joined.delete(id); deps.onJoinRequestsChanged(id); deps.onGroupsChanged(); } },
+    onPurged: (id) => { if (!disposed && handle.leaseHeld()) { live.delete(id); liveAdmins.delete(id); hidden.delete(id); joined.delete(id); deps.onJoinRequestsChanged(id); deps.onGroupsChanged(); } },
     onError: (_id, failure) => report(failure.error),
   });
   const purger = { ...rawPurger, purgeLocalGroup: async (...args: Parameters<typeof rawPurger.purgeLocalGroup>) => {
@@ -198,7 +199,8 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
   const offPending = pendingView.onChange(() => deps.onInvitationsChanged(pendingView.pending()));
   const removal = createGroupRemovalHandlers({ ownPubkey: pubkey, purger, enqueue, onError: (_id, error) => report(error) });
   const disband = createDisbandMarker({ overlay: { load: async (id) => await loadGroup(id, pubkey) as (Group & { [key: string]: unknown }) | undefined, save: async (row) => saveOverlay({ ...row, accountPubkey: pubkey } as Group) }, now: Date.now, onMarked: deps.onGroupsChanged, onError: (_id, error) => report(error) });
-  const syncOverlayNow = async (group: MarmotGroup): Promise<Group> => {
+  type OverlayRefresh = { force: boolean };
+  const syncOverlayNow = async (group: MarmotGroup, refresh?: OverlayRefresh): Promise<Group> => {
     assertLease();
     const id = group.id;
     const previous = await loadGroup(id, pubkey);
@@ -208,32 +210,40 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
       ...previous, id, accountPubkey: pubkey, name: group.name, memberPubkeys: [...group.members()],
       relays: [...group.relays], createdAt: previous?.createdAt ?? Date.now(), unloadable: undefined,
     };
-    if (JSON.stringify(row) !== JSON.stringify(previous)) await saveOverlay(row);
+    const admins = JSON.stringify([...group.activeAdmins()].sort());
+    const rowChanged = JSON.stringify(row) !== JSON.stringify(previous);
+    if (rowChanged) await saveOverlay(row);
     if (!disposed && handle.leaseHeld()) {
+      // Admin roles are read from the live handle and are absent from the overlay.
+      const previousAdmins = liveAdmins.get(id);
+      liveAdmins.set(id, admins);
       live.set(id, group);
-      deps.onGroupsChanged();
+      if (rowChanged || (previousAdmins !== undefined && previousAdmins !== admins) || refresh?.force) {
+        deps.onGroupsChanged();
+      }
     }
     return row;
   };
-  const syncOverlay = async (group: MarmotGroup): Promise<Group> => {
+  const syncOverlay = async (group: MarmotGroup, refresh?: OverlayRefresh): Promise<Group> => {
     assertLease();
     const id = group.id;
     if (purging.has(id)) return Promise.reject(purgeRace());
     const pending = overlayWrites.get(id) ?? new Set<Promise<unknown>>();
     overlayWrites.set(id, pending);
-    const work = syncOverlayNow(group);
+    const work = syncOverlayNow(group, refresh);
     pending.add(work);
     void work.then(() => { pending.delete(work); if (!pending.size) overlayWrites.delete(id); }, () => { pending.delete(work); if (!pending.size) overlayWrites.delete(id); });
     return work;
   };
-  const scheduled = new Set<string>();
+  const scheduled = new Map<string, OverlayRefresh>();
   const scheduleOverlay = (id: string) => {
     if (scheduled.has(id)) return;
-    scheduled.add(id);
+    const refresh = { force: false };
+    scheduled.set(id, refresh);
     const accepted = enqueue(async () => {
       try {
         const group = await getGroup(id);
-        if (group) await syncOverlay(group);
+        if (group) await syncOverlay(group, refresh);
       } finally {
         scheduled.delete(id);
       }
@@ -299,8 +309,14 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
     purger, pendingView, contexts, inboxHandlers, hiddenGroups: hidden,
     onInboxDisposition: (event: { readonly kind: string }) => { if (!started) { pendingDisposition = true; return; } pendingView.onInboxDisposition(event); autoAccept.onInboxDisposition(event); },
     onWelcomeDeclined: decline.onWelcomeDeclined, onGroupRemoved: removal.onGroupRemoved,
-    onGroupNotification: (group: MarmotGroup, notification: GroupNotification) => { if (!disposed && handle.leaseHeld()) route(group.id, notification); },
-    syncOverlay,
+    onGroupNotification(group: MarmotGroup, notification: GroupNotification) {
+      if (disposed || !handle.leaseHeld()) return;
+      const id = group.id;
+      route(id, notification);
+      const refresh = scheduled.get(id);
+      if (refresh && notification.type === 'own-change-lost') refresh.force = true;
+    },
+    syncOverlay: (group: MarmotGroup) => syncOverlay(group),
     listLiveGroupIds: () => [...live.keys()].filter((id) => !hidden.has(id)),
     listLiveGroups: () => [...live.entries()].filter(([id]) => !hidden.has(id)).map(([, group]) => group),
     visibleGroups: (groups: readonly Group[]) => groups.filter((group) => !hidden.has(group.id)),
@@ -329,7 +345,7 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
       const group = await requiredGroup(id);
       const result = await inviter.inviteByPubkey(group, account);
       // The roster can arrive before the invite reference is persisted.
-      if ('outcome' in result) await syncOverlay(group).catch(report);
+      if ('outcome' in result) await syncOverlay(group, { force: true }).catch(report);
       return result;
     },
     async accept(id: string) {
@@ -369,6 +385,7 @@ export function createGroupSessionMembership(deps: GroupSessionMembershipDeps) {
       leaver.dispose();
       pendingView.dispose();
       live.clear();
+      liveAdmins.clear();
       await Promise.allSettled(writes);
     },
   };

@@ -30,9 +30,10 @@ import {
   type StoredNostrIdentity,
 } from '@/src/lib/nostrKeys';
 import { deriveIsFreshIdentity } from '@/src/lib/freshIdentity';
-import { buildNip46PermsParam, connectBunkerWithPermissions, loadNip46Session, saveNip46Session } from '@/src/lib/nip46Perms';
+import { buildNip46PermsParam, connectBunkerWithPermissions, loadNip46Session, loadVerifiedNip46Account, parseSignerAccountPubkey, requestVerifiedNip46Account, saveNip46Session } from '@/src/lib/nip46Perms';
 import { postAccountChangedIfSwitched } from '@/src/lib/crossTab';
 import { detachBackupForReplace } from '@/src/lib/backup/suspension';
+import { getDeviceResetGeneration } from '@/src/lib/storage';
 
 export type SignerMode = 'local' | 'nip46' | 'nip07';
 
@@ -51,6 +52,8 @@ type NostrIdentityContextValue = {
   isFreshIdentity: boolean;
   /** Hex-encoded public key */
   pubkeyHex: string | null;
+  /** Last verified account of the active remote signer, available while offline. */
+  signerAccountPubkey: string | null;
   /** Npub (NIP-19 bech32 encoded public key) */
   npub: string | null;
   /** Hex private key — needed to pass to MarmotClient signer */
@@ -115,6 +118,8 @@ const NostrIdentityContext = createContext<NostrIdentityContextValue | null>(nul
 /** Timeout (ms) for a NIP-46 blockUntilReady() call (AC-SIGNER-7). */
 const BUNKER_TIMEOUT_MS = 15_000;
 
+class Nip46AccountMismatchError extends Error {}
+
 function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('timeout')), ms);
@@ -125,12 +130,20 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+function persistSignerMode(mode: SignerMode): void {
+  if (typeof localStorage === 'undefined') return;
+  if (mode !== 'nip07') localStorage.removeItem(STORAGE_KEYS.nip07Account);
+  if (mode !== 'nip46') localStorage.removeItem(STORAGE_KEYS.nip46Account);
+  localStorage.setItem(STORAGE_KEYS.signerMode, mode);
+}
+
 export function NostrIdentityProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [identity, setIdentity] = useState<StoredNostrIdentity | null>(null);
   const [isFreshIdentity, setIsFreshIdentity] = useState(false);
   const [backedUp, setBackedUp] = useState(false);
   const [signerMode, setSignerModeState] = useState<SignerMode>('local');
+  const [signerAccountPubkey, setSignerAccountPubkey] = useState<string | null>(null);
   const [signerAvailable, setSignerAvailable] = useState(true);
   const [signerError, setSignerError] = useState<string | null>(null);
   const [signerReconnecting, setSignerReconnecting] = useState(false);
@@ -138,12 +151,22 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
   // Module-level ref for the active NIP-46 signer — not React state (no re-render needed).
   // Populated by initNostrConnect/connectBunkerUri and used by confirmNostrConnect.
   const pendingNip46SignerRef = useRef<import('@nostr-dev-kit/ndk').NDKNip46Signer | null>(null);
+  const signerAttempt = useRef(0);
+  const [deviceGeneration] = useState(getDeviceResetGeneration);
+  const isCurrentDevice = useCallback(() => getDeviceResetGeneration() === deviceGeneration, [deviceGeneration]);
+  const beginSignerAttempt = useCallback(() => {
+    const attempt = ++signerAttempt.current;
+    return () => signerAttempt.current === attempt && isCurrentDevice();
+  }, [isCurrentDevice]);
 
   // Initialize identity on client
   useEffect(() => {
     let cancelled = false;
+    const attempt = signerAttempt.current;
+    const isCurrent = () => !cancelled && signerAttempt.current === attempt && isCurrentDevice();
 
     async function init() {
+      if (!isCurrent()) return;
       // Check backed-up status
       const isBackedUp =
         typeof localStorage !== 'undefined' &&
@@ -175,14 +198,28 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
         // First launch: generate keypair from 128-bit seed
         const { seedHex, privateKeyHex } = await generateIdentityFromSeed();
         const pubkeyHex = await derivePublicKeyHex(privateKeyHex);
+        if (cancelled || !isCurrentDevice()) return;
         stored = { privateKeyHex, pubkeyHex, seedHex };
         saveStoredIdentity(stored);
       }
 
-      if (cancelled) return;
+      if (cancelled || !isCurrentDevice()) return;
+      let sessionPayload: string | null = null;
+      if (isCurrent() && effectiveMode !== 'local') {
+        if (typeof localStorage !== 'undefined') {
+          if (effectiveMode === 'nip46') {
+            sessionPayload = loadNip46Session(localStorage);
+            setSignerAccountPubkey(loadVerifiedNip46Account(localStorage));
+          } else {
+            setSignerAccountPubkey(parseSignerAccountPubkey(localStorage.getItem(STORAGE_KEYS.nip07Account)));
+          }
+        }
+        setSignerAvailable(false);
+      }
       setIdentity(stored);
       setIsFreshIdentity(freshAtInit);
       setHydrated(true);
+      if (!isCurrent()) return;
 
       // AC-NIP07: If previously in nip07 mode, re-connect the extension silently on mount.
       if (effectiveMode === 'nip07') {
@@ -194,17 +231,16 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
             const { NDKNip07Signer } = await import('@nostr-dev-kit/ndk');
             const nip07 = new NDKNip07Signer();
             await nip07.blockUntilReady();
-            if (cancelled) return;
-            await _activateNip07Signer(nip07, stored);
+            await _activateNip07Signer(nip07, stored, isCurrent);
           } else {
             // Extension gone or missing NIP-44 — degrade gracefully
-            if (!cancelled) {
+            if (isCurrent()) {
               setSignerError('nip07_unavailable');
               setSignerAvailable(false);
             }
           }
         } catch {
-          if (!cancelled) {
+          if (isCurrent()) {
             setSignerError('nip07_unavailable');
             setSignerAvailable(false);
           }
@@ -213,8 +249,6 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
 
       // AC-SIGNER-6: If previously in nip46 mode, restore session on mount.
       if (effectiveMode === 'nip46') {
-        const sessionPayload = typeof localStorage !== 'undefined' ? loadNip46Session(localStorage) : null;
-
         if (sessionPayload) {
           setSignerReconnecting(true);
           setSignerAvailable(false);
@@ -229,19 +263,24 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
               if (typeof window !== 'undefined') window.open(url, '_blank');
             });
 
-            await raceWithTimeout(connectBunkerWithPermissions(restoredSigner), BUNKER_TIMEOUT_MS);
-
-            if (cancelled) return;
-            await _activateNip46Signer(restoredSigner, null, stored);
-            setSignerAvailable(true);
-            setSignerError(null);
-          } catch {
-            if (!cancelled) {
-              setSignerError('bunker_unreachable');
+            await _activateNip46Signer(restoredSigner, connectBunkerWithPermissions(restoredSigner), stored, isCurrent);
+          } catch (error) {
+            if (isCurrent()) {
+              if (error instanceof Nip46AccountMismatchError) {
+                if (localStorage.getItem(STORAGE_KEYS.nip46Session) === sessionPayload) {
+                  localStorage.removeItem(STORAGE_KEYS.nip46Session);
+                  localStorage.removeItem(STORAGE_KEYS.nip46Permissions);
+                  localStorage.removeItem(STORAGE_KEYS.nip46Account);
+                }
+                setSignerAccountPubkey(null);
+                setSignerError('connection_failed');
+              } else {
+                setSignerError('bunker_unreachable');
+              }
               setSignerAvailable(false);
             }
           } finally {
-            if (!cancelled) setSignerReconnecting(false);
+            if (isCurrent()) setSignerReconnecting(false);
           }
         } else {
           setSignerError('connection_failed');
@@ -267,11 +306,13 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(STORAGE_KEYS.nip46Session);
       localStorage.removeItem(STORAGE_KEYS.nip46Permissions);
-      localStorage.setItem(STORAGE_KEYS.signerMode, 'local');
     }
+    persistSignerMode('local');
+    setSignerAccountPubkey(null);
     setSignerModeState('local');
     setSignerAvailable(true);
     setSignerError(null);
+    setSignerReconnecting(false);
     pendingNip46SignerRef.current = null;
     // Clear the global EventSigner override so MarmotContext reverts to local
     import('@/src/lib/marmot/signerAdapter').then(({ activeEventSignerOverride }) => {
@@ -284,21 +325,25 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
    * Sets signerMode to 'nip46', persists the session, applies the signer
    * to NDK and to the global EventSigner override (for MarmotContext).
    *
-   * If reportedPubkey differs from the local identity's pubkeyHex, the user
+   * If the verified account differs from the local identity's pubkeyHex, the user
    * is switching identities. We accept this (no hard block in this epic slice)
    * but log a warning. The backup gate (AC-SIGNER-4b) is enforced by the
    * settings UI before calling connect functions.
    */
   async function _activateNip46Signer(
     signer: import('@nostr-dev-kit/ndk').NDKNip46Signer,
-    reportedPubkey: string | null,
+    connect: Promise<import('@nostr-dev-kit/ndk').NDKUser>,
     currentIdentity: StoredNostrIdentity | null,
+    isCurrent: () => boolean,
   ): Promise<void> {
-    if (reportedPubkey && currentIdentity && reportedPubkey !== currentIdentity.pubkeyHex) {
-      console.warn('[NostrIdentity] NIP-46 pubkey differs from local identity.', {
-        local: currentIdentity.pubkeyHex,
-        bunker: reportedPubkey,
-      });
+    const verified = await raceWithTimeout(connect.then(async (user) => {
+      if (!isCurrent()) return null;
+      return { user, account: await requestVerifiedNip46Account(signer) };
+    }), BUNKER_TIMEOUT_MS);
+    if (!verified || !isCurrent()) return;
+    const account = verified.account.pubkey;
+    if (verified.user.pubkey !== account || signer.userPubkey !== account) {
+      throw new Nip46AccountMismatchError('NIP-46 account does not match the bunker details. Reconnect with the correct signer.');
     }
 
     // Everything that can throw (module loads, payload, storage quota) runs
@@ -306,28 +351,28 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     // so a failed activation must not leave it bound while the mode stays local.
     const { applyNdkSigner } = await import('@/src/lib/ndkClient');
     const { createNip46EventSigner, activeEventSignerOverride } = await import('@/src/lib/marmot/signerAdapter');
+    if (!isCurrent()) return;
     const eventSigner = createNip46EventSigner(signer);
 
-    // Persist session payload (no private key stored — AC-SIGNER-5)
-    const payload = signer.toPayload();
-    if (typeof localStorage !== 'undefined') {
-      saveNip46Session(localStorage, payload);
-      // Remove the raw private key from localStorage (AC-SIGNER-5)
-      // Only do this if the bunker is for the same identity (safe guard)
-      if (!reportedPubkey || !currentIdentity || reportedPubkey === currentIdentity.pubkeyHex) {
-        localStorage.removeItem(STORAGE_KEYS.nostrIdentity);
-      }
+    // Only remove the local key when the remote signer controls that account.
+    saveNip46Session(localStorage, signer.toPayload(), verified.account);
+    if (account === parseSignerAccountPubkey(currentIdentity?.pubkeyHex)) {
+      localStorage.removeItem(STORAGE_KEYS.nostrIdentity);
+    } else if (currentIdentity) {
+      console.warn('[NostrIdentity] NIP-46 pubkey differs from local identity.', {
+        local: currentIdentity.pubkeyHex,
+        bunker: account,
+      });
     }
+    persistSignerMode('nip46');
 
     // Apply to the NDK singleton and the global EventSigner override (MarmotContext)
     applyNdkSigner(signer);
     activeEventSignerOverride.current = eventSigner;
 
     pendingNip46SignerRef.current = signer;
+    setSignerAccountPubkey(account);
     setSignerModeState('nip46');
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEYS.signerMode, 'nip46');
-    }
     setSignerAvailable(true);
     setSignerError(null);
   }
@@ -337,20 +382,21 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
    * Sets signerMode to 'nip07', applies the signer to NDK and the global
    * EventSigner override (for MarmotContext).
    *
-   * Unlike NIP-46, there is no session payload to persist — the extension
-   * is always present on the device. signerMode='nip07' in localStorage is
-   * sufficient to trigger auto-reconnect on the next mount.
+   * The verified account is persisted for offline use. The extension handles
+   * its own session and is queried again on the next mount.
    */
   async function _activateNip07Signer(
     signer: import('@nostr-dev-kit/ndk').NDKNip07Signer,
     currentIdentity: StoredNostrIdentity | null,
+    isCurrent: () => boolean,
   ): Promise<void> {
     // .pubkey getter is available synchronously after blockUntilReady() has been called (done by the caller)
-    const reportedPubkey = signer.pubkey;
-    if (currentIdentity && reportedPubkey !== currentIdentity.pubkeyHex) {
+    const account = parseSignerAccountPubkey(signer.pubkey);
+    if (!account) throw new Error('NIP-07 signer is missing its account public key');
+    if (currentIdentity && account !== parseSignerAccountPubkey(currentIdentity.pubkeyHex)) {
       console.warn('[NostrIdentity] NIP-07 pubkey differs from local identity.', {
         local: currentIdentity.pubkeyHex,
-        extension: reportedPubkey,
+        extension: account,
       });
     }
 
@@ -358,26 +404,27 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     // singleton and the global EventSigner override (MarmotContext).
     const { applyNdkSigner } = await import('@/src/lib/ndkClient');
     const { createNip07EventSigner, activeEventSignerOverride } = await import('@/src/lib/marmot/signerAdapter');
+    if (!isCurrent()) return;
     const eventSigner = createNip07EventSigner(signer);
+    localStorage.setItem(STORAGE_KEYS.nip07Account, account);
+    persistSignerMode('nip07');
     applyNdkSigner(signer);
     activeEventSignerOverride.current = eventSigner;
 
+    setSignerAccountPubkey(account);
     setSignerModeState('nip07');
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEYS.signerMode, 'nip07');
-    }
     setSignerAvailable(true);
     setSignerError(null);
   }
 
   /** Internal: revert signer mode to local and clean up NIP-07 state. */
   function _clearNip07Mode() {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEYS.signerMode, 'local');
-    }
+    persistSignerMode('local');
+    setSignerAccountPubkey(null);
     setSignerModeState('local');
     setSignerAvailable(true);
     setSignerError(null);
+    setSignerReconnecting(false);
     // Clear the global EventSigner override so MarmotContext reverts to local
     import('@/src/lib/marmot/signerAdapter').then(({ activeEventSignerOverride }) => {
       activeEventSignerOverride.current = null;
@@ -407,11 +454,15 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
   }, []);
 
   const setSignerMode = useCallback((mode: SignerMode) => {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEYS.signerMode, mode);
+    if (!isCurrentDevice()) return;
+    if (mode !== signerMode) {
+      signerAttempt.current++;
+      setSignerAccountPubkey(null);
+      setSignerReconnecting(false);
     }
+    persistSignerMode(mode);
     setSignerModeState(mode);
-  }, []);
+  }, [isCurrentDevice, signerMode]);
 
   /**
    * Step 1 of nostrconnect flow: create pending NIP-46 signer, return URI.
@@ -419,6 +470,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
    */
   const initNostrConnect = useCallback(async (relay: string): Promise<{ connectUri: string }> => {
     if (typeof window === 'undefined') return { connectUri: '' };
+    const attempt = signerAttempt.current;
 
     try {
       const { connectNdk, getNdkInstance } = await import('@/src/lib/ndkClient');
@@ -437,6 +489,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       // Generate an ephemeral local signer for the nostrconnect flow
       const ephemeralSigner = NDKPrivateKeySigner.generate();
       await ephemeralSigner.blockUntilReady();
+      if (signerAttempt.current !== attempt || !isCurrentDevice()) return { connectUri: '' };
 
       const nip46 = NDKNip46Signer.nostrconnect(ndk, relay, ephemeralSigner, {
         name: 'Few',
@@ -455,7 +508,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       console.warn('[NostrIdentity] initNostrConnect failed:', err);
       return { connectUri: '' };
     }
-  }, []);
+  }, [isCurrentDevice]);
 
   /**
    * Step 2 of nostrconnect flow: block until remote signer approves (15 s timeout).
@@ -463,13 +516,15 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
   const confirmNostrConnect = useCallback(async (): Promise<void> => {
     const signer = pendingNip46SignerRef.current;
     if (!signer) throw new Error('No pending nostrconnect signer');
+    const isCurrent = beginSignerAttempt();
+    if (!isCurrent()) return;
 
     setSignerReconnecting(true);
     setSignerAvailable(false);
     try {
-      const user = await raceWithTimeout(signer.blockUntilReadyNostrConnect(), BUNKER_TIMEOUT_MS);
-      await _activateNip46Signer(signer, user.pubkey, identity);
+      await _activateNip46Signer(signer, signer.blockUntilReadyNostrConnect(), identity, isCurrent);
     } catch (err) {
+      if (!isCurrent()) return;
       const msg = err instanceof Error && err.message === 'timeout'
         ? 'bunker_unreachable'
         : 'connection_failed';
@@ -477,16 +532,18 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       setSignerAvailable(false);
       throw err;
     } finally {
-      setSignerReconnecting(false);
+      if (isCurrent()) setSignerReconnecting(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
+  }, [beginSignerAttempt, identity]);
 
   /**
    * Connect via a bunker:// URI (paste flow).
    */
   const connectBunkerUri = useCallback(async (uri: string): Promise<void> => {
     if (typeof window === 'undefined') return;
+    const isCurrent = beginSignerAttempt();
+    if (!isCurrent()) return;
 
     setSignerReconnecting(true);
     setSignerAvailable(false);
@@ -501,6 +558,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
         if (stored) ndk = await connectNdk(stored.privateKeyHex);
       }
       if (!ndk) throw new Error('NDK not available');
+      if (!isCurrent()) return;
 
       const signer = NDKNip46Signer.bunker(ndk, uri);
 
@@ -510,9 +568,9 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       });
 
       pendingNip46SignerRef.current = signer;
-      const user = await raceWithTimeout(connectBunkerWithPermissions(signer), BUNKER_TIMEOUT_MS);
-      await _activateNip46Signer(signer, user.pubkey, identity);
+      await _activateNip46Signer(signer, connectBunkerWithPermissions(signer), identity, isCurrent);
     } catch (err) {
+      if (!isCurrent()) return;
       const msg = err instanceof Error && err.message === 'timeout'
         ? 'bunker_unreachable'
         : 'connection_failed';
@@ -520,16 +578,18 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       setSignerAvailable(false);
       throw err;
     } finally {
-      setSignerReconnecting(false);
+      if (isCurrent()) setSignerReconnecting(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
+  }, [beginSignerAttempt, identity]);
 
   /**
    * Disconnect the NIP-46 signer and return to local mode (AC-SIGNER-8).
    * Never leaves the user without a signer.
    */
   const disconnectBunker = useCallback(() => {
+    const isCurrent = beginSignerAttempt();
+    if (!isCurrent()) return;
     // Stop the active NIP-46 signer if any
     pendingNip46SignerRef.current?.stop?.();
     pendingNip46SignerRef.current = null;
@@ -545,6 +605,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       // No local identity: generate one
       void generateIdentityFromSeed().then(async ({ seedHex, privateKeyHex }) => {
         const pubkeyHex = await derivePublicKeyHex(privateKeyHex);
+        if (!isCurrent()) return;
         const newId = { privateKeyHex, pubkeyHex, seedHex };
         saveStoredIdentity(newId);
         setIdentity(newId);
@@ -561,7 +622,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
 
     _clearNip46Mode();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [beginSignerAttempt]);
 
   /**
    * Connect via a NIP-07 browser extension (AC-OTHER-2, AC-NIP07-1, AC-NIP07-2).
@@ -577,6 +638,8 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     if (!window.nostr.nip44) {
       throw new Error('Extension does not support NIP-44 encryption. Use Alby or nos2x-fox.');
     }
+    const isCurrent = beginSignerAttempt();
+    if (!isCurrent()) return;
 
     setSignerReconnecting(true);
     setSignerAvailable(false);
@@ -585,22 +648,25 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       const { NDKNip07Signer } = await import('@nostr-dev-kit/ndk');
       const nip07 = new NDKNip07Signer();
       await nip07.blockUntilReady();
-      await _activateNip07Signer(nip07, identity);
+      await _activateNip07Signer(nip07, identity, isCurrent);
     } catch (err) {
+      if (!isCurrent()) return;
       setSignerError('nip07_unavailable');
       setSignerAvailable(false);
       throw err;
     } finally {
-      setSignerReconnecting(false);
+      if (isCurrent()) setSignerReconnecting(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
+  }, [beginSignerAttempt, identity]);
 
   /**
    * Disconnect the NIP-07 signer and return to local mode.
    * Mirrors disconnectBunker but without any session payload to delete.
    */
   const disconnectNip07 = useCallback(() => {
+    const isCurrent = beginSignerAttempt();
+    if (!isCurrent()) return;
     // Restore local NDK signer. Release first, unconditionally: without a stored
     // identity the new key only exists after async generation, and the stopped
     // external signer must not stay bound meanwhile (or forever, if it fails).
@@ -611,6 +677,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     if (!stored) {
       void generateIdentityFromSeed().then(async ({ seedHex, privateKeyHex }) => {
         const pubkeyHex = await derivePublicKeyHex(privateKeyHex);
+        if (!isCurrent()) return;
         const newId = { privateKeyHex, pubkeyHex, seedHex };
         saveStoredIdentity(newId);
         setIdentity(newId);
@@ -622,13 +689,14 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
 
     _clearNip07Mode();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [beginSignerAttempt]);
 
   const value = useMemo<NostrIdentityContextValue>(
     () => ({
       hydrated,
       isFreshIdentity,
       pubkeyHex: identity?.pubkeyHex ?? null,
+      signerAccountPubkey,
       npub: identity ? pubkeyToNpub(identity.pubkeyHex) : null,
       privateKeyHex: identity?.privateKeyHex ?? null,
       seedHex: identity?.seedHex ?? null,
@@ -651,6 +719,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       hydrated,
       isFreshIdentity,
       identity,
+      signerAccountPubkey,
       backedUp,
       replaceIdentity,
       signerMode,
@@ -687,6 +756,7 @@ const DEFAULT_CONTEXT: NostrIdentityContextValue = {
   hydrated: false,
   isFreshIdentity: false,
   pubkeyHex: null,
+  signerAccountPubkey: null,
   npub: null,
   privateKeyHex: null,
   seedHex: null,

@@ -84,12 +84,19 @@ export function useDecryptedImage(
   const slotRef = useRef<ObjectUrlSlot | null>(null);
   if (slotRef.current === null) slotRef.current = new ObjectUrlSlot();
 
+  // Group loading reads the original imeta, including its role and locators.
+  // The direct decryptor also uses the URL and type beyond the cache fingerprint.
+  const attachmentKey = !attachment ? null : 'imeta' in attachment
+    ? JSON.stringify(['group', attachment.imeta])
+    : JSON.stringify(['direct', attachmentFingerprint(attachment), attachment.url, attachment.type]);
+
   useEffect(() => {
     const slot = slotRef.current!;
     let cancelled = false;
 
     if (!attachment) {
       slot.revoke();
+      setState({ status: 'loading' });
       return;
     }
 
@@ -124,10 +131,9 @@ export function useDecryptedImage(
       cancelled = true;
       slot.revoke();
     };
-    // Re-run on every field that participates in the cache fingerprint so
-    // a swap to an attachment with the same sha256 but a different nonce
-    // (e.g. a forged record) does not silently keep showing the prior blob.
-  }, [groupId, attachment, decryptMedia, getGroup, groupImages]);
+    // The key contains the inputs to loading, independent of row object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId, attachmentKey, decryptMedia, getGroup, groupImages]);
 
   return state;
 }

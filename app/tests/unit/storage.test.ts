@@ -6,9 +6,11 @@ import {
   readUserProfile,
   writeUserProfile,
   resetAllData,
+  getDeviceResetGeneration,
 } from '@/src/lib/storage';
 import { STORAGE_KEYS } from '@/src/types';
 import { NICKNAME_MAX_BYTES } from '@/src/config/profile';
+import { FOREIGN_INBOX_RELAY_LIST_PREFIX } from '@/src/lib/marmot/client/inboxRelayOwnership';
 
 // Mock localStorage for Node environment
 const store: Record<string, string> = {};
@@ -148,21 +150,41 @@ describe('UserProfile', () => {
 
 // resetAllData backs the Settings "Danger Zone" wipe (typed confirmation).
 describe('resetAllData', () => {
-  it('clears all lp_* keys', async () => {
+  it('clears the app settings and profile and advances a device-only reset generation', async () => {
     writeSettings({ theme: 'spring', language: 'de' });
     writeUserProfile({ nickname: 'Pineapple Pal', avatar: null });
 
     expect(store[STORAGE_KEYS.settings]).toBeDefined();
     expect(store[STORAGE_KEYS.userProfile]).toBeDefined();
 
+    const initial = getDeviceResetGeneration();
     await resetAllData();
 
     expect(store[STORAGE_KEYS.settings]).toBeUndefined();
     expect(store[STORAGE_KEYS.userProfile]).toBeUndefined();
+    const first = getDeviceResetGeneration();
+    expect(first).toEqual(expect.any(String));
+    expect(first).not.toEqual(initial);
+    await resetAllData();
+    expect(getDeviceResetGeneration()).not.toEqual(first);
   });
 
   it('handles already-empty storage gracefully', async () => {
     await expect(resetAllData()).resolves.toBeUndefined();
+  });
+
+  it('removes legacy discovery keys and cached inbox relay lists for every account', async () => {
+    store['lp_marmotInboxDiscovery:alice'] = '["wss://old.example"]';
+    store['lp_marmotInboxDiscovery:bob'] = 'malformed';
+    store[FOREIGN_INBOX_RELAY_LIST_PREFIX + 'alice'] = 'list';
+    store[FOREIGN_INBOX_RELAY_LIST_PREFIX + 'bob'] = 'list';
+    store['unrelated-origin-setting'] = 'keep';
+
+    await resetAllData();
+
+    expect(Object.keys(store).filter((key) => key.startsWith('lp_marmotInboxDiscovery:'))).toEqual([]);
+    expect(Object.keys(store).filter((key) => key.startsWith(FOREIGN_INBOX_RELAY_LIST_PREFIX))).toEqual([]);
+    expect(store['unrelated-origin-setting']).toBe('keep');
   });
 });
 

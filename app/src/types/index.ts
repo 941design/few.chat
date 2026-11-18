@@ -48,6 +48,8 @@ export const STORAGE_KEYS = {
   signerMode: 'lp_signerMode_v1',
   nip46Session: 'lp_nip46Session_v1',
   nip46Permissions: 'lp_nip46Permissions_v1',
+  nip46Account: 'lp_nip46Account_v1',
+  nip07Account: 'lp_nip07Account_v1',
   // MIP-00 KeyPackage addressable slot (`d` tag) identifier, minted once via
   // generateKeyPackageSlot() and reused across launches/rotations. See
   // storage.ts's readOrCreateKeyPackageSlot().

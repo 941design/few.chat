@@ -1535,9 +1535,10 @@ export default function SettingsPage() {
                               }
                             };
                             try {
-                              await wipeLocalGroups();
-                              assertCurrent();
-                              await resetAllData();
+                              await wipeLocalGroups(async () => {
+                                assertCurrent();
+                                await resetAllData();
+                              });
                               assertCurrent();
                               window.location.reload();
                             } catch (error) {

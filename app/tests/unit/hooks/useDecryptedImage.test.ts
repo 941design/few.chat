@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { DirectMediaAttachment } from '@/src/lib/media/imageMessage';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useEffect, useRef, useState } from 'react';
+import { useMarmot } from '@/src/context/MarmotContext';
+import type { ChatMediaAttachment, DirectMediaAttachment, GroupImageAttachment } from '@/src/lib/media/imageMessage';
 
 vi.mock('@/src/lib/marmot/mediaPersistence', () => ({
   getBlob: vi.fn(),
@@ -7,15 +9,78 @@ vi.mock('@/src/lib/marmot/mediaPersistence', () => ({
   attachmentFingerprint: (a: DirectMediaAttachment) => `${a.sha256}:${a.nonce}:${a.version}`,
 }));
 vi.mock('@/src/context/MarmotContext', () => ({ useMarmot: vi.fn() }));
+vi.mock('react', () => ({ useEffect: vi.fn(), useRef: vi.fn(), useState: vi.fn() }));
 
 const { getBlob, setBlob } = await import('@/src/lib/marmot/mediaPersistence');
-const { fetchDecryptedMedia, __resetInFlightForTests, ObjectUrlSlot } = await import('@/src/hooks/useDecryptedImage');
+const { fetchDecryptedMedia, __resetInFlightForTests, ObjectUrlSlot, useDecryptedImage } = await import('@/src/hooks/useDecryptedImage');
 
 const attachment: DirectMediaAttachment = {
   sha256: 'a'.repeat(64), type: 'image/webp', filename: 'photo.webp',
   nonce: 'b'.repeat(24), version: 'few-dm-media-v1',
 };
 const contents = { bytes: new Uint8Array([1, 2, 3]), type: 'image/webp' };
+
+describe('useDecryptedImage effect lifetime', () => {
+  let cleanup: void | (() => void);
+  const setState = vi.fn();
+  const getGroup = vi.fn();
+  const loadImage = vi.fn();
+  const decrypt = vi.fn();
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    const ref = { current: null };
+    let dependencies: readonly unknown[] | undefined;
+    vi.mocked(useRef).mockReturnValue(ref);
+    vi.mocked(useState).mockReturnValue([{ status: 'loading' }, setState]);
+    vi.mocked(useEffect).mockImplementation((effect, next) => {
+      if (dependencies && next?.every((value, i) => Object.is(value, dependencies?.[i]))) return;
+      cleanup?.();
+      dependencies = next;
+      cleanup = effect();
+    });
+    getGroup.mockResolvedValue({ id: 'group' });
+    loadImage.mockResolvedValue(contents);
+    decrypt.mockResolvedValue(contents);
+    vi.mocked(useMarmot).mockReturnValue({ getGroup, groupImages: { loadImage } } as unknown as ReturnType<typeof useMarmot>);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    cleanup = undefined;
+    vi.restoreAllMocks();
+  });
+
+  const groupAttachment = {
+    attachment: { nonce: 'first' },
+    imeta: ['imeta', 'nonce first'],
+  } as GroupImageAttachment;
+
+  it.each([
+    { kind: 'group', initial: groupAttachment, changed: { ...groupAttachment, imeta: ['imeta', 'nonce second'] }, loader: loadImage },
+    { kind: 'direct', initial: attachment, changed: { ...attachment, nonce: 'c'.repeat(24) }, loader: decrypt },
+  ])('keeps the $kind object URL across fresh rows and reloads for a changed nonce', async ({ initial, changed, loader }) => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+    const render = (value: ChatMediaAttachment) => useDecryptedImage('thread', value, decrypt);
+
+    render(initial);
+    await vi.waitFor(() => expect(setState).toHaveBeenLastCalledWith({ status: 'ready', url: expect.any(String) }));
+    const { url } = setState.mock.lastCall![0];
+    setState.mockClear();
+
+    render(structuredClone(initial));
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(setState).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
+
+    render(changed);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(url);
+    expect(setState).toHaveBeenCalledWith({ status: 'loading' });
+    await vi.waitFor(() => expect(setState).toHaveBeenLastCalledWith({ status: 'ready', url: expect.any(String) }));
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(setState.mock.lastCall![0].url).not.toBe(url);
+  });
+});
 
 describe('direct image decryption', () => {
   beforeEach(() => {

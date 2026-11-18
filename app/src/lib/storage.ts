@@ -8,6 +8,7 @@ import { STORAGE_KEYS } from '@/src/types';
 import { DEFAULT_THEME_NAME, normalizeThemeName } from '@/src/lib/theme';
 import { AVATAR_BROWSER_CONFIG, capNickname } from '@/src/config/profile';
 import { postAccountChanged } from '@/src/lib/crossTab';
+import { FOREIGN_INBOX_RELAY_LIST_PREFIX } from '@/src/lib/marmot/client/inboxRelayOwnership';
 
 // ============================
 // localStorage availability check
@@ -127,18 +128,34 @@ export function writeUserProfile(profile: UserProfile): void {
 /** Test seam: the IndexedDB clear step. */
 export type ResetAllDataDeps = { clearIdb?: () => Promise<void> };
 
+const RESET_GENERATION_KEY = 'lp_deviceResetGeneration_v1';
+
+// A device-only generation lets a tab reject stale in-memory credentials after a wipe.
+export function getDeviceResetGeneration(): string | null {
+  try {
+    return localStorage.getItem(RESET_GENERATION_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export async function resetAllData(deps: ResetAllDataDeps = {}): Promise<void> {
   // First, before anything is removed: a backup published from here on would
   // snapshot the half-wiped storage under the old key.
   suspendBackups();
   if (!isStorageAvailable()) return;
-  Object.values(STORAGE_KEYS).forEach((key) => {
+  const relayKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+    .filter((key): key is string => !!key &&
+      (key.startsWith('lp_marmotInboxDiscovery:') || key.startsWith(FOREIGN_INBOX_RELAY_LIST_PREFIX)));
+  for (const key of [...Object.values(STORAGE_KEYS), ...relayKeys]) {
     try {
       localStorage.removeItem(key);
     } catch {
       // Silent fail
     }
-  });
+  }
+  // A page starting with the new generation must see the old credentials removed.
+  localStorage.setItem(RESET_GENERATION_KEY, globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 
   // Clear IndexedDB account-scoped data and WAIT for it: each clear runs
   // regardless of whether another rejects (allSettled), so leftover data from

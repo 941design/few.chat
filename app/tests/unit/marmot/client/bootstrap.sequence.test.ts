@@ -260,6 +260,29 @@ describe('key-package ensure (AC-BOOT-2)', () => {
     expect(r.status === 'ready' && r.account.ensure).toEqual({ keyPackage: 'created', inboxRelayList: 'failed' });
     expect(rig.log).toContain('onError:inboxRelayListEnsure:10050 boom');
   });
+
+  it.each(['bootstrap abort', 'teardown'] as const)('cancels an in-flight 10050 retry on %s', async (mode) => {
+    const rig = makeRig();
+    const abort = new AbortController();
+    rig.input.signal = abort.signal;
+    const ensure = vi.fn<BootstrapInput['inboxRelayList']['ensure']>()
+      .mockRejectedValueOnce(new Error('Temporary failure'))
+      .mockImplementationOnce(({ signal }) => new Promise((_, reject) => {
+        signal!.addEventListener('abort', () => reject(signal!.reason), { once: true });
+      }));
+    rig.input.inboxRelayList = { ensure };
+    const result = await bootstrapAccountClient(rig.input);
+    if (result.status !== 'ready') throw new Error('Bootstrap failed');
+
+    const pending = result.account.retryInboxRelayList!();
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(ensure).toHaveBeenCalledTimes(2);
+    if (mode === 'bootstrap abort') abort.abort();
+    else await result.account.teardown();
+    await rejected;
+    expect(rig.log.filter((entry) => entry === 'inbox.start')).toHaveLength(1);
+    await result.account.teardown();
+  });
 });
 
 describe('AccountClientHandle seam shape', () => {

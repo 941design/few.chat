@@ -17,9 +17,8 @@
  *   - `MarmotContext`'s `groups` for the already-a-member check (AC-BANNER-4),
  *     mirroring `JoinRequestCard`'s own `alreadyMemberGroupId` derivation.
  *
- * The inline "Request to join" action reuses `sendJoinRequest`
- * (joinRequestSender.ts) directly — no re-implementation of the NIP-59
- * gift-wrap logic — and gates its visible name field with
+ * The inline "Request to join" action uses the lease-bound `sendJoinRequest`
+ * from MarmotContext and gates its visible name field with
  * `isWelcomeJoinRequestDisabled`, the SAME predicate `JoinRequestCard`
  * applies for its own always-visible-field (welcome) variant (AC-BANNER-3):
  * the visible field is the sole source of truth, independent of whether a
@@ -107,10 +106,7 @@ export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: In
     loaded,
   });
 
-  // Identity not yet hydrated, or an invalid admin npub on the link: render
-  // nothing rather than a half-ready banner. Neither is a target state of
-  // this story's ACs.
-  if (!hydrated || !pubkeyHex || !ready || !adminPubkeyHex) return null;
+  if (!hydrated || !pubkeyHex || !adminPubkeyHex) return null;
 
   if (state === 'loading' || state === 'none' || state === 'first-visit') return null;
 
@@ -206,7 +202,7 @@ export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: In
           <Button
             onClick={() => void handleSend()}
             isLoading={sending}
-            isDisabled={requestDisabled}
+            isDisabled={!ready || requestDisabled}
             size="sm"
             alignSelf="flex-start"
             data-testid="invite-awaiting-request-btn"

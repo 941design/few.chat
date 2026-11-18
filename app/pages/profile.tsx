@@ -602,11 +602,29 @@ export function statusForViewedContact(
   return attempt.pubkey !== null && attempt.pubkey === viewedPubkey ? attempt.status : 'idle';
 }
 
+export async function resolveAdminGroupIds(
+  candidates: readonly { id: string }[],
+  ownPubkeyHex: string,
+  getGroup: (id: string) => Promise<Pick<import('@941design/marmot').MarmotGroup, 'activeAdmins'> | null>,
+): Promise<Set<string>> {
+  const own = ownPubkeyHex.toLowerCase();
+  const ids = await Promise.all(candidates.map(async ({ id }) => {
+    try {
+      const group = await getGroup(id);
+      return group?.activeAdmins().some((pubkey) => pubkey.toLowerCase() === own) ? id : null;
+    } catch {
+      // An abandoned handle must not discard valid results for other groups.
+      return null;
+    }
+  }));
+  return new Set(ids.filter((id): id is string => id !== null));
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const copy = useCopy();
   const { pubkeyHex: ownPubkeyHex } = useNostrIdentity();
-  const { groups, inviteByNpub, getGroup, groupDataVersion } = useMarmot();
+  const { groups, ready, inviteByNpub, getGroup, groupDataVersion } = useMarmot();
   const [version, setVersion] = useState(0);
   // const [npubCopied, setNpubCopied] = useState(false); // npub display hidden — see handleCopyNpub/JSX below
   const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -622,27 +640,19 @@ export default function ProfilePage() {
 
   // Resolve admin groups only when viewing another user's profile
   useEffect(() => {
-    if (isOwnProfile || !pubkeyHex || !ownPubkeyHex) {
+    if (!ready || isOwnProfile || !pubkeyHex || !ownPubkeyHex) {
       setAdminGroupIds(new Set());
       return;
     }
     let cancelled = false;
     const candidates = eligibleGroupsForContact(groups, pubkeyHex);
-    void Promise.all(
-      candidates.map(async (group) => {
-        const mlsGroup = await getGroup(group.id).catch(() => null);
-        const admins = mlsGroup?.activeAdmins() ?? [];
-        const isAdmin = admins.some((pk) => pk.toLowerCase() === ownPubkeyHex.toLowerCase());
-        return isAdmin ? group.id : null;
-      }),
-    ).then((ids) => {
-      if (cancelled) return;
-      setAdminGroupIds(new Set(ids.filter((id): id is string => id !== null)));
+    void resolveAdminGroupIds(candidates, ownPubkeyHex, getGroup).then((ids) => {
+      if (!cancelled) setAdminGroupIds(ids);
     });
     return () => {
       cancelled = true;
     };
-  }, [groups, pubkeyHex, ownPubkeyHex, getGroup, groupDataVersion, isOwnProfile]);
+  }, [ready, groups, pubkeyHex, ownPubkeyHex, getGroup, groupDataVersion, isOwnProfile]);
 
   const contact: ContactListItem | null = useMemo(() => {
     if (isOwnProfile || !pubkeyHex || !ownPubkeyHex) return null;
@@ -684,8 +694,10 @@ export default function ProfilePage() {
   // DD-9), so this is only true when NOT blocked.
   const isPending = !isBlocked && !!contact?.isPendingConfirmation;
 
-  const addableGroups = addableGroupsForContact(groups, pubkeyHex!, adminGroupIds);
-  const effectiveGroupId = selectedGroupId || addableGroups[0]?.id || '';
+  const addableGroups = ready ? addableGroupsForContact(groups, pubkeyHex!, adminGroupIds) : [];
+  const effectiveGroupId = selectedGroupId
+    ? addableGroups.find((group) => group.id === selectedGroupId)?.id ?? ''
+    : addableGroups[0]?.id ?? '';
   const addToGroup = addToGroupView({
     isBlocked,
     hasContact: !!contact,
@@ -700,7 +712,7 @@ export default function ProfilePage() {
   // }
 
   async function handleAddToGroup() {
-    if (!effectiveGroupId || !pubkeyHex) return;
+    if (!ready || !effectiveGroupId || !pubkeyHex) return;
     // Code-level enforcement (AC-PEND-6): never invite a pending/unconfirmed
     // (or blocked) contact to a group, even if the disabled button were
     // bypassed. The UI already disables the control while pending; this is the
@@ -833,6 +845,7 @@ export default function ProfilePage() {
               <HStack spacing={3} align="stretch">
                 <Select
                   value={effectiveGroupId}
+                  placeholder={effectiveGroupId ? undefined : copy.profile.addToGroupSelect}
                   onChange={(e) => {
                     setSelectedGroupId(e.target.value);
                     setAddToGroupAttempt({ pubkey: pubkeyHex, status: 'idle' });
