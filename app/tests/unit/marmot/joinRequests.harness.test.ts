@@ -41,7 +41,7 @@ import { createJoinRequestInboxHandler } from '@/src/lib/marmot/joinRequestHandl
 import { createJoinRequestSender } from '@/src/lib/marmot/joinRequestSender';
 import { createJoinRequestApproval } from '@/src/lib/marmot/joinRequestApproval';
 import type { PendingJoinRequest } from '@/src/lib/marmot/joinRequestStorage';
-import type { OutboundJoinRequestRecord } from '@/src/lib/marmot/outboundJoinRequests';
+import type { OutboundJoinRequestConsent } from '@/src/lib/marmot/outboundJoinRequests';
 import { APP_INBOX_KINDS } from '@/src/lib/marmot/kinds';
 import { noPurge } from './invitations/noPurge';
 
@@ -67,7 +67,7 @@ interface Peer {
   inviteLinks: Map<string, { nonce: string; groupId: string; createdAt: number; expiresAt: number; muted: boolean; usageCount: number; expiryNotified: boolean; expiryAcknowledged: boolean }>;
   // requester side
   sender: ReturnType<typeof createJoinRequestSender>;
-  outbound: OutboundJoinRequestRecord[];
+  outbound: OutboundJoinRequestConsent[];
   view: PendingInvitationView;
   actions: ReturnType<typeof createInvitationActions>;
   auto: ReturnType<typeof createAutoAccept>;
@@ -96,7 +96,7 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
   const groupsById = new Map<string, MarmotGroup>();
   const inviteLinks: Peer['inviteLinks'] = new Map();
   const seen = new Set<string>();
-  const outbound: OutboundJoinRequestRecord[] = [];
+  const outbound: OutboundJoinRequestConsent[] = [];
   const acceptCalls: string[] = [];
   let forward: (d: { kind: string }) => void = () => undefined;
 
@@ -162,7 +162,7 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
     inbox: client.extensions,
     ownPubkey: pubkey,
     now: () => Date.now(),
-    saveOutbound: async (record) => void outbound.push(record),
+    saveOutbound: async (record) => void outbound.push({ ...record, accountPubkey: pubkey }),
     onError: (e) => void errors.push(e),
   });
 
@@ -182,14 +182,25 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
   });
   const actions = createInvitationActions({ invitations, view, attachGroup: (g) => account.attachGroup(g), purge: noPurge, onError: (e) => void errors.push(e) });
   const auto = createAutoAccept({
+    accountPubkey: pubkey,
+    assertLease: () => { if (!account.handle.leaseHeld()) throw new Error('Account lease lost'); },
     view,
     actions,
     purge: noPurge,
     enqueue: account.handle.enqueue,
     outbound: {
-      loadUnexpiredForAdmin: async (admin) => outbound.filter((r) => r.adminPubkeyHex === admin),
-      consume: async (nonce) => {
-        const at = outbound.findIndex((r) => r.nonce === nonce);
+      loadUnexpiredForAdmin: async (owner, admin) => outbound.filter((r) => r.accountPubkey === owner && r.adminPubkeyHex === admin),
+      claim: async (owner, record, invitationId) => {
+        const at = outbound.findIndex((r) => r.accountPubkey === owner && r.nonce === record.nonce && r.sentAt === record.sentAt);
+        if (at < 0) return { kind: 'unavailable' };
+        const current = outbound[at];
+        if (current.claimedInvitationId !== undefined) return { kind: current.claimedInvitationId === invitationId ? 'existing' : 'unavailable' };
+        outbound[at] = { ...current, claimedInvitationId: invitationId };
+        return { kind: 'acquired', token: invitationId };
+      },
+      releaseClaim: async () => false,
+      consume: async (owner, record, invitationId) => {
+        const at = outbound.findIndex((r) => r.accountPubkey === owner && r.nonce === record.nonce && r.sentAt === record.sentAt && r.claimedInvitationId === invitationId);
         if (at >= 0) outbound.splice(at, 1);
       },
     },

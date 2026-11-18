@@ -14,9 +14,8 @@
  */
 
 import { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, parsePollOpen, parsePollVote, parsePollClose } from '@/src/lib/marmot/pollSync';
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RecomputeSignal, RumorHandler } from '@/src/lib/marmot/handlers/types';
+import type { ApplicationRumor, DispatcherContext, RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 import { assertPorts, remainingSignals, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
-import type { GroupRumorInput } from '@/src/lib/marmot/history';
 import { applyPollOpen, applyPollVote, applyPollClose, type PollHandlerDeps } from '../pollCore';
 import type { Poll } from '../pollPersistence';
 
@@ -27,33 +26,7 @@ export {
   guardDeps,
   MaintenanceCancelled,
   type PollHandlerDeps,
-  type HeldPollSweepDeps,
 } from '../pollCore';
-
-// ---- Per-kind handlers (old dispatcher path) ---------------------------------
-
-export function createPollOpenHandler(deps: PollHandlerDeps): RumorHandler {
-  return {
-    kind: POLL_OPEN_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => applyPollOpen(rumor, ctx, sender, deps),
-  };
-}
-
-export function createPollVoteHandler(deps: PollHandlerDeps): RumorHandler {
-  return {
-    kind: POLL_VOTE_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => applyPollVote(rumor, ctx, sender, deps),
-  };
-}
-
-export function createPollCloseHandler(deps: PollHandlerDeps): RumorHandler {
-  return {
-    kind: POLL_CLOSE_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => applyPollClose(rumor, ctx, sender, deps),
-  };
-}
-
-// ---- History-sink path (dispatch + retract) ---------------------------------
 
 /**
  * Deps of the history-sink path. `recomputePoll` is REQUIRED (an unwired port must fail at construction): the
@@ -69,7 +42,7 @@ export interface PollGroupHandlerDeps extends PollHandlerDeps {
    * Rebuilds the poll aggregate from the remaining kind-10/11/12 signals naming it. True iff the visible state changed.
    * `selfPubkeyHex` is the local account (the fold's context, as in a live dispatch).
    */
-  recomputePoll: (groupId: string, pollId: string, signals: readonly RecomputeSignal[], selfPubkeyHex?: string) => Promise<boolean>;
+  recomputePoll: (groupId: string, pollId: string, signals: readonly RecomputeSignal[], selfPubkeyHex?: string, cancelled?: () => boolean) => Promise<boolean>;
   /**
    * The strictly increasing local receipt clock (pollPersistence.receiptNow): resolves a stamp not below `atLeast`.
    * A sink dispatch stamps its votes / held votes / held closes from the ROW's `receivedAt` through it, the same
@@ -86,7 +59,7 @@ const POLL_GROUP_PORTS = [
 ] as const;
 
 /** The poll a kind-10/11/12 rumor names, or null (not a poll rumor / unparsable). */
-export function pollIdOfRumor(rumor: { kind: number; content: string }): string | null {
+function pollIdOfRumor(rumor: { kind: number; content: string }): string | null {
   if (rumor.kind === POLL_OPEN_KIND) return parsePollOpen(rumor.content)?.id ?? null;
   if (rumor.kind === POLL_VOTE_KIND) return parsePollVote(rumor.content)?.pollId ?? null;
   if (rumor.kind === POLL_CLOSE_KIND) return parsePollClose(rumor.content)?.pollId ?? null;
@@ -111,7 +84,7 @@ function stampedFromRow(deps: PollGroupHandlerDeps, receivedAt: number | undefin
 }
 
 /**
- * Wraps a legacy poll handler for the sink: dispatch reuses its core with the
+ * Dispatches the poll core for the sink with the
  * MLS-authenticated sender. retract derives the poll id from the withdrawn
  * rumor, selects the remaining kind-10/11/12 rows naming that poll and has the
  * store recompute the aggregate from them (recompute-on-retract, AC-WDR-7);
@@ -120,13 +93,13 @@ function stampedFromRow(deps: PollGroupHandlerDeps, receivedAt: number | undefin
  */
 function pollGroupHandler(
   factory: string,
-  legacy: RumorHandler,
+  kind: number,
   apply: typeof applyPollOpen,
   deps: PollGroupHandlerDeps,
-): GroupKindHandler & RumorHandler {
+): GroupKindHandler {
   assertPorts(factory, deps, POLL_GROUP_PORTS);
   return {
-    ...legacy,
+    kind,
     async dispatch(input, env) {
       const { ctx, sender } = toHandlerArgs(input, env);
       await apply(input.rumor as ApplicationRumor, ctx, sender, stampedFromRow(deps, input.receivedAt));
@@ -142,11 +115,14 @@ function pollGroupHandler(
       const pollId = pollIdOfRumor(input.rumor);
       if (!pollId) return;
       const signals = await remainingSignals(input, (rumor) => pollIdOfRumor(rumor) === pollId);
-      if (await deps.recomputePoll(input.groupId, pollId, signals, env.selfPubkeyHex)) deps.setPollVersion((v) => v + 1);
+      const { cancelled } = input;
+      if (cancelled?.()) return;
+      const changed = await deps.recomputePoll(input.groupId, pollId, signals, env.selfPubkeyHex, ...(cancelled ? [cancelled] : []));
+      if (changed && !cancelled?.()) deps.setPollVersion((v) => v + 1);
     },
   };
 }
 
-export const createPollOpenGroupHandler = (deps: PollGroupHandlerDeps) => pollGroupHandler('createPollOpenGroupHandler', createPollOpenHandler(deps), applyPollOpen, deps);
-export const createPollVoteGroupHandler = (deps: PollGroupHandlerDeps) => pollGroupHandler('createPollVoteGroupHandler', createPollVoteHandler(deps), applyPollVote, deps);
-export const createPollCloseGroupHandler = (deps: PollGroupHandlerDeps) => pollGroupHandler('createPollCloseGroupHandler', createPollCloseHandler(deps), applyPollClose, deps);
+export const createPollOpenGroupHandler = (deps: PollGroupHandlerDeps) => pollGroupHandler('createPollOpenGroupHandler', POLL_OPEN_KIND, applyPollOpen, deps);
+export const createPollVoteGroupHandler = (deps: PollGroupHandlerDeps) => pollGroupHandler('createPollVoteGroupHandler', POLL_VOTE_KIND, applyPollVote, deps);
+export const createPollCloseGroupHandler = (deps: PollGroupHandlerDeps) => pollGroupHandler('createPollCloseGroupHandler', POLL_CLOSE_KIND, applyPollClose, deps);

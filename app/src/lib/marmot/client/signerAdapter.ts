@@ -42,20 +42,20 @@ export type SignerKind = 'local' | 'nip07' | 'nip46';
  */
 export const REMOTE_SIGNER_TIMEOUT_MS = 120_000;
 
-export const REMOTE_SIGNER_BUDGET: BudgetPolicy = Object.freeze({
+const REMOTE_SIGNER_BUDGET: BudgetPolicy = Object.freeze({
   concurrency: 2,
   minSpacingMs: 200,
   timeoutMs: REMOTE_SIGNER_TIMEOUT_MS,
   leaseMs: 150_000,
 });
 
-export const LOCAL_SIGNER_BUDGET: BudgetPolicy = Object.freeze({ policy: 'none' as const });
+const LOCAL_SIGNER_BUDGET: BudgetPolicy = Object.freeze({ policy: 'none' as const });
 
 export function budgetPolicyFor(kind: SignerKind): BudgetPolicy {
   return kind === 'local' ? LOCAL_SIGNER_BUDGET : REMOTE_SIGNER_BUDGET;
 }
 
-export type AccountSignerResult =
+type AccountSignerResult =
   | { status: 'ready'; signer: Signer; budget: BudgetPolicy }
   | { status: 'unsupported'; reason: 'nip44' };
 

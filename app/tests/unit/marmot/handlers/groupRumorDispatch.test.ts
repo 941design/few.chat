@@ -31,7 +31,8 @@ import {
   type GroupKindHandler,
   type GroupResyncTargets,
 } from '@/src/lib/marmot/handlers/groupRumorDispatch';
-import { createChatGroupHandler, createChatHandler, createPollCloseAnnouncementReplayer, type ChatGroupHandlerDeps, type ChatHandlerDeps } from '@/src/lib/marmot/handlers/chatHandler';
+import { createChatHandler } from './reducerFixtures';
+import { createChatGroupHandler, createPollCloseAnnouncementReplayer, type ChatGroupHandlerDeps, type ChatHandlerDeps } from '@/src/lib/marmot/handlers/chatHandler';
 import type { GateGroup } from '@/src/lib/marmot/handlers/groupGates';
 import { createReactionGroupHandler, type ReactionGroupHandlerDeps } from '@/src/lib/marmot/handlers/reactionHandler';
 import { createDeleteEditGroupHandler, type DeleteEditGroupHandlerDeps } from '@/src/lib/marmot/handlers/deleteEditHandler';
@@ -262,6 +263,26 @@ describe('AC-HIST-10: message-store bumps are driven from handler completion', (
       expect(app.calls).toEqual([]);
     });
 
+    it('logs a lost own change and refreshes the group views without a disband notice', () => {
+      const { t, route } = targets();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        route(G, {
+          type: 'own-change-lost',
+          intentId: 'intent',
+          change: { type: 'admin', account: BOB, admin: true },
+          reason: 'concurrent-change',
+        });
+        expect(warn).toHaveBeenCalledWith('[membership] own-change-lost', G, 'admin', 'concurrent-change');
+        expect(t.members).toHaveBeenCalledWith(G);
+        expect(t.admins).toHaveBeenCalledWith(G);
+        expect(t.name).toHaveBeenCalledWith(G);
+        expect(t.disband).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('component change resyncs admins and name; disband resyncs disband', () => {
       const { t, route } = targets();
       route(G, { type: 'applied', commitDigest: 'c3', kind: 'componentChanged' } as never);
@@ -394,7 +415,7 @@ describe('own echo confirms the optimistic row (D13, AC-OWN-1 handler half)', ()
     expect(stored.filter((m) => m.id === 'rumor-e1')).toHaveLength(1);
     expect(app.chatDeps.incrementUnread).not.toHaveBeenCalled();
     expect(app.chatDeps.markAsRead).not.toHaveBeenCalled();
-    expect(app.chatDeps.onOwnEcho).toHaveBeenCalledWith(G, 'rumor-e1');
+    expect(app.chatDeps.onOwnEcho).toHaveBeenCalledWith(G, 'rumor-e1', 'e1');
     expect(app.versions.chat).toBe(1); // the row re-reads as confirmed even though nothing was inserted
     expect(isKnownPeer(SELF)).toBe(false);
   });
@@ -434,7 +455,7 @@ describe('AC-WDR-6: withdraw keeps the effects already emitted', () => {
     const app = make();
     await app.sink.append(entry({ eventId: 'e1', account: SELF, content: 'mine' }));
     await app.sink.withdraw(G, ['e1']);
-    expect(app.chatDeps.onOwnWithdrawn).toHaveBeenCalledWith(G, 'rumor-e1');
+    expect(app.chatDeps.onOwnWithdrawn).toHaveBeenCalledWith(G, 'rumor-e1', 'e1');
     expect((await rows()).map((m) => m.id)).toEqual(['rumor-e1']);
     expect(app.calls).not.toContain('retractMessageCarrier');
   });
@@ -553,7 +574,7 @@ describe('own echo and own withdraw edge cases', () => {
     const app = make();
     await app.sink.append(entry({ eventId: 'e1', account: SELF, content: 'new text', tags: [['e', 'orig', '', 'edit']] }));
     expect(app.chatDeps.applyDeleteEditSignal).toHaveBeenCalledTimes(1);
-    expect(app.chatDeps.onOwnEcho).toHaveBeenCalledWith(G, 'rumor-e1');
+    expect(app.chatDeps.onOwnEcho).toHaveBeenCalledWith(G, 'rumor-e1', 'e1');
   });
 
   it('an own retract of a rumor that was never applied is a no-op (no hand-back, no bump)', async () => {
@@ -675,6 +696,13 @@ describe('resolvePendingSignalsForSlot failure policy', () => {
 });
 
 describe('required ports are enforced at construction', () => {
+  it('the chat group factory exposes only the sink handler interface', () => {
+    const app = make();
+    const handler = createChatGroupHandler(app.chatDeps);
+    expect(handler.kind).toBe(9);
+    expect(handler).not.toHaveProperty('handle');
+  });
+
   const CHAT_PORTS = [
     'appendMessage', 'incrementUnread', 'markAsRead', 'setChatVersion', 'applyDeleteEditSignal', 'resolvePendingSignalsForSlot',
     'groupOf', 'getPoll', 'loadVotes', 'saveVoteIfNewer', 'loadPendingVotes', 'removePendingVotes',

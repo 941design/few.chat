@@ -34,7 +34,7 @@ The top level is a modular monolith (Next.js 14 static-export client app).
 - Only `client/` constructs or disposes the `MarmotClient` or opens stores. Other modules receive a `MarmotClient` / `MarmotGroup` handle by injection.
 - Import MLS types only from `@941design/marmot/mls`. Never import `ts-mls` or `@internet-privacy/marmot-ts`.
 - **Re-entrancy:** code running inside `HistoryBackend` calls, inbox handlers or client event listeners never awaits an account-scope client call. Exception: handlers may await `groupOf(groupId)` (`client.groups.get`) for live roster/admin gates — inside a history drain the group's runtime is already cached, so the call resolves without a load and without the re-entrancy rejection (verified in S3 against group-runtime.js:1171-1180, 1196-1217).
-  - Follow-up client work is enqueued onto an owned FIFO (jobs start in a later macrotask, after the enqueuing synchronous frame returns); enqueue as the last action of a handler/sink call, after its own awaits.
+  - Follow-up client work enters the owned FIFO after the full callback settles. The queue tracks history writes by group and inbox work by its own scope, then starts ready jobs on a timer.
   - `HistoryBackend.append` must settle within 10 s.
 - **Sender identity:** group handlers take it only from `orderingKey.account` (passed as `sender`), never from `rumor.pubkey`. Inbox handlers use the seal-bound `rumor.pubkey`.
 - **Roster and admin gates in handlers** read live library accessors (`group.members()`, `group.admins`), never the overlay.
@@ -101,10 +101,10 @@ Typed cross-story contracts (planner-populated; mirrored in `stories.json#seams`
 ### `ClientJobQueue` — Owned FIFO for follow-up client work scheduled from listener/handler frames
 - Producer: S1 `app/src/lib/marmot/client/fifo.ts` -> Consumer: S5 `app/src/lib/marmot/handlers/*.ts`
 - Fields:
-  - `enqueue`: `(job: () => Promise<void>) => void`
+  - `enqueue`: `(job: () => Promise<void>, scope?: ClientCallbackScope) => void`
 - Invariants:
-  - a job starts after the enqueuing synchronous frame returns; enqueue as the last action of a handler/sink call, after its own awaits
-  - jobs run strictly one at a time in enqueue order
+  - jobs associated with a pending library callback enter the FIFO when the callback settles
+  - ready jobs run one at a time in FIFO order, with jobs from each callback retaining their enqueue order
   - a rejecting job does not stall the queue
 
 ### `InboxRelayListEnsure` — Port for ensuring the kind-10050 list during bootstrap

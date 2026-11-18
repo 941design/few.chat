@@ -108,6 +108,8 @@ export type Copy = {
     heading: string;
     /** Shown when the account's signer cannot do NIP-44 (group features are unsupported; no fallback encryption). */
     unsupportedNip44: string;
+    activeInAnotherTab: string;
+    groupDisbanded: (name: string) => string;
     noGroups: string;
     noGroupsBody: string;
     createGroup: string;
@@ -534,6 +536,7 @@ export type Copy = {
       resetBtn: string;
       saveBtn: string;
       savedSuccess: string;
+      groupDiscoveryPending: string;
       statusConnected: string;
       statusConnecting: string;
       statusDisconnected: string;
@@ -550,6 +553,7 @@ export type Copy = {
       wipeConfirmWord: string;
       wipeCancel: string;
       wipeWarning: string;
+      wipeError: string;
     };
     nip46: {
       sectionTitle: string;
@@ -797,7 +801,7 @@ const copy: Record<LanguageCode, Copy> = {
       backupApplyError: 'Your identity was restored, but applying the backup failed.',
       backupRestoreTitle: 'Restore from backup?',
       backupRestoreBody:
-        'A backup of your groups and settings was found. Restoring adds it to this device; nothing on this device is deleted.',
+        'A backup of your settings and profile was found. Restore it to this device?',
       backupRestoreSkip: 'Skip',
       backupRestoreConfirm: 'Restore',
       backupReminderTitle: 'Back up your identity',
@@ -810,6 +814,8 @@ const copy: Record<LanguageCode, Copy> = {
     groups: {
       pageTitle: 'Groups',
       heading: 'Groups',
+      activeInAnotherTab: 'Groups are active in another tab.',
+      groupDisbanded: (name) => `${name} has been disbanded.`,
       unsupportedNip44: 'Groups are unavailable: your signer does not support NIP-44 encryption, which group chats require.',
       noGroups: 'You are not in any groups yet.',
       noGroupsBody: 'Create a group or wait for an invitation from a friend.',
@@ -1137,6 +1143,7 @@ const copy: Record<LanguageCode, Copy> = {
         resetBtn: 'Reset to defaults',
         saveBtn: 'Save',
         savedSuccess: 'Relay list saved.',
+        groupDiscoveryPending: 'Relay list saved. Group discovery is still pending. Save again to retry.',
         statusConnected: 'Connected',
         statusConnecting: 'Connecting',
         statusDisconnected: 'Disconnected',
@@ -1146,6 +1153,7 @@ const copy: Record<LanguageCode, Copy> = {
         discoverabilityNote: 'Existing groups\' relay lists are not changed.',
       },
       dangerZone: {
+        wipeError: 'Local data could not be cleared. Close other Few tabs and try again.',
         title: 'Danger Zone',
         wipeBtn: 'Wipe this device',
         wipeConfirmPrompt: 'Type WIPE to confirm',
@@ -1386,7 +1394,7 @@ const copy: Record<LanguageCode, Copy> = {
       backupApplyError: 'Deine Identität wurde wiederhergestellt, aber das Einspielen der Sicherung ist fehlgeschlagen.',
       backupRestoreTitle: 'Aus Sicherung wiederherstellen?',
       backupRestoreBody:
-        'Eine Sicherung deiner Gruppen und Einstellungen wurde gefunden. Beim Wiederherstellen wird sie zu diesem Gerät hinzugefügt; auf diesem Gerät wird nichts gelöscht.',
+        'Eine Sicherung deiner Einstellungen und deines Profils wurde gefunden. Möchtest du sie auf diesem Gerät wiederherstellen?',
       backupRestoreSkip: 'Überspringen',
       backupRestoreConfirm: 'Wiederherstellen',
       backupReminderTitle: 'Identität sichern',
@@ -1399,6 +1407,8 @@ const copy: Record<LanguageCode, Copy> = {
     groups: {
       pageTitle: 'Gruppen',
       heading: 'Gruppen',
+      activeInAnotherTab: 'Gruppen sind in einem anderen Tab aktiv.',
+      groupDisbanded: (name) => `${name} wurde aufgelöst.`,
       unsupportedNip44: 'Gruppen sind nicht verfügbar: Dein Signer unterstützt keine NIP-44-Verschlüsselung, die Gruppenchats benötigen.',
       noGroups: 'Du bist noch in keiner Gruppe.',
       noGroupsBody: 'Erstelle eine Gruppe oder warte auf eine Einladung von einem Freund.',
@@ -1725,6 +1735,7 @@ const copy: Record<LanguageCode, Copy> = {
         resetBtn: 'Auf Standard zurücksetzen',
         saveBtn: 'Speichern',
         savedSuccess: 'Relay-Liste gespeichert.',
+        groupDiscoveryPending: 'Relay-Liste gespeichert. Die Erreichbarkeit für Gruppen wird noch aktualisiert. Speichere erneut, um es noch einmal zu versuchen.',
         statusConnected: 'Verbunden',
         statusConnecting: 'Verbinde …',
         statusDisconnected: 'Getrennt',
@@ -1734,6 +1745,7 @@ const copy: Record<LanguageCode, Copy> = {
         discoverabilityNote: 'Relay-Listen bestehender Gruppen werden nicht geändert.',
       },
       dangerZone: {
+        wipeError: 'Lokale Daten konnten nicht gelöscht werden. Schließe andere Few-Tabs und versuche es erneut.',
         title: 'Gefahrenzone',
         wipeBtn: 'Dieses Gerät löschen',
         wipeConfirmPrompt: 'Gib WIPE ein, um zu bestätigen',

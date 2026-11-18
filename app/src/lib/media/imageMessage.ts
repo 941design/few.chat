@@ -1,4 +1,3 @@
-import { parseMediaImetaTag, type MediaAttachment as GroupMediaAttachment } from '@internet-privacy/marmot-ts';
 import { parseMediaImetaTag as parseGroupMediaImetaTag, type MediaAttachment as EngineMediaAttachment } from '@941design/marmot-engine/core';
 import type { EncryptedMedia, EncryptMediaOptions } from '@941design/marmot';
 import { MAX_OUTPUT_BYTES } from '@/src/config/blossom';
@@ -19,7 +18,7 @@ export type DirectMediaAttachment = {
   blurhash?: string;
 };
 
-export type ChatMediaAttachment = GroupMediaAttachment | DirectMediaAttachment;
+export type ChatMediaAttachment = GroupImageAttachment | DirectMediaAttachment;
 
 export type ImageMessageContent = {
   type: 'image';
@@ -68,43 +67,6 @@ export function parseImageMessageContent(content: string): ImageMessageContent |
     return null;
   }
 }
-
-export function extractAttachmentsByRole(tags: string[][]): RoledAttachments {
-  const result: RoledAttachments = { full: null, thumb: null };
-
-  for (const tag of tags) {
-    if (tag[0] !== 'imeta') continue;
-
-    let role: string | undefined;
-    for (let i = 1; i < tag.length; i++) {
-      if (tag[i].startsWith('role ')) {
-        role = tag[i].slice(5);
-        break;
-      }
-    }
-
-    const attachment = parseMediaImetaTag(tag);
-    if (!attachment) continue;
-
-    if (role === 'thumb') {
-      result.thumb = attachment;
-    } else {
-      // role 'full' or missing (treat as full per spec)
-      result.full = attachment;
-    }
-  }
-
-  return result;
-}
-
-// ---------------------------------------------------------------------------
-// Group image messages over the library (encrypted-media-v1). Built beside the
-// legacy marmot-ts path above, which the old hooks still use until the cutover
-// (S18); the legacy exports are deleted by the sweep (S22).
-//
-// Privacy: the only bytes that ever leave the device for Blossom are the
-// library's ciphertext. The plaintext is held in the local decrypted cache only.
-// ---------------------------------------------------------------------------
 
 /** The kind-9 chat kind an image message travels as (a plain chat row, not a signal; kind registry `APP_RUMOR_KINDS`). */
 const GROUP_IMAGE_MESSAGE_KIND = 9;
@@ -209,6 +171,8 @@ export interface SendGroupImageInput {
   baseName?: string;
   /** 0..100 over both uploads. */
   onProgress?: (pct: number) => void;
+  /** Called after upload and before dispatch, so the canonical row survives a failed send. */
+  onPrepared?: (image: SentGroupImage) => void;
 }
 
 export interface SentGroupImage {
@@ -408,6 +372,13 @@ export function createGroupImageService(deps: GroupImageServiceDeps): GroupImage
     }
 
     const prepared = sender.prepare(group, GROUP_IMAGE_MESSAGE_KIND, buildImageMessageContent(input.caption), [full.tag, thumb.tag]);
+    const image: SentGroupImage = {
+      rumorId: prepared.id,
+      createdAt: prepared.rumor.created_at,
+      full: { attachment: full.attachment, imeta: full.tag },
+      thumb: { attachment: thumb.attachment, imeta: thumb.tag },
+    };
+    input.onPrepared?.(image);
     await prepared.send();
 
     // Published: the send is a success whatever happens next. The cache is a sender-side convenience
@@ -425,12 +396,7 @@ export function createGroupImageService(deps: GroupImageServiceDeps): GroupImage
     } catch (err) {
       warn('[groupImageService] post-publish cache write failed; the image will be fetched and decrypted on reload', err);
     }
-    return {
-      rumorId: prepared.id,
-      createdAt: prepared.rumor.created_at,
-      full: { attachment: full.attachment, imeta: full.tag },
-      thumb: { attachment: thumb.attachment, imeta: thumb.tag },
-    };
+    return image;
   }
 
   async function loadImage(group: Pick<GroupMediaGroup, 'id' | 'decryptMedia'>, ref: LoadGroupImageRef): Promise<{ bytes: Uint8Array; type: string }> {

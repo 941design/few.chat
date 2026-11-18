@@ -48,7 +48,7 @@ export type StructuredContent =
   // variant MUST resolve the displayed *author* from the message's
   // protocol-level `senderPubkey` — NEVER from this payload's `pubkey`
   // field — to prevent identity spoofing.
-  | { type: 'invite_lifecycle'; event: 'invited' | 'accepted' | 'declined'; pubkey: string }
+  | { type: 'invite_lifecycle'; event: 'invited' | 'accepted' | 'declined'; pubkey: string; id?: string }
   | null;
 
 /**
@@ -58,9 +58,7 @@ export type StructuredContent =
  * message like {"type":"leave_intent","pubkey":"x"} would otherwise break the
  * chat timeline for every receiver. Rejecting non-canonical pubkeys here makes
  * such content fall through to harmless plain-text rendering. Every producer
- * emits a canonical 64-char lowercase-hex pubkey (leaveGroupImpl's
- * selfPubkeyHex, cancelInvitationImpl's roster pubkey, the admission paths'
- * request.pubkeyHex), so this never rejects a legitimate announcement.
+ * emits a canonical 64-character lowercase hexadecimal pubkey.
  * The `typeof` check matters: RegExp#test coerces its argument, so a
  * one-element array `["<64 hex>"]` would otherwise pass.
  */
@@ -109,7 +107,10 @@ export function parseStructured(content: string): StructuredContent {
       (parsed.event === 'invited' || parsed.event === 'accepted' || parsed.event === 'declined') &&
       isCanonicalPubkey(parsed.pubkey)
     ) {
-      return { type: 'invite_lifecycle', event: parsed.event, pubkey: parsed.pubkey };
+      const id = parsed.event === 'declined' && typeof parsed.id === 'string' && parsed.id.length <= 256
+        ? parsed.id
+        : undefined;
+      return { type: 'invite_lifecycle', event: parsed.event, pubkey: parsed.pubkey, ...(id ? { id } : {}) };
     }
   } catch {
     // Not JSON — plain text message

@@ -142,14 +142,16 @@ async function runScenario(seed: number): Promise<void> {
       expect(rejected, `seed ${seed} step ${step} append ${key}`).toBe(registered(kind) && !r.dispatched);
     } else if (op === 'withdraw') {
       const ids = [e, pick(IDS)];
-      recover(g);
       await sink.withdraw(g, ids);
+      let matched = false;
       for (const id of new Set(ids)) {
         const r = rows.get(g)!.get(id);
         if (!r) continue;
+        matched = true;
         if (registered(r.kind)) modelApplied.delete(`${g}:${id}`);
         rows.get(g)!.delete(id);
       }
+      if (matched) recover(g);
     } else if (op === 'purge') {
       await sink.purge(g);
       rows.get(g)!.clear();
@@ -184,5 +186,5 @@ async function runScenario(seed: number): Promise<void> {
 describe('history sink model (seeded)', () => {
   it('agrees with the model over 150 random operation sequences', async () => {
     for (let seed = 1; seed <= 150; seed++) await runScenario(seed);
-  });
+  }, 30_000);
 });

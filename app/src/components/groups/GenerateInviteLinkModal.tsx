@@ -31,6 +31,7 @@ type GenerateInviteLinkModalProps = {
   onClose: () => void;
   groupId: string;
   groupName: string;
+  ownerPubkey?: string;
 };
 
 export default function GenerateInviteLinkModal({
@@ -38,6 +39,7 @@ export default function GenerateInviteLinkModal({
   onClose,
   groupId,
   groupName,
+  ownerPubkey,
 }: GenerateInviteLinkModalProps) {
   const copy = useCopy();
   const { npub } = useNostrIdentity();
@@ -97,10 +99,12 @@ export default function GenerateInviteLinkModal({
   }, [isOpen, inviteUrl, copy.groups.qrGenerationError]);
 
   async function persistLink() {
+    if (!ownerPubkey) throw new Error('Group account is not ready');
     await saveInviteLink(
       buildNewInviteLink({
         nonce,
         groupId,
+        ownerPubkey,
         createdAt: Date.now(),
         label: label.trim() || undefined,
       })

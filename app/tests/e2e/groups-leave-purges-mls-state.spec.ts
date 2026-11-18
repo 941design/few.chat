@@ -22,6 +22,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { createGroupAndInvite } from './helpers/group-setup';
+import { waitForLibraryGroupAbsent } from './helpers/session-cutover';
 import { readIdbRecord } from './helpers/idb-record';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
@@ -86,9 +87,10 @@ test.describe.serial('Leaving deletes the group\'s MLS state after the departure
     groupId = (testId ?? '').replace('group-card-', '');
     expect(groupId).toMatch(/^[0-9a-f]{64}$/);
 
-    await expect
-      .poll(() => readIdbRecord(bobPage, 'few-groups-state', 'state', groupId), { timeout: 30_000 })
-      .not.toBeNull();
+    await expect.poll(() => bobPage.evaluate(async (id) => {
+      const hooks = (window as any).__fewTest;
+      return hooks?.marmotSession ? (await hooks.marmotSession.listGroupIds())?.includes(id) === true : false;
+    }, groupId), { timeout: 30_000 }).toBe(true);
   });
 
   test('Bob leaves; Alice sees the departure announcement; Bob\'s MLS state is gone', async () => {
@@ -118,22 +120,16 @@ test.describe.serial('Leaving deletes the group\'s MLS state after the departure
     await expect(announcement).toBeVisible({ timeout: 60_000 });
     await expect(announcement).toContainText('Bob left the group');
 
-    // Bob's device no longer holds the group's MLS state, and the tombstone
-    // that guarded the deferred destroy is cleared.
-    await expect
-      .poll(() => readIdbRecord(bobPage, 'few-groups-state', 'state', groupId), { timeout: 30_000 })
-      .toBeNull();
-    await expect
-      .poll(() => readIdbRecord(bobPage, 'few-left-groups', 'tombstones', groupId), { timeout: 30_000 })
-      .toBeNull();
-    expect(await readIdbRecord(bobPage, 'few-groups-meta', 'groups', groupId)).toBeNull();
+    await expect(alicePage.getByTestId(`member-item-${USER_B.pubkeyHex.slice(0, 8)}`)).toHaveCount(0, { timeout: 90_000 });
+    await waitForLibraryGroupAbsent(bobPage, groupId);
+    expect(await readIdbRecord(bobPage, 'few-groups-meta', 'groups', `${USER_B.pubkeyHex}:${groupId}`)).toBeNull();
 
     // Still gone after a reload (the startup sweep has nothing to resurrect).
     await bobPage.reload();
     await expect(
       bobPage.getByTestId('groups-empty-state').or(bobPage.getByTestId('groups-list')),
     ).toBeVisible({ timeout: 30_000 });
-    expect(await readIdbRecord(bobPage, 'few-groups-state', 'state', groupId)).toBeNull();
+    await waitForLibraryGroupAbsent(bobPage, groupId);
     await expect(joinedCards(bobPage, GROUP_NAME)).toHaveCount(0);
   });
 });

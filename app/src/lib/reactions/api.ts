@@ -19,7 +19,7 @@
  */
 
 import type { Reaction, ReactionThreadKey } from '@/src/lib/reactions/types';
-import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { AuthenticatedSender } from '@/src/lib/marmot/handlers/types';
 import type { ApplicationRumor, RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 import * as walledGarden from '@/src/lib/walledGarden';
 import { postStoreChanged } from '@/src/lib/crossTab';
@@ -239,6 +239,7 @@ async function reconcileAfterRejectedWrite(
 function enqueue(
   key: string,
   task: (current: Reaction[]) => Promise<Reaction[] | null>,
+  cancelled?: () => boolean,
 ): Promise<Reaction[] | null> {
   // Synchronous guard — checked before any writeQueues.set() call so the race
   // window in clearAllReactions cannot be re-opened by a concurrent enqueue.
@@ -248,7 +249,9 @@ function enqueue(
   const step = async (): Promise<Reaction[] | null> => {
     const { get, set } = await import('idb-keyval');
     const current = (await get<Reaction[]>(key)) ?? [];
+    if (cancelled?.()) return null;
     const nextRows = await task(current);
+    if (cancelled?.()) return null;
     if (nextRows !== null) {
       cache.set(key, nextRows);
       try {
@@ -903,23 +906,26 @@ function addHeldEntry(entries: HeldReaction[], entry: HeldReaction): HeldReactio
 
 /**
  * Runs `task` on the thread's live (unexpired) held entries inside the held
- * queue. `task` returns the next entries (null = unchanged). Expired entries
- * are dropped whenever the queue is accessed.
+ * queue. `task` returns the next entries (null = unchanged). Normal queue
+ * access drops expired entries. A history fold preserves their timestamps.
  */
 function modifyHeld<R>(
   hkey: string,
   task: (entries: HeldReaction[]) => Promise<{ next: HeldReaction[] | null; result: R }>,
   idle: R,
+  options?: { cancelled?: () => boolean; keepExpired?: boolean; now?: number },
 ): Promise<R> {
   if (clearingInProgress) return Promise.resolve(idle);
   const prev = heldQueues.get(hkey) ?? Promise.resolve();
   const next = prev.then(async (): Promise<R> => {
-    if (clearingInProgress) return idle;
+    if (clearingInProgress || options?.cancelled?.()) return idle;
     const { get, set, del } = await import('idb-keyval');
     const stored = (await get<HeldReaction[]>(hkey)) ?? [];
-    const cutoff = Date.now() - HELD_REACTION_TTL_MS;
-    const live = stored.filter((e) => e.heldAt > cutoff);
+    if (options?.cancelled?.()) return idle;
+    const cutoff = options?.keepExpired ? undefined : (options?.now ?? Date.now()) - HELD_REACTION_TTL_MS;
+    const live = cutoff === undefined ? stored : stored.filter((e) => e.heldAt > cutoff);
     const { next: written, result } = await task(live);
+    if (options?.cancelled?.()) return idle;
     const finalEntries = written ?? (live.length !== stored.length ? live : null);
     if (finalEntries !== null) {
       if (finalEntries.length === 0) await del(hkey);
@@ -944,15 +950,17 @@ export function holdReaction(
   thread: ReactionThreadKey,
   rumor: ApplicationRumor,
   sender: AuthenticatedSender,
+  receivedAt?: number,
 ): Promise<void> {
   if (!firstETag(rumor)) return Promise.resolve();
   return modifyHeld<void>(
     heldKeyFor(thread),
     async (entries) => {
-      const next = addHeldEntry(entries, { rumor, sender, heldAt: Date.now() });
+      const next = addHeldEntry(entries, { rumor, sender, heldAt: receivedAt ?? Date.now() });
       return { next: next === entries ? null : next, result: undefined };
     },
     undefined,
+    { now: receivedAt },
   );
 }
 
@@ -1025,8 +1033,8 @@ async function targetMessageStored(thread: ReactionThreadKey, messageId: string)
  *   3. If the target message is NOT stored (its base was withdrawn, or never arrived) nothing is folded: the
  *      reactions are HELD instead, and `releaseHeldReactions` applies them when the base is stored again.
  *
- * The fold reads no clock: it orders by the rumors' own created_at and the history order. The wall clock is read
- * only for the held queue's own bookkeeping (`heldAt`, TTL expiry), never to decide a fold. Nothing but the
+ * The fold orders by the rumors' own created_at and the history order. Held reactions keep the history row's
+ * receipt time. Expiry runs on normal queue access (e.g. release) without refreshing the held time. Nothing but the
  * two stores is touched: no listener beyond the store's own, no bell, no unread, no send (AC-WDR-6).
  * Resolves true iff the visible reactions of the message changed. Live-state gates do not apply to reactions.
  */
@@ -1034,7 +1042,9 @@ export async function recomputeMessageReactions(
   thread: ReactionThreadKey,
   targetMessageId: string,
   signals: readonly RecomputeSignal[],
+  cancelled?: () => boolean,
 ): Promise<boolean> {
+  if (cancelled?.()) return false;
   const mine = signals
     .filter((s) => s.rumor.kind === 7 && firstETag(s.rumor) === targetMessageId)
     .slice()
@@ -1055,15 +1065,17 @@ export async function recomputeMessageReactions(
           }
         } else {
           for (const s of mine) {
-            held = addHeldEntry(held, { rumor: s.rumor, sender: { pubkey: s.sender, authenticity: 'mls' }, heldAt: Date.now() });
+            const heldAt = Number.isFinite(s.receivedAt) ? s.receivedAt : s.rumor.created_at * 1000;
+            held = addHeldEntry(held, { rumor: s.rumor, sender: { pubkey: s.sender, authenticity: 'mls' }, heldAt });
           }
         }
         visible = visibleSignature(rows, targetMessageId) !== before;
         return JSON.stringify(rows) === JSON.stringify(current) ? null : rows;
-      });
+      }, cancelled);
       return { next: JSON.stringify(held) === JSON.stringify(entries) ? null : held, result: visible };
     },
     false,
+    { cancelled, keepExpired: true },
   );
 }
 
@@ -1133,6 +1145,24 @@ export async function snapshotHeldReactions(groupId: string): Promise<unknown> {
     .map((e, i) => ({ e, i }))
     .sort((a, b) => (a.e.target < b.e.target ? -1 : a.e.target > b.e.target ? 1 : a.i - b.i))
     .map(({ e: { rumor, sender } }) => ({ rumor, sender }));
+}
+
+/** Clear group reactions, including held rows for groups without an overlay. */
+export async function clearAllGroupReactions(): Promise<void> {
+  const { keys } = await import('idb-keyval');
+  const all = await keys();
+  const groupPrefix = 'few:reactions:group:';
+  const heldPrefix = `${HELD_PREFIX}group:`;
+  const ids = new Set<string>();
+  for (const key of all) {
+    if (typeof key !== 'string') continue;
+    if (key.startsWith(groupPrefix)) ids.add(key.slice(groupPrefix.length));
+    if (key.startsWith(heldPrefix)) ids.add(key.slice(heldPrefix.length));
+  }
+  for (const id of ids) {
+    await clearReactionsForGroup(id);
+    await purgeHeldReactionsForGroup(id);
+  }
 }
 
 /**

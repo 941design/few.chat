@@ -197,7 +197,7 @@ describe('inviteExpirySweep — runInviteExpirySweep', () => {
 
     await runInviteExpirySweep(6_000);
 
-    expect(spy).toHaveBeenCalledWith('n1');
+    expect(spy).toHaveBeenCalledWith('n1', expect.any(Function));
     expect(useUnreadCounts().inviteExpiries['group-1']).toBeUndefined();
     spy.mockRestore();
   });

@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeRelay } from '@941design/nostr-events/transport/contract/conformance';
 import { createMemoryStorage, createMemoryPersistence } from '@941design/marmot/storage/memory';
 import { getPublicKey } from 'nostr-tools/pure';
-import { createGroupLibraryHook, type GroupLibraryHook } from '@/src/lib/testHooks/groupLibrary';
+import { createGroupLibraryHook, type GroupLibraryHook } from './helpers/libraryHarness';
 import { openAccountStores } from '@/src/lib/marmot/client/storage';
 
 const SECRET_A = 'a1'.repeat(32);

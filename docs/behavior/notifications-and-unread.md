@@ -15,42 +15,40 @@ or read state is ever published to anyone.
 
 Notifications reuse the **same gates as messaging** (the walled garden, blocking, pending
 contacts): the indicator can never surface something the app would not have let you receive
-or see in the first place. That consistency is the point of the two rules below.
+or see in the first place. The same checks apply whether or not the conversation is open.
 
 ---
 
-## 2. The two rules
+## 2. Chat unread and pending activity
 
-Everything about the indicator follows from two invariants:
-
-- **Activity you are not looking at raises a notification.** A new message, request, or
-  expiry for something you do not currently have open increments the relevant unread count.
-- **Activity in what you *are* looking at does not.** A change to the conversation you
-  currently have open does **not** raise a notification — the open view simply updates in
-  place, and being in it marks it read.
-
-In short: the indicator is for things happening *away from your attention*, never a nag
-about the thing already in front of you.
+A new chat message in a conversation you have not opened raises its unread count.
+A message in the open conversation updates it in place and is marked read. Pending
+join requests and invitations track decisions that remain outstanding.
 
 ---
 
 ## 3. What raises a notification
 
-There are four kinds of new activity the indicator reflects:
+The app counts group and contact activity in their respective areas:
 
 - **A new group message** — raises the unread count for that group, unless you currently have
-  that group open. Your own messages never count.
+  that group open. Your own messages appear once and become confirmed when the group
+  accepts them, without raising unread or an alert.
 - **A new direct message** — raises the unread count for that conversation, unless you have it
   open. This is subject to the full set of gates in §4 (a stranger's, a blocked person's, or
   a still-pending contact's message does not raise anything). Only actual chat messages count
   — a reaction or other background signal does not.
-- **A group join request** — raises a count for the admin who received it, unless they have
-  that group open. A duplicate of a request already pending does not count again.
+- **A pending group join request** — counts for the receiving admin until it is
+  approved, declined or cleared. A duplicate of a pending request does not count again.
+- **A received group invitation** — counts in Groups while it is pending. Its sponsor
+  context can update the label without adding a count.
+- **A contact awaiting your confirmation** — counts in Contacts as a pending decision.
+  Their messages do not add unread until you confirm them.
 - **One of your invite links expiring** — raises a count for the group the link belonged to,
   once per link, noticed by a periodic check.
 
-The indicator combines all four into a single overall signal, and reads as "nothing new"
-when all are clear.
+Group activity is processed by the active group tab. DM and contact counts can still
+update while another tab is active for groups.
 
 ---
 
@@ -60,8 +58,8 @@ The following are deliberately silent — several of them the same rules that go
 itself:
 
 - **Your own messages** — you are never notified about what you sent.
-- **The conversation you have open** — an open group or DM updates in place and is marked
-  read, never notified (rule two, §2).
+- **The conversation you have open** — new chat in the open group or DM updates in place and is marked
+  read (§2).
 - **A message from a stranger** — someone outside the walled garden (neither a current
   group co-member nor an ever-known peer) is dropped before it is stored or counted; they
   cannot get your attention at all. (See the Contacts document for the reachability model.)
@@ -70,14 +68,13 @@ itself:
 - **A message from a still-pending contact** — a contact you have not yet confirmed is held
   quietly: their messages are received and kept but raise nothing while they are pending.
   Nothing is lost — once you confirm the contact, those messages count as unread (below).
-- **A join request that gets dropped** — a request through a muted or expired invite link,
+- **A join request that gets dropped** — a request through a deleted or expired invite link,
   from someone already a member, or one that fails its authenticity check is silently
   discarded and never raises anything (see the Groups document).
 - **Background signals and non-message activity** — profile updates, pairing
-  acknowledgements, and — *inside a group* — reactions, message edits and deletes, new polls,
-  and members joining or leaving do **not** raise the indicator. Only an actual new chat
-  message in an unopened group raises its count. (So a new poll posted to a group you do not
-  have open will not, by itself, get your attention — worth knowing.)
+  acknowledgements, sponsor context, reactions, edits, deletes, and polls do not raise
+  chat unread. A roster change by itself raises no chat alert. A departure announcement
+  delivered as a chat message follows the group-message rule.
 
 These gates are evaluated on **every** incoming message against the *current* state, so a
 person you block mid-conversation stops raising notifications from their very next message.
@@ -99,9 +96,13 @@ Unread counts are designed so they neither miss activity nor invent it:
   the network re-delivers the message, not from local history.)
 - **Some counts also go down as you act on the items** — approving or declining a group join
   request lowers that group's pending-request count, one at a time.
+- **A group history withdrawal recalculates unread.** If a competing branch loses,
+  unread reflects the messages that remain. Withdrawal adds no alert and does not
+  recall one that already fired. Retrying your own withdrawn message does not raise
+  unread. See [Groups](groups.md#fork-withdrawal-and-send-retry).
 - **Some counts are cleared entirely** (rather than marked read) when the underlying
   relationship ends: blocking a contact removes their unread count along with the wiped
-  conversation, and a departed stranger being cleaned up removes theirs.
+  conversation, and leaving a group or being removed clears that group’s counts.
 - **A blocked contact never counts.** The startup reconstruction skips blocked contacts and
   drops any count one still holds — this covers contacts that were hidden before blocking
   existed and kept their history. Only the count goes; their stored conversation is untouched.
@@ -124,7 +125,7 @@ arrives at the very moment you confirm is counted too, exactly once. Opening the
 conversation marks them read as usual.
 
 **A message arrives for a conversation you have open.** No notification; the view updates and
-the conversation stays marked read (rule two).
+the conversation stays marked read (§2).
 
 **A stranger becomes unreachable and is cleaned up.** Their unread count is removed along with
 their conversation. (A *blocked* peer's count is instead removed at the moment you block them
@@ -139,7 +140,7 @@ and because each link is only ever counted once, it will not resurface as a noti
 later either.
 
 **An expiry for a group not in your groups list.** Leaving a group clears its expiry count.
-Expired links of a group you are not in — for example restored from a backup — do not count:
+Expired links of a group you are no longer in do not count:
 once your groups list has loaded, expiry counts are kept only for groups in it, so the
 indicator never shows an expiry with no group to clear it from. Nothing is pruned while the
 list is still loading, and the links themselves are left as stored.
@@ -174,12 +175,15 @@ shipped implementation, and the automated test suite:
   `specs/epic-pending-contact-confirmation/` — the reachability, block, and pending gates the
   notification path reuses; `specs/epic-group-invite-links/` and
   `specs/epic-invite-link-lifecycle/` — join-request and expiry notifications.
-- `docs/adr/ADR-002` / `ADR-005` (reachability) and `ADR-008` (block as a deny layer AND-ed at
+- `docs/adr/ADR-002-mutual-contact-graph-and-pull-only-invitations.md` / `ADR-005` (reachability) and `ADR-008` (block as a deny layer AND-ed at
   every peer channel, the notification path included).
+- `specs/epic-marmot-library-adoption/acceptance-criteria.md` — AC-OWN, AC-WDR,
+  AC-INBOX and AC-MT cover confirmation, withdrawal, inbox routing, and the active tab.
 - Implementation under `app/src/lib/unreadStore.ts` (the four counter slices, last-read
   timestamps, startup reconstruction, purge), `app/src/lib/directMessageNotifications.ts` and
   `DirectMessageNotificationsWatcher.tsx` (DM gating), the group-message and join-request
-  counters in the group context, and `inviteExpirySweep.ts` (expiry).
+  counters in `app/src/lib/marmot/groupSessionHistory.ts` and
+  `app/src/lib/marmot/groupSessionMembership.ts`, and `app/src/lib/marmot/inviteExpirySweep.ts` (expiry).
 - The `groups-notification-domain-invariants` end-to-end spec and the unit tests for the
   counter increment/clear, last-read, active-view suppression, and pending/blocked/stranger
   gates.

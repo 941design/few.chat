@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { initDirectMessageCounts, initPendingContactCounts } from '@/src/lib/unreadStore';
-import { startInviteExpirySweep } from '@/src/lib/marmot/inviteExpirySweep';
 import { readStoredContacts } from '@/src/lib/contacts';
 import type { StoredContact } from '@/src/lib/contacts';
 import { useMarmot } from '@/src/context/MarmotContext';
@@ -31,7 +30,7 @@ export function buildInitDirectMessagePeerList(
 
 export default function DirectMessageNotificationsWatcher() {
   const { hydrated, pubkeyHex, privateKeyHex } = useNostrIdentity();
-  const { groups, knownPeersRevision, blockedPeersRevision, notifyContactsChanged } = useMarmot();
+  const { groups, getDmGroups, whenDmGroupsReady, knownPeersRevision, blockedPeersRevision, notifyContactsChanged } = useMarmot();
 
   // Live ref to the contacts change-signal so the long-lived subscription
   // callback can bump it after an inbound-DM rememberContact write without
@@ -40,10 +39,6 @@ export default function DirectMessageNotificationsWatcher() {
   const notifyContactsChangedRef = useRef(notifyContactsChanged);
   useEffect(() => { notifyContactsChangedRef.current = notifyContactsChanged; }, [notifyContactsChanged]);
 
-  // Live ref keeps the gate current without recreating the subscription on
-  // every group membership change. Pattern matches ContactChat.tsx groupsRef.
-  const groupsRef = useRef(groups);
-  useEffect(() => { groupsRef.current = groups; }, [groups]);
   // Ever-known peers ref — refreshed whenever groups change (when MarmotContext's
   // maintenance effect may have updated lp_knownPeers_v1) OR when
   // knownPeersRevision bumps (an out-of-band write, e.g. manual add-contact-by-npub,
@@ -60,17 +55,6 @@ export default function DirectMessageNotificationsWatcher() {
   useEffect(() => {
     blockedPeersRef.current = loadBlockedPeers();
   }, [groups, knownPeersRevision, blockedPeersRevision]);
-
-  // Invite-link expiry sweep, rehomed from the deleted NotificationBell (epic:
-  // obsolete-notification-bell, INV-B / TRAP 1). This watcher is mounted exactly
-  // once by Layout, so the sweep runs from a single mount-stable host. Runs one
-  // cycle on mount, then every 60s; the returned stop function clears the
-  // interval on unmount. Independent of the identity gate below — the sweep
-  // operates on locally-persisted invite links and needs no signer.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    return startInviteExpirySweep();
-  }, []);
 
   useEffect(() => {
     if (!hydrated || !pubkeyHex || !privateKeyHex) return;
@@ -99,18 +83,18 @@ export default function DirectMessageNotificationsWatcher() {
         const { subscribeDirectMessageNotifications } = await import(
           '@/src/lib/directMessageNotifications'
         );
-        // groupsRef.current is always up-to-date: the separate effect above
-        // keeps it in sync with the latest groups array without triggering a
-        // subscription teardown/rebuild on every membership change. Same
-        // pattern for blockedPeersRef (epic: block-contact, S2) — the composite
-        // gate re-reads the live ref on every inbound event.
+        await Promise.race([
+          whenDmGroupsReady(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+        ]);
+        if (cancelled) return;
         unsubscribe = subscribeDirectMessageNotifications({
           ndk,
           ownPubkeyHex: ownPubkey,
           privateKeyHex,
           isAllowedSender: (peer) => isAllowedDmSenderComposite(
             peer,
-            groupsRef.current,
+            getDmGroups(),
             knownPeersRef.current,
             blockedPeersRef.current,
             ownPubkey,
@@ -126,7 +110,7 @@ export default function DirectMessageNotificationsWatcher() {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [hydrated, pubkeyHex, privateKeyHex]); // groups intentionally omitted — live ref handles updates
+  }, [hydrated, pubkeyHex, privateKeyHex, getDmGroups, whenDmGroupsReady]);
 
   return null;
 }

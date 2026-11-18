@@ -17,6 +17,7 @@ import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
 import { queryRelayForEvents } from './helpers/relay-query';
+import { waitForLibraryGroupAbsent } from './helpers/session-cutover';
 import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
@@ -96,6 +97,7 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
   let ctxB: BrowserContext;
   let pgA: Page;
   let pgB: Page;
+  let groupId: string;
 
   test.beforeAll(async ({ browser }) => {
     await computeTestKeypairs();
@@ -154,6 +156,8 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
     await expect(pgB.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
     await dismissErrorOverlay(pgB);
 
+    groupId = new URL(pgB.url()).searchParams.get('id')!;
+    expect(groupId).toBeTruthy();
     // Confirm USER_B can see themselves in the member list (proves join succeeded).
     const bPkPrefix = USER_B.pubkeyHex.slice(0, 8);
     await expect(pgB.getByTestId(`member-item-${bPkPrefix}`)).toBeVisible({ timeout: 30_000 });
@@ -171,6 +175,102 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
     await expect(pgA.getByTestId(`member-item-${bPkPrefix}`)).toContainText('Bob', { timeout: 60_000 });
   });
 
+  test('failed and interrupted leaves restore the group without a durable leaving marker (AC-LEAVE-3)', async () => {
+    test.setTimeout(180_000);
+    await pgB.evaluate((id) => {
+      const hooks = (window as any).__fewTest;
+      if (!hooks?.marmotSession) throw new Error('marmotSession test hook unavailable');
+      hooks.beforeGroupLeave = (groupId: string) => {
+        if (groupId === id) throw new Error('injected leave failure');
+      };
+    }, groupId);
+    await pgB.getByTestId('leave-group-btn').click();
+    await pgB.getByTestId('leave-group-confirm-btn').click();
+    await expect(pgB.getByText('Leaving the group did not work. The group is back in your list; please try again.'))
+      .toBeVisible({ timeout: 30_000 });
+    const card = pgB.locator('[data-testid^="group-card-"]', { hasText: GROUP_NAME });
+    await expect(card).toHaveCount(1, { timeout: 30_000 });
+
+    await card.click();
+    await expect(pgB.getByTestId('group-detail-page')).toBeVisible();
+    await pgB.evaluate((id) => {
+      const hooks = (window as any).__fewTest;
+      sessionStorage.removeItem('s25-leave-paused');
+      hooks.beforeGroupLeave = async (groupId: string) => {
+        if (groupId !== id) return;
+        sessionStorage.setItem('s25-leave-paused', groupId);
+        await new Promise<void>(() => {});
+      };
+    }, groupId);
+    await pgB.getByTestId('leave-group-btn').click();
+    await pgB.getByTestId('leave-group-confirm-btn').click();
+    await expect.poll(() => pgB.evaluate(() => sessionStorage.getItem('s25-leave-paused')),
+      { timeout: 15_000 }).toBe(groupId);
+    await expect(pgB.getByTestId('groups-empty-state').or(pgB.getByTestId('groups-list')))
+      .toBeVisible({ timeout: 10_000 });
+    await expect(card).toHaveCount(0);
+    await pgB.reload();
+    await expect(pgB.getByTestId('groups-empty-state').or(pgB.getByTestId('groups-list')))
+      .toBeVisible({ timeout: 60_000 });
+    await expect(card).toHaveCount(1, { timeout: 60_000 });
+    await expect.poll(() => pgB.evaluate(async (id) => {
+      const ids = await (window as any).__fewTest?.marmotSession?.listGroupIds();
+      return ids?.includes(id) === true;
+    }, groupId), { timeout: 60_000 }).toBe(true);
+
+    const markers = await pgB.evaluate(async () => {
+      const found: string[] = [];
+      const inspect = (value: unknown, path: string, seen = new WeakSet<object>()) => {
+        if (typeof value === 'string') {
+          if (/^leaving$/i.test(value)) found.push(path);
+          return;
+        }
+        if (!value || typeof value !== 'object' || seen.has(value)) return;
+        seen.add(value);
+        for (const [key, child] of Object.entries(value)) {
+          if (/leaving/i.test(key)) found.push(`${path}.${key}`);
+          inspect(child, `${path}.${key}`, seen);
+        }
+      };
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)!;
+        if (/leaving/i.test(key)) found.push(`localStorage:${key}`);
+        const value = localStorage.getItem(key)!;
+        try { inspect(JSON.parse(value), `localStorage:${key}`); } catch { inspect(value, `localStorage:${key}`); }
+      }
+      for (const { name } of await indexedDB.databases()) {
+        if (!name) continue;
+        if (/leaving/i.test(name)) found.push(`indexedDB:${name}`);
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open(name);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        try {
+          for (const storeName of Array.from(db.objectStoreNames)) {
+            if (/leaving/i.test(storeName)) found.push(`indexedDB:${name}/${storeName}`);
+            await new Promise<void>((resolve, reject) => {
+              const request = db.transaction(storeName).objectStore(storeName).openCursor();
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) { resolve(); return; }
+                const path = `indexedDB:${name}/${storeName}`;
+                if (/leaving/i.test(JSON.stringify(cursor.key))) found.push(`${path}:key`);
+                inspect(cursor.value, path);
+                cursor.continue();
+              };
+            });
+          }
+        } finally { db.close(); }
+      }
+      return found;
+    });
+    expect(markers).toEqual([]);
+    await card.click();
+    await expect(pgB.getByTestId('group-detail-page')).toBeVisible();
+  });
+
   // Step 3: USER_B clicks "Leave Group" and confirms.
   // This triggers MarmotContext.leaveGroup:
   //   1. Sends kind-13 leave-intent (encrypted application rumor)
@@ -182,6 +282,8 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
     // Confirm modal appears.
     await expect(pgB.getByTestId('leave-group-confirm-btn')).toBeVisible({ timeout: 10_000 });
     await pgB.getByTestId('leave-group-confirm-btn').click();
+    await waitForLibraryGroupAbsent(pgB, groupId);
+    await expect(pgB.locator('[data-testid^="group-card-"]', { hasText: GROUP_NAME })).toHaveCount(0);
     // After confirmation, leaveGroup() runs and router.push('/groups') fires.
     // Wait for USER_B to land back on the groups list — proves leaveGroup() completed.
     await expect(
@@ -214,7 +316,7 @@ test.describe.serial('Out-of-band group leave (kind-13 leave intent)', () => {
   // The kind-9 rumor USER_B sent is displayed as a LeaveChatAnnouncement row.
   // It must name the departed member ("Bob left the group") — never an npub.
   test('Leave-chat announcement names the departed member in USER_A chat (AC-MEMBERS-2)', async () => {
-    const announcement = pgA.getByTestId('leave-chat-announcement');
+    const announcement = pgA.getByTestId('leave-chat-announcement').first();
     await expect(announcement).toBeVisible({ timeout: 15_000 });
     await expect(announcement).toContainText('Bob left the group');
     // The leaver's name, not their identifier: no npub must leak into the row.

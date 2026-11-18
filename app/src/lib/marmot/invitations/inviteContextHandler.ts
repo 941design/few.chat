@@ -14,8 +14,7 @@
  *   4. the sender is not a sponsor of a pending invitation of that group (the store drops it when an invitation
  *      for the group is already pending; otherwise it is held until one arrives, then validated).
  * The sender identity is the seal-bound `rumor.pubkey` (lowercased), never a field of the content. Redelivery of
- * the same rumor id stores one entry (the store dedupes by rumor id). A store failure is reported, never thrown
- * into the library.
+ * the same rumor id stores one entry. A persistence failure rejects delivery so the library can defer and retry it.
  */
 import type { InboxRumorHandler } from '@941design/marmot';
 import { APP_INBOX_KINDS } from '../kinds';
@@ -23,7 +22,7 @@ import type { DenyLayer } from './denyLayer';
 import { parseInviteContextContent } from './inviteContext';
 import type { InviteContextStore } from './inviteContextStore';
 
-export interface InviteContextHandlerDeps {
+interface InviteContextHandlerDeps {
   store: Pick<InviteContextStore, 'add'>;
   denyLayer: DenyLayer;
   onError?: (error: unknown) => void;
@@ -46,9 +45,10 @@ export function createInviteContextHandler(deps: InviteContextHandlerDeps): Inbo
     const payload = parseInviteContextContent(rumor.content);
     if (!payload || typeof rumor.id !== 'string' || rumor.id.length === 0) return;
     try {
-      await store.add({ rumorId: rumor.id, sender, groupId: payload.groupId, name: payload.name });
+      await store.add({ rumorId: rumor.id, sender, groupId: payload.groupId, name: payload.name }, { requirePersistence: true });
     } catch (e) {
       onError(e);
+      throw e;
     }
   };
 }

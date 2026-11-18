@@ -2,7 +2,7 @@
  * Pending-invitation view (D14, seam `PendingInvitationView`, AC-INV-2 / AC-INV-4 / AC-BLK-1 / AC-CAP-1).
  *
  * `invitations.pending()` of the library is the ONLY pending store: this module reads nothing else
- * (`lp_pendingInvitations_v1` is never read or written by new code). ADR-002 (pull-only) is the library's
+ * (the library is the sole source of pending invitations). ADR-002 (pull-only) is the library's
  * behaviour with no `expectWelcome` manifest: an unexpected Welcome lands in `pending()` and nothing joins
  * until `accept`. The view adds what the app owns on top of that list, evaluated on every refresh in this order:
  *
@@ -47,7 +47,7 @@ export interface PendingInvitationsApi {
   decline: (id: string, options?: { readonly declineRumor?: boolean }) => Promise<void>;
 }
 
-export interface PendingInvitationViewDeps {
+interface PendingInvitationViewDeps {
   invitations: PendingInvitationsApi;
   denyLayer: DenyLayer;
   /** `AccountClientHandle.enqueue`: follow-up client work, started after the enqueuing frame returned. `false` = not accepted (queue disposed). */

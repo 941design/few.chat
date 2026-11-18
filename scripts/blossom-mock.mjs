@@ -76,7 +76,9 @@ const server = createServer((req, res) => {
       const hash = sha256(body);
       store.set(hash, body);
 
-      const serverHost = `http://localhost:${PORT}`;
+      const serverHost = req.headers['x-forwarded-proto'] === 'https'
+        ? `https://${req.headers.host}`
+        : `http://localhost:${PORT}`;
       const blobUrl = `${serverHost}/${hash}`;
 
       res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -17,12 +17,9 @@
  *            lower-pubkey committer (equal witness scores).
  *  A1        a handler failure inside the sink makes the library retry `append`
  *            until it lands (throw-to-retry through the real backend).
- *  Re-entrancy  a handler that enqueues follow-up client work as its FIRST
- *            action (before its own awaits) runs that job inside the still-live
- *            library frame: the job's account-scope call rejects with
- *            `reentrant`, reported as step `queuedJob`. Enqueuing as the LAST
- *            action (after the handler's own awaits) works. This documents the
- *            ClientJobQueue invariant the concrete handlers (S4/S5) must honour.
+ *  Re-entrancy  a direct group send from the history callback is rejected.
+ *            Queued sends wait for the library callback, including sink writes
+ *            that occur after the app's history handler finishes.
  */
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -143,7 +140,12 @@ interface Peer {
   pubkey: string;
 }
 
-async function startPeer(secretHex: string, label: string, handlerOverride?: (peer: () => Peer, base: GroupHistoryHandlers) => GroupHistoryHandlers): Promise<Peer> {
+async function startPeer(
+  secretHex: string,
+  label: string,
+  handlerOverride?: (peer: () => Peer, base: GroupHistoryHandlers) => GroupHistoryHandlers,
+  afterChatAppend?: () => Promise<void>,
+): Promise<Peer> {
   const backend = createMemoryStorage({ persistence: createMemoryPersistence(), leaseTimeoutMs: 200 });
   const chat = new Map<string, ChatRow>();
   const retractCalls: GroupRumorInput[] = [];
@@ -176,6 +178,7 @@ async function startPeer(secretHex: string, label: string, handlerOverride?: (pe
       appendAttempts.push(call);
       try {
         await app.append(entry);
+        if (entry.rumor?.kind === 9) await afterChatAppend?.();
       } catch (error) {
         call.threw = true;
         throw error;
@@ -441,7 +444,7 @@ describe('A1 through the real sink: a handler failure is retried by the library'
   }, 60_000);
 });
 
-describe('handlers enqueue follow-up client work as their LAST action (ClientJobQueue invariant)', () => {
+describe('history callback follow-up queue', () => {
   const isReentrant = (e: unknown) => (e as { code?: string })?.code === 'reentrant';
 
   async function soloGroup(peer: Peer) {
@@ -464,15 +467,16 @@ describe('handlers enqueue follow-up client work as their LAST action (ClientJob
     results.push('job-ok');
   }
 
-  it('enqueue BEFORE the handler awaits: the job runs inside the live frame and its client call is rejected as reentrant (step queuedJob)', async () => {
+  it('a direct send within a history handler is rejected as reentrant', async () => {
     const results: string[] = [];
+    const errors: unknown[] = [];
     const a = await startPeer(SECRET_A, 'a', (self, base) => ({
       ...base,
       async dispatch(input) {
         if (input.rumor.kind === 9) {
-          self().account.handle.enqueue(() => followUp(self(), input.groupId, results));
+          try { await followUp(self(), input.groupId, results); }
+          catch (error) { errors.push(error); }
         }
-        await sleep(80); // the handler's own await: the frame is still live when the job starts
         await base.dispatch(input);
       },
     }));
@@ -480,13 +484,12 @@ describe('handlers enqueue follow-up client work as their LAST action (ClientJob
     const id = await a.send(groupId, 'violates the invariant');
     await expect.poll(() => a.chat.has(id), { timeout: 15_000 }).toBe(true);
     await a.account.queue.idle();
-    const queued = a.errors.filter((e) => e.step === 'queuedJob');
-    expect(queued).toHaveLength(1);
-    expect(isReentrant(queued[0].error)).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(isReentrant(errors[0])).toBe(true);
     expect(results).toEqual([]);
   }, 40_000);
 
-  it('enqueue AFTER the handler\'s own awaits: the job runs after the frame is dead and succeeds', async () => {
+  it('queued operations wait for the completed append and settle in order', async () => {
     const results: string[] = [];
     const a = await startPeer(SECRET_A, 'a', (self, base) => ({
       ...base,
@@ -494,15 +497,19 @@ describe('handlers enqueue follow-up client work as their LAST action (ClientJob
         await sleep(80);
         await base.dispatch(input);
         if (input.rumor.kind === 9) {
-          self().account.handle.enqueue(() => followUp(self(), input.groupId, results));
+          self().account.handle.enqueue(() => followUp(self(), input.groupId, results), input.groupId);
+          self().account.handle.enqueue(async () => { results.push('second-job'); }, input.groupId);
         }
       },
-    }));
+    }), async () => {
+      await sleep(80);
+      results.push('append-complete');
+    });
     const groupId = await soloGroup(a);
     const id = await a.send(groupId, 'honours the invariant');
     await expect.poll(() => a.chat.has(id), { timeout: 15_000 }).toBe(true);
     await a.account.queue.idle();
-    expect(results).toEqual(['job-ok']);
     expect(a.errors.filter((e) => e.step === 'queuedJob')).toEqual([]);
+    expect(results).toEqual(['append-complete', 'job-ok', 'second-job']);
   }, 40_000);
 });

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { getEventHash } from '@941design/nostr-events/event';
-import { MAX_GROUP_NAME_LENGTH } from '@/src/lib/marmot/renameGroupImpl';
+const MAX_GROUP_NAME_LENGTH = 64;
 import {
   APP_INBOX_KINDS_FOR_TEST,
   makeSender,

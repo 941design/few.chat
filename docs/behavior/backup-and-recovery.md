@@ -11,7 +11,7 @@ re-fetched — with an honest account of what comes back and what does not.*
 Recovering an account is really three separate mechanisms, and it helps to keep them apart:
 
 - **Your identity** is recovered from a **seed phrase** (§2) — words only you hold.
-- **Your app state** (settings, profile, groups, recent group messages, invite links) is
+- **Your settings and profile** are
   recovered from an **encrypted backup you publish to relays** (§3–§4).
 - **Your direct-message history** is neither of those — the half of each conversation that
   was sent *to you* is **re-fetched from relays** (§6); the half you *sent* is not
@@ -47,20 +47,13 @@ is restored on top.
 
 ## 3. The relay backup
 
-The app keeps an **encrypted backup of your app state on relays**, so a new device can be brought
-back close to where you left off.
+The app keeps an **encrypted backup on your configured relays**.
 
-**What the backup contains:** your settings and profile, your groups and their cryptographic
-state, your **most recent** group messages (a small, capped window per group — not the full
-history), the member profiles you have learned, and your invite links. It does **not** contain
-your contacts, your direct messages, your "ever-known" reachability, your relay configuration,
-your choice of external signer, cached media, or unread/reaction state.
-
-Only groups you are still in carry their cryptographic state into the backup: a group you have
-left — including one whose keys are still waiting to be deleted from the device — is never
-written into it. A group you rejoined after leaving is backed up again; in the rare case that the
-device fails to record the rejoin, it stays out of the backup until the app next starts. Restoring only adds or updates groups; it never removes a group the device
-holds, so leaving stays a per-device act (see [Groups](groups.md) §7).
+The backup contains your theme, language, and own profile. Group membership, keys,
+messages, member profiles, and invite links stay outside recovery. If you recover on a
+new device, ask for a fresh invitation to rejoin a group. Contacts, direct messages,
+reachability, relay configuration, signer choice, cached media, and unread and
+reaction state are also outside the backup.
 
 **How it is protected:** the state itself is a **single blob encrypted to yourself** — only your
 own key can decrypt it, and relays see only ciphertext with none of its *contents* labelled.
@@ -68,14 +61,14 @@ What relays (and anyone looking) *can* see is unavoidable: that this identity us
 a backup exists, how large it is, and when it was last updated. The privacy is of the contents,
 not of the backup's existence.
 
-**When it is saved:** automatically, when your profile or your groups change, and when you
+**When it is saved:** automatically, when your profile changes, and when you
 background the app — but **debounced**, so it publishes at most once every few minutes. Two
 honest consequences follow: a change made and then immediately followed by closing the app,
 inside that window, may **not** be captured at that moment; and a change to settings alone does
 not by itself trigger a save — it rides along with the next one that does.
 
 **A change that has not been saved yet survives a reload.** The need for a backup is recorded on
-the device (a bare flag — no profile or group data) the moment something changes, including
+the device (a bare flag — no backup contents) the moment something changes, including
 changes made while the app is still starting up and has not yet loaded your identity. The flag
 is removed only after a backup was really published, not when a save fails or is paused for a
 pending restore decision, and it is not removed if something changed again while that save was
@@ -101,9 +94,8 @@ retried in the background — after about half a minute, then two minutes, then 
 up to five times; changes made meanwhile are included in the next retry, and a change after the
 last retry starts a fresh round. Right after the app starts the relays may still be connecting, so
 the first failure before any backup has succeeded in this session is retried once early, after
-about five seconds, ahead of that round; and if looking up your relay list just timed out, the
-retry skips the fetch and uses the currently configured relays. There is no on-screen backup
-status; a backup that keeps failing is not signalled to you.
+about five seconds, ahead of that round. Each retry uses the currently configured relays.
+The app does not report a backup that keeps failing.
 
 **Only with the app's own key:** automatic backups are made only when the app holds your key
 itself. If you sign in with an **external signer** (a browser extension or a remote signer), no
@@ -118,12 +110,9 @@ After recovering your identity, the app looks for your **latest** backup and off
 it; you can also **decline** and keep an identity-only recovery. Restoring decrypts the backup
 with your recovered key and **adds it on top of** the device's current state:
 
-- **It is non-destructive.** Restore only writes the categories the backup carries — it
-  overwrites your settings and profile, adds or updates the groups it contains, and **merges**
-  group messages (a message already present locally is kept). It never deletes data the backup
-  does not carry: anything else already on the device — other groups, direct messages, contacts,
-  relay settings — is left untouched. (This matters mainly on a device that already has state; on
-  a truly fresh device there is nothing to preserve.)
+- Restore applies the settings and own profile included in the backup. Existing
+  groups, direct messages, contacts and relay settings stay on the device. Older
+  backups may contain group sections. Recovery ignores those sections.
 - If several backups exist, the **most recent** is used. A backup written by a **newer,
   incompatible** version of the app — or one that cannot be read — is refused as a whole before
   anything is written, rather than applied wrongly or in part.
@@ -137,8 +126,7 @@ confirmation, the app says which of these happened:
 - **A backup was found but this app version can't use it** — updating the app and recovering
   again is the way forward.
 
-If applying a found backup fails partway, you are told that the backup could not be applied;
-your settings and profile are only overwritten once everything else in the backup was written.
+If applying a found backup fails, the app reports that it could not apply the backup.
 
 **Your old backup is protected until you decide.** From the moment you recover your identity until
 you restore or skip the backup found on relays, the app does not save a new backup over it. If you
@@ -159,8 +147,8 @@ that did not answer holds one.
 | Recovered by | What returns |
 |---|---|
 | **The seed phrase** | Your identity (keys / npub) |
-| **The relay backup** | Settings, profile, groups and their cryptographic state, your *recent* group messages, learned member profiles, invite links |
-| **Re-fetching from relays** | The **inbound** half of your direct messages (§6); contacts and reachability rebuilt from your current groups *and* from any DM partners whose messages re-appear |
+| **The relay backup** | Settings and your own profile |
+| **Re-fetching from relays** | The **inbound** half of your direct messages (§6); contacts and reachability rebuilt from groups you join and DM partners whose messages re-appear |
 
 **What does *not* come back:**
 
@@ -168,10 +156,10 @@ that did not answer holds one.
   re-fetched (§6). The messages *you* sent were sealed to the other person and kept only on this
   device, so on a new device your side of every conversation is missing — you see the other
   person's messages but not your own replies.
-- **Group message history older than your backup allows.** Only your recent group messages are
-  in the backup, and older group messages are protected by *forward secrecy* — they can be
-  recovered from relays only as far back as the restored cryptographic state can still decrypt.
-  History older than that is **permanently gone** on a new device.
+- **Groups and group history.** Recovery does not restore groups, keys, messages,
+  member profiles, or invite links. An admin may need to remove the old membership before
+  sending a fresh invitation. A recovered account that was the sole admin cannot
+  administer that group from the recovered device.
 - **Contacts and reachability exactly as they were.** These are **rebuilt** — from your current
   group membership and from DM partners whose messages re-appear — rather than carried in the
   backup. Someone you knew only through a 1:1 contact, with no messages the relays still hold,
@@ -210,10 +198,6 @@ repairs damaged entries as it loads them.
   (That a backup exists for your identity, and its size and update times, are visible — see §3.)
 - **Restoring never makes your profile public.** Fetching your name during recovery is read-only;
   the app never re-broadcasts it (consistent with the never-public rule in the Profiles document).
-- **An honest tradeoff.** Because the backup carries your recent group messages and group
-  cryptographic state encrypted *only to your own key*, anyone who obtains your key can read the
-  backed-up content. The backup deliberately trades a measure of forward secrecy for
-  recoverability, so that losing a device does not lose your recent state.
 
 ---
 
@@ -222,10 +206,8 @@ repairs damaged entries as it loads them.
 **You lose the seed phrase and every device.** The account is unrecoverable — there is no other
 path back (§2). While any device survives, the phrase can be read from it.
 
-**You restore onto a device that already has state.** Restore **merges**: it updates settings,
-profile, and the groups it carries, keeps any group messages already present, and leaves
-everything the backup does not contain — other groups, direct messages, contacts, relay settings —
-in place (§4).
+**You restore onto a device that already has state.** Restore updates the saved settings
+and own profile present in the backup. Other device data remains in place (§4).
 
 **Several backups exist.** The most recent one is used.
 
@@ -236,18 +218,14 @@ are told the backup can't be used by this app version (§4).
 relays could not be reached and can check again (§4).
 
 **Relays are unreachable when a backup is due.** The backup is retried in the background a few
-times; the next change to your groups or profile, or putting the app in the background, tries
+times; the next change to your profile, or putting the app in the background, tries
 again (§3).
 
-**A new device restores, but relays have aged out old messages.** Group history beyond what the
-restored cryptographic state can decrypt is gone regardless (§5); the inbound half of DM history
-returns only as far as relays still hold it (§6).
+**A new device restores, but relays have aged out old messages.** The inbound half of DM
+history returns only as far as relays still hold it (§6).
 
 **Your sent messages after a device loss.** Not recoverable — only messages sent *to* you are on
 relays for you to re-fetch (§6).
-
-**The group's cryptographic state can't be restored cleanly.** The affected group cannot be
-resumed from the backup and would have to be rejoined.
 
 ---
 
@@ -260,8 +238,6 @@ resumed from the backup and would have to be rejoined.
 - **Live multi-device sync** — the backup restores or tops up a device; it is not a mechanism for
   keeping two active devices continuously in step (contacts, reachability, unread, and reactions
   are per-device).
-- **Restoring group history older than the restored cryptographic state can decrypt** — forward
-  secrecy makes it unrecoverable on a new device.
 
 ---
 
@@ -270,19 +246,18 @@ resumed from the backup and would have to be rejoined.
 Reconciled across product specifications, acceptance criteria, the shipped implementation, and the
 automated test suite:
 
-- `specs/relay-backup.md` and `specs/epic-relay-backup/` — the encrypted relay backup (contents,
-  encrypt-to-self, save triggers); its restore section now describes the shipped
-  **non-destructive merge**. `specs/epic-backup-restore-reliability/` — distinct restore outcomes,
-  validate-before-apply, and background retry of failed backups.
+- `specs/epic-marmot-library-adoption/acceptance-criteria.md` — AC-BKP and AC-REL-3
+  cover settings and own profile, legacy group sections, encryption, and configured relays.
+- `specs/epic-backup-restore-reliability/` — restore outcomes and retry.
 - `specs/dm-message-recovery.md` and `specs/epic-dm-message-recovery/` — recovering the inbound
   half of direct-message history by re-fetching from relays, with lenient parsing and self-heal.
 - `specs/spec.md` / `specs/user-stories.md` — seed-phrase identity recovery.
   (`specs/peer-backup.md` describes a complementary peer-stored layer that is **not shipped**; the
   mechanism documented here is the relay backup.)
 - Implementation under `app/src/lib/backup/relayBackup.ts` (assembly, self-encryption, publish, and
-  the documented non-destructive restore/merge), `app/src/lib/nostrKeys.ts` with the seed/mnemonic
+  settings/profile restore), `app/src/lib/nostrKeys.ts` with the seed/mnemonic
   handling (identity recovery), and the direct-message historical re-fetch and self-heal in the
   chat-persistence and DM-subscription code.
 - The `groups-seed-phrase`, `groups-seed-recovery`, `dm-historical-recovery`, and
-  `groups-migration-backfill` end-to-end specs, and the unit tests for backup assembly, lookup
+  `groups-backup-restore-outcomes` end-to-end specs, and the unit tests for backup assembly, lookup
   outcomes, validation, restore, scheduling/retry, and the seed mnemonic — including the assertion that the profile is never broadcast on restore.

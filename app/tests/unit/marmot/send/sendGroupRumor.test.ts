@@ -56,6 +56,15 @@ describe('buildGroupRumor', () => {
 });
 
 describe('sendGroupRumor', () => {
+  it('preserves an explicit timestamp and refuses to silently change it on a collision', async () => {
+    const { sender, group, send } = setup();
+    const prepared = sender.prepare(group, 9, 'edit', [['e', 'original', '', 'edit']], { createdAt: 123 });
+    await prepared.send();
+    expect(prepared.rumor.created_at).toBe(123);
+    expect((send.mock.calls[0][0] as { rumor: { id: string; created_at: number } }).rumor).toMatchObject({ id: prepared.id, created_at: 123 });
+    expect(() => sender.prepare(group, 9, 'edit', [['e', 'original', '', 'edit']], { createdAt: 123 })).toThrow(/already tracked/);
+  });
+
   it('calls group.send exactly once with {type:application, rumor}; the rumor is authored by the own account', async () => {
     const { sender, send, group } = setup();
     const out = await sender.sendGroupRumor(group, 9, 'hi there', [['x', 'y']]);

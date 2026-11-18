@@ -1,0 +1,49 @@
+{
+  "module_name": "client",
+  "purpose": "Control automatic lease takeover, one guarded incompatible-store wipe, and lease-gated reconciliation and app-side group cleanup.",
+  "public_api": [
+    {
+      "name": "startAccountLifecycle",
+      "signature": "(options) => AccountLifecycle",
+      "description": "Start one abortable account generation, resolve readiness on the first lease outcome, retry lease-held, dispose before release, and run the once-per-page wipe before closing the incompatible session stores."
+    },
+    {
+      "name": "clearAllGroupData",
+      "signature": "(pubkey: string) => Promise<void>",
+      "description": "Clear app group-owned state for the current account, including history and persisted group stores, preserving DM and contacts."
+    },
+    {
+      "name": "reconcileOverlayGroups",
+      "signature": "(options) => Promise<void>",
+      "description": "While lease held, purge overlay ids absent from the library snapshot via the existing local group purger."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "Lease outcome and page-local wipe attempt guard"
+  ],
+  "dependencies_allowed": [
+    "client bootstrap and lifecycle",
+    "existing group store clear helpers and history barrel",
+    "GroupDataPurger seam"
+  ],
+  "dependencies_forbidden": [
+    "legacy MLS packages",
+    "React or NDK imports",
+    "group writes while not holding a lease"
+  ],
+  "external_ports": [
+    "bootstrap",
+    "AccountStore.wipe",
+    "GroupDataPurger",
+    "overlay listing",
+    "onState"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "storeIncompatible"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/client/*.test.ts"
+  ]
+}

@@ -6,9 +6,7 @@ import {
   readUserProfile,
   writeUserProfile,
   resetAllData,
-  readOrCreateKeyPackageSlot,
 } from '@/src/lib/storage';
-import { generateKeyPackageSlot } from '@internet-privacy/marmot-ts';
 import { STORAGE_KEYS } from '@/src/types';
 import { NICKNAME_MAX_BYTES } from '@/src/config/profile';
 
@@ -163,18 +161,6 @@ describe('resetAllData', () => {
     expect(store[STORAGE_KEYS.userProfile]).toBeUndefined();
   });
 
-  it('wipes every stale-replace recovery marker by prefix, and only those', async () => {
-    store['few-stale-replace-recovery:aa'] = '1';
-    store['few-stale-replace-recovery:bb'] = '2';
-    store['unrelated-key'] = 'keep';
-
-    await resetAllData();
-
-    expect(store['few-stale-replace-recovery:aa']).toBeUndefined();
-    expect(store['few-stale-replace-recovery:bb']).toBeUndefined();
-    expect(store['unrelated-key']).toBe('keep');
-  });
-
   it('handles already-empty storage gracefully', async () => {
     await expect(resetAllData()).resolves.toBeUndefined();
   });
@@ -191,76 +177,6 @@ describe('corrupt data handling', () => {
 // MarmotContext.tsx's three KeyPackage slot-resolution call sites
 // (marmot-ts 0.7.0 hex-validates the `d` tag / clientId and throws on the
 // pre-migration free-form 'few' literal).
-describe('readOrCreateKeyPackageSlot', () => {
-  const HEX_64 = /^[0-9a-f]{64}$/;
-
-  it('mints and persists a hex slot on a fresh install (AC-KEY-1) using the real generateKeyPackageSlot()', () => {
-    expect(store[STORAGE_KEYS.keyPackageSlot]).toBeUndefined();
-
-    const slot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
-
-    expect(slot).toMatch(HEX_64);
-    // Persisted synchronously, before this function returns — a caller
-    // constructing a stateful client with `slot` immediately after is
-    // guaranteed the write already landed.
-    expect(store[STORAGE_KEYS.keyPackageSlot]).toBeDefined();
-    expect(JSON.parse(store[STORAGE_KEYS.keyPackageSlot])).toBe(slot);
-  });
-
-  it('regenerates a conformant slot when the persisted value is the legacy free-form "few" literal (AC-KEY-2)', () => {
-    store[STORAGE_KEYS.keyPackageSlot] = JSON.stringify('few');
-
-    const slot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
-
-    expect(slot).toMatch(HEX_64);
-    expect(slot).not.toBe('few');
-    expect(JSON.parse(store[STORAGE_KEYS.keyPackageSlot])).toBe(slot);
-  });
-
-  it('regenerates when the persisted value is any other non-conformant shape (too short, uppercase, non-hex)', () => {
-    for (const bad of ['ab'.repeat(31), 'A'.repeat(64), 'g'.repeat(64), '']) {
-      store[STORAGE_KEYS.keyPackageSlot] = JSON.stringify(bad);
-      const slot = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
-      expect(slot).toMatch(HEX_64);
-    }
-  });
-
-  it('reuses a byte-identical persisted slot on every subsequent call, never regenerating (AC-KEY-3)', () => {
-    const first = readOrCreateKeyPackageSlot(generateKeyPackageSlot);
-
-    // A mint function that would prove regeneration happened if called again.
-    let mintCalls = 0;
-    const mintSlot = () => {
-      mintCalls += 1;
-      return generateKeyPackageSlot();
-    };
-
-    const second = readOrCreateKeyPackageSlot(mintSlot);
-    const third = readOrCreateKeyPackageSlot(mintSlot);
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
-    expect(mintCalls).toBe(0);
-  });
-
-  it('calls mintSlot at most once even when regenerating', () => {
-    store[STORAGE_KEYS.keyPackageSlot] = JSON.stringify('few');
-    let mintCalls = 0;
-    const mintSlot = () => {
-      mintCalls += 1;
-      return generateKeyPackageSlot();
-    };
-
-    readOrCreateKeyPackageSlot(mintSlot);
-
-    expect(mintCalls).toBe(1);
-  });
-});
-
-// When localStorage is unavailable (e.g. Safari private mode, storage disabled
-// or quota-blocked), the app must degrade gracefully: isStorageAvailable()
-// latches false, reads fall back to their defaults, and writes are silent
-// no-ops that never even reach localStorage.setItem.
 describe('storage unavailable (localStorage throws)', () => {
   it('latches isStorageAvailable() false, reads return defaults, and writes are silent no-ops', async () => {
     const throwing = {

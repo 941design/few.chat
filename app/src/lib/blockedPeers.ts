@@ -112,7 +112,7 @@ export function isBlockedPeer(peerHex: string, blockedPeers: ReadonlySet<string>
  */
 export function isAllowedDmSenderComposite(
   peer: string,
-  groups: ReadonlyArray<Group>,
+  groups: ReadonlyArray<Pick<Group, 'memberPubkeys'>>,
   knownPeers: ReadonlySet<string>,
   blockedPeers: ReadonlySet<string>,
   ownPubkeyHex: string,

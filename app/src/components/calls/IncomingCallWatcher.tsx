@@ -46,7 +46,7 @@ export function getCallManager(): CallManager | null {
 
 export function IncomingCallWatcher() {
   const { hydrated, pubkeyHex, privateKeyHex } = useNostrIdentity();
-  const { groups, getClient, knownPeersRevision, blockedPeersRevision } = useMarmot();
+  const { groups, getLiveMemberPubkeys, sendGroupNotice, knownPeersRevision, blockedPeersRevision } = useMarmot();
 
   // Live ref keeps the group roster current without tearing down the subscription
   // on every membership change. Mirrors the pattern in ContactChat.tsx / DMNotificationsWatcher.
@@ -73,8 +73,8 @@ export function IncomingCallWatcher() {
   }, [groups, knownPeersRevision, blockedPeersRevision]);
 
   // getClient is stable (useCallback) — safe to read directly in the effect.
-  const getClientRef = useRef(getClient);
-  useEffect(() => { getClientRef.current = getClient; }, [getClient]);
+  const groupActions = useRef({ getLiveMemberPubkeys, sendGroupNotice });
+  groupActions.current = { getLiveMemberPubkeys, sendGroupNotice };
 
   useEffect(() => {
     if (!hydrated || !pubkeyHex || !privateKeyHex) return;
@@ -109,37 +109,12 @@ export function IncomingCallWatcher() {
           privateKeyHex,
           signer,
           ndk,
-          getGroupRoster: async (groupId: string) => {
-            try {
-              const { getGroupMembers } = await import('@internet-privacy/marmot-ts');
-              const client = getClientRef.current();
-              if (!client) return [];
-              const mlsGroup = await client.groups.get(groupId);
-              if (!mlsGroup) return [];
-              return getGroupMembers(mlsGroup.state);
-            } catch {
-              return [];
-            }
-          },
+          getGroupRoster: async (id) => (await groupActions.current.getLiveMemberPubkeys(id)) ?? [],
           // Live list of the user's group ids so CallManager can bind an incoming
           // call to the actual MLS group it belongs to (strict roster authorization).
           getGroupIds: () => groupsRef.current.map((g) => g.id),
           isBlockedCaller: (pk: string) => isBlockedPeer(pk, blockedPeersRef.current),
-          publishGroupNotice: async (groupId: string, content: string) => {
-            try {
-              const client = getClientRef.current();
-              if (!client) return;
-              const mlsGroup = await client.groups.get(groupId);
-              if (!mlsGroup) return;
-              const { getEventHash } = await import('applesauce-core/helpers/event');
-              // Build a properly-hashed kind-9 rumor (same pattern as MarmotContext.buildRumor)
-              const rumor = { id: '', kind: 9, pubkey: pubkeyHex, created_at: Math.floor(Date.now() / 1000), content, tags: [] as string[][] };
-              rumor.id = getEventHash(rumor);
-              await (mlsGroup.sendApplicationRumor as unknown as (r: typeof rumor) => Promise<void>)(rumor);
-            } catch (err) {
-              console.warn('[IncomingCallWatcher] publishGroupNotice failed', err);
-            }
-          },
+          publishGroupNotice: (id, content) => groupActions.current.sendGroupNotice(id, content),
         });
 
         activeCallManager = manager;

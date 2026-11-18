@@ -15,7 +15,7 @@
     "app/tests/unit/marmot/client/importBoundary.test.ts"
   ],
   "tests_added": {
-    "unit": "kinds.test.ts (11) + nip46Perms.test.ts (7) approx; collision, registry content, literal-ban scan, perms set equality, discard predicate"
+    "unit": 22
   },
   "test_counts": {
     "baseline": 6646,
@@ -45,5 +45,7 @@
     "kinds",
     "nip46Perms",
     "client"
-  ]
+  ],
+  "legacy_tests_added_unit": "kinds.test.ts (11) + nip46Perms.test.ts (7) approx; collision, registry content, literal-ban scan, perms set equality, discard predicate",
+  "test_count_recovery": "12 kinds and 10 NIP-46 it() declarations at the original S2 commit 4bb0f23."
 }

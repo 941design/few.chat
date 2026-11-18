@@ -8,14 +8,17 @@
  * pool (a spy over a real SimplePool) and teardown destroys it exactly once,
  * after client.dispose().
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRelay } from '@941design/nostr-events/transport/contract/conformance';
 import { createMemoryStorage, createMemoryPersistence } from '@941design/marmot/storage/memory';
 import { createMarmotClient as libCreateMarmotClient, createMemoryHistoryBackend } from '@941design/marmot';
 import { SimplePool } from 'nostr-tools/pool';
+import { getEventHash } from 'nostr-tools/pure';
 import { createPrivateKeySigner as createAppSigner } from '@/src/lib/marmot/signerAdapter';
 import {
   bootstrapAccountClient,
+  inboxRelayList,
+  rebuildAccountForRelays,
   type AccountClient,
   type BootstrapInput,
 } from '@/src/lib/marmot/client';
@@ -244,3 +247,434 @@ describe('structural attach against the real library (groupCreated / groupJoined
     await expect.poll(() => seenB.filter((s) => s === `${gid}:message`).length, { timeout: 15_000 }).toBeGreaterThan(before);
   });
 });
+
+
+it('disposes the old client and rotates each key-package slot onto new relays on relay-settings save', async () => {
+  const other = new FakeRelay();
+  const otherUrl = await other.start();
+  try {
+    const persistence = createMemoryPersistence();
+    const old = await boot({ ...baseInput(SECRET_A, persistence), inboxRelayList });
+    await old.handle.client.keyPackages.create();
+    const original = await old.handle.client.keyPackages.list();
+    expect(original).toHaveLength(2);
+
+    const transitions: string[] = [];
+    const input = baseInput(SECRET_A, persistence);
+    const next = await rebuildAccountForRelays({
+      async teardown() {
+        await old.teardown();
+        expect(old.handle.leaseHeld()).toBe(false);
+        transitions.push('disposed');
+      },
+    }, {
+      ...input,
+      relays: [otherUrl],
+      seams: {
+        ...input.seams,
+        createMarmotClient(params) {
+          expect(transitions).toEqual(['disposed']);
+          expect(params.relays.defaults).toEqual([otherUrl]);
+          transitions.push('created');
+          return libCreateMarmotClient(params);
+        },
+      },
+    }, [relayUrl]);
+    expect(next.bootstrap.status).toBe('ready');
+    if (next.bootstrap.status !== 'ready') throw new Error('Replacement bootstrap failed');
+    opened.push(next.bootstrap.account);
+    expect(next.rotationErrors).toEqual([]);
+    expect(next.bootstrap.account.ensure.inboxRelayList).toBe('ok');
+    expect(transitions).toEqual(['disposed', 'created']);
+
+    const replacements = await next.bootstrap.account.handle.client.keyPackages.list();
+    expect(replacements).toHaveLength(2);
+    expect(replacements.every(({ id }) => !original.some((oldEvent) => oldEvent.id === id))).toBe(true);
+    expect([...new Set(other.storedEvents.filter((event) => event.kind === 30443).map(({ id }) => id))].sort())
+      .toEqual(replacements.map(({ id }) => id).sort());
+    expect(other.storedEvents.find((event) => event.kind === 10050)).toMatchObject({
+      content: '', tags: [['relay', otherUrl], ['client', 'few']],
+    });
+  } finally {
+    await other.stop();
+  }
+}, 20_000);
+
+it('receives a B-only inbox rumor after replacing the tagged A list on rebuild', async () => {
+  const b = new FakeRelay();
+  const bUrl = await b.start();
+  try {
+    const persistence = createMemoryPersistence();
+    const old = await boot({ ...baseInput(SECRET_A, persistence), inboxRelayList });
+    expect(relay.storedEvents.find((event) => event.kind === 10050)?.tags)
+      .toEqual([['relay', relayUrl], ['client', 'few']]);
+    const seen: string[] = [];
+    const input = baseInput(SECRET_A, persistence);
+    input.relays = [bUrl];
+    input.inboxHandlers.inviteContext = (rumor) => { seen.push(rumor.content); };
+    const result = await rebuildAccountForRelays(old, input, [relayUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    opened.push(result.bootstrap.account);
+    expect(result.bootstrap.account.ensure.inboxRelayList).toBe('ok');
+    const sender = await boot({ ...baseInput(SECRET_B), relays: [bUrl] });
+    const draft = { pubkey: sender.handle.pubkey, kind: 21064, created_at: Math.floor(Date.now() / 1000), content: 'B-only delivery', tags: [] as string[][] };
+    expect(await sender.handle.client.extensions.sendInboxRumor({
+      to: old.handle.pubkey, rumor: { ...draft, id: getEventHash(draft) },
+    })).toMatchObject({ status: 'delivered', relays: [bUrl] });
+    await expect.poll(() => seen, { timeout: 5_000 }).toEqual(['B-only delivery']);
+    expect(b.storedEvents.filter((event) => event.kind === 1059)).toHaveLength(1);
+    expect(relay.storedEvents.filter((event) => event.kind === 1059)).toEqual([]);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+  }
+}, 20_000);
+
+it('receives on foreign inbox C after rebuilding A to B without copying the foreign list', async () => {
+  const b = new FakeRelay();
+  const c = new FakeRelay();
+  const bUrl = await b.start();
+  const cUrl = await c.start();
+  try {
+    const persistence = createMemoryPersistence();
+    const signer = createAppSigner(SECRET_A);
+    const foreignList = await signer.signEvent({
+      kind: 10050, created_at: Math.floor(Date.now() / 1000), content: '', tags: [['relay', cUrl]],
+    });
+    relay.publish(foreignList);
+    const old = await boot({ ...baseInput(SECRET_A, persistence), inboxRelayList });
+    const seen: string[] = [];
+    const input = baseInput(SECRET_A, persistence);
+    input.relays = [bUrl];
+    input.inboxHandlers.inviteContext = (rumor) => { seen.push(rumor.content); };
+    input.seams!.createMarmotClient = (params) => {
+      expect(params.relays.defaults).toEqual([bUrl]);
+      return libCreateMarmotClient(params);
+    };
+    const result = await rebuildAccountForRelays(old, input, [relayUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    opened.push(result.bootstrap.account);
+    expect(result.bootstrap.account.ensure.inboxRelayList).toBe('ok');
+
+    const sender = await boot(baseInput(SECRET_B));
+    const draft = {
+      pubkey: sender.handle.pubkey, kind: 21064, created_at: Math.floor(Date.now() / 1000),
+      content: 'C-only delivery', tags: [] as string[][],
+    };
+    expect(await sender.handle.client.extensions.sendInboxRumor({
+      to: old.handle.pubkey, rumor: { ...draft, id: getEventHash(draft) },
+    })).toMatchObject({ status: 'delivered', relays: [cUrl] });
+    await expect.poll(() => seen, { timeout: 10_000 }).toEqual(['C-only delivery']);
+    expect(c.storedEvents.filter((event) => event.kind === 1059)).toHaveLength(1);
+    expect([relay, b].flatMap((r) => r.storedEvents).filter((event) => event.kind === 1059)).toEqual([]);
+    expect(b.storedEvents.filter((event) => event.kind === 10050 && event.pubkey === old.handle.pubkey)).toEqual([]);
+    expect(relay.storedEvents.filter((event) => event.kind === 10050 && event.pubkey === old.handle.pubkey))
+      .toEqual([foreignList]);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+    await c.stop();
+  }
+}, 20_000);
+
+it.each([true, false])('rotation uses the new relay acknowledgments when old NIP-65 writes reject (new accepts: %s)', async (acceptNew) => {
+  const rejecting = new FakeRelay({ publishOk: () => ({ ok: false, message: 'blocked: old writes disabled' }) });
+  const b = new FakeRelay({ publishOk: (event) => ({
+    ok: event.kind !== 30443 || acceptNew, message: 'blocked: new writes disabled',
+  }) });
+  const oldWriteUrl = await rejecting.start();
+  const bUrl = await b.start();
+  try {
+    const persistence = createMemoryPersistence();
+    const old = await boot({ ...baseInput(SECRET_A, persistence), inboxRelayList });
+    const originals = await old.handle.client.keyPackages.list();
+    const nip65 = await createAppSigner(SECRET_A).signEvent({
+      kind: 10002, created_at: Math.floor(Date.now() / 1000), content: '', tags: [['r', oldWriteUrl, 'write']],
+    });
+    b.publish(nip65);
+    const result = await rebuildAccountForRelays(old, {
+      ...baseInput(SECRET_A, persistence), relays: [bUrl],
+    }, [relayUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    const account = result.bootstrap.account;
+    opened.push(account);
+    const replacements = b.storedEvents.filter((event) => event.kind === 30443);
+    if (acceptNew) {
+      expect(result.rotationErrors).toEqual([]);
+      expect(replacements).toHaveLength(originals.length);
+      expect(replacements.every((event) => !originals.some((oldEvent) => oldEvent.id === event.id))).toBe(true);
+      expect((await account.handle.client.keyPackages.list()).map(({ id }) => id).sort())
+        .toEqual(replacements.map(({ id }) => id).sort());
+    } else {
+      expect(result.rotationErrors).toHaveLength(originals.length);
+      expect(replacements).toEqual([]);
+      expect((await account.handle.client.keyPackages.list()).map(({ id }) => id))
+        .toEqual(originals.map(({ id }) => id));
+    }
+    // The override ends with the rebuild; normal own NIP-65 discovery survives.
+    const lookup = await account.transport.requestWithDeadline([bUrl], {
+      kinds: [10002], authors: [account.handle.pubkey],
+    }, { timeoutMs: 500 });
+    expect(lookup.events.map(({ id }) => id)).toContain(nip65.id);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await rejecting.stop();
+    await b.stop();
+  }
+}, 20_000);
+
+it.each(['first boot', 'rebuild'] as const)('receives on a foreign C inbox during %s when a configured relay times out', async (mode) => {
+  const b = new FakeRelay();
+  const c = new FakeRelay();
+  const bUrl = await b.start();
+  const cUrl = await c.start();
+  const silentUrl = 'wss://silent-current.example';
+  try {
+    const foreignList = await createAppSigner(SECRET_A).signEvent({
+      kind: 10050, created_at: Math.floor(Date.now() / 1000), content: '', tags: [['relay', cUrl]],
+    });
+    b.publish(foreignList);
+    const seen: string[] = [];
+    const input = baseInput(SECRET_A);
+    input.relays = [bUrl, silentUrl];
+    input.inboxRelayList = inboxRelayList;
+    input.inboxHandlers.inviteContext = (rumor) => { seen.push(rumor.content); };
+    input.seams!.createTransport = (relays) => {
+      const network = createClientTransport({ relays });
+      const real = network.transport;
+      return { ...network, transport: { ...real, async requestWithDeadline(targets, filters, opts) {
+        const available = targets.filter((target) => target !== silentUrl);
+        const result = available.length ? await real.requestWithDeadline(available, filters, opts)
+          : { events: [], timedOut: false, eosedRelays: [], silentRelays: [] };
+        return targets.includes(silentUrl)
+          ? { ...result, timedOut: true, silentRelays: [...result.silentRelays, silentUrl] }
+          : result;
+      } } };
+    };
+    let account: AccountClient;
+    if (mode === 'first boot') {
+      account = await boot(input);
+    } else {
+      const result = await rebuildAccountForRelays(null, input, [relayUrl]);
+      if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+      expect(result.inboxRelayListFailure).toBeUndefined();
+      account = result.bootstrap.account;
+      opened.push(account);
+    }
+    expect(account.ensure.inboxRelayList).toBe('ok');
+    const sender = await boot({ ...baseInput(SECRET_B), relays: [bUrl] });
+    const draft = { pubkey: sender.handle.pubkey, kind: 21064, created_at: Math.floor(Date.now() / 1000), content: 'partial C delivery', tags: [] as string[][] };
+    expect(await sender.handle.client.extensions.sendInboxRumor({
+      to: account.handle.pubkey, rumor: { ...draft, id: getEventHash(draft) },
+    })).toMatchObject({ status: 'delivered', relays: [cUrl] });
+    await expect.poll(() => seen, { timeout: 5_000 }).toEqual(['partial C delivery']);
+    expect(c.storedEvents.filter((event) => event.kind === 1059)).toHaveLength(1);
+    expect(b.storedEvents.filter((event) => event.kind === 10050)).toEqual([foreignList]);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+    await c.stop();
+  }
+}, 20_000);
+
+it('receives on the verified B inbox when the previous relay times out', async () => {
+  const b = new FakeRelay();
+  const c = new FakeRelay();
+  const bUrl = await b.start();
+  const cUrl = await c.start();
+  const oldUrl = 'wss://old-timeout.example';
+  try {
+    const foreignList = await createAppSigner(SECRET_A).signEvent({
+      kind: 10050, created_at: Math.floor(Date.now() / 1000), content: '', tags: [['relay', cUrl]],
+    });
+    b.publish(foreignList);
+    relay.publish(foreignList);
+    const seen: string[] = [];
+    const input = baseInput(SECRET_A);
+    input.relays = [bUrl];
+    input.inboxHandlers.inviteContext = (rumor) => { seen.push(rumor.content); };
+    input.seams!.createTransport = (relays) => {
+      const network = createClientTransport({ relays });
+      const real = network.transport;
+      return { ...network, transport: { ...real, async requestWithDeadline(targets, filters, opts) {
+        const current = targets.filter((target) => target !== oldUrl);
+        const result = current.length ? await real.requestWithDeadline(current, filters, opts)
+          : { events: [], timedOut: false, eosedRelays: [], silentRelays: [] };
+        return targets.includes(oldUrl)
+          ? { ...result, timedOut: true, silentRelays: [...result.silentRelays, oldUrl] }
+          : result;
+      } } };
+    };
+    const result = await rebuildAccountForRelays({ teardown: async () => {} }, input, [oldUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    opened.push(result.bootstrap.account);
+    const sender = await boot(baseInput(SECRET_B));
+    const draft = { pubkey: sender.handle.pubkey, kind: 21064, created_at: Math.floor(Date.now() / 1000), content: 'delivery on C', tags: [] as string[][] };
+    expect(await sender.handle.client.extensions.sendInboxRumor({
+      to: result.bootstrap.account.handle.pubkey, rumor: { ...draft, id: getEventHash(draft) },
+    })).toMatchObject({ status: 'delivered', relays: [cUrl] });
+    await expect.poll(() => seen, { timeout: 10_000 }).toContain('delivery on C');
+    expect(b.storedEvents.filter((event) => event.kind === 10050)).toEqual([foreignList]);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+    await c.stop();
+  }
+}, 20_000);
+
+it('bootstraps an empty key-package store on B despite an obsolete NIP-65 write list', async () => {
+  const b = new FakeRelay();
+  const oldWrite = new FakeRelay({ publishOk: () => ({ ok: false, message: 'blocked' }) });
+  const bUrl = await b.start();
+  const oldWriteUrl = await oldWrite.start();
+  try {
+    b.publish(await createAppSigner(SECRET_A).signEvent({
+      kind: 10002, created_at: Math.floor(Date.now() / 1000), content: '', tags: [['r', oldWriteUrl, 'write']],
+    }));
+    const result = await rebuildAccountForRelays({ teardown: async () => {} }, {
+      ...baseInput(SECRET_A), relays: [bUrl],
+    }, [relayUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    opened.push(result.bootstrap.account);
+    expect(result.bootstrap.account.ensure.keyPackage).toBe('created');
+    expect(result.rotationErrors).toEqual([]);
+    expect(b.storedEvents.some((event) => event.kind === 30443)).toBe(true);
+    expect(await result.bootstrap.account.handle.client.keyPackages.list()).toHaveLength(1);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+    await oldWrite.stop();
+  }
+}, 20_000);
+
+it.each(['previous', 'configured'] as const)('does not overwrite a B list when the %s relay lookup is incomplete', async (silentSet) => {
+  const b = new FakeRelay();
+  const bUrl = await b.start();
+  const oldUrl = 'wss://old-timeout.example';
+  try {
+    const existing = await createAppSigner(SECRET_A).signEvent({
+      kind: 10050, created_at: Math.floor(Date.now() / 1000), content: '',
+      tags: [['relay', bUrl], ['client', 'few']],
+    });
+    b.publish(existing);
+    const input = baseInput(SECRET_A);
+    input.relays = silentSet === 'configured' ? [bUrl, oldUrl] : [bUrl];
+    input.onError = () => {};
+    let inboxStart: ReturnType<typeof vi.spyOn>;
+    let inboxStop: ReturnType<typeof vi.spyOn>;
+    input.seams!.createMarmotClient = (params) => {
+      const client = libCreateMarmotClient(params);
+      inboxStart = vi.spyOn(client.inbox, 'start');
+      inboxStop = vi.spyOn(client.inbox, 'stop');
+      return client;
+    };
+    input.seams!.createTransport = (relays) => {
+      const network = createClientTransport({ relays });
+      const real = network.transport;
+      return { ...network, transport: { ...real, async requestWithDeadline(targets, filters, opts) {
+        const current = targets.filter((target) => target !== oldUrl);
+        const result = current.length ? await real.requestWithDeadline(current, filters, opts)
+          : { events: [], timedOut: false, eosedRelays: [], silentRelays: [] };
+        return targets.includes(oldUrl)
+          ? { ...result, timedOut: true, silentRelays: [...result.silentRelays, oldUrl] }
+          : result;
+      } } };
+    };
+    const result = await rebuildAccountForRelays({ teardown: async () => {} }, input, silentSet === 'configured' ? [relayUrl] : [oldUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    opened.push(result.bootstrap.account);
+    expect(result.bootstrap.account.ensure.inboxRelayList).toBe('failed');
+    expect(result.inboxRelayListFailure?.error).toEqual(expect.objectContaining({ message: 'Inbox relay list lookup did not complete' }));
+    expect(inboxStart!).toHaveBeenCalledTimes(1);
+    expect(inboxStop!).not.toHaveBeenCalled();
+    const lookup = await result.bootstrap.account.transport.requestWithDeadline([...input.relays], {
+      kinds: [10050], authors: [result.bootstrap.account.handle.pubkey],
+    }, { timeoutMs: 500 });
+    expect(lookup.timedOut).toBe(true);
+    expect(b.storedEvents.filter((event) => event.kind === 10050)).toEqual([existing]);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+  }
+}, 20_000);
+
+it('retains account-scoped discovery across A-to-B rebuild and a cold boot, receiving on foreign C', async () => {
+  const b = new FakeRelay();
+  const c = new FakeRelay();
+  const bUrl = await b.start();
+  const cUrl = await c.start();
+  const records = new Map<string, string[]>();
+  const discoverySourcesStore = {
+    load: (pubkey: string) => records.get(pubkey) ?? [],
+    save: (pubkey: string, relays: readonly string[]) => { records.set(pubkey, [...relays]); },
+  };
+  const persistence = createMemoryPersistence();
+  try {
+    const foreign = await createAppSigner(SECRET_A).signEvent({
+      kind: 10050, created_at: Math.floor(Date.now() / 1000), content: '', tags: [['relay', cUrl]],
+    });
+    relay.publish(foreign);
+    const old = await boot({ ...baseInput(SECRET_A, persistence), discoverySourcesStore, inboxRelayList });
+    const result = await rebuildAccountForRelays(old, {
+      ...baseInput(SECRET_A, persistence), relays: [bUrl], discoverySourcesStore, inboxRelayList,
+    }, [relayUrl]);
+    if (result.bootstrap.status !== 'ready') throw new Error('Rebuild failed');
+    expect(result.bootstrap.account.ensure.inboxRelayList).toBe('ok');
+    await result.bootstrap.account.teardown();
+
+    const seen: string[] = [];
+    const resolved: string[] = [];
+    const coldInput: BootstrapInput = { ...baseInput(SECRET_A, persistence), relays: [bUrl], discoverySourcesStore, inboxRelayList };
+    coldInput.inboxHandlers.inviteContext = (rumor) => { seen.push(rumor.content); };
+    const openStores = coldInput.seams!.openStores!;
+    coldInput.onAccountResolved = async (pubkey) => { resolved.push(pubkey); };
+    coldInput.seams!.openStores = (pubkey) => {
+      expect(resolved).toEqual([pubkey]);
+      return openStores(pubkey);
+    };
+    const cold = await boot(coldInput);
+    expect(cold.ensure.inboxRelayList).toBe('ok');
+    expect(records.get(cold.handle.pubkey)).toEqual([relayUrl, bUrl]);
+    const sender = await boot({ ...baseInput(SECRET_B), discoverySourcesStore });
+    expect(records.get(sender.handle.pubkey)).toEqual([relayUrl]);
+    const draft = { pubkey: sender.handle.pubkey, kind: 21064, created_at: Math.floor(Date.now() / 1000), content: 'cold C delivery', tags: [] as string[][] };
+    expect(await sender.handle.client.extensions.sendInboxRumor({
+      to: cold.handle.pubkey, rumor: { ...draft, id: getEventHash(draft) },
+    })).toMatchObject({ status: 'delivered', relays: [cUrl] });
+    await expect.poll(() => seen, { timeout: 10_000 }).toEqual(['cold C delivery']);
+    expect(c.storedEvents.filter((event) => event.kind === 1059)).toHaveLength(1);
+    expect([relay, b].flatMap((r) => r.storedEvents).filter((event) => event.kind === 1059)).toEqual([]);
+    expect(relay.storedEvents.filter((event) => event.kind === 10050 && event.pubkey === cold.handle.pubkey)).toEqual([foreign]);
+    expect(b.storedEvents.filter((event) => event.kind === 10050 && event.pubkey === cold.handle.pubkey)).toEqual([]);
+  } finally {
+    for (const account of opened.splice(0)) await account.teardown();
+    await b.stop();
+    await c.stop();
+  }
+}, 25_000);
+
+it('does not publish on cold boot when a saved discovery source gives only a partial lookup', async () => {
+  const silent = 'wss://silent-discovery.example';
+  const persistence = createMemoryPersistence();
+  const records = new Map<string, string[]>();
+  const discoverySourcesStore = {
+    load: (pubkey: string) => records.get(pubkey) ?? [],
+    save: (pubkey: string, relays: readonly string[]) => { records.set(pubkey, [...relays]); },
+  };
+  const pubkey = await createAppSigner(SECRET_A).getPublicKey();
+  records.set(pubkey, [silent]);
+  const input: BootstrapInput = { ...baseInput(SECRET_A, persistence), discoverySourcesStore, inboxRelayList, onError: () => {} };
+  input.seams!.createTransport = (relays) => {
+    const network = createClientTransport({ relays });
+    const real = network.transport;
+    return { ...network, transport: { ...real, async requestWithDeadline(targets, filters, opts) {
+      const available = targets.filter((target) => target !== silent);
+      const result = available.length ? await real.requestWithDeadline(available, filters, opts)
+        : { events: [], timedOut: false, eosedRelays: [], silentRelays: [] };
+      return targets.includes(silent) ? { ...result, timedOut: true, silentRelays: [...result.silentRelays, silent] } : result;
+    } } };
+  };
+  const account = await boot(input);
+  expect(account.ensure.inboxRelayList).toBe('failed');
+  expect(relay.storedEvents.filter((event) => event.kind === 10050 && event.pubkey === pubkey)).toEqual([]);
+}, 20_000);

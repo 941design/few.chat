@@ -20,13 +20,7 @@
     "app/tests/unit/marmot/client/bootstrap.harness.test.ts",
     "app/tests/unit/marmot/client/importSafety.test.ts"
   ],
-  "tests_added": {
-    "unit": "historyBackend.test.ts (44: AC-HIST-1..7, AC-IDEM-1/2, AC-WDR-4, kind gate, fail-loud port)",
-    "property": "historyBackend.model.test.ts (1 test, 150 seeded random op sequences vs a model)",
-    "real_idb": "historyStore.realIdb.test.ts (7, fake-indexeddb: key order vs seq order, reload sweep)",
-    "structural": "history.structural.test.ts (5: no update(), no rumor.pubkey, import boundary)",
-    "harness": "historyWithdraw.harness.test.ts (4: AC-WDR-5 fork withdraw, A1 retry, re-entrancy enqueue-last documentation)"
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 6709,
     "final": 6785
@@ -66,5 +60,12 @@
   },
   "modules_touched": [
     "history"
-  ]
+  ],
+  "legacy_tests_added": {
+    "unit": "historyBackend.test.ts (44: AC-HIST-1..7, AC-IDEM-1/2, AC-WDR-4, kind gate, fail-loud port)",
+    "property": "historyBackend.model.test.ts (1 test, 150 seeded random op sequences vs a model)",
+    "real_idb": "historyStore.realIdb.test.ts (7, fake-indexeddb: key order vs seq order, reload sweep)",
+    "structural": "history.structural.test.ts (5: no update(), no rumor.pubkey, import boundary)",
+    "harness": "historyWithdraw.harness.test.ts (4: AC-WDR-5 fork withdraw, A1 retry, re-entrancy enqueue-last documentation)"
+  }
 }

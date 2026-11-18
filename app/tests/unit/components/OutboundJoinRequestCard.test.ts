@@ -149,7 +149,7 @@ describe('groups.tsx — OutboundJoinRequestCard wiring', () => {
 
   it('the list-render condition includes outboundRecords.length > 0 alongside groups.length > 0', () => {
     const listMatch = GROUPS_PAGE_SOURCE.match(
-      /\{ready && \(groups\.length > 0[^)]*\)[^(]*\(/,
+      /\(ready \|\| waitingForLease\) && \(groups\.length > 0[^)]*\)/,
     );
     expect(listMatch).not.toBeNull();
     expect(listMatch?.[0]).toMatch(/outboundRecords\.length > 0/);

@@ -1,0 +1,42 @@
+{
+  "story_id": "S14",
+  "status": "done",
+  "remediation_rounds": 1,
+  "files_created": [
+    "app/src/lib/marmot/membership/removeMember.ts",
+    "app/src/lib/marmot/membership/cancelInvitation.ts",
+    "app/src/lib/marmot/membership/setAdmins.ts",
+    "app/src/lib/marmot/membership/renameGroup.ts",
+    "app/tests/unit/marmot/membership/adminOps.test.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/membership/index.ts",
+    "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+    "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts",
+    "app/tests/unit/marmot/membership/leave.harness.test.ts"
+  ],
+  "modules_touched": [
+    "membership",
+    "handlers"
+  ],
+  "tests_added": {
+    "unit": 6,
+    "harness": 1
+  },
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "typecheck": "tsc -p tsconfig.tests-marmot.json --noEmit passed",
+    "unit": "82 focused unit tests passed",
+    "harness": "group administration test in leave.harness.test.ts passed with FakeRelay bound to loopback",
+    "pending": "S18 wires the operations and row-captured inviteeRef. Named browser checks remain in the integrated gate."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol accepted after stale-reference and cleanup-failure fixes",
+    "adversarial": "GPT-6 Astra clean. Independently ran 82 focused tests, administration harness and typecheck."
+  }
+}

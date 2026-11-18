@@ -59,7 +59,7 @@ function purgerFixture(overrides: Partial<PurgeLocalGroupDeps> = {}) {
   return { purger, trace };
 }
 
-const invitation = { id: 'inv-1', groupId: G, sponsorAccount: SPONSOR, sponsors: [SPONSOR], keyPackageRef: 'kp', receivedAt: 1 };
+const invitation = { id: 'inv-1', groupId: G, sponsorAccount: SPONSOR, sponsors: [SPONSOR], keyPackageRef: 'kp', receivedAt: Date.now() };
 
 function actionsFixture(purger: { withGroupLock: never } | object, accept: () => Promise<unknown>) {
   return createInvitationActions({
@@ -133,6 +133,25 @@ describe('purge started AFTER the accept began waits for the accept', () => {
 });
 
 describe('accept started DURING a purge waits for the purge', () => {
+  it('checks automatic consent inside the group lock before calling the library', async () => {
+    const { purger } = purgerFixture();
+    const gate = deferred();
+    const lock = purger.withGroupLock(G, () => gate.promise);
+    const accept = vi.fn(async () => ({ id: G }));
+    let currentConsent = true;
+    const verify = vi.fn(() => currentConsent);
+    const accepted = actionsFixture(purger, accept).accept(invitation.id, verify);
+    const rejected = expect(accepted).rejects.toThrow();
+    await settleMicrotasks();
+    expect(verify).not.toHaveBeenCalled();
+    currentConsent = false;
+    gate.resolve();
+    await lock;
+    await rejected;
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(accept).not.toHaveBeenCalled();
+  });
+
   it('actions.accept: the library accept() is not called until the purge finished', async () => {
     const gate = deferred();
     const { purger, trace } = purgerFixture({ clearMessages: async () => gate.promise });
@@ -157,11 +176,15 @@ describe('accept started DURING a purge waits for the purge', () => {
     const actions = actionsFixture(purger, accept);
     const jobs: Array<() => Promise<void>> = [];
     const auto = createAutoAccept({
+      accountPubkey: OWN,
+      assertLease: () => {},
       view: { refresh: async () => [invitation] as never, scheduleRefresh: () => undefined },
       actions,
       enqueue: (job) => void jobs.push(job),
       outbound: {
-        loadUnexpiredForAdmin: async () => [{ nonce: 'n1', adminPubkeyHex: SPONSOR, groupName: 'Club' }],
+        loadUnexpiredForAdmin: async () => [{ accountPubkey: OWN, nonce: 'n1', adminPubkeyHex: SPONSOR, groupName: 'Club', sentAt: invitation.receivedAt - 1 }],
+        claim: async () => ({ kind: 'acquired', token: 'claim' }),
+        releaseClaim: async () => false,
         consume: async () => undefined,
       },
       purge: purger,
@@ -215,10 +238,12 @@ describe('the exclusion port is REQUIRED (it cannot be silently disabled)', () =
   });
   it('createAutoAccept without `purge` (or without purge.whenPurged) throws', () => {
     const deps = {
+      accountPubkey: OWN,
+      assertLease: () => {},
       view: { refresh: async () => [], scheduleRefresh: () => undefined },
       actions: { accept: async () => ({}) as never },
       enqueue: () => undefined,
-      outbound: { loadUnexpiredForAdmin: async () => [], consume: async () => undefined },
+      outbound: { loadUnexpiredForAdmin: async () => [], claim: async () => ({ kind: 'unavailable' as const }), releaseClaim: async () => false, consume: async () => undefined },
       groupNameOf: () => undefined,
     };
     expect(() => createAutoAccept(deps as never)).toThrow(/purge/);

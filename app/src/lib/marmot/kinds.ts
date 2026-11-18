@@ -12,30 +12,17 @@
  * Pure: no React, no context imports (AC-BOUND-1).
  */
 import { RUMOR_KINDS } from '@941design/marmot';
+import { APP_INBOX_KINDS, APP_RUMOR_KINDS } from './kindRegistryInputs';
 
-/** App kinds carried as MLS application rumors inside groups. */
-export const APP_RUMOR_KINDS = [0, 5, 7, 9, 10, 11, 12, 30] as const;
+export { APP_INBOX_KINDS, APP_RUMOR_KINDS } from './kindRegistryInputs';
 
-/**
- * App kinds of gift-wrapped rumors. Join request (21059) and invite context (21064)
- * travel over the library inbox (`sendInboxRumor`); pairing ack (21060) and DM
- * profile (21061/21062) travel over the NDK DM plane.
- */
-export const APP_INBOX_KINDS = {
-  joinRequest: 21059,
-  pairingAck: 21060,
-  dmProfile: [21061, 21062],
-  /** D3 invite-context rumor (`{groupId, name}`); deliberately not 21063. */
-  inviteContext: 21064,
-} as const;
-
-/** Kinds that were used by earlier designs and must never be sent or handled again. */
+/** Kinds retired by the app. */
 export const RETIRED_KINDS = [13, 21063] as const;
 
 /** Kinds reserved by the library (values of `RUMOR_KINDS`). */
 export const RESERVED_KINDS: readonly number[] = Object.values(RUMOR_KINDS);
 
-export type KindRegistryInputs = {
+type KindRegistryInputs = {
   appRumorKinds: readonly number[];
   appInboxKinds: readonly number[];
   retiredKinds: readonly number[];

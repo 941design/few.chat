@@ -1,0 +1,17 @@
+{
+  "consumer_sha": "5311488",
+  "typecheck": {
+    "command": "make test-unit (tsc stage)",
+    "outcome": "passed"
+  },
+  "tests": {
+    "command": "make ensure-deps && cd app && npx vitest run tests/unit/marmot/membership tests/unit/marmot/handlers/groupRumorDispatch.test.ts --maxWorkers=2",
+    "observed_unit_tests_passed": 236,
+    "log": "/tmp/quizzl-s14-before.log",
+    "note": "Existing non-harness files finished before edits. The leave harness had also started and was still running."
+  },
+  "lint": {
+    "outcome": "not run",
+    "note": "No lint target in the baseline command."
+  }
+}

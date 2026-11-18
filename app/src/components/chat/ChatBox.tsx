@@ -97,6 +97,8 @@ function isGrouped(prev: ChatMessage, curr: ChatMessage): boolean {
 }
 
 type ChatBoxProps = {
+  rowStatuses?: Map<string, 'sending' | 'failed' | 'confirmed'>;
+  retryMessage?: (id: string) => Promise<void>;
   threadId: string;
   pubkey: string;
   messages: ChatMessage[];
@@ -180,6 +182,8 @@ type ChatBoxProps = {
 };
 
 export default function ChatBox({
+  rowStatuses,
+  retryMessage,
   threadId,
   pubkey,
   messages,
@@ -388,7 +392,6 @@ export default function ChatBox({
       setImageSendFailed(false);
       setImageTooLarge(false);
       try {
-        const { ImageTooLargeError } = await import('@/src/lib/media/imageProcessing');
         await sendImageMessage(attachedFile, caption);
         removeAttachment();
       } catch (err) {
@@ -953,6 +956,12 @@ export default function ChatBox({
                       )}
                     </Flex>
 
+                    {isSelf && rowStatuses?.get(msg.id) === 'failed' && retryMessage && (
+                      <Box as="button" fontSize="xs" color="red.500" data-testid={`message-retry-${msg.id}`}
+                        onClick={() => void retryMessage(msg.id).catch(() => {})}>
+                        {copy.groups.messageSendFailed} · {copy.groups.imageRetry}
+                      </Box>
+                    )}
                     {/* Reaction badge row — real implementation (AC-49, story-08) */}
                     {aggregates.length > 0 && onReact && reactable && (
                       <ReactionBadgeRow

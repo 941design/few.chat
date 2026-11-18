@@ -33,18 +33,14 @@ import type { GroupHistoryHandlers, GroupRumorInput, RetractInput } from '@/src/
 import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 
 /** Account-level facts a handler needs besides the rumor itself. */
-export interface GroupHandlerEnv {
+interface GroupHandlerEnv {
   /** The local account's pubkey (lowercase hex). */
   selfPubkeyHex: string;
   /** The group whose detail view is open, or null. */
   getActiveGroupId: () => string | null;
 }
 
-/**
- * One app kind's handler on the new sink path. `RumorHandler` (the old
- * dispatcher path) is kept on the same object until the old path is removed
- * (S22); the factories return `GroupKindHandler & RumorHandler`.
- */
+/** One kind of retained group rumor. */
 export interface GroupKindHandler {
   kind: number;
   /** Idempotent per `(groupId, eventId)`; throws on a durable failure. */
@@ -116,7 +112,7 @@ export function assertPorts(factory: string, deps: object, ports: readonly strin
   }
 }
 
-export interface GroupRumorDispatchOptions {
+interface GroupRumorDispatchOptions {
   handlers: readonly GroupKindHandler[];
   env: GroupHandlerEnv;
 }
@@ -146,6 +142,7 @@ export function createGroupRumorDispatch(options: GroupRumorDispatchOptions): Gr
     },
     async retract(input) {
       for (const handler of matching(input)) {
+        if (input.cancelled?.()) return;
         const key = handler.retractKey?.(input);
         if (key === undefined || typeof input.remaining !== 'function') {
           await handler.retract(input, env);
@@ -185,7 +182,7 @@ export interface GroupResyncTargets {
  * disband resync. `message` / `message-withdrawn` notifications are ignored —
  * message stores move from handler completion inside the history sink, and the
  * two paths are independent and may race, so a notification must never bump a
- * message store. Every other notification type is ignored here.
+ * message store. An own change lost to a fork refreshes the current views.
  *
  * `applied` kinds (library state-notification names): a member added/removed or
  * the local account removed -> members; a component change (group data: name
@@ -214,6 +211,12 @@ export function createGroupNotificationRouter(
       case 'leaf-removed':
       case 'leaf-removal-withdrawn':
         targets.members(groupId);
+        return;
+      case 'own-change-lost':
+        console.warn('[membership] own-change-lost', groupId, notification.change.type, notification.reason);
+        targets.members(groupId);
+        targets.admins(groupId);
+        targets.name(groupId);
         return;
       case 'group-disbanded':
         targets.disband(groupId);

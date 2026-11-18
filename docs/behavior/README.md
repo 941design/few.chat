@@ -16,13 +16,14 @@ behaviour. UI presentation rules live separately in
 - **[Groups](groups.md)** — creating a group; the admin and member roles and granting
   admin; bringing people in (invite by identity, invite links, join requests,
   cancelling an invitation, removing a member); joining (pull-only Welcomes, auto-accept,
-  onboarding); renaming; leaving and what it erases; removing a departed member; historical message processing; and the failure modes.
+  sponsor context, onboarding); renaming; leaving and membership removal; one active
+  tab per account; group history withdrawal and send retry.
 - **[Contacts & direct messages](contacts-and-direct-messages.md)** — adding a contact
   (by identity, by scanning a card), pending & issuer confirmation, blocking, keeping
-  profiles in sync, sending/receiving DMs, and the walled-garden reachability model
+  profiles in sync, group inbox versus DMs, and the walled-garden reachability model
   (ever-known peers).
 - **[Profiles & identity](profiles-and-identity.md)** — the auto-generated identity and
-  key packages; setting a name and avatar; the never-public privacy invariant; and how
+  key packages and inbox relay settings; setting a name and avatar; the never-public privacy invariant; and how
   profiles propagate (signed in-group, unsigned to contacts) and heal.
 - **[Reactions & emoji](reactions-and-emoji.md)** — reacting to messages in groups and DMs,
   the curated emoji set, aggregation, and the group (member-attested) vs DM (authenticated)
@@ -35,10 +36,10 @@ behaviour. UI presentation rules live separately in
   attribution.
 - **[Notifications & unread](notifications-and-unread.md)** — what raises the in-app
   notification indicator (messages, join requests, expiring links), the "never notify"
-  invariants (own/open/stranger/blocked/pending), and how unread counts stay honest.
+  invariants (own/open/stranger/blocked/pending), and unread counts after history withdrawal.
 - **[Backup & recovery](backup-and-recovery.md)** — the seed phrase that recovers your
-  identity, the encrypted relay backup of app state, how direct-message history is re-fetched
-  from relays, and what does and does not come back.
+  identity, encrypted settings and own-profile recovery, and re-fetching direct-message
+  history from relays. Group membership and history stay outside recovery.
 
 ## Not covered
 

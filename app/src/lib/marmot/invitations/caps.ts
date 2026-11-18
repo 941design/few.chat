@@ -20,7 +20,8 @@
  * The result does not depend on the input order, and applying it to its own retained set (same `now`) yields no
  * excess (idempotent). `retained` is sorted oldest first.
  */
-import { GLOBAL_CAP, PER_INVITER_CAP } from '@/src/lib/pendingInvitations';
+const GLOBAL_CAP = 256;
+const PER_INVITER_CAP = 8;
 import { isKnownPeer } from '@/src/lib/knownPeers';
 
 /** Most pending invitations kept in total. */
@@ -31,18 +32,18 @@ export const PENDING_PER_INVITER_CAP: number = PER_INVITER_CAP;
 export const STRANGER_INVITATION_TTL_MS = 14 * 86_400_000;
 
 /** The fields the cap needs of an invitation. */
-export interface CappedInvitation {
+interface CappedInvitation {
   id: string;
   sponsorAccount: string;
   receivedAt: number;
 }
 
-export interface CapLimits {
+interface CapLimits {
   total: number;
   perInviter: number;
 }
 
-export const DEFAULT_CAP_LIMITS: CapLimits = { total: PENDING_TOTAL_CAP, perInviter: PENDING_PER_INVITER_CAP };
+const DEFAULT_CAP_LIMITS: CapLimits = { total: PENDING_TOTAL_CAP, perInviter: PENDING_PER_INVITER_CAP };
 
 export interface CapContext {
   /** True iff the sponsor (lowercase hex) is trusted. Evaluated once per invitation per call. */
@@ -55,7 +56,7 @@ export interface CapContext {
   ttlMs?: number;
 }
 
-export interface CapSplit<T> {
+interface CapSplit<T> {
   /** Kept, oldest first. */
   retained: T[];
   /** To be declined (expired strangers, per-inviter and total excess). */

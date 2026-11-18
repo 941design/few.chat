@@ -11,8 +11,8 @@
  * Last-member is tested before the admin rule (a last member is also a sole admin: admin-first ordering would
  * swallow the abandon case).
  *
- * TWIN-READ DISCIPLINE (kept from the pre-adoption `leaveGroupImpl` / `getLiveMemberPubkeys`): the roster accessors
- * (`members()`, `activeAdmins()`) are synchronous reads of in-memory state and throw on a corrupt state. Every read
+ * The roster accessors (`members()`, `activeAdmins()`) synchronously read
+ * in-memory state and can throw when it is corrupt. Every read
  * is guarded on its own (one corrupt accessor never hides the other), and the two consumers fail in OPPOSITE
  * directions on purpose. Do NOT unify them:
  *   - EXECUTION path (`decideLeave`): an unreadable roster is "unknown", never "sole member" and never "sole admin":
@@ -40,18 +40,18 @@ export interface RosterReadableGroup {
 }
 
 /** What a guarded read of the roster produced; `undefined` = unreadable (the accessor threw or answered garbage). */
-export interface RosterFacts {
+interface RosterFacts {
   members: readonly string[] | undefined;
   admins: readonly string[] | undefined;
 }
 
-export type LeaveDecision =
+type LeaveDecision =
   | { action: 'abandon'; reason: 'sole-member' | 'not-a-member' }
   | { action: 'blocked'; reason: 'last-admin' }
   /** `rosterKnown: false` = the member list was unreadable: the caller must not skip the local purge (twin-read rule). */
   | { action: 'leave'; rosterKnown: boolean };
 
-export type LeaveModalState = 'abandon' | 'blocked' | 'confirm';
+type LeaveModalState = 'abandon' | 'blocked' | 'confirm';
 
 const lower = (hex: string): string => hex.toLowerCase();
 

@@ -5,10 +5,10 @@
  * Testing convention (this repo has no jsdom / @testing-library / renderHook
  * precedent — see exploration.json findings.testing): the producer decision
  * and payload construction are extracted as pure/async functions
- * (buildInvitedAnnouncementContent, submitInviteWithMarker's extended
+ * (buildInvitedAnnouncementContent, submitInvite's extended
  * sendAnnouncement param) and exercised directly, mirroring
  * app/tests/unit/cards/inviteByCard.test.ts's existing pattern for this same
- * file's submitInvite/submitInviteWithMarker exports. `.test.ts`, not
+ * file's submitInvite exports. `.test.ts`, not
  * `.test.tsx` — no component render is needed or attempted (see result.json
  * for the documented deviation from the story's file-list name).
  *
@@ -64,10 +64,10 @@ Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, wri
 
 // ── Module imports (after mocks are set up) ────────────────────────────────
 
-const { submitInviteWithMarker, buildInvitedAnnouncementContent } = await import(
+const { submitInvite, buildInvitedAnnouncementContent } = await import(
   '@/src/components/groups/InviteMemberModal'
 );
-const { approveJoinRequestImpl } = await import('@/src/context/MarmotContext');
+
 import { parseStructured } from '@/src/lib/marmot/parseStructured';
 import type { PendingJoinRequest } from '@/src/lib/marmot/joinRequestStorage';
 
@@ -82,13 +82,6 @@ beforeEach(() => {
 });
 
 const GROUP_ID = 'group-under-test';
-
-function noopMarkerDeps() {
-  return {
-    markPendingDirectInvite: vi.fn(async () => {}),
-    clearPendingDirectInvite: vi.fn(async () => {}),
-  };
-}
 
 // ── buildInvitedAnnouncementContent — pure payload builder ─────────────────
 
@@ -138,9 +131,9 @@ describe('buildInvitedAnnouncementContent — pure invite_lifecycle payload buil
   });
 });
 
-// ── submitInviteWithMarker + sendAnnouncement — AC-PROD-1 ──────────────────
+// ── submitInvite + sendAnnouncement — AC-PROD-1 ──────────────────
 
-describe('submitInviteWithMarker — invited producer fires only on a successful direct invite (AC-PROD-1, DD-8)', () => {
+describe('submitInvite — invited producer fires only on a successful direct invite (AC-PROD-1, DD-8)', () => {
   it('posts the invited announcement with the exact payload AFTER inviteByNpub resolves {ok:true}', async () => {
     const pubkeyHex = makePubkeyHex();
     const callOrder: string[] = [];
@@ -161,11 +154,10 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
       });
     });
 
-    const result = await submitInviteWithMarker(
+    const result = await submitInvite(
       pubkeyHex,
       GROUP_ID,
       inviteByNpub,
-      noopMarkerDeps(),
       sendAnnouncement,
     );
 
@@ -178,11 +170,10 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
     const inviteByNpub = vi.fn(async () => ({ ok: true }));
     const sendAnnouncement = vi.fn(async () => {});
 
-    await submitInviteWithMarker(
+    await submitInvite(
       pubkeyHex.toUpperCase(),
       GROUP_ID,
       inviteByNpub,
-      noopMarkerDeps(),
       sendAnnouncement,
     );
 
@@ -194,11 +185,10 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
     const inviteByNpub = vi.fn(async () => ({ ok: false, error: 'no_key_package' }));
     const sendAnnouncement = vi.fn(async () => {});
 
-    const result = await submitInviteWithMarker(
+    const result = await submitInvite(
       pubkeyHex,
       GROUP_ID,
       inviteByNpub,
-      noopMarkerDeps(),
       sendAnnouncement,
     );
 
@@ -210,11 +200,10 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
     const inviteByNpub = vi.fn(async () => ({ ok: true }));
     const sendAnnouncement = vi.fn(async () => {});
 
-    const result = await submitInviteWithMarker(
+    const result = await submitInvite(
       'not-a-pubkey',
       GROUP_ID,
       inviteByNpub,
-      noopMarkerDeps(),
       sendAnnouncement,
     );
 
@@ -223,18 +212,17 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
     expect(sendAnnouncement).not.toHaveBeenCalled();
   });
 
-  it('is fire-and-forget: a rejecting sendAnnouncement does not reject submitInviteWithMarker or flip a successful result to failure', async () => {
+  it('is fire-and-forget: a rejecting sendAnnouncement does not reject submitInvite or flip a successful result to failure', async () => {
     const pubkeyHex = makePubkeyHex();
     const inviteByNpub = vi.fn(async () => ({ ok: true }));
     const sendAnnouncement = vi.fn(async () => {
       throw new Error('relay publish failed');
     });
 
-    const result = await submitInviteWithMarker(
+    const result = await submitInvite(
       pubkeyHex,
       GROUP_ID,
       inviteByNpub,
-      noopMarkerDeps(),
       sendAnnouncement,
     );
 
@@ -246,7 +234,7 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
     const pubkeyHex = makePubkeyHex();
     const inviteByNpub = vi.fn(async () => ({ ok: true }));
 
-    const result = await submitInviteWithMarker(pubkeyHex, GROUP_ID, inviteByNpub, noopMarkerDeps());
+    const result = await submitInvite(pubkeyHex, GROUP_ID, inviteByNpub);
 
     expect(result).toEqual({ ok: true });
   });
@@ -255,7 +243,7 @@ describe('submitInviteWithMarker — invited producer fires only on a successful
 // ── AC-PROD-2 — join-request/invite-link approval never emits invite_lifecycle ─
 //
 // approveJoinRequestImpl (MarmotContext.tsx) reuses inviteByNpub directly —
-// it never calls submitInvite/submitInviteWithMarker, which is where this
+// it never calls submitInvite, which is where this
 // story's producer lives. This is exercised two ways: (a) behaviorally,
 // confirming the REAL approveJoinRequestImpl's deps/outputs carry no
 // invite_lifecycle content, and (b) via a source-scan regression guard
@@ -302,45 +290,10 @@ function makeRequest(overrides: Partial<PendingJoinRequest> = {}): PendingJoinRe
 }
 
 describe('AC-PROD-2: approving a join-request (approveJoinRequestImpl / inviteByNpub) never emits invite_lifecycle', () => {
-  it('behavioral: approveJoinRequestImpl completes successfully with no invite_lifecycle content anywhere in its dependency calls', async () => {
-    const inviteByNpub = vi.fn(async () => ({ ok: true }) as { ok: boolean; error?: string });
-    const deps = {
-      inviteByNpub,
-      pubkeyToNpub: vi.fn((pubkeyHex: string) => `npub-${pubkeyHex}`),
-      deletePendingJoinRequest: vi.fn(async () => {}),
-      incrementInviteLinkUsage: vi.fn(async () => {}),
-      decrementJoinRequest: vi.fn(),
-      filterPendingRequest: vi.fn(),
-      mergeMemberProfile: vi.fn(async () => true),
-      bumpProfileVersion: vi.fn(),
-    };
-    const request = makeRequest();
-
-    const result = await approveJoinRequestImpl(deps, request);
-
-    expect(result).toEqual({ ok: true });
-    // inviteByNpub — the only network-facing call in this flow — receives
-    // exactly (groupId, npub); there is no side channel through which an
-    // invite_lifecycle payload could ride along.
-    expect(inviteByNpub).toHaveBeenCalledTimes(1);
-    expect(inviteByNpub).toHaveBeenCalledWith(request.groupId, `npub-${request.pubkeyHex}`);
-    for (const call of inviteByNpub.mock.calls) {
-      for (const arg of call) {
-        expect(String(arg)).not.toMatch(/invite_lifecycle/);
-      }
-    }
-  });
-
-  it('source-scan: inviteByNpub (MarmotContext.tsx, shared with the direct-invite flow) never constructs an invite_lifecycle payload (DD-8)', () => {
-    const source = fs.readFileSync(path.join(APP_ROOT, 'src', 'context', 'MarmotContext.tsx'), 'utf8');
-    const body = extractFunctionBody(source, 'const inviteByNpub = useCallback(');
-    expect(body).not.toMatch(/invite_lifecycle/);
-  });
-
-  it('source-scan: approveJoinRequestImpl never constructs an invite_lifecycle payload (DD-8) — only the pre-existing member_admitted announcement, fired by its caller, survives for this flow', () => {
-    const source = fs.readFileSync(path.join(APP_ROOT, 'src', 'context', 'MarmotContext.tsx'), 'utf8');
-    const body = extractFunctionBody(source, 'export async function approveJoinRequestImpl(');
-    expect(body).not.toMatch(/invite_lifecycle/);
+  // D8 retires the old shared inviteByNpub and context approval implementation.
+  it('the current approval does not construct an invite lifecycle announcement', () => {
+    const source = fs.readFileSync(path.join(APP_ROOT, 'src', 'lib', 'marmot', 'joinRequestApproval.ts'), 'utf8');
+    expect(source).not.toMatch(/invite_lifecycle/);
   });
 
   it("source-scan: pages/groups.tsx's handleApproveRequest still fires member_admitted on success, and does not also fire invite_lifecycle", () => {

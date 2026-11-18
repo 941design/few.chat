@@ -3,13 +3,14 @@
  * 7 days + 1 ms; sponsor validation on invitation arrival; deletion on accept, decline and expiry; persistence
  * that does not depend on the storage's key order.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CONTEXT_TTL_MS,
   HELD_PER_SENDER_CAP,
   HELD_TOTAL_CAP,
   TOMBSTONE_CAP,
   bindInviteContextToPendingView,
+  buildInvitationCardViewModels,
   createInviteContextStore,
   withInviteContextCleanup,
   type InvitationRef,
@@ -38,10 +39,16 @@ describe('constants', () => {
 });
 
 describe('held caps (no matching invitation): oldest evicted first', () => {
-  it('9 contexts from one sender retain exactly the newest 8 (the oldest is evicted)', async () => {
+  it('9 contexts from one sender retain exactly the newest 8 even if the evicted ID is redelivered after reload', async () => {
     const s = setup();
     for (let i = 0; i < 9; i++) await s.store.add({ rumorId: `r${i}`, sender: hex(1), groupId: `0${i}`, name: `g${i}` });
     expect(s.ids()).toEqual(['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8']);
+    const evicted = { rumorId: 'r0', sender: hex(1), groupId: '00', name: 'g0' };
+    expect(await s.store.add(evicted)).toBe('duplicate');
+    const reopened = createInviteContextStore({ port: s.mem.port, now: () => s.clock.t, getPending: () => [] });
+    expect(await reopened.add(evicted)).toBe('duplicate');
+    expect(reopened.snapshot()).toEqual(s.store.snapshot());
+    expect(s.mem.saves).toHaveLength(9);
   });
 
   it('65 contexts over 9 senders (8 + 8 + ... + 1) retain exactly 64: the single oldest overall is evicted', async () => {
@@ -78,6 +85,44 @@ describe('held caps (no matching invitation): oldest evicted first', () => {
 });
 
 describe('expiry: 7 days (fake time)', () => {
+  it('updates an idle card and purges its stored name at the deadline, then cancels the next timer on disposal', async () => {
+    const clock = { t: 1_000 };
+    const mem = memoryPort();
+    const pending = [inv('1', 1, 'aa')];
+    let timer: { deadline: number; expire: () => Promise<void> } | undefined;
+    const store = createInviteContextStore({
+      port: mem.port,
+      now: () => clock.t,
+      getPending: () => pending,
+      scheduleExpiry: (delay, expire) => {
+        const scheduled = { deadline: clock.t + delay, expire };
+        timer = scheduled;
+        return () => { if (timer === scheduled) timer = undefined; };
+      },
+    });
+    const displayed: string[] = [];
+    store.subscribe(() => displayed.push(buildInvitationCardViewModels(pending, store.snapshot(), 'Invitation', clock.t)[0].displayName));
+    await store.add({ rumorId: 'old', sender: hex(1), groupId: 'aa', name: 'Club' });
+    clock.t += 10;
+    await store.add({ rumorId: 'new', sender: hex(2), groupId: 'bb', name: 'New' });
+    expect(displayed).toEqual(['Club', 'Club']);
+    clock.t = 1_000 + CONTEXT_TTL_MS;
+    expect(timer?.deadline).toBe(clock.t + 1);
+    expect(mem.stored?.map((r) => r.rumorId)).toEqual(['old', 'new']);
+    clock.t += 1;
+    await timer!.expire();
+    expect(displayed).toEqual(['Club', 'Club', 'Invitation']);
+    expect(mem.stored?.map((r) => r.rumorId)).toEqual(['new']);
+    const cancelled = timer!;
+    expect(cancelled.deadline).toBe(clock.t + 10);
+    store.stopExpiry();
+    expect(timer).toBeUndefined();
+    clock.t = cancelled.deadline;
+    await cancelled.expire();
+    expect(displayed).toEqual(['Club', 'Club', 'Invitation']);
+    expect(mem.stored?.map((r) => r.rumorId)).toEqual(['new']);
+  });
+
   it('kept at exactly 7 days, gone at 7 days + 1 ms (snapshot and persisted set after reconcile)', async () => {
     const s = setup();
     await s.store.add({ rumorId: 'old', sender: hex(1), groupId: 'aa', name: 'old' });
@@ -87,6 +132,84 @@ describe('expiry: 7 days (fake time)', () => {
     expect(s.ids()).toEqual([]); // lazily hidden
     await s.store.reconcile([]);
     expect(s.mem.stored).toEqual([]); // and purged from storage
+  });
+
+  it('retires an expired ID before deduping the arrival that first observes its expiry', async () => {
+    const s = setup();
+    const context = { rumorId: 'old', sender: hex(1), groupId: 'aa', name: 'Club' };
+    await s.store.add(context);
+    s.clock.t += CONTEXT_TTL_MS + 1;
+    expect(await s.store.add(context)).toBe('duplicate');
+    expect(s.ids()).toEqual([]);
+    expect(await s.mem.port.load()).toEqual({
+      records: [],
+      tombstones: [{ rumorId: context.rumorId, removedAt: s.clock.t }],
+    });
+  });
+
+  it.each(['recovers', 'disposes'])('backs off after an idle expiry save fails and %s', async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      const mem = memoryPort();
+      let unavailable = false;
+      const save = vi.fn<typeof mem.port.save>(async (records, tombstones) => {
+        if (unavailable) throw new Error('IDB unavailable');
+        await mem.port.save(records, tombstones);
+      });
+      const store = createInviteContextStore({
+        port: { ...mem.port, save },
+        now: Date.now,
+        getPending: () => [],
+        onError: vi.fn(),
+        scheduleExpiry: (delay, expire) => {
+          const timer = setTimeout(expire, delay);
+          return () => clearTimeout(timer);
+        },
+      });
+      const changed = vi.fn();
+      store.subscribe(changed);
+      const context = { rumorId: 'old', sender: hex(1), groupId: 'aa', name: 'Club' };
+      await store.add(context);
+      await vi.advanceTimersByTimeAsync(10);
+      await store.add({ ...context, rumorId: 'other', groupId: 'bb' });
+      unavailable = true;
+      await vi.advanceTimersByTimeAsync(CONTEXT_TTL_MS - 9);
+      const removedAt = Date.now();
+      expect(store.snapshot().map((r) => r.rumorId)).toEqual(['other']);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(store.snapshot()).toEqual([]);
+      expect(changed).toHaveBeenCalledTimes(4);
+      expect(mem.stored?.map((r) => r.rumorId)).toEqual(['old', 'other']);
+      expect(await store.add(context)).toBe('duplicate');
+      expect(save).toHaveBeenCalledTimes(3);
+
+      const backoff = [990, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000];
+      for (const [index, delay] of backoff.entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(save).toHaveBeenCalledTimes(index + 3);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(save).toHaveBeenCalledTimes(index + 4);
+      }
+
+      unavailable = false;
+      if (outcome === 'disposes') store.stopExpiry();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(save).toHaveBeenCalledTimes(backoff.length + 3);
+      await vi.advanceTimersByTimeAsync(1);
+      if (outcome === 'recovers') {
+        expect(save).toHaveBeenCalledTimes(backoff.length + 4);
+        expect(await mem.port.load()).toEqual({
+          records: [],
+          tombstones: [{ rumorId: 'old', removedAt }, { rumorId: 'other', removedAt: removedAt + 10 }],
+        });
+      } else {
+        expect(save).toHaveBeenCalledTimes(backoff.length + 3);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+      expect(changed).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('only the expired entry goes; a newer one survives', async () => {
@@ -121,6 +244,22 @@ describe('sponsor validation when the invitation arrives', () => {
     expect(await add(s, 2, 'a0', 'impostor')).toBe('dropped');
     expect(await add(s, 1, 'a0', 'sponsor')).toBe('stored');
     expect(s.store.snapshot().map((r) => [r.name, r.matched])).toEqual([['sponsor', true]]);
+  });
+
+  it.each([true, false])('retires sponsor-mismatch IDs even after the pending invitation leaves (pending on arrival %s)', async (pendingOnArrival) => {
+    const invitation = inv('1', 1, 'aa');
+    let pending = pendingOnArrival ? [invitation] : [];
+    const s = setup({ pending: () => pending });
+    const mismatch = { rumorId: 'mismatch', sender: hex(2), groupId: 'aa', name: 'Discard this name' };
+    expect(await s.store.add(mismatch)).toBe(pendingOnArrival ? 'dropped' : 'stored');
+    await s.store.reconcile([invitation]);
+    pending = [];
+    expect(await s.mem.port.load()).toEqual({
+      records: [],
+      tombstones: [{ rumorId: mismatch.rumorId, removedAt: s.clock.t }],
+    });
+    expect(await s.store.add(mismatch)).toBe('duplicate');
+    expect(s.ids()).toEqual([]);
   });
 
   it('a sender listed only in sponsors[] (not sponsorAccount) is accepted', async () => {
@@ -197,6 +336,7 @@ describe('dedupe and replacement', () => {
     expect(await s.store.add({ rumorId: 'dup', sender: hex(1), groupId: 'aa', name: 'first' })).toBe('duplicate');
     expect(s.ids()).toEqual(['dup']);
     expect(await s.store.add({ rumorId: 'dup2', sender: hex(1), groupId: 'aa', name: 'second' })).toBe('replaced');
+    expect(await s.store.add({ rumorId: 'dup', sender: hex(1), groupId: 'aa', name: 'first' })).toBe('duplicate');
     expect(s.store.snapshot().map((r) => r.name)).toEqual(['second']);
   });
 
@@ -235,12 +375,19 @@ describe('persistence', () => {
     expect(s.ids()).toEqual(['r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9']); // seq 1 (the true oldest) evicted
   });
 
-  it('load drops expired and corrupt persisted records', async () => {
+  it('load drops corrupt persisted records and durably retires expired IDs', async () => {
     const good: InviteContextRecord = { rumorId: 'ok', groupId: 'aa', sender: hex(1), name: 'ok', receivedAt: 1_000_000, seq: 2, matched: false };
     const expired = { ...good, rumorId: 'old', seq: 1, receivedAt: 1_000_000 - CONTEXT_TTL_MS - 1 };
     const s = setup({ initial: [expired, good, { nonsense: true } as never] });
     await s.store.load();
     expect(s.ids()).toEqual(['ok']);
+    expect(await s.mem.port.load()).toEqual({
+      records: [good],
+      tombstones: [{ rumorId: expired.rumorId, removedAt: s.clock.t }],
+    });
+    const reopened = createInviteContextStore({ port: s.mem.port, now: () => s.clock.t, getPending: () => [] });
+    expect(await reopened.add(expired)).toBe('duplicate');
+    expect(reopened.snapshot()).toEqual([good]);
   });
 
   it('a failing save is reported and the in-memory state still serves the card', async () => {
@@ -361,9 +508,10 @@ describe('tombstones: a discarded context does not come back on redelivery', () 
       await b.store.add({ rumorId: `d${i}`, sender: hex(1), groupId: 'a0', name: 'A' });
       await b.store.discard({ groupId: 'a0' });
     }
-    expect(await b.store.add({ rumorId: 'd0', sender: hex(1), groupId: 'a0', name: 'A' })).toBe('stored'); // forgotten (oldest)
-    await b.store.discard({ groupId: 'a0' });
-    expect(await b.store.add({ rumorId: `d${TOMBSTONE_CAP}`, sender: hex(1), groupId: 'a0', name: 'A' })).toBe('duplicate'); // newest kept
+    const reopened = createInviteContextStore({ port: b.mem.port, now: () => b.clock.t, getPending: () => [] });
+    expect(await reopened.add({ rumorId: 'd0', sender: hex(1), groupId: 'a0', name: 'A' })).toBe('stored'); // forgotten (oldest)
+    await reopened.discard({ groupId: 'a0' });
+    expect(await reopened.add({ rumorId: `d${TOMBSTONE_CAP}`, sender: hex(1), groupId: 'a0', name: 'A' })).toBe('duplicate'); // newest kept
   });
 });
 

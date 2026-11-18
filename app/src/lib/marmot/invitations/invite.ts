@@ -31,6 +31,7 @@
  */
 import { isMarmotError } from '@941design/marmot';
 import type { MarmotGroup, WelcomeOutcome } from '@941design/marmot';
+import { decode, mlsMessageDecoder, wireformats } from '@941design/marmot/mls';
 import type { NostrEvent } from '@941design/nostr-events/event';
 import { GroupOpError, type GroupOpOptions, type GroupOpQueue } from '../send';
 import type { KeyPackageLookup } from './keyPackageLookup';
@@ -42,6 +43,10 @@ export type InviteGroup = Pick<MarmotGroup, 'id' | 'synced' | 'invite' | 'leaves
 export interface InviteOutcome {
   outcome: WelcomeOutcome;
   keyPackageEventId: string;
+  /** Leaf signature key of the exact KeyPackage used by the commit. */
+  invitedLeafKey?: string;
+  /** The synced roster had no leaf of this account immediately before the successful Add. */
+  inviteeAbsentBeforeAdd?: true;
   /** Candidates offered to `group.invite` (1 = the newest was accepted). */
   attempts: number;
 }
@@ -59,6 +64,7 @@ export interface AlreadyMember {
 }
 
 export interface InviteOptions {
+  viaJoinRequest?: boolean;
   signal?: AbortSignal;
   /** Bound of the `synced()` wait of each attempt (queue default 30 s). */
   syncTimeoutMs?: number;
@@ -68,7 +74,7 @@ export interface KeyPackageInviter {
   inviteByPubkey: (group: InviteGroup, pubkey: string, opts?: InviteOptions) => Promise<InviteOutcome | NoUsableKeyPackage | AlreadyMember>;
 }
 
-export interface KeyPackageInviterDeps {
+interface KeyPackageInviterDeps {
   lookup: KeyPackageLookup;
   queue: Pick<GroupOpQueue, 'runCommit'>;
 }
@@ -87,6 +93,18 @@ function isCandidateRejection(error: unknown, candidateId: string): boolean {
   const details = error.details as { reason?: unknown; eventId?: unknown } | undefined;
   if (!CANDIDATE_REJECTION_REASONS.has(details?.reason)) return false;
   return details?.eventId === undefined || details.eventId === candidateId;
+}
+
+function invitedLeafKey(event: NostrEvent): string | undefined {
+  try {
+    const bytes = Uint8Array.from(atob(event.content), (byte) => byte.charCodeAt(0));
+    const message = decode(mlsMessageDecoder, bytes);
+    if (message?.wireformat === wireformats.mls_key_package) {
+      return Array.from(message.keyPackage.leafNode.signaturePublicKey, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 /** The abort of `signal`, in the one shape the caller handles. */
@@ -131,7 +149,8 @@ export function createKeyPackageInviter(deps: KeyPackageInviterDeps): KeyPackage
           if (outcomes === ALREADY_MEMBER) return { error: 'already-member' };
           const outcome = outcomes[0];
           if (!outcome) throw new Error('inviteByPubkey: group.invite returned no outcome for the one invitee');
-          return { outcome, keyPackageEventId: candidate.id, attempts };
+          const leafKey = invitedLeafKey(candidate);
+          return { outcome, keyPackageEventId: candidate.id, attempts, inviteeAbsentBeforeAdd: true, ...(leafKey ? { invitedLeafKey: leafKey } : {}) };
         } catch (error) {
           if (!isCandidateRejection(error, candidate.id)) throw error;
         }

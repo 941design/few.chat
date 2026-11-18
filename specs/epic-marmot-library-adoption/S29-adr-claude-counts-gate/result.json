@@ -1,0 +1,28 @@
+{
+  "story_id": "S29",
+  "status": "done",
+  "final_outcome": "accepted",
+  "modules_touched": [
+    "adr-and-shipping"
+  ],
+  "files_created": [
+    "docs/adr/ADR-013-consume-marmot-client-and-retained-history.md"
+  ],
+  "files_modified": [
+    "CLAUDE.md",
+    "Makefile",
+    "docs/adr/ADR-003-accept-last-writer-wins-for-mls-metadata-mutations-no-protocol-level-no-clobber-in-marmot-ts.md",
+    "docs/adr/ADR-012-implement-spec-mandated-sender-binding-in-fork-plus-signed-enum-meta-events.md"
+  ],
+  "remediation_rounds": 0,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "static": "ADR-013 supersedes the fork mechanism and preserves authenticated sender and rev-clock rules. Playwright discovers 72 non-relay and 372 relay tests.",
+    "browser": "The current static export passed a real Chromium group create, invite, accept and bidirectional message round trip in 9.2 seconds without development hooks.",
+    "latest": "Independent S29 review accepted AC-DOC-2, AC-DOC-3, AC-DOC-4 and AC-GATE-6. Its AC-GATE-3 condition was satisfied by the final canonical exit zero: 7,363 unit passes, one unit skip, 72 non-relay passes, 353 relay passes, 19 relay skips and no invalid browser bucket."
+  }
+}

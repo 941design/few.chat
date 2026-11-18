@@ -14,6 +14,8 @@ export interface InviteLink {
   nonce: string;
   /** Group this link belongs to */
   groupId: string;
+  /** Account that created the link; absent on records predating account scoping. */
+  ownerPubkey?: string;
   /** When the link was created (Unix ms) */
   createdAt: number;
   /**
@@ -82,10 +84,12 @@ export function buildNewInviteLink(params: {
   groupId: string;
   createdAt: number;
   label?: string;
+  ownerPubkey?: string;
 }): InviteLink {
   return {
     nonce: params.nonce,
     groupId: params.groupId,
+    ...(params.ownerPubkey ? { ownerPubkey: params.ownerPubkey } : {}),
     createdAt: params.createdAt,
     expiresAt: params.createdAt + DAY_MS,
     usageCount: 0,
@@ -321,10 +325,10 @@ export async function incrementInviteLinkUsage(nonce: string): Promise<void> {
  * or cleared between the caller's read and this write). The sweep uses the
  * return to avoid bumping the unread badge for a link that no longer exists.
  */
-export async function markInviteLinkExpiryNotified(nonce: string): Promise<boolean> {
+export async function markInviteLinkExpiryNotified(nonce: string, allowed: (link: InviteLink) => boolean = () => true): Promise<boolean> {
   return withNonceLock(nonce, async () => {
     const link = await get<InviteLink>(nonce, inviteLinkStore);
-    if (!link) return false;
+    if (!link || !allowed(link)) return false;
     await set(nonce, { ...link, expiryNotified: true }, inviteLinkStore);
     return true;
   });
@@ -335,10 +339,10 @@ export async function markInviteLinkExpiryNotified(nonce: string): Promise<boole
  * `usageCount`, and `expiresAt` unchanged. Silent no-op when `nonce` does not
  * resolve.
  */
-export async function markInviteLinkExpiryAcknowledged(nonce: string): Promise<void> {
+export async function markInviteLinkExpiryAcknowledged(nonce: string, allowed: (link: InviteLink) => boolean = () => true): Promise<void> {
   await withNonceLock(nonce, async () => {
     const link = await get<InviteLink>(nonce, inviteLinkStore);
-    if (!link) return;
+    if (!link || !allowed(link)) return;
     await set(nonce, { ...link, expiryAcknowledged: true }, inviteLinkStore);
   });
 }
@@ -451,13 +455,13 @@ let migrationInFlight: Promise<void> | null = null;
  * feeding it the freshly re-read record is sufficient to preserve any field
  * a concurrent writer already set.
  */
-async function runMigration(now: number): Promise<void> {
+async function runMigration(now: number, belongsToSession: (groupId: string) => boolean, allowed: (link: LegacyInviteLink) => boolean): Promise<void> {
   const all = await entries<string, LegacyInviteLink>(inviteLinkStore);
   await Promise.all(
     all.map(([nonce]) =>
       withNonceLock(nonce, async () => {
         const fresh = await get<LegacyInviteLink>(nonce, inviteLinkStore);
-        if (!fresh) return; // deleted concurrently — nothing to migrate
+        if (!fresh || !belongsToSession(fresh.groupId) || !allowed(fresh)) return;
         const migrated = migrateRecord(fresh, now);
         if (migrated) {
           await set(nonce, migrated, inviteLinkStore);
@@ -477,9 +481,9 @@ async function runMigration(now: number): Promise<void> {
  * startup calls) are deduplicated onto a single in-flight promise so two
  * simultaneous callers never walk the store independently.
  */
-export function migrateInviteLinks(now: number): Promise<void> {
+export function migrateInviteLinks(now: number, belongsToSession: (groupId: string) => boolean = () => true, allowed: (link: LegacyInviteLink) => boolean = () => true): Promise<void> {
   if (migrationInFlight) return migrationInFlight;
-  const run = runMigration(now).finally(() => {
+  const run = runMigration(now, belongsToSession, allowed).finally(() => {
     migrationInFlight = null;
   });
   migrationInFlight = run;

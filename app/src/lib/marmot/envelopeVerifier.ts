@@ -33,7 +33,7 @@
 import { verifyEvent } from 'nostr-tools/pure';
 
 /** Structural shape every forwarded envelope's inner content must carry. */
-export interface SignedInnerEvent {
+interface SignedInnerEvent {
   id: string;
   pubkey: string;
   created_at: number;
@@ -52,7 +52,7 @@ export interface SignedInnerEvent {
  */
 export const GROUP_BINDING_TAG_NAME = 'g';
 
-export interface GroupBindingPolicy {
+interface GroupBindingPolicy {
   /**
    * false: context-free / identity-scoped kind (e.g. profile, kind 0) — no
    * group-tag check is performed; the `groupId` argument to verify() is
@@ -72,9 +72,9 @@ export interface ForwardedKindSpec {
   binding: GroupBindingPolicy;
 }
 
-export type VerifyFailureReason = 'malformed' | 'invalid-signature' | 'wrong-kind' | 'group-mismatch';
+type VerifyFailureReason = 'malformed' | 'invalid-signature' | 'wrong-kind' | 'group-mismatch';
 
-export type VerifyResult =
+type VerifyResult =
   | { ok: true; event: SignedInnerEvent }
   | { ok: false; reason: VerifyFailureReason };
 
@@ -168,19 +168,8 @@ export interface OneShotGate {
 }
 
 /**
- * Fresh one-shot consumption gate. A plain Set that only grows for the
- * lifetime of the returned instance — callers own that lifetime. Production
- * wiring (profileHandler.ts) creates ONE instance per handler construction,
- * mirroring applicationRumorDispatcher.ts's per-subscribe lifecycle (one
- * instance per subscribe), so state genuinely accumulates across deliveries
- * within a subscription rather than resetting per call.
- *
- * Deliberately UNBOUNDED — unlike the dispatcher's own seen-rumor-id LRU
- * (applicationRumorDispatcher.ts, capacity-evicting), this Set never evicts.
- * An LRU here could drop an old inner-event id and let a late duplicate
- * re-apply, breaking exact one-shot semantics. Growth is bounded in practice
- * by the count of distinct signed-profile inner-event ids seen during a
- * subscription — small, since profile events are infrequent.
+ * Track consumed signed inner-event IDs for the lifetime of the gate.
+ * Retain each ID so late duplicates cannot be applied after eviction.
  */
 export function createOneShotGate(): OneShotGate {
   const consumed = new Set<string>();

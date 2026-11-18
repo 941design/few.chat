@@ -1,7 +1,7 @@
 // E2E: Admin Role Management for Groups
 //
 // This file covers the NEW admin model: creator-only admin, explicit "Make admin" grant,
-// non-admin join, last-admin leave protection, and pending-removal badge persistence.
+// non-admin join, last-admin leave protection, and leave liveness.
 //
 // NOTE on legacy groups (§4.4 of the spec):
 //   In groups created before this feature shipped, every member was auto-promoted to admin.
@@ -352,17 +352,6 @@ test.describe.serial('Scenario 2 – Last-admin leave is blocked; second admin u
 //   after B leaves would require a 3rd context (USER_C), which multiplies timing risk.
 //   The lighter assertion is used here; see result.json for rationale.
 //
-// AC-PENDING-5 — "pending-removal badge survives a page reload" — is covered by
-//   MANUAL VALIDATION (see acceptance-criteria.md MV-4), NOT an automated e2e test.
-//   Rationale: the badge only PERSISTS when no admin is online to finalize the
-//   removal (an online admin's fireAutoCommit clears it within the debounce window),
-//   yet observing the badge and reloading requires an ONLINE viewer. In a 2-user
-//   group (A admin, B member) the only non-admin is the leaver, so no online
-//   non-admin observer exists. A faithful automated test needs a 3rd member
-//   (offline admin + online non-admin observer), which the project's e2e
-//   reliability posture deliberately avoids (3-context MLS-over-relay timing). The
-//   production logic is verified by the S6 integration examiner; persistence is
-//   spot-checked manually. (Product-owner decision, 2026-06-12.)
 // ---------------------------------------------------------------------------
 
 test.describe.serial('Scenario 3 – Pending-removal badge and leave liveness', () => {
@@ -420,9 +409,5 @@ test.describe.serial('Scenario 3 – Pending-removal badge and leave liveness', 
     await expect(pageB.getByText(GROUP_NAME)).not.toBeVisible({ timeout: 15_000 });
   });
 
-  // AC-PENDING-5 (badge survives reload) is covered by manual validation (MV-4) — see the
-  // header comment above. It is intentionally NOT an automated test here: faithfully
-  // asserting badge PERSISTENCE requires an offline admin (so nothing finalizes) plus an
-  // online non-admin observer, which is impossible in this 2-user group and is deliberately
-  // not implemented as a flakier 3-context test.
+
 });

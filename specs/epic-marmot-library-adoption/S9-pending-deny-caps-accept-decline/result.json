@@ -1,7 +1,7 @@
 {
   "story_id": "S9",
   "status": "done",
-  "final_outcome": "completed",
+  "final_outcome": "accepted_with_caveats",
   "completed_at": "2026-11-17T20:00:00Z",
   "files_created": [
     "app/src/lib/marmot/invitations/pendingView.ts",
@@ -23,10 +23,7 @@
     "specs/epic-marmot-library-adoption/architecture.md"
   ],
   "adjacent_fixes": [],
-  "tests_added": {
-    "unit": "caps.test.ts (26): trust-ordered retention incl. all ruling cases, TTL boundary, retention stability, properties, view retention behaviour; denyLayer.test.ts (7); pendingView.test.ts (29): ports, re-entrancy, snapshot/events, actions incl. decline-mirrors-accept, explicit seeding, queued-flag reset, structural scan.",
-    "harness": "pendingDeny.harness.test.ts (3): AC-INV-2; AC-INV-3 (+ double user decline: exactly one extra wrap); AC-BLK-1 (+ full relay delta pinned to the key-package rotation; onError collected and asserted empty in teardown)."
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 7682,
     "final": 7721
@@ -77,5 +74,10 @@
     "commits_made": [],
     "absorbed_from": [],
     "lead_clarifications": []
-  }
+  },
+  "legacy_tests_added": {
+    "unit": "caps.test.ts (26): trust-ordered retention incl. all ruling cases, TTL boundary, retention stability, properties, view retention behaviour; denyLayer.test.ts (7); pendingView.test.ts (29): ports, re-entrancy, snapshot/events, actions incl. decline-mirrors-accept, explicit seeding, queued-flag reset, structural scan.",
+    "harness": "pendingDeny.harness.test.ts (3): AC-INV-2; AC-INV-3 (+ double user decline: exactly one extra wrap); AC-BLK-1 (+ full relay delta pinned to the key-package rotation; onError collected and asserted empty in teardown)."
+  },
+  "legacy_final_outcome": "completed"
 }

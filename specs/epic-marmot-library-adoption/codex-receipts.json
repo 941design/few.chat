@@ -1,0 +1,7 @@
+{
+  "e2e": {
+    "tree": "0cbcb1c07363e3f2bfb2e760f629730a087f768dbf8ebc5c9bb5f7ca8c9ef3dd",
+    "outcome": "fired_pass",
+    "detail": "Final make build and canonical make test exited zero. Static Chromium round trip passed. Vitest 7363 passed and 1 skipped. Chromium 72 non-relay passed and 353 relay passed with 19 baseline skips. No INVALID browser run."
+  }
+}

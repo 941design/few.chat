@@ -5,7 +5,7 @@
  * - Pure modules under src/lib/marmot/** never import src/context/** (React
  *   contexts). New module directories additionally never import 'react'.
  * - The client module's transitive import graph reaches no NDK, no
- *   @internet-privacy/marmot-ts, no ts-mls, and none of the old NDK-transport
+ *   the retired fork, no ts-mls, and none of the old NDK-transport
  *   modules; it never uses idb-keyval.
  *
  * Extend NEW_MODULE_DIRS as later stories add module directories.
@@ -113,9 +113,10 @@ describe('client module import graph (AC-TRANS-1, boundary rules)', () => {
   });
 
   it('stays inside src/lib/marmot/client (imports no old flow module, no ndkClient)', () => {
-    // The AppKinds registry (kinds.ts) is the one sanctioned module outside client/.
+    // The pure AppKinds registry and its declaration-only inputs are the one shared seam outside client/.
+    const registry = new Set(['kinds.ts', 'kindRegistryInputs.ts'].map((file) => join(MARMOT_DIR, file)));
     const outside = files.filter(
-      (f) => !f.startsWith(join(MARMOT_DIR, 'client') + '/') && f !== join(MARMOT_DIR, 'kinds.ts'),
+      (f) => !f.startsWith(join(MARMOT_DIR, 'client') + '/') && !registry.has(f),
     );
     expect(outside.map((f) => relative(APP_ROOT, f))).toEqual([]);
   });

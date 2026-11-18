@@ -1,25 +1,13 @@
 /**
  * Relay backup — payload assembly, serialization, encryption, and publishing.
  *
- * Collects all local app state (localStorage + IDB) into a single
- * BackupPayload object, encrypts it with NIP-44 self-encryption,
+ * Collects settings and the account profile from localStorage,
+ * encrypts them with NIP-44 self-encryption,
  * and publishes/fetches it as a kind 30078 replaceable event.
  */
 
 import { STORAGE_KEYS } from '@/src/types';
 import { getEffectiveRelays } from '@/src/lib/relay';
-import {
-  loadAllGroups,
-  loadMemberProfiles,
-  saveGroup,
-  saveMemberProfiles,
-  IdbGroupStateBackend,
-} from '@/src/lib/marmot/groupStorage';
-import { loadMessages } from '@/src/lib/marmot/chatPersistence';
-import { listLeftGroupIds } from '@/src/lib/marmot/leftGroupTombstones';
-import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
-import { loadAllInviteLinks, saveInviteLink } from '@/src/lib/marmot/inviteLinkStorage';
-import type { InviteLink } from '@/src/lib/marmot/inviteLinkStorage';
 import type { EventSigner } from 'applesauce-core';
 import type NDK from '@nostr-dev-kit/ndk';
 import { connectNdk, fetchEventsWithTimeout } from '@/src/lib/ndkClient';
@@ -36,47 +24,6 @@ export interface BackupPayload {
     nickname: string;
     avatar: { imageUrl: string } | null;
   } | null;
-  groups: Array<{
-    id: string;
-    name: string;
-    createdAt: number;
-    memberPubkeys: string[];
-    relays: string[];
-  }>;
-  groupStates: Record<string, string>;
-  memberProfiles: Record<string, unknown[]>;
-  chatMessages: Record<
-    string,
-    Array<{
-      id: string;
-      content: string;
-      senderPubkey: string;
-      groupId: string;
-      createdAt: number;
-    }>
-  >;
-  inviteLinks: InviteLink[];
-}
-
-// ---------------------------------------------------------------------------
-// Base64 helpers
-// ---------------------------------------------------------------------------
-
-export function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-export function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,97 +44,18 @@ function readJsonItem<T>(key: string): T | null {
 // Payload assembly
 // ---------------------------------------------------------------------------
 
-/** Maximum number of chat messages to include per group. */
-const MAX_CHAT_MESSAGES = 10;
-
 export async function collectBackupPayload(): Promise<BackupPayload> {
-  // localStorage reads
-  const settings = readJsonItem<{ theme: string; language: string }>(
-    STORAGE_KEYS.settings,
-  );
-
-  const rawProfile = readJsonItem<{
-    nickname: string;
-    avatar: { imageUrl: string } | null;
-  }>(STORAGE_KEYS.userProfile);
-  const userProfile = rawProfile ?? null;
-
-  // IDB reads
-  const groups = await loadAllGroups();
-
-  const groupStates: Record<string, string> = {};
-  const memberProfiles: Record<string, unknown[]> = {};
-  const chatMessages: Record<string, ChatMessage[]> = {};
-
-  const stateBackend = new IdbGroupStateBackend();
-  const stateKeys = await stateBackend.keys();
-
-  // MLS state (group keys) is exported only for groups this device is still
-  // in: an overlay record exists and the group is not tombstoned as left
-  // (bug: left-groups-keep-mls-state-forever). A left group's state awaiting
-  // its deferred destroy, or an orphan without an overlay, never leaves the
-  // device. The tombstones themselves are never exported.
-  const leftGroupIds = await listLeftGroupIds();
-  const backedUpGroupIds = new Set(groups.map((g) => g.id).filter((id) => !leftGroupIds.has(id)));
-
-  // Load MLS state for those groups and base64-encode
-  for (const key of stateKeys) {
-    if (!backedUpGroupIds.has(key)) continue;
-    const state = await stateBackend.getItem(key);
-    if (state) {
-      // SerializedClientState may be a Uint8Array or have a bytes field
-      const bytes =
-        state instanceof Uint8Array
-          ? state
-          : typeof (state as { bytes?: Uint8Array }).bytes !== 'undefined'
-            ? new Uint8Array((state as { bytes: Uint8Array }).bytes)
-            : new TextEncoder().encode(JSON.stringify(state));
-      groupStates[key] = uint8ArrayToBase64(bytes);
-    }
-  }
-
-  // Per-group data
-  for (const group of groups) {
-    const profiles = await loadMemberProfiles(group.id);
-    memberProfiles[group.id] = profiles;
-
-    const { messages } = await loadMessages(group.id);
-    // Keep only the last MAX_CHAT_MESSAGES, preserving chronological order
-    chatMessages[group.id] = messages.slice(-MAX_CHAT_MESSAGES);
-  }
-
-  // Invite links (all groups)
-  const inviteLinks = await loadAllInviteLinks();
-
   return {
     version: 1,
     createdAt: Math.floor(Date.now() / 1000),
-    settings,
-    userProfile,
-    groups: groups.map((g) => ({
-      id: g.id,
-      name: g.name,
-      createdAt: g.createdAt,
-      memberPubkeys: g.memberPubkeys,
-      relays: g.relays,
-    })),
-    groupStates,
-    memberProfiles,
-    chatMessages,
-    inviteLinks,
+    settings: readJsonItem<BackupPayload['settings']>(STORAGE_KEYS.settings),
+    userProfile: readJsonItem<BackupPayload['userProfile']>(STORAGE_KEYS.userProfile),
   };
 }
-
-// ---------------------------------------------------------------------------
-// S2: NIP-44 encrypt, publish, fetch, decrypt
-// ---------------------------------------------------------------------------
 
 /** Kind 30078 is a parameterized replaceable event (NIP-78: application data). */
 const BACKUP_EVENT_KIND = 30078;
 const BACKUP_D_TAG = 'few';
-
-/** Kind 30051 is a relay list for specific use (NIP-51 sets). */
-const RELAY_LIST_KIND = 30051;
 
 /**
  * Encrypt the backup payload with NIP-44 (self-encryption) and build
@@ -214,7 +82,7 @@ export async function createBackupEvent(
  * Returns { ok: true } on success, or { ok: false, error } if all relays reject.
  *
  * `mayPublish` is asked as the very last step, right before the network
- * publish (after snapshot, signing and relay discovery); when it says no the
+ * publish (after collection and signing); when it says no the
  * event is dropped unpublished and the result is `{ ok: false, skipped: true }`
  * (not a failure to retry).
  */
@@ -230,7 +98,7 @@ export async function publishBackup(
     const signedEvent = await signer.signEvent(eventTemplate);
 
     const { NDKEvent, NDKRelaySet } = await import('@nostr-dev-kit/ndk');
-    const relayUrls = await getBackupRelays(ndk, pubkeyHex, { reuseAfterRecentTimeout: true });
+    const relayUrls = getBackupRelays();
     const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndk);
 
     const ndkEvent = new NDKEvent(ndk);
@@ -242,9 +110,7 @@ export async function publishBackup(
     ndkEvent.id = signedEvent.id;
     ndkEvent.sig = signedEvent.sig;
 
-    // Last check, with no await between it and the network publish: relay
-    // discovery above can take seconds, long enough for a wipe or identity
-    // replace to land.
+    // Signing may take long enough for a wipe or identity replacement.
     if (mayPublish && !mayPublish()) return { ok: false, skipped: true };
     await ndkEvent.publish(relaySet);
     return { ok: true };
@@ -268,81 +134,19 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === 'string');
-}
-
-function isBase64(v: unknown): boolean {
-  if (typeof v !== 'string') return false;
-  try {
-    atob(v);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Validate a decrypted v1 payload's full shape before anything is written,
- * so a malformed backup is refused instead of partially applied. Collections
- * an older v1 payload may lack are normalised to empty. Returns null when the
- * payload is not a usable v1 backup.
- */
+/** Parse the settings and profile from v1 backups, including those with retired group sections. */
 export function parseBackupPayload(raw: unknown): BackupPayload | null {
   if (!isRecord(raw) || raw.version !== 1 || typeof raw.createdAt !== 'number') return null;
 
   const { settings, userProfile } = raw;
-  if (settings !== null && settings !== undefined && !isRecord(settings)) return null;
-  if (userProfile !== null && userProfile !== undefined) {
-    if (!isRecord(userProfile) || typeof userProfile.nickname !== 'string') return null;
-  }
-
-  const groups = raw.groups ?? [];
-  if (
-    !Array.isArray(groups) ||
-    !groups.every(
-      (g) =>
-        isRecord(g) &&
-        typeof g.id === 'string' &&
-        typeof g.name === 'string' &&
-        typeof g.createdAt === 'number' &&
-        isStringArray(g.memberPubkeys) &&
-        isStringArray(g.relays),
-    )
-  ) {
-    return null;
-  }
-
-  const groupStates = raw.groupStates ?? {};
-  if (!isRecord(groupStates) || !Object.values(groupStates).every(isBase64)) return null;
-
-  const memberProfiles = raw.memberProfiles ?? {};
-  if (!isRecord(memberProfiles) || !Object.values(memberProfiles).every(Array.isArray)) return null;
-
-  const chatMessages = raw.chatMessages ?? {};
-  if (
-    !isRecord(chatMessages) ||
-    !Object.values(chatMessages).every(
-      (list) =>
-        Array.isArray(list) &&
-        list.every((m) => isRecord(m) && typeof m.id === 'string' && typeof m.createdAt === 'number'),
-    )
-  ) {
-    return null;
-  }
-
-  const inviteLinks = raw.inviteLinks ?? [];
-  if (!Array.isArray(inviteLinks) || !inviteLinks.every(isRecord)) return null;
+  if (settings != null && !isRecord(settings)) return null;
+  if (userProfile != null && (!isRecord(userProfile) || typeof userProfile.nickname !== 'string')) return null;
 
   return {
-    ...(raw as unknown as BackupPayload),
+    version: 1,
+    createdAt: raw.createdAt,
     settings: (settings ?? null) as BackupPayload['settings'],
     userProfile: (userProfile ?? null) as BackupPayload['userProfile'],
-    groups: groups as BackupPayload['groups'],
-    groupStates: groupStates as BackupPayload['groupStates'],
-    memberProfiles: memberProfiles as BackupPayload['memberProfiles'],
-    chatMessages: chatMessages as BackupPayload['chatMessages'],
-    inviteLinks: inviteLinks as unknown as InviteLink[],
   };
 }
 
@@ -398,93 +202,16 @@ export async function fetchBackup(
   return payload ? { status: 'found', payload } : { status: 'unusable', reason: 'unreadable' };
 }
 
-/**
- * How long after a timed-out relay-list fetch a backup publish skips the fetch
- * (bug: first-relay-backup-cold-start-retry). The fetch costs up to 8 s when
- * the relays are slow; a retry shortly after such a timeout would most likely
- * time out again and push the publish past its own deadline.
- */
-const RELAY_LIST_TIMEOUT_REUSE_MS = 60 * 1000;
-
-/**
- * In-memory, per identity: when the last relay-list fetch timed out. Never
- * persisted. Deliberately no remembered relay list: a remembered list could
- * name relays the user has since removed.
- */
-const relayListTimedOutAt = new Map<string, number>();
-
-/** Forget the relay-list memo (tests; nothing in the app needs to reset it). */
-export function resetBackupRelayListMemo(): void {
-  relayListTimedOutAt.clear();
+export function getBackupRelays(): string[] {
+  return getEffectiveRelays();
 }
 
-/**
- * Read relay URLs from the user's kind 30051 relay list event.
- * Falls back to the effective relays (the user's configured relays, else
- * DEFAULT_RELAYS) if no list is found — also when the fetch timed out empty.
- *
- * With `reuseAfterRecentTimeout` (the backup publish path), within
- * RELAY_LIST_TIMEOUT_REUSE_MS of a timed-out fetch for this identity it skips
- * the fetch and uses the currently configured relays (getEffectiveRelays(),
- * read at call time) — the relays a timed-out fetch resolves to anyway.
- */
-export async function getBackupRelays(
-  ndk: NDK,
-  pubkeyHex: string,
-  opts?: { reuseAfterRecentTimeout?: boolean },
-): Promise<string[]> {
-  if (opts?.reuseAfterRecentTimeout) {
-    const timedOutAt = relayListTimedOutAt.get(pubkeyHex);
-    if (timedOutAt !== undefined && Date.now() - timedOutAt < RELAY_LIST_TIMEOUT_REUSE_MS) {
-      return getEffectiveRelays();
-    }
-  }
-
-  const { events, timedOut } = await fetchEventsWithTimeout(ndk, {
-    kinds: [RELAY_LIST_KIND as import('@nostr-dev-kit/ndk').NDKKind],
-    authors: [pubkeyHex],
-  });
-  if (timedOut) relayListTimedOutAt.set(pubkeyHex, Date.now());
-  else relayListTimedOutAt.delete(pubkeyHex);
-
-  return relayUrlsFromNewestList(events) ?? getEffectiveRelays();
-}
-
-/** Relay URLs of the newest dated relay-list event, or null when there are none. */
-function relayUrlsFromNewestList(events: Set<{ created_at?: number; tags: string[][] }>): string[] | null {
-  if (events.size === 0) return null;
-
-  // Pick newest event
-  let newest: { tags: string[][] } | null = null;
-  let newestAt = 0;
-  for (const ev of events) {
-    if ((ev.created_at ?? 0) > newestAt) {
-      newestAt = ev.created_at ?? 0;
-      newest = { tags: ev.tags };
-    }
-  }
-
-  if (!newest) return null;
-
-  // Extract relay URLs from 'relay' or 'r' tags
-  const relayUrls = newest.tags
-    .filter((t) => t[0] === 'relay' || t[0] === 'r')
-    .map((t) => t[1])
-    .filter(Boolean);
-
-  return relayUrls.length > 0 ? relayUrls : null;
-}
-
-/**
- * Look up the relay backup for an identity whose private key the app holds:
- * connect, read the relay list, fetch, decrypt, and validate. Never throws — a
- * failure to connect counts as "unreachable".
- */
+/** Look up and decrypt the identity's backup using the configured relays. */
 export async function lookupBackup(privateKeyHex: string, pubkeyHex: string): Promise<BackupLookup> {
   try {
     const { createPrivateKeySigner } = await import('@/src/lib/marmot/signerAdapter');
     const ndk = await connectNdk(privateKeyHex);
-    const relays = await getBackupRelays(ndk, pubkeyHex);
+    const relays = getBackupRelays();
     const lookup = await fetchBackup(createPrivateKeySigner(privateKeyHex), pubkeyHex, ndk, relays);
     if (lookup.status === 'unusable') console.warn('[Backup] relay backup unusable:', lookup.reason);
     return lookup;
@@ -534,73 +261,8 @@ export function settleRestoreGuard(lookup: BackupLookup): void {
 // S3: Restore state from backup payload
 // ---------------------------------------------------------------------------
 
-/**
- * Restore local state from a backup payload — NON-DESTRUCTIVELY.
- *
- * A backup carries only a subset of device state: settings + userProfile
- * (localStorage), and groups, MLS group state, member profiles, recent group
- * chat (capped at MAX_CHAT_MESSAGES per group), and invite links (IDB). It does
- * NOT carry DM thread history, contacts / contact cache, known peers, relay or
- * signer config, polls, pending join requests, or media blobs.
- *
- * Restore therefore overwrites ONLY the categories the backup carries and leaves
- * everything else untouched. An earlier implementation blanket-cleared every
- * `STORAGE_KEYS` entry and every `few:messages:*` IDB key (including DM
- * threads) before rehydrating the subset, silently destroying DM history,
- * contacts, relay/signer config, polls, and media. Group chat is MERGED rather
- * than overwritten so the per-group MAX_CHAT_MESSAGES cap cannot erase local
- * history beyond the cap. Net effect: restore never deletes data the backup
- * does not contain.
- */
+/** Apply the backed-up settings and own profile alongside existing device data. */
 export async function restoreFromBackup(payload: BackupPayload): Promise<void> {
-  // IDB writes come first and the localStorage writes last, so an IDB failure
-  // mid-restore leaves settings, profile and the backed-up flag untouched.
-
-  // 1. Rehydrate IDB groups (overwrite per group; groups absent from the backup
-  //    are left in place — restore adds/updates, never deletes).
-  for (const group of payload.groups) {
-    await saveGroup(group);
-  }
-
-  // 2. Rehydrate MLS state (base64-decoded; overwrite per key).
-  const stateBackend = new IdbGroupStateBackend();
-  for (const [key, b64] of Object.entries(payload.groupStates)) {
-    const bytes = base64ToUint8Array(b64);
-    await stateBackend.setItem(key, bytes as never);
-  }
-
-  // 3. Rehydrate member profiles (overwrite per group).
-  for (const [groupId, profiles] of Object.entries(payload.memberProfiles)) {
-    await saveMemberProfiles(groupId, profiles as never[]);
-  }
-
-  // 4. MERGE group chat messages by id. The backup truncates each group's chat
-  //    to the most recent MAX_CHAT_MESSAGES, so overwriting would erase local
-  //    history beyond the cap. Union the backup messages with whatever is
-  //    already stored (local wins on id collision), sorted chronologically. DM
-  //    threads (`few:messages:dm:*`) are not in the payload and are untouched.
-  const { get: idbGet, set: idbSet } = await import('idb-keyval');
-  for (const [groupId, backupMessages] of Object.entries(payload.chatMessages)) {
-    const key = `few:messages:${groupId}`;
-    const existing = (await idbGet<ChatMessage[]>(key)) ?? [];
-    const byId = new Map<string, ChatMessage>();
-    for (const m of existing) byId.set(m.id, m);
-    for (const m of backupMessages as ChatMessage[]) {
-      if (!byId.has(m.id)) byId.set(m.id, m);
-    }
-    const merged = Array.from(byId.values()).sort((a, b) => a.createdAt - b.createdAt);
-    await idbSet(key, merged);
-  }
-
-  // 5. Rehydrate invite links (overwrite per link).
-  if (payload.inviteLinks) {
-    for (const link of payload.inviteLinks) {
-      await saveInviteLink(link);
-    }
-  }
-
-  // 6. Rehydrate localStorage — overwrite in place; all other keys (contacts,
-  //    knownPeers, relays, signerMode, identity, …) are preserved.
   if (payload.settings) {
     localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(payload.settings));
   }
@@ -608,7 +270,6 @@ export async function restoreFromBackup(payload: BackupPayload): Promise<void> {
     localStorage.setItem(STORAGE_KEYS.userProfile, JSON.stringify(payload.userProfile));
   }
 
-  // 7. Mark identity as backed up.
   localStorage.setItem(STORAGE_KEYS.nostrBackedUp, 'true');
 }
 
@@ -630,8 +291,7 @@ const MAX_RETRIES = 5;
  * first successful publish (bug: first-relay-backup-cold-start-retry). It
  * fires on the first failure before any success, whenever that happens; the
  * case it is for is start-up, when the relays may still be connecting and an
- * attempt can fail on NDK's tight timeouts (connect 2.5 s, relay-list fetch
- * 8 s, publish 2.5 s) — waiting the regular 30 s would leave a fresh session
+ * attempt can fail on NDK's tight connection and publish timeouts — waiting the regular 30 s would leave a fresh session
  * without a backup for long. It is granted once per scheduler, does not consume the retry budget,
  * and the regular schedule (RETRY_DELAYS_MS) follows unchanged.
  */

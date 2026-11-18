@@ -1,23 +1,5 @@
-/**
- * InvitationCard — a single inline, fully-coloured invitation card rendered
- * at the top of the groups list (epic: inline-invitation-cards, S2).
- *
- * Replaces the separate `<PendingInvitations />` section: each pending
- * Welcome now renders as its own card, styled identically to `GroupCard`
- * (never dimmed — unlike `OutboundJoinRequestCard`, which is deliberately
- * dimmed/non-interactive). The list-mapping and store subscription live in
- * the parent (`app/pages/groups.tsx`) — this component is a pure per-item
- * card.
- *
- * Group-name resolution is local-only: `getInvitationGroupData` (S1) decodes
- * the stored Welcome without any relay call. Attribution goes through
- * `resolveInviterLabel` (S1), which reads the local contact list only. Per
- * the project privacy invariant, this component must never publish, sync,
- * or fetch profile/group data over any public channel.
- */
-
 import { acceptErrorKind } from '@/src/lib/marmot/inviteAcceptError';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   HStack,
@@ -36,10 +18,8 @@ import { useMarmot } from '@/src/context/MarmotContext';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { resolveInviterLabel } from '@/src/lib/pubkeyDisplay';
 import { BADGE_ACCENT } from '@/src/lib/badgeAccent';
-import type { PendingInvitation } from '@/src/lib/pendingInvitations';
+import type { InvitationView } from '@/src/context/MarmotContext';
 import type { InvitationCardViewModel } from '@/src/lib/marmot/invitations';
-
-type InvitationGroupData = { name: string; description: string; adminPubkeys: string[] } | null;
 
 /**
  * Pure selection of the display name for an invitation card: the decoded
@@ -67,46 +47,20 @@ export function selectCardViewModel(
 }
 
 type InvitationCardProps = {
-  invitation: PendingInvitation;
-  /**
-   * Library-native card model (D3): the sponsor's group name from a validated invite context, or the generic
-   * label. Pure text (never markup); the card never shows a description or admin list. When absent the legacy
-   * Welcome decode below supplies the name until the production cut-over (S18) removes it.
-   */
+  invitation: InvitationView;
   viewModel?: InvitationCardViewModel;
 };
 
 export default function InvitationCard({ invitation, viewModel }: InvitationCardProps) {
   const copy = useCopy();
-  const { acceptPendingInvitation, declinePendingInvitation, getInvitationGroupData } = useMarmot();
+  const { acceptPendingInvitation, declinePendingInvitation } = useMarmot();
   const { pubkeyHex } = useNostrIdentity();
-
-  const model = selectCardViewModel(invitation.id, viewModel);
-  const hasModel = model !== undefined;
-  const [groupData, setGroupData] = useState<InvitationGroupData>(null);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    // The library-native view model supplies the name: the legacy Welcome decode is skipped entirely.
-    if (hasModel) return;
-    let cancelled = false;
-    getInvitationGroupData(invitation.welcomeEventJson)
-      .then((data) => {
-        if (!cancelled) setGroupData(data);
-      })
-      .catch(() => {
-        if (!cancelled) setGroupData(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hasModel, invitation.welcomeEventJson, getInvitationGroupData]);
-
-  const displayName = model
-    ? model.displayName
-    : selectInvitationDisplayName(groupData, copy.groups.pendingInvitations.unknownGroupFallback);
-  const inviterLabel = resolveInviterLabel(invitation.inviterPubkeyHex, pubkeyHex);
+  const model = selectCardViewModel(invitation.id, viewModel);
+  const displayName = model?.displayName ?? invitation.displayName ?? copy.groups.pendingInvitations.unknownGroupFallback;
+  const inviterLabel = resolveInviterLabel(invitation.sponsorAccount, pubkeyHex);
 
   async function handleAccept() {
     setAccepting(true);
@@ -121,7 +75,7 @@ export default function InvitationCard({ invitation, viewModel }: InvitationCard
   }
 
   function handleDecline() {
-    void declinePendingInvitation(invitation.id);
+    void declinePendingInvitation(invitation.id).catch((err) => setError(acceptErrorKind(err)));
   }
 
   return (

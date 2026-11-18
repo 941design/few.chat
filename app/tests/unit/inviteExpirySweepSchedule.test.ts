@@ -113,4 +113,21 @@ describe('startInviteExpirySweep', () => {
     sched.tick(); // guarded by `cleared` — must not invoke run again
     expect(run).toHaveBeenCalledTimes(1);
   });
+  it('stops immediately and drains an already running cycle', async () => {
+    const sched = makeFakeScheduler();
+    let finish!: () => void;
+    const cycle = new Promise<void>((resolve) => { finish = resolve; });
+    const run = vi.fn(() => cycle);
+    const stop = startInviteExpirySweep({ setInterval: sched.setInterval, clearInterval: sched.clearInterval, run });
+    let drained = false;
+    const draining = stop().then(() => { drained = true; });
+    sched.tick();
+    await Promise.resolve();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(drained).toBe(false);
+    finish();
+    await draining;
+    expect(drained).toBe(true);
+  });
+
 });

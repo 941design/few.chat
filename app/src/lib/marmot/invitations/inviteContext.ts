@@ -33,7 +33,7 @@ export const INVITE_CONTEXT_KIND: number = APP_INBOX_KINDS.inviteContext;
 
 /**
  * Longest stored / shown context name, in CODE POINTS (not UTF-16 units). It equals the group-name cap
- * `MAX_GROUP_NAME_LENGTH` (renameGroupImpl.ts), which counts UTF-16 units: a valid group name has at most as many
+ * used for group creation and rename, which counts UTF-16 units: a valid group name has at most as many
  * code points as units, so it always fits unchanged. A test pins the equality of the two numbers.
  */
 export const MAX_CONTEXT_NAME_LENGTH = 64;
@@ -146,7 +146,7 @@ export function sanitizeContextName(raw: unknown): string {
   return capByGrapheme(collapsed, MAX_CONTEXT_NAME_LENGTH).trim();
 }
 
-export interface InviteContextPayload {
+interface InviteContextPayload {
   groupId: string;
   name: string;
 }
@@ -178,11 +178,11 @@ export function parseInviteContextContent(content: unknown): InviteContextPayloa
 }
 
 /** The slice of `MarmotClient['extensions']` the sender uses. */
-export interface InboxRumorSender {
+interface InboxRumorSender {
   sendInboxRumor: (input: { readonly to: string; readonly rumor: Rumor }) => Promise<{ readonly status: 'delivered' | 'retryable' | 'failed'; readonly reason?: string }>;
 }
 
-export interface InviteContextSenderDeps {
+interface InviteContextSenderDeps {
   inbox: InboxRumorSender;
   /** The own account pubkey (the rumor's author). */
   ownPubkey: string;
@@ -192,9 +192,9 @@ export interface InviteContextSenderDeps {
   onError?: (error: unknown) => void;
 }
 
-export type InviteContextSendResult = 'sent' | 'skipped' | 'failed';
+type InviteContextSendResult = 'sent' | 'skipped' | 'failed';
 
-export interface InviteContextSender {
+interface InviteContextSender {
   /**
    * Sends the context for an invite result. `skipped` = the invite did not deliver (`failed`, `declined`, or an
    * error value): nothing is sent. `failed` = the send was rejected or reported `failed`; never throws.
@@ -251,9 +251,9 @@ export function createInviteContextSender(deps: InviteContextSenderDeps): Invite
 }
 
 /** The group handle `inviteByPubkey` is given plus its display name (a `MarmotGroup` has both). */
-export type ContextInviteGroup = InviteGroup & { readonly name: string };
+type ContextInviteGroup = InviteGroup & { readonly name: string };
 
-export interface ContextSendingInviterDeps {
+interface ContextSendingInviterDeps {
   inviter: KeyPackageInviter;
   sender: InviteContextSender;
   /** A context send that threw or rejected (default `console.error`). The invite result is unaffected. */

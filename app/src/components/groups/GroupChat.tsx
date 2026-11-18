@@ -18,7 +18,7 @@ type GroupChatProps = {
 };
 
 export default function GroupChat({ threadId, pubkey, profileMap, isCurrentUserAdmin }: GroupChatProps) {
-  const { messages, sendMessage, sendImageMessage, sendReaction, loading, handleDeleteMessage, handleEditMessage } = useChatStore();
+  const { messages, rowStatuses, retryMessage, sendMessage, sendImageMessage, sendReaction, loading, handleDeleteMessage, handleEditMessage } = useChatStore();
 
   // Stable ref so the bridge callback always calls the latest sendReaction
   const sendReactionRef = useRef(sendReaction);
@@ -69,6 +69,8 @@ export default function GroupChat({ threadId, pubkey, profileMap, isCurrentUserA
       pubkey={pubkey}
       profileMap={profileMap}
       messages={messages}
+      rowStatuses={rowStatuses}
+      retryMessage={retryMessage}
       loading={loading}
       sendMessage={sendMessage}
       sendImageMessage={sendImageMessage}

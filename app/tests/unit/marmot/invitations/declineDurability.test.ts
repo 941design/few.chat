@@ -12,6 +12,8 @@ import {
   clearAllPendingDirectInvites,
   clearPendingDirectInvite,
   clearPendingDirectInviteIfRef,
+  clearPendingDirectInvitesForGroup,
+  createSponsorDeclineMarkerStore,
   getPendingDirectInviteMarker,
   loadOrphanDeclines,
   ORPHAN_MAX,
@@ -19,19 +21,20 @@ import {
   recordOrphanDecline,
   setPendingDirectInvitePhase,
   markerKey,
-  markPendingDirectInvite,
   pendingDirectInviteMarkerStore,
   recordPendingDirectInvite,
 } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import {
   buildDeclinedAnnouncementContent,
   createDeclineDurability,
+  createKeyPackageInviter,
   declinedDedupId,
   DEFAULT_RETRY_DELAYS_MS,
   DECLINED_MARKER_MAX_AGE_MS,
   createMarkerRecordingInviter,
   type DeclineDurabilityDeps,
   type DeclineGroup,
+  type InviteGroup,
 } from '@/src/lib/marmot/invitations';
 import { parseStructured } from '@/src/lib/marmot/parseStructured';
 
@@ -172,7 +175,7 @@ describe('AC-DECL-1 (a): a decline while the group is unsynced removes only afte
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.syncedGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
 
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
@@ -196,7 +199,7 @@ describe('AC-DECL-1 (a): a decline while the group is unsynced removes only afte
   it('the removal is not in the listener frame: the listener returns synchronously and the job runs in a later macrotask', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     let enqueued = 0;
     let job: (() => Promise<void>) | undefined;
     const durability = build({ enqueue: (j) => void ((job = j), enqueued++) });
@@ -213,7 +216,7 @@ describe('AC-DECL-1 (a): a decline while the group is unsynced removes only afte
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.syncedGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await jobs.idle(); // resolves although synced() never did
@@ -227,7 +230,7 @@ describe('AC-DECL-1 (a): a decline while the group is unsynced removes only afte
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await expect.poll(() => group.removeCalls.length, { timeout: 2000 }).toBe(1);
@@ -248,12 +251,12 @@ describe('AC-DECL-1 (b): startup retry replays every declined marker', () => {
     groups.set(G1, g1);
     groups.set(G2, g2);
     // seeded out of key order; G2 first
-    await recordPendingDirectInvite(G2, BOB, 'ref-bob-2');
+    await recordPendingDirectInvite(G2, BOB, 'ref-bob-2', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G2, 'ref-bob-2');
-    await recordPendingDirectInvite(G1, CAROL, 'ref-carol'); // invited, not declined
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob-1');
+    await recordPendingDirectInvite(G1, CAROL, 'ref-carol', `leaf-${CAROL.slice(0, 2)}`); // invited, not declined
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob-1', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob-1');
-    await markPendingDirectInvite(G2, CAROL); // legacy bare true
+    await set(markerKey(G2, CAROL), true, raw); // legacy bare true
     await set(markerKey(G1, '77'.repeat(32)), { pubkey: '77'.repeat(32), declined: true }, raw); // legacy: no inviteeRef
 
     const restarted = build(); // a fresh instance: nothing in memory
@@ -273,7 +276,7 @@ describe('AC-DECL-1 (b): startup retry replays every declined marker', () => {
   it('is idempotent: a second retry (and a retry racing a live decline) removes and announces once', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' }); // a duplicate event
@@ -291,7 +294,7 @@ describe('AC-DECL-1 (b): startup retry replays every declined marker', () => {
   it('a lost marker clear (crash after removeMember) is replayed as already-removed: no second Remove, no second announcement', async () => {
     const group = fakeGroup(G1, [CAROL], log); // Bob is already gone from the member list
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
     const durability = build();
     expect(await durability.retryDeclined()).toEqual(['already-removed']);
@@ -301,7 +304,7 @@ describe('AC-DECL-1 (b): startup retry replays every declined marker', () => {
   });
 
   it('a group that is not loaded keeps the marker declined for the next attempt', async () => {
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
     const durability = build();
     expect(await durability.retryDeclined()).toEqual(['group-missing']);
@@ -315,7 +318,7 @@ describe('AC-DECL-1 (c): removeMember rejects', () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = new Error('commit failed');
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await jobs.idle();
@@ -337,7 +340,7 @@ describe('AC-DECL-1 (c): removeMember rejects', () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.syncedGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build({ syncTimeoutMs: 40 });
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await jobs.idle();
@@ -353,7 +356,7 @@ describe('AC-DECL-1 (c): removeMember rejects', () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.syncedGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await jobs.idle();
@@ -371,7 +374,7 @@ describe('AC-DECL-1 (d): success', () => {
   it('clears the marker and sends exactly one announcement, a parseable declined lifecycle post carrying only the pubkey and the dedup id', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await jobs.idle();
@@ -379,14 +382,14 @@ describe('AC-DECL-1 (d): success', () => {
     expect(await getPendingDirectInviteMarker(G1, BOB)).toBeUndefined();
     expect(announced).toHaveLength(1);
     expect(JSON.parse(announced[0].content)).toEqual({ type: 'invite_lifecycle', event: 'declined', pubkey: BOB, id: `${G1}:ref-bob` });
-    expect(parseStructured(announced[0].content)).toEqual({ type: 'invite_lifecycle', event: 'declined', pubkey: BOB });
+    expect(parseStructured(announced[0].content)).toEqual({ type: 'invite_lifecycle', event: 'declined', pubkey: BOB, id: `${G1}:ref-bob` });
     expect(log).toEqual(['removeMember:cd', 'removeMember:resolved', 'announce']);
   });
 
   it('a failing announcement is reported and retried WITHOUT a second Remove: the marker stays announce-pending, the replay announces with the same dedup id', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     let failing = true;
     const sent: string[] = [];
     const durability = build({
@@ -410,11 +413,111 @@ describe('AC-DECL-1 (d): success', () => {
     expect(await durability.retryDeclined()).toEqual([]);
   });
 
+  it('replays a failed announcement after a re-invite and restart, leaving the new invite intact', async () => {
+    const group = fakeGroup(G1, [CAROL, BOB], log);
+    groups.set(G1, group);
+    await recordPendingDirectInvite(G1, BOB, 'ref-old', 'leaf-cd');
+    const failNotice = vi.fn(async () => { throw new Error('send failed'); });
+    const first = build({ announce: failNotice, retryDelaysMs: [] });
+    await decline(first, G1, 'ref-old');
+    expect(group.removeCalls).toEqual([BOB]);
+    expect((await getPendingDirectInviteMarker(G1, BOB))?.phase).toBe('announce-pending');
+    expect(errors.map((e) => (e as Error).message)).toEqual(['send failed']);
+
+    group.addLeaf(BOB, 'leaf-new');
+    const newMarker = await recordPendingDirectInvite(G1, BOB, 'ref-new', 'leaf-new');
+    first.dispose();
+    const restarted = build();
+    restarted.startupRetry();
+    await jobs.idle();
+    await restarted.idle();
+
+    const content = buildDeclinedAnnouncementContent(BOB, declinedDedupId(G1, 'ref-old'));
+    expect(failNotice).toHaveBeenCalledExactlyOnceWith(group, content);
+    expect(announced).toEqual([{ groupId: G1, content }]);
+    expect(group.removeCalls).toEqual([BOB]);
+    expect(group.leaves(BOB).map((leaf) => leaf.leafKey)).toEqual(['leaf-new']);
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual(newMarker);
+    expect(await restarted.retryDeclined()).toEqual([]);
+    restarted.dispose();
+  });
+
+  it('retries the removal only after it persists the removing phase', async () => {
+    const group = fakeGroup(G1, [CAROL, BOB], log);
+    groups.set(G1, group);
+    await recordPendingDirectInvite(G1, BOB, 'ref', 'leaf-cd');
+    let failPhase = true;
+    const durability = build({ store: {
+      ...pendingDirectInviteMarkerStore,
+      setPhase: async (...args) => {
+        if (args[3] === 'removing' && failPhase) throw new Error('removing write failed');
+        return pendingDirectInviteMarkerStore.setPhase(...args);
+      },
+    } });
+    await decline(durability, G1, 'ref');
+    expect(group.removeCalls).toEqual([]);
+    expect(announced).toEqual([]);
+    expect((await getPendingDirectInviteMarker(G1, BOB))?.declined).toBe(true);
+
+    failPhase = false;
+    expect(await durability.retryDeclined()).toEqual(['removed']);
+    expect(group.removeCalls).toEqual([BOB]);
+    expect(announced).toHaveLength(1);
+  });
+
+  it('recovers a removing marker after a failed phase write and a successful queued re-invite', async () => {
+    const group = fakeGroup(G1, [CAROL, BOB], log);
+    groups.set(G1, group);
+    const sponsor = createSponsorDeclineMarkerStore(CAROL);
+    const queue = createGroupOpQueue();
+    await sponsor.record(G1, BOB, 'ref-old', 'leaf-cd');
+    const failNotice = vi.fn(async () => { throw new Error('send failed'); });
+    const first = build({ queue, retryDelaysMs: [], announce: failNotice, store: {
+      ...sponsor,
+      setPhase: async (...args) => {
+        if (args[3] === 'announce-pending') throw new Error('phase write failed');
+        return sponsor.setPhase(...args);
+      },
+    } });
+    await decline(first, G1, 'ref-old');
+    expect(group.removeCalls).toEqual([BOB]);
+    expect((await sponsor.get(G1, BOB))?.phase).toBe('removing');
+    expect(errors.map((error) => (error as Error).message)).toEqual(['phase write failed', 'send failed']);
+
+    const invite: InviteGroup['invite'] = async () => {
+      expect(group.leaves(BOB)).toEqual([]);
+      group.addLeaf(BOB, 'leaf-new');
+      return [{ inviteeRef: 'ref-new', pubkey: BOB, status: 'delivered', relays: [] }];
+    };
+    const inviter = createMarkerRecordingInviter({
+      inviter: createKeyPackageInviter({ queue, lookup: { lookup: async () => ({
+        ok: true, candidates: [{ id: 'candidate', content: '' } as never], relays: [],
+      }) } }),
+      store: sponsor,
+      onRecordedDeclined: first.replayMarker,
+    });
+    expect(await inviter.inviteByPubkey({ ...group, invite }, BOB)).toMatchObject({ outcome: { inviteeRef: 'ref-new' } });
+    const newer = await sponsor.get(G1, BOB);
+    expect(newer).toMatchObject({ inviteeRef: 'ref-new', sponsorPubkey: CAROL, declined: false });
+    first.dispose();
+
+    const restarted = build({ store: sponsor });
+    expect(await restarted.retryDeclined()).toEqual(['removed']);
+    const content = buildDeclinedAnnouncementContent(BOB, declinedDedupId(G1, 'ref-old'));
+    expect(failNotice).toHaveBeenCalledExactlyOnceWith(group, content);
+    expect(announced).toEqual([{ groupId: G1, content }]);
+    expect(group.removeCalls).toEqual([BOB]);
+    expect(group.leaves(BOB).map((leaf) => leaf.leafKey)).toEqual(['leaf-new']);
+    expect(await sponsor.get(G1, BOB)).toEqual(newer);
+    expect(await restarted.retryDeclined()).toEqual([]);
+    restarted.dispose();
+  });
+
   it('a failing marker clear after the announcement is reported; the replay re-sends the SAME announcement (at-least-once, receiver dedups on id), never a second Remove', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
-    const store = { ...pendingDirectInviteMarkerStore, clearIfRef: async () => { throw new Error('idb down'); } };
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
+    const store = { ...pendingDirectInviteMarkerStore, clearAnnouncement: async () => { throw new Error('idb down'); } };
     const durability = build({ store });
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await jobs.idle();
@@ -432,7 +535,7 @@ describe('AC-DECL-2: an unknown inviteeRef is ignored', () => {
   it('no removeMember, no announcement, no marker change (and nothing thrown) for an unknown ref, another group\'s ref, malformed payloads', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'nobody' });
     durability.onWelcomeDeclined({ groupId: G2, inviteeRef: 'ref-bob' }); // right ref, wrong group
@@ -443,14 +546,14 @@ describe('AC-DECL-2: an unknown inviteeRef is ignored', () => {
     await durability.idle();
     expect(group.removeCalls).toEqual([]);
     expect(announced).toEqual([]);
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
     expect((await loadOrphanDeclines()).map((o) => [o.groupId, o.inviteeRef]).sort()).toEqual([[G1, 'nobody'], [G2, 'ref-bob']]);
   });
 
   it('a hostile inviteeRef that merely resembles a pubkey or key cannot select a marker', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: BOB });
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: `${G1}:${BOB}` });
@@ -465,7 +568,7 @@ describe('AC-DEL-2: legacy markers are ignored without throwing', () => {
   it('a legacy bare-true marker survives welcomeDeclined and the startup retry untouched; no removeMember', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await markPendingDirectInvite(G1, BOB);
+    await set(markerKey(G1, BOB), true, raw);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'anything' });
     durability.startupRetry();
@@ -503,7 +606,7 @@ describe('invite time: inviteeRef -> pubkey is persisted (AC-DECL-1, AC-DEL-2)',
       store: pendingDirectInviteMarkerStore,
     });
     expect(await inviter.inviteByPubkey(group, BOB.toUpperCase())).toBe(result);
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
   });
 
   it('an error value (no usable key package / already-member) records nothing; a throwing invite propagates', async () => {
@@ -612,8 +715,8 @@ describe('the decline is bound to the invited LEAF, not to the account', () => {
     two.addLeaf(BOB, 'leaf-second');
     groups.set(G1, sole);
     groups.set(G2, two);
-    await recordPendingDirectInvite(G1, BOB, 'ref-1');
-    await recordPendingDirectInvite(G2, BOB, 'ref-2');
+    await recordPendingDirectInvite(G1, BOB, 'ref-1', `leaf-${BOB.slice(0, 2)}`);
+    await recordPendingDirectInvite(G2, BOB, 'ref-2', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     await decline(durability, G1, 'ref-1');
     await decline(durability, G2, 'ref-2');
@@ -623,28 +726,30 @@ describe('the decline is bound to the invited LEAF, not to the account', () => {
   });
 });
 
-describe('invite time derives the added leaf', () => {
-  const inviteResult = (ref: string) => ({ outcome: { inviteeRef: ref, pubkey: BOB, status: 'delivered', relays: [] }, keyPackageEventId: 'k', attempts: 1 }) as never;
-  const wrap = (group: FakeGroup, add: string[]) =>
-    createMarkerRecordingInviter({ onRecordedDeclined: () => undefined,
-      inviter: { inviteByPubkey: async () => (add.forEach((k) => group.addLeaf(BOB, k)), inviteResult('ref-bob')) },
-      store: pendingDirectInviteMarkerStore,
-      onError: (e) => void errors.push(e),
-    });
-
-  it('exactly one new leaf is recorded as leafKey', async () => {
+describe('invite-time leaf binding', () => {
+  it('records the selected KeyPackage leaf even when another leaf appears during the invite', async () => {
     const group = fakeGroup(G1, [CAROL], log);
-    await wrap(group, ['leaf-added']).inviteByPubkey(group as never, BOB.toUpperCase());
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false, leafKey: 'leaf-added' });
+    const inviter = createMarkerRecordingInviter({
+      onRecordedDeclined: () => undefined,
+      inviter: { inviteByPubkey: async () => {
+        group.addLeaf(BOB, 'leaf-welcome');
+        group.addLeaf(BOB, 'leaf-other');
+        return { outcome: { inviteeRef: 'ref-bob', pubkey: BOB, status: 'delivered', relays: [] }, keyPackageEventId: 'k', invitedLeafKey: 'leaf-welcome', attempts: 1 };
+      } },
+      store: pendingDirectInviteMarkerStore,
+    });
+    await inviter.inviteByPubkey(group as never, BOB.toUpperCase());
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false, leafKey: 'leaf-welcome' });
   });
 
-  it('several new leaves (ambiguous) record none; a handle without leaves() records none', async () => {
-    const group = fakeGroup(G1, [CAROL], log);
-    await wrap(group, ['a', 'b']).inviteByPubkey(group as never, BOB);
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
-    const inviter = createMarkerRecordingInviter({ onRecordedDeclined: () => undefined, inviter: { inviteByPubkey: async () => inviteResult('ref-2') }, store: pendingDirectInviteMarkerStore });
-    await inviter.inviteByPubkey({ id: G2 } as never, BOB);
-    expect(await getPendingDirectInviteMarker(G2, BOB)).toEqual({ inviteeRef: 'ref-2', pubkey: BOB, declined: false });
+  it('never removes the account when a persisted marker lacks a leaf binding', async () => {
+    const group = fakeGroup(G1, [CAROL, BOB], log);
+    groups.set(G1, group);
+    await recordPendingDirectInvite(G1, BOB, 'ref-unbound');
+    await decline(build(), G1, 'ref-unbound');
+    expect(group.leaves(BOB)).toHaveLength(1);
+    expect(group.removeCalls).toEqual([]);
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toBeUndefined();
   });
 });
 
@@ -653,7 +758,7 @@ describe('the marker is re-read INSIDE the queued op; the clear is compare-and-c
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.syncedGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-old');
+    await recordPendingDirectInvite(G1, BOB, 'ref-old', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-old' });
     await expect.poll(() => group.syncCalls, { timeout: 2000 }).toBeGreaterThan(0); // parked on synced(), marker read already
@@ -665,7 +770,7 @@ describe('the marker is re-read INSIDE the queued op; the clear is compare-and-c
     expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-new', pubkey: BOB, declined: false, leafKey: 'leaf-new' });
   });
 
-  it('an owed announcement of a replaced marker is not sent: the op decides on the marker as it is AFTER the sync wait', async () => {
+  it('overlapping replays join an owed notice moved to its reference during the sync wait', async () => {
     const group = fakeGroup(G1, [CAROL], log); // Bob's leaf is gone, the old marker owes the announcement
     group.syncedGate = deferred();
     groups.set(G1, group);
@@ -676,17 +781,43 @@ describe('the marker is re-read INSIDE the queued op; the clear is compare-and-c
     const replay = durability.retryDeclined();
     await expect.poll(() => group.syncCalls, { timeout: 2000 }).toBeGreaterThan(0);
     await recordPendingDirectInvite(G1, BOB, 'ref-new', 'leaf-new');
+    const overlapping = durability.retryDeclined();
+    await expect.poll(async () => (await pendingDirectInviteMarkerStore.listDeclined()).length).toBe(1);
     group.syncedGate.resolve();
-    expect(await replay).toEqual(['no-marker']);
-    expect(announced).toEqual([]);
+    expect(await Promise.all([replay, overlapping])).toEqual([['removed'], ['removed']]);
+    expect(group.removeCalls).toEqual([]);
+    expect(announced).toEqual([{ groupId: G1, content: buildDeclinedAnnouncementContent(BOB, declinedDedupId(G1, 'ref-old')) }]);
     expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-new', pubkey: BOB, declined: false, leafKey: 'leaf-new' });
+  });
+
+  it.each(['group clear', 'account clear', 'dispose'] as const)('%s stops a queued notice from publishing', async (stop) => {
+    const group = fakeGroup(G1, [CAROL], log);
+    group.syncedGate = deferred();
+    groups.set(G1, group);
+    await recordPendingDirectInvite(G1, BOB, 'ref-old', 'leaf-old');
+    await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-old');
+    await setPendingDirectInvitePhase(G1, BOB, 'ref-old', 'announce-pending');
+    await recordPendingDirectInvite(G1, BOB, 'ref-new', 'leaf-new');
+    const durability = build();
+    const replay = durability.retryDeclined();
+    await expect.poll(() => group.syncCalls, { timeout: 2000 }).toBeGreaterThan(0);
+    if (stop === 'group clear') await clearPendingDirectInvitesForGroup(G1);
+    if (stop === 'account clear') await clearAllPendingDirectInvites();
+    if (stop === 'dispose') durability.dispose();
+    group.syncedGate.resolve();
+    await replay;
+    expect(announced).toEqual([]);
+    expect(group.removeCalls).toEqual([]);
+    expect((await pendingDirectInviteMarkerStore.listDeclined()).map(({ marker }) => marker.inviteeRef))
+      .toEqual(stop === 'dispose' ? ['ref-old'] : []);
+    durability.dispose();
   });
 
   it('cleared meanwhile (cancel / reset) while the removal waits: nothing removed, nothing announced, nothing resurrected', async () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.syncedGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await expect.poll(() => group.syncCalls, { timeout: 2000 }).toBeGreaterThan(0);
@@ -702,29 +833,29 @@ describe('the marker is re-read INSIDE the queued op; the clear is compare-and-c
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeGate = deferred();
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-old');
+    await recordPendingDirectInvite(G1, BOB, 'ref-old', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-old' });
     await expect.poll(() => group.removeCalls.length, { timeout: 2000 }).toBe(1);
-    await recordPendingDirectInvite(G1, BOB, 'ref-new');
+    await recordPendingDirectInvite(G1, BOB, 'ref-new', `leaf-${BOB.slice(0, 2)}`);
     group.removeGate.resolve();
     await durability.idle();
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-new', pubkey: BOB, declined: false });
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ inviteeRef: 'ref-new', pubkey: BOB, declined: false });
   });
 
   it('clearPendingDirectInviteIfRef clears only a record carrying that ref (never a newer, a legacy or an absent marker)', async () => {
-    await recordPendingDirectInvite(G1, BOB, 'ref-1');
+    await recordPendingDirectInvite(G1, BOB, 'ref-1', `leaf-${BOB.slice(0, 2)}`);
     expect(await clearPendingDirectInviteIfRef(G1, BOB, 'ref-other')).toBe(false);
     expect(await getPendingDirectInviteMarker(G1, BOB)).toBeDefined();
     expect(await clearPendingDirectInviteIfRef(G1, BOB, 'ref-1')).toBe(true);
     expect(await getPendingDirectInviteMarker(G1, BOB)).toBeUndefined();
     expect(await clearPendingDirectInviteIfRef(G1, BOB, 'ref-1')).toBe(false);
-    await markPendingDirectInvite(G1, CAROL);
+    await set(markerKey(G1, CAROL), true, raw);
     expect(await clearPendingDirectInviteIfRef(G1, CAROL, 'ref-1')).toBe(false);
   });
 
   it('setPendingDirectInvitePhase refuses a marker that is not declined or carries another ref', async () => {
-    await recordPendingDirectInvite(G1, BOB, 'ref-1');
+    await recordPendingDirectInvite(G1, BOB, 'ref-1', `leaf-${BOB.slice(0, 2)}`);
     expect(await setPendingDirectInvitePhase(G1, BOB, 'ref-1', 'removing')).toBe(false); // not declined
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-1');
     expect(await setPendingDirectInvitePhase(G1, BOB, 'ref-2', 'removing')).toBe(false);
@@ -743,7 +874,7 @@ describe('phased marker: the announcement survives reload / dispose', () => {
       return removeMember(a);
     };
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build({
       announce: async () => void phases.push((await getPendingDirectInviteMarker(G1, BOB))?.phase),
     });
@@ -777,10 +908,10 @@ describe('phased marker: the announcement survives reload / dispose', () => {
     const done = fakeGroup(G2, [CAROL], log);
     groups.set(G1, pending);
     groups.set(G2, done);
-    await recordPendingDirectInvite(G1, BOB, 'ref-1');
+    await recordPendingDirectInvite(G1, BOB, 'ref-1', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-1');
     await setPendingDirectInvitePhase(G1, BOB, 'ref-1', 'removing');
-    await recordPendingDirectInvite(G2, BOB, 'ref-2');
+    await recordPendingDirectInvite(G2, BOB, 'ref-2', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G2, 'ref-2');
     await setPendingDirectInvitePhase(G2, BOB, 'ref-2', 'announce-pending');
     const outcomes = await build().retryDeclined();
@@ -805,7 +936,7 @@ describe('in-session bounded backoff replay', () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = new Error('commit failed');
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await advance(0); // the first attempt, at t=0
@@ -832,7 +963,7 @@ describe('in-session bounded backoff replay', () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = new Error('commit failed');
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await advance(0); // the first attempt, at t=0
@@ -847,7 +978,7 @@ describe('in-session bounded backoff replay', () => {
   });
 
   it('a group that is not loaded yet is replayed too', async () => {
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await advance(0); // the first attempt, at t=0
@@ -863,7 +994,7 @@ describe('in-session bounded backoff replay', () => {
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = new Error('commit failed');
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await advance(0); // the first attempt, at t=0
@@ -890,7 +1021,7 @@ describe('orphan declines', () => {
           expect(errors.map((e) => (e as Error).message)).toEqual([expect.stringContaining('orphan')]);
           expect((await loadOrphanDeclines()).map((o) => [o.groupId, o.inviteeRef])).toEqual([[G1, 'ref-bob']]);
           expect(group.removeCalls).toEqual([]);
-          return { outcome: { inviteeRef: 'ref-bob', pubkey: BOB, status: 'delivered', relays: [] }, keyPackageEventId: 'k', attempts: 1 } as never;
+          return { outcome: { inviteeRef: 'ref-bob', pubkey: BOB, status: 'delivered', relays: [] }, keyPackageEventId: 'k', invitedLeafKey: 'leaf-bob', attempts: 1 } as never;
         },
       },
       store: pendingDirectInviteMarkerStore,
@@ -911,11 +1042,11 @@ describe('orphan declines', () => {
     try {
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
       await recordOrphanDecline(G1, 'ref-bob');
-      expect((await recordPendingDirectInvite(G1, BOB, 'ref-other')).declined).toBe(false);
+      expect((await recordPendingDirectInvite(G1, BOB, 'ref-other', `leaf-${BOB.slice(0, 2)}`)).declined).toBe(false);
       expect(await loadOrphanDeclines()).toHaveLength(1);
       vi.setSystemTime(new Date(Date.parse('2026-01-01T00:00:00Z') + ORPHAN_TTL_MS + 1000));
       expect(await loadOrphanDeclines()).toEqual([]);
-      expect((await recordPendingDirectInvite(G1, BOB, 'ref-bob')).declined).toBe(false);
+      expect((await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`)).declined).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -938,14 +1069,11 @@ describe('orphan declines', () => {
   });
 });
 
-describe('legacy marker writer and bulk clears are serialised per key', () => {
-  it('a legacy markPendingDirectInvite issued right after a record is applied AFTER it (not overtaking it)', async () => {
-    void recordPendingDirectInvite(G1, BOB, 'ref-bob');
-    await markPendingDirectInvite(G1, BOB);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toBeUndefined(); // the bare `true` won: it ran second
-    expect((await import('@/src/lib/marmot/pendingDirectInviteStorage').then((m) => m.loadPendingDirectInviteMarkers(G1))).has(BOB)).toBe(true);
-  });
+it('a second record for the same account is serialized after the first', async () => {
+  const first = recordPendingDirectInvite(G1, BOB, 'ref-first', `leaf-${BOB.slice(0, 2)}`);
+  const second = recordPendingDirectInvite(G1, BOB, 'ref-second', `leaf-${BOB.slice(0, 2)}`);
+  await Promise.all([first, second]);
+  expect((await getPendingDirectInviteMarker(G1, BOB))?.inviteeRef).toBe('ref-second');
 });
 
 describe('the same pubkey invited to two groups: a decline in one leaves the other untouched (full path)', () => {
@@ -990,7 +1118,7 @@ describe('stale orphan adoption: only a decline that arrived since THIS invite b
       onError: (e) => void errors.push(e),
     });
     await inviter.inviteByPubkey({ id: G1 } as never, BOB);
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ inviteeRef: 'ref-bob', pubkey: BOB, declined: false });
     expect(recorded).toEqual([]);
     expect(await loadOrphanDeclines()).toEqual([]);
   });
@@ -1021,7 +1149,7 @@ describe('stale orphan adoption: only a decline that arrived since THIS invite b
     await recordOrphanDecline(G1, 'r2');
     expect((await recordPendingDirectInvite(G1, BOB, 'r2', undefined, t)).declined).toBe(true);
     await recordOrphanDecline(G1, 'r3');
-    expect((await recordPendingDirectInvite(G1, CAROL, 'r3')).declined).toBe(true);
+    expect((await recordPendingDirectInvite(G1, CAROL, 'r3', `leaf-${CAROL.slice(0, 2)}`)).declined).toBe(true);
   });
 });
 
@@ -1040,7 +1168,7 @@ describe('terminal removal errors: cleared, reported once, never retried', () =>
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = error;
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
     const durability = build();
     expect(await durability.retryDeclined()).toEqual(['terminal']);
@@ -1060,7 +1188,7 @@ describe('terminal removal errors: cleared, reported once, never retried', () =>
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = error;
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
     expect(await build({ retryDelaysMs: [] }).retryDeclined()).toEqual(['retry-later']);
     expect((await getPendingDirectInviteMarker(G1, BOB))?.declined).toBe(true);
@@ -1071,7 +1199,7 @@ describe('terminal removal errors: cleared, reported once, never retried', () =>
     const group = fakeGroup(G1, [CAROL, BOB], log);
     group.removeError = coded('not-a-member');
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     const durability = build();
     durability.onWelcomeDeclined({ groupId: G1, inviteeRef: 'ref-bob' });
     await vi.advanceTimersByTimeAsync(0);
@@ -1088,19 +1216,27 @@ describe('declined markers have a maximum age', () => {
   afterEach(() => void vi.useRealTimers());
   const DAY = 24 * 3_600_000;
 
-  it('a marker declined more than 30 days ago is dropped on replay: cleared, reported, nothing removed or announced', async () => {
+  it.each(['marker', 'moved notice'] as const)('a %s declined more than 30 days ago expires on replay', async (kind) => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
+    let replacement;
+    if (kind === 'moved notice') {
+      await setPendingDirectInvitePhase(G1, BOB, 'ref-bob', 'announce-pending');
+      vi.setSystemTime(new Date('2026-01-11T00:00:00Z'));
+      replacement = await recordPendingDirectInvite(G1, BOB, 'ref-new', 'leaf-new');
+    }
     vi.setSystemTime(new Date(Date.parse('2026-01-01T00:00:00Z') + 30 * DAY + 1));
-    expect(await build().retryDeclined()).toEqual(['expired']);
+    const durability = build();
+    expect(await durability.retryDeclined()).toEqual(['expired']);
     expect(errors.map((e) => (e as Error).message)).toEqual([expect.stringContaining('maximum age')]);
     expect(group.removeCalls).toEqual([]);
     expect(announced).toEqual([]);
-    expect(await getPendingDirectInviteMarker(G1, BOB)).toBeUndefined();
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toEqual(replacement);
+    expect(await durability.retryDeclined()).toEqual([]);
   });
 
   it('exactly at the maximum age (and any younger marker) is still replayed', async () => {
@@ -1108,7 +1244,7 @@ describe('declined markers have a maximum age', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     const group = fakeGroup(G1, [CAROL, BOB], log);
     groups.set(G1, group);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
     vi.setSystemTime(new Date(Date.parse('2026-01-01T00:00:00Z') + 30 * DAY));
     expect(await build().retryDeclined()).toEqual(['removed']);
@@ -1119,10 +1255,10 @@ describe('declined markers have a maximum age', () => {
   it('maxAgeMs and now are injectable and validated; an expired marker of a re-invite (newer ref) is left alone', async () => {
     expect(() => build({ maxAgeMs: 0 })).toThrow(TypeError);
     expect(() => build({ now: 'x' as never })).toThrow(TypeError);
-    await recordPendingDirectInvite(G1, BOB, 'ref-bob');
+    await recordPendingDirectInvite(G1, BOB, 'ref-bob', `leaf-${BOB.slice(0, 2)}`);
     await pendingDirectInviteMarkerStore.markDeclined(G1, 'ref-bob');
     const durability = build({ maxAgeMs: 10, now: () => Date.now() + 1_000 });
-    await recordPendingDirectInvite(G1, BOB, 'ref-new'); 
+    await recordPendingDirectInvite(G1, BOB, 'ref-new', `leaf-${BOB.slice(0, 2)}`);
     expect(await durability.retryDeclined()).toEqual([]);
     expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ inviteeRef: 'ref-new', declined: false });
   });

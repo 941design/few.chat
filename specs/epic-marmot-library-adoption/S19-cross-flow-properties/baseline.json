@@ -1,0 +1,12 @@
+{
+  "consumer_sha": "5311488",
+  "tests": {
+    "command": "VITEST_MAX_WORKERS=6 make test-unit",
+    "files_passed": 355,
+    "files_failed": 29,
+    "tests_passed": 8138,
+    "tests_failed": 128,
+    "tests_skipped": 1
+  },
+  "note": "Measured on the runtime cutover working tree before the new properties or publication recorder. The suite showed legacy expectations and client import boundary tests still needing migration."
+}

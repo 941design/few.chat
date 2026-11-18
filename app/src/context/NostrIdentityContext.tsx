@@ -30,34 +30,11 @@ import {
   type StoredNostrIdentity,
 } from '@/src/lib/nostrKeys';
 import { deriveIsFreshIdentity } from '@/src/lib/freshIdentity';
+import { buildNip46PermsParam, connectBunkerWithPermissions, loadNip46Session, saveNip46Session } from '@/src/lib/nip46Perms';
 import { postAccountChangedIfSwitched } from '@/src/lib/crossTab';
 import { detachBackupForReplace } from '@/src/lib/backup/suspension';
 
 export type SignerMode = 'local' | 'nip46' | 'nip07';
-
-/**
- * Required NIP-46 permissions for group chat + DMs.
- * Matches AC-SIGNER-3.
- */
-const REQUIRED_PERMS = [
-  'sign_event:0',
-  'sign_event:5',
-  'sign_event:443',
-  'sign_event:444',
-  'sign_event:445',
-  'sign_event:1059',
-  'sign_event:10051',
-  // CARD_SIG_KIND_V2 (contactCard.ts) — the synthetic kind the v2 pairing card
-  // signs over. Required or a permission-enforcing NIP-46 bunker rejects the
-  // Share contact card action (all shares are v2 pairing codes as of the
-  // contact-pairing-code epic).
-  'sign_event:20602',
-  'sign_event:30051',
-  'sign_event:30078',
-  'sign_event:30443',
-  'nip44_encrypt',
-  'nip44_decrypt',
-];
 
 type NostrIdentityContextValue = {
   /** Whether the identity has been loaded from storage (may be null on SSR) */
@@ -236,9 +213,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
 
       // AC-SIGNER-6: If previously in nip46 mode, restore session on mount.
       if (effectiveMode === 'nip46') {
-        const sessionPayload = typeof localStorage !== 'undefined'
-          ? localStorage.getItem(STORAGE_KEYS.nip46Session)
-          : null;
+        const sessionPayload = typeof localStorage !== 'undefined' ? loadNip46Session(localStorage) : null;
 
         if (sessionPayload) {
           setSignerReconnecting(true);
@@ -254,7 +229,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
               if (typeof window !== 'undefined') window.open(url, '_blank');
             });
 
-            await raceWithTimeout(restoredSigner.blockUntilReady(), BUNKER_TIMEOUT_MS);
+            await raceWithTimeout(connectBunkerWithPermissions(restoredSigner), BUNKER_TIMEOUT_MS);
 
             if (cancelled) return;
             await _activateNip46Signer(restoredSigner, null, stored);
@@ -269,8 +244,8 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
             if (!cancelled) setSignerReconnecting(false);
           }
         } else {
-          // No session payload — revert to local (shouldn't happen normally)
-          _clearNip46Mode();
+          setSignerError('connection_failed');
+          setSignerAvailable(false);
         }
       }
 
@@ -291,6 +266,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
   function _clearNip46Mode() {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(STORAGE_KEYS.nip46Session);
+      localStorage.removeItem(STORAGE_KEYS.nip46Permissions);
       localStorage.setItem(STORAGE_KEYS.signerMode, 'local');
     }
     setSignerModeState('local');
@@ -335,7 +311,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
     // Persist session payload (no private key stored — AC-SIGNER-5)
     const payload = signer.toPayload();
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEYS.nip46Session, payload);
+      saveNip46Session(localStorage, payload);
       // Remove the raw private key from localStorage (AC-SIGNER-5)
       // Only do this if the bunker is for the same identity (safe guard)
       if (!reportedPubkey || !currentIdentity || reportedPubkey === currentIdentity.pubkeyHex) {
@@ -465,7 +441,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       const nip46 = NDKNip46Signer.nostrconnect(ndk, relay, ephemeralSigner, {
         name: 'Few',
         url: 'https://few.chat',
-        perms: REQUIRED_PERMS.join(','),
+        perms: buildNip46PermsParam(),
       });
 
       // Wire auth_url handler
@@ -534,7 +510,7 @@ export function NostrIdentityProvider({ children }: { children: React.ReactNode 
       });
 
       pendingNip46SignerRef.current = signer;
-      const user = await raceWithTimeout(signer.blockUntilReady(), BUNKER_TIMEOUT_MS);
+      const user = await raceWithTimeout(connectBunkerWithPermissions(signer), BUNKER_TIMEOUT_MS);
       await _activateNip46Signer(signer, user.pubkey, identity);
     } catch (err) {
       const msg = err instanceof Error && err.message === 'timeout'

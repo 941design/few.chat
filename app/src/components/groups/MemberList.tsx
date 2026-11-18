@@ -57,7 +57,6 @@ type MemberListProps = {
   /** Called when the user confirms granting admin to a member; only invoked on confirm */
   onMakeAdmin?: (pubkey: string) => Promise<void>;
   /** Hex pubkeys with a pending eviction commit; drives the leave/removal-pending badge */
-  pendingRemovalPubkeys?: string[];
   /**
    * Open join requests for this group — people who applied to join but are
    * NOT yet in the MLS tree (distinct from an in-tree "Pending" member awaiting
@@ -230,7 +229,6 @@ export default function MemberList({
   adminPubkeys,
   isCurrentUserAdmin,
   onMakeAdmin,
-  pendingRemovalPubkeys,
   pendingRequests,
   onApproveRequest,
   onDenyRequest,
@@ -238,12 +236,31 @@ export default function MemberList({
   requestErrors,
 }: MemberListProps) {
   const copy = useCopy();
+  const [removing, setRemoving] = useState<Set<string>>(() => new Set());
+  const visibleMembers = [...new Set([...memberPubkeys, ...removing])];
+
+  // A roster update can remove the row while the confirmation is still saving its notice.
+  function keepRowUntilSettled(action: (pubkey: string) => Promise<void>) {
+    return async (pubkey: string) => {
+      setRemoving((current) => new Set(current).add(pubkey));
+      try {
+        await action(pubkey);
+      } finally {
+        setRemoving((current) => {
+          const remaining = new Set(current);
+          remaining.delete(pubkey);
+          return remaining;
+        });
+      }
+    };
+  }
+
 
   // Open join requests render as approve/deny rows at the TOP of the single
   // list; they precede the in-tree members below (people who applied but have
   // not yet been admitted). Admin-only — non-admins receive an empty list.
   const requests = pendingRequests ?? [];
-  const hasMembers = memberPubkeys.length > 0;
+  const hasMembers = visibleMembers.length > 0;
 
   return (
     <VStack align="stretch" spacing={2}>
@@ -264,7 +281,7 @@ export default function MemberList({
         </Text>
       )}
 
-      {hasMembers && memberPubkeys.map((pubkey) => {
+      {hasMembers && visibleMembers.map((pubkey) => {
         const npub = pubkeyToNpub(pubkey);
         // Canonicalize the row's pubkey once and use it for EVERY identity /
         // membership check below (isYou, confirmedPubkeys, pendingInviteMarkers).
@@ -284,7 +301,6 @@ export default function MemberList({
           hasMarker,
         });
         const rowIsAdmin = isRowAdmin(pubkey, adminPubkeys);
-        const isPendingRemoval = pendingRemovalPubkeys?.includes(pubkey) ?? false;
         const showMakeAdmin = computeShowMakeAdmin({
           isCurrentUserAdmin,
           isRowAdmin: rowIsAdmin,
@@ -314,12 +330,10 @@ export default function MemberList({
             removeMemberBody={copy.groups.removeMemberBody}
             removeMemberConfirm={copy.groups.removeMemberConfirm}
             cancelLabel={copy.groups.cancel}
-            onCancelInvite={affordance === 'cancel-invite' ? onCancelInvite : undefined}
-            onRemoveMember={affordance === 'remove-member' ? onRemoveMember : undefined}
+            onCancelInvite={affordance === 'cancel-invite' && onCancelInvite ? keepRowUntilSettled(onCancelInvite) : undefined}
+            onRemoveMember={affordance === 'remove-member' && onRemoveMember ? keepRowUntilSettled(onRemoveMember) : undefined}
             isRowAdmin={rowIsAdmin}
             adminBadgeLabel={copy.groups.adminBadge}
-            isPendingRemoval={isPendingRemoval}
-            removalPendingLabel={copy.groups.leavePendingBadge}
             showMakeAdmin={showMakeAdmin}
             makeAdminLabel={copy.groups.makeAdminButton}
             makeAdminTitle={copy.groups.makeAdminTitle}
@@ -364,10 +378,6 @@ type MemberListItemProps = {
   isRowAdmin?: boolean;
   /** Resolved i18n string for the admin badge */
   adminBadgeLabel?: string;
-  /** Whether this row has a pending eviction commit */
-  isPendingRemoval?: boolean;
-  /** Resolved i18n string for the removal-pending badge (leavePendingBadge copy) */
-  removalPendingLabel?: string;
   /** Whether to show the Make admin trigger button on this row */
   showMakeAdmin?: boolean;
   /** Resolved i18n string for the Make admin trigger button */
@@ -405,8 +415,6 @@ function MemberListItem({
   onRemoveMember,
   isRowAdmin,
   adminBadgeLabel,
-  isPendingRemoval,
-  removalPendingLabel,
   showMakeAdmin,
   makeAdminLabel,
   makeAdminTitle,
@@ -491,16 +499,6 @@ function MemberListItem({
                 data-testid={`admin-badge-${prefix}`}
               >
                 {adminBadgeLabel}
-              </Badge>
-            )}
-            {isPendingRemoval && removalPendingLabel && (
-              <Badge
-                colorScheme={BADGE_ACCENT.removalPending}
-                variant="subtle"
-                fontSize="2xs"
-                data-testid={`removal-pending-${prefix}`}
-              >
-                {removalPendingLabel}
               </Badge>
             )}
             {isYou && (

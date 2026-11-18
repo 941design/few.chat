@@ -17,7 +17,6 @@ import { createGroupRumorDispatch, type GroupKindHandler } from '@/src/lib/marmo
 import {
   createPollCloseGroupHandler,
   createPollOpenGroupHandler,
-  createPollOpenHandler,
   createPollVoteGroupHandler,
   type PollGroupHandlerDeps,
 } from '@/src/lib/marmot/handlers/pollHandler';
@@ -264,6 +263,11 @@ describe('construction', () => {
     createPollVoteGroupHandler,
     createPollCloseGroupHandler,
   };
+  it('group factories expose their sink kinds without a legacy handle', () => {
+    const { handlers } = build();
+    expect(handlers.map((handler) => handler.kind)).toEqual([POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND]);
+    for (const handler of handlers) expect(handler).not.toHaveProperty('handle');
+  });
   const ports = [
     'savePoll', 'saveVoteIfNewer', 'getPoll', 'loadVotes', 'queuePendingVote', 'loadPendingVotes', 'removePendingVotes',
     'queuePendingClose', 'loadPendingCloses', 'removePendingCloses', 'setPollVersion', 'recomputePoll', 'receiptNow',
@@ -290,7 +294,6 @@ describe('construction', () => {
     G = 'ee'.repeat(32);
     const { deps } = build();
     const { replayHeldCloseAnnouncements: _unused, ...legacyDeps } = deps;
-    expect(() => createPollOpenHandler(legacyDeps)).not.toThrow();
     expect(() => createPollOpenGroupHandler(legacyDeps as unknown as PollGroupHandlerDeps)).toThrow(
       new TypeError('createPollOpenGroupHandler: required port "replayHeldCloseAnnouncements" is missing or not a function'),
     );

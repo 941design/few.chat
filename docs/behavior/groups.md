@@ -2,62 +2,46 @@
 
 *The full lifecycle of a group: creating one, the admin and member roles, bringing
 people in (by identity, by link, by join request), joining one, renaming, leaving,
-and removing a departed member — with the reasoning and failure modes the product
+and membership removal — with the reasoning and failure modes the product
 deliberately accepts.*
 
 ---
 
+## One active tab per account
+
+In the same browser, one tab at a time sends and processes group activity for an
+account. Other tabs report that groups are active in another tab and show the locally
+saved group list for reference. Group changes do not live-sync into the waiting tab. It uses the saved list for
+DM reachability.
+When the active tab releases access, a waiting tab takes over automatically without a
+reload. See [Contacts & direct messages](contacts-and-direct-messages.md#7-direct-messages)
+for the separate DM behaviour.
+
 ## Receiving messages after reopening
 
-Application handlers are attached before historical group messages are ingested.
-Historical readiness waits for queued application processing, including storage
-writes, before history-dependent profile publication begins. This covers chat,
-polls, profiles, reactions, and edit/delete messages through the same authenticated
-message channel. Messages are processed in arrival order within each subscription.
+The app keeps accepted group events on this device before applying them to chat, polls,
+reactions, profiles, and edits or deletes. If processing is interrupted, reopening the
+app retries unfinished work in each group's saved order. Repeat delivery of a processed
+event does not add another message or unread count. An event that repeatedly fails
+recovery stops retrying after five failed recovery attempts so it cannot stall every
+reopening.
 
-Leaving a subscription cancels work that has not started and detaches its
-listeners. A pending historical fetch that completes after cancellation cannot
-start a live subscription. A handler already running must finish before its
-storage can safely be reassigned to another account; full account-transition
-isolation remains under review. Offline two-peer recovery and rapid React lifecycle
-transitions still require integration verification.
+### Fork withdrawal and send retry
 
-**A reload or closed tab while a message is being received does not lose it.**
-Decrypting a group message moves the group's keys forward, and the advanced keys are
-saved before the message itself has been stored — once that happens the message can
-never be decrypted again. So each decrypted message is first kept on the device, and
-only then may the advanced keys be saved. A kept message is discarded only once its
-processing **completed** — everything it had to store on the device was stored. One whose
-processing was cut short, or failed to store what it needed (for example a storage error
-while saving a chat message, a reaction, an edit or deletion, or a pending member
-removal), stays kept and is processed
-again the next time the group is opened, before any newly arriving message. Processing a
-message again is safe by design: chat messages, profiles, poll votes and reactions are
-stored at most once, an edit or deletion re-applied gives the same result, a departure is
-queued once per membership, and nothing is counted or announced twice.
-Within one opening of a group a message is processed once; a re-received copy is ignored
-and does not discard a kept message whose processing failed.
+When members make competing changes to a group, one branch of its history can lose.
+The app withdraws events that are no longer part of the accepted history. Another
+member's withdrawn message disappears, unread is recalculated from the remaining
+messages, and reactions, poll results, and edits or deletes reflect the history that
+remains, including when your own contributions are withdrawn. A message can return if its branch later wins.
 
-- **What this guarantees:** a message that was decrypted and kept is processed again
-  until its processing completes, even if the page goes away, or storage fails, before
-  it is stored — up to five failed attempts. A message that fails on every one of them
-  (for example one that can never be stored) is then discarded and the failure is
-  logged, so it does not keep being retried for 30 days. If discarding a completed
-  message itself fails, it is not processed again while the app stays open, and the
-  discard is retried; after a reload it may be processed once more, without visible
-  effect.
-- **What it does not:** if keeping the message fails (for example, the device's storage
-  is full) the message is processed as before, and a reload at that moment can still
-  lose it. A failure the app treats as recoverable by other means is not retried this
-  way: anything about a profile request (recording it, or answering it — the requester
-  asks again), noting that a requested profile has arrived (at worst it is requested
-  once more). A kept message that is not processed within 30 days is discarded; there is
-  no limit on how many are kept for one group, so a long catch-up cut short is resumed
-  in full.
-- Kept messages stay on this device only: they are not part of the relay backup, are
-  never sent anywhere, and are removed when you leave the group or the account's
-  local data is cleared.
-
+Your own withdrawn chat message stays visible as failed and can be retried. An
+unconfirmed send can also fail when the app can no longer send it, its send operation
+fails, the group switches branches, or it stays unconfirmed for a minute after the
+send finishes and the group has caught up. A message still queued for sending stays
+pending. Only a manual retry resends a failed chat message. It uses the same message
+identity, so confirmation updates the existing row. A late confirmation can also recover a failed row. See
+[Notifications & unread](notifications-and-unread.md#5-unread-counts-kept-honest) for
+what changes in unread and what happens to alerts already raised.
 
 ## 1. What a group is
 
@@ -113,7 +97,6 @@ These actions are **admin-only**; a regular member cannot perform them.
 | Remove another member | Yes | No |
 | Rename the group | Yes | No |
 | Grant admin to another member | Yes | No |
-| Finalise a departed member's removal | Yes | No — deferred to an admin |
 | Leave the group | Yes* | Yes |
 | Read, send, react, poll, share | Yes | Yes |
 
@@ -123,7 +106,7 @@ dissolves the group.
 
 **Where "admin-only" is actually enforced.** For actions that change the group's
 shared state — inviting, cancelling an invitation, removing a member, renaming,
-granting admin, and finalising a removal — the restriction is enforced in two independent places: the app
+and granting admin — the restriction is enforced in two independent places: the app
 will not initiate the action for a non-admin, *and* the protocol itself rejects such a
 change even from a modified client. Two actions are weaker: creating an invite link
 and *declining* a join request are purely local decisions with no protocol
@@ -186,41 +169,16 @@ invitation is outstanding.
 For an invitation to succeed, the invitee must have **published the identity keys**
 that let others add them (this happens automatically when someone sets up their
 identity). If they have not, the invitation fails with an explanation that the person
-hasn't set up their identity yet. Other failures — the invitee being unreachable, or
-the lookup timing out — surface as distinct errors; the invite is not silently lost.
+hasn't set up their identity yet. If delivery cannot be confirmed, the invitation can remain retryable.
 
-**Where the invitee's keys are looked for.** The inviter first reads the relay list the
-invitee advertises (the list Few itself publishes, or the generic Marmot key-package
-relay list that other clients publish). Only a list signed by the invitee counts: the
-signature is checked. Few's own list is preferred over the generic one, and the newest
-valid list of the preferred kind wins. Of the relays it names, at most
-three are used: secure (`wss://`) addresses only — plain `ws://` only for a relay on the
-inviter's own machine — with duplicates dropped. The invitee's keys are then requested
-from the inviter's own relays and from those advertised relays together; finding them in
-either place is enough. When the inviter's own relays already hold them, that copy is
-used, the advertised relays are not compared, and the invitation does not wait for them.
-An advertised relay that is down or slow never fails an invitation whose keys were found
-elsewhere; when no keys are found anywhere, a slow advertised relay turns the error into
-a time-out instead of "not set up". Every key package that is used is signature-checked, and one from an
-advertised relay must also be the invitee's own. Advertised relays are asked for this one
-request over a separate short-lived connection: they never join the inviter's relay
-connections and never change the inviter's saved relay settings. Only the key request is read
-from them, and nothing but that request and the Welcome is sent to them — no profile data
-is sent or fetched.
+**Where the invitee's keys are looked for.** The inviter searches its configured relays
+and safe public relay addresses advertised in the invitee's inbox and write relay
+lists. It tries up to six matching key packages, newest first, skipping packages that
+cannot be used. An invitation can fail if the inviter cannot discover the invitee's
+lists or keys from the relays it can reach. The Welcome is delivered through the
+invitee's inbox relay routing (see [Contacts & direct messages](contacts-and-direct-messages.md#7-direct-messages)).
 
-**Where the Welcome goes.** When the inviter could read the invitee's relay list, the
-Welcome is delivered to the invitee's advertised relays **and** the inviter's own relays.
-When it could not — the list is not visible from the inviter's relays, is empty, or the
-read timed out before any valid list arrived — the Welcome goes to the inviter's own relays alone.
-
-**Limit: fully separate relays still cannot be bridged.** A Few user publishes the
-relay list only on their own relays. If the inviter and the invitee share no relay at
-all, the inviter cannot find that list, finds no keys, and the invitation fails as if
-the person had not set up their identity. Closing this would need a new publication
-(a pointer to the list on well-known relays) or relay hints carried in the invite; both
-are open product decisions.
-
-A successful invitation adds the person to the group and delivers them a Welcome; it
+A successful invitation adds the person to the roster and sends them a Welcome; it
 does **not** make them an admin (§3.1). Inviting from the contact's own profile
 confirms success there even when that was the last group they could be invited to —
 the confirmation does not disappear just because no group is left to offer.
@@ -281,64 +239,61 @@ so it cannot be forged to look like it came from someone else.
 
 ### 4.4 Cancelling a pending invitation
 
-An admin can cancel a **pending member** — someone who is in the group's cryptographic
-tree but whom the group has not yet **confirmed** (no profile has arrived from them
-yet). This is how an admin withdraws an invitation sent to the wrong person before it
-is accepted. Cancelling removes that person **immediately**; it does not wait on anyone
-else, and any admin can do it once they have synced the group's state — the pending
-status is computed from shared group state, not from anything the inviting admin holds
-privately.
-
-"Pending" means only *in the tree, no profile yet* — it does not record how the person
-got there, so it also covers **someone who joined through an approved join request**
-but whose profile has not yet propagated. Cancelling and removing are the same
-operation (§4.5): both remove whoever is still in the group's tree, so cancelling a
-person who has meanwhile become confirmed removes them too. Only when the person is no
-longer in the tree at all (another admin removed them first) is the cancellation a
-harmless no-op.
+An admin can cancel a pending direct invitation by removing the invitee from the
+group and clearing the pending invitation. The action uses the same membership removal
+as §4.5. Once the invitation is confirmed, removing the member is a separate admin action.
 
 ### 4.5 Removing a member
 
-An admin can remove **any other member** — confirmed or pending, admin or not. The
-removal is immediate and does not wait on anyone else: the member is dropped from the
-roster on every remaining member's device and the group's keys are refreshed in the
-same step. An admin
-cannot remove themselves this way; their own exit is leaving (§7).
+An admin can remove another member. As the membership change reaches each device,
+the remaining members see the updated roster and use refreshed group keys. The removed
+member's device clears its local copy when it learns of the removal (§8). An admin's
+own exit is leaving (§7).
 
 ---
 
 ## 5. Joining a group (the invitee side)
 
-However an admin adds someone, the person receives a **Welcome** — the cryptographic
+However an admin adds someone, the person receives a **Welcome**, the cryptographic
 grant of membership. Receiving a Welcome does not, by itself, put them in the group.
 
 ### 5.1 A Welcome must be accepted (pull-only)
 
-Incoming Welcomes are **not** acted on automatically. Each is held in a **pending
-list** until the recipient explicitly **accepts** or **declines** it. Accepting joins
-the group; declining discards the Welcome silently, publishing nothing (the inviter is
-never told it was declined).
+A Welcome waits for the recipient to accept or decline it, except for the join request
+case in §5.2. Consent matters because joining gives group co-members DM reachability
+(ADR-002). A blocked sponsor's invitation is silently dropped.
 
-**Why consent is required.** A Welcome anyone can craft would otherwise let an attacker
-force their own key into your group roster — and, because sharing a group grants DM
-reachability, make themselves able to message you — without your consent. Requiring you
-to accept closes that pre-admission attack surface: a Welcome grants nothing until you
-act on it. (This is **ADR-002**.) To blunt flooding, the pending list is capped
-(overall, and per inviter); when it is full, the **oldest** waiting Welcome is
-discarded to make room for a new one — so a flood displaces older pending invitations
-rather than blocking new ones. If a queued Welcome is accepted too late — after its
-cryptographic state has moved on — accepting fails and the entry is discarded.
+The recipient sees a generic group label until a matching sponsor supplies the group
+name through the private inbox. The label can update in place regardless of arrival
+order. The name is the sponsor's claim and is shown as plain text. After seven days,
+the app discards the stored name and returns to the generic label. The preview omits
+descriptions and admin lists.
+
+A sponsor is trusted if they are you or an ever-known peer, including someone you
+added as a contact. A stranger invitation expires after 14 days. Trusted invitations
+do not age out under this rule. The app keeps up to eight invitations per sponsor,
+preferring already shown invitations, then older ones. Of those, it keeps up to 256
+overall, preferring trusted sponsors first, then already shown invitations, then older
+ones. A trusted arrival can displace a stranger invitation. Excess and expired invitations
+are silently declined.
+
+An explicit decline removes the invitation and sends a private decline. For a tracked
+direct invitation, the sponsor's app removes that invitation's membership after syncing
+the group, then announces the decline in the group. Once the sponsor records the
+decline locally, cleanup can resume when the app reopens. Ignoring a Welcome leaves
+it pending within the rules above.
 
 ### 5.2 Accepting your own request automatically
 
-The one exception to §5.1 is a Welcome you actually asked for. When a Welcome arrives
-from an **authenticated admin you have an outstanding join request to**, and (when the
-group's name can be read from the Welcome) that name **matches** the request, the app
-accepts it for you — so a link join completes without a second confirmation. If the
-name can't be read and you have exactly one outstanding request to that admin, it still
-auto-accepts; anything else — an unauthenticated or forged Welcome, a Welcome from an
-admin you didn't ask, or a name mismatch — goes to the pending list for an explicit
-decision.
+A Welcome received after an unexpired join request can complete that request when
+the same account sent it, the authenticated sponsor matches the admin asked, and the
+sponsor's group name matches the requested name. The app binds the request to one
+invitation before joining and keeps that binding across reloads. Earlier requests
+without account ownership remain available for manual handling.
+
+If the context has yet to arrive, the Welcome waits with its generic label and is
+checked again when the context arrives. A different sponsor, a name mismatch, or an
+expired request leaves the invitation for an explicit decision.
 
 ### 5.3 First visit and onboarding
 
@@ -364,170 +319,48 @@ Renaming changes the group's shared name. **Only an admin may rename**, enforced
 protocol, not merely the app. The constraints on the name itself are app-level: it must
 be non-empty after trimming surrounding spaces and at most 64 characters; an invalid
 name is refused and nothing changes. Renaming to the current name is a no-op. On a real
-change, the shared name updates for every member as it propagates, and a rename notice
-is posted into the conversation so members can see what happened and who did it (that
-notice is best-effort — a rename whose notice fails to send still takes effect).
+change, the shared name updates for every member as it propagates.
 
 ---
 
 ## 7. Leaving a group
 
-When a member chooses to leave, the group's current membership is read fresh (the admin
-list it is checked against is the last one the leaver's app knows) and one of three
-outcomes applies, evaluated strictly in this order:
+- **Last member.** Confirming abandonment deletes the local group and its history.
+  There is nobody else to notify.
+- **Last admin with other members.** Leaving is blocked. Grant admin to another
+  member first (§3.3).
+- **Other members and admins.** Confirming hides the group immediately while the
+  departure runs in the background. The app first tries to send a departure
+  announcement. It proceeds with leaving if the announcement fails or is slow.
+  Other members see the roster change as they sync, without waiting for an admin to
+  approve the departure.
 
-1. **Abandon** — you are the only member left.
-2. **Blocked** — you are the only admin, but other members remain.
-3. **Confirm** — the normal case.
-
-The order matters: a sole member is also, by definition, a sole admin, so checking
-"last member" first prevents the sole-admin block from wrongly trapping the last person
-in their own group.
-
-- **Abandon.** If you are the only member, leaving **permanently deletes the group**;
-  because that is irreversible it requires an explicit confirmation acknowledging the
-  group cannot be recovered. There is no one to notify, and every trace of the group is
-  erased from your device.
-- **Blocked.** If you are the only admin and other members remain, the leave is
-  **refused**; you are told you must first grant admin to another member. This prevents
-  a group being stranded with no one able to change its membership (§10). The check is
-  repeated at the moment of leaving, against the group's admin list as it is then: if
-  it changed after the leaver's confirmation was shown and they have become the only
-  admin, the leave is **aborted** — nothing is sent or erased — and they are told the
-  same thing. An admin list that cannot be read at that moment never blocks the leave
-  (a group in unreadable state must stay deletable). It does not
-  fix an admin who loses their key or abandons the app — the only defence there is to
-  grant admin to trusted members early, and because grants are permanent, so are those.
-- **Confirm.** Any other member confirms and leaves. Leaving is **always immediate and
-  unilateral** — the moment you confirm you are gone from your own device, whether or
-  not any admin is online; the right to leave is never conditional on anyone's approval.
-  Behind the scenes, leaving is not a forcible protocol eviction (that would freeze the
-  whole group's conversation until an admin acted, §8); instead it records a departure
-  signal an admin's app later uses to finalise the removal, plus a departure
-  announcement in the conversation, and then erases the group from your own device.
-
-**What leaving erases, and when.** The group disappears from your view, with its
-messages and member details, the moment you confirm. Its cryptographic keys and
-encrypted history are deleted from the device once sending the departure announcement
-has finished — whether it was sent or failed — or after about five seconds if it has not
-finished by then, because the announcement is encrypted with those keys. When there is
-nothing to announce (abandon), they are deleted at once. If the app is closed or
-reloaded before that deletion completes, or the deletion fails, it completes the next
-time the app starts. Nothing about this deletion is sent anywhere; it happens on your
-device only.
-
-- **What this guarantees:** a group you left does not keep its keys on this device
-  beyond the next start, and they are never written into your relay backup (see
-  [Backup & recovery](backup-and-recovery.md)).
-- **Rejoining:** accepting a new invitation to a group you left makes it an ordinary
-  group again, backed up like any other. Only if the device fails to record the rejoin
-  as well can the group stay out of the backup — until the next start, which
-  restores it.
-- **What it does not:** leaving is per device. Another device of the same identity, and
-  a relay backup made before the leave, still hold the group until it is left there.
+A successful leave clears this device's group keys, history, messages, polls, member
+profiles, and invitation data. Other groups and established DM reachability are
+preserved. If the leave fails or times out, the app reports the failure and shows the
+group again. If you reload mid-leave, the group can reappear if the departure did
+not complete.
+A former member can rejoin with a fresh invitation.
 
 ---
 
-## 8. Removing a departed member
+## 8. When your membership is removed
 
-Because a leave is not a forcible eviction, there is a gap between a member *announcing*
-they have left and the roster actually *dropping* them.
-
-- After a member leaves, a remaining admin's app **automatically finalises the removal**
-  a few seconds later — dropping them from the roster and refreshing the group's keys in
-  one step. Several departures close together are handled together.
-- **A reload does not drop a pending removal.** A departure the app has received but
-  not yet finalised is kept on the device together with an identity of the departing
-  member's group membership as it was when the departure arrived. When the group is
-  opened again, the kept removal is resumed — only on a device whose user is an admin
-  of the group (any other device discards it) — and finalised only if that same
-  membership is still present. If the person has since re-joined with a new
-  membership, the kept removal is discarded instead: a stale removal never evicts a
-  member. The membership recorded is the one that **sent** the departure, as it stood
-  when the departure was written — so a departure that is only processed after a reload
-  (see *Receiving messages after reopening*), after the person has already re-joined,
-  is discarded too. Removals not finalised within 30 days are discarded. These pending
-  removals stay on the device only and are discarded when you leave the group or the
-  account's local data is cleared.
-- **A storage error does not lose a removal.** If the pending removal cannot be stored,
-  the app still finalises it while it stays open, and the departure itself stays kept on
-  the device until a later attempt has stored it — a repeated departure of the same
-  membership stores it too. If the recorded membership of a kept departure cannot be
-  read, the departure is not acted on then; it stays kept and is processed again later,
-  never against the current membership. Two admin tabs open on the same device never
-  discard each other's pending removals.
-- **What it does not guarantee:** a removal is lost when keeping the departure message
-  and storing the pending removal both fail, followed by a reload before it is
-  finalised, or when storing the removal fails on all five attempts (see *Receiving
-  messages after reopening*). A kept departure that carries no recorded membership (it
-  could not be determined when the departure arrived, or it was kept before the
-  membership was recorded with it) is **not acted on** when it is processed after a
-  reopening: it is discarded rather than checked against the current membership, so the
-  person stays on the roster until they leave again or an admin removes them. (A
-  departure processed as it arrives without a recorded membership uses the membership
-  present at that moment.) A person who re-joins with exactly the same membership keys as
-  before (possible only when re-using the same reusable invitation key without any
-  change in between) cannot be told apart from the departed membership; a stale removal
-  can then remove them.
-- **Only an admin can finalise a removal.** If only regular members are online, it
-  waits, and an admin completes it next time one is online — as long as the departure
-  signal was published and a relay still carries it.
-- **The conversation never freezes** during this gap. What is delayed is hygiene, not
-  liveness: the roster count stays stale until cleanup lands, and the departed member's
-  key remains valid until then (in practice they have already erased their copy).
-
-While a departure is awaiting finalisation, the departed member is in a distinct,
-observable state — **departed, cleanup pending** — visible only to remaining members. It
-conveys that the member has departed and cleanup is pending; it does **not** claim
-message delivery to them has stopped (at the protocol level it has not), and it does not
-promise a timeline — if no admin ever comes online it can persist indefinitely.
-
-The deferred finalisation here only ever completes a member's own departure. Removing a
-member who has not chosen to leave is a separate, immediate admin action (§4.5).
-
-**Residual zero-admin window.** Leaving re-checks that the leaver is not the only admin
-(§7), but only against departures whose removal has already been committed on the
-leaver's device, which happens a few seconds after a departure arrives. Two admins who
-confirm leaving within that window of each other can both pass, and the group is left
-with no admin. This is a sub-case of the accepted "no admin reachable"
-failure (§10): the group keeps working as a conversation but its membership is frozen.
+When your device learns that an admin has removed you, the group disappears and its
+local data is cleared, just as after leaving (§7). An offline device checks its
+membership when it reopens, so it can clean up even if it missed the original removal.
+Messages you sent remain in other members' histories. A fresh Welcome can let you
+rejoin without bringing back the deleted local history.
 
 ---
 
 ## 9. Message authenticity: who really sent a message
 
-Every group message now carries a **cryptographically authenticated sender**. Who a
-message came from is read from the group's shared cryptographic state — the sender proven
-by the group's key material — not from a name the message claims for itself. A message
-whose claimed author does not match its authenticated sender is **dropped**: it is not
-shown under anyone's name and not stored. Honest messages — the overwhelming normal case,
-where the claimed author is the real sender — are unaffected and behave exactly as before.
-
-This is what makes the authority described elsewhere in this document real rather than
-advisory. An admin-only action, a "so-and-so has left" signal (§8), or an announcement
-attributed to a member is now backed by proof that that member actually sent it. Where a
-system message additionally names an actor *inside its body* — a leave naming its subject,
-an announcement naming who invited or admitted whom — the app checks that named actor
-against the authenticated sender and ignores the message if they disagree, so one member
-cannot act, or appear to act, on another member's behalf.
-
-- **What this guarantees:** a message shown as authored by someone was sent by them, or it
-  was dropped. A member cannot forge a message to appear to come from another member.
-- **What this does not add:** it is not deniability (a deliberate non-goal) and it does not
-  broadcast anything — authentication is derived from the group's existing encrypted state,
-  not from any new public signal. A dropped forgery is surfaced as a diagnostic, so a
-  member-on-member impersonation attempt is observable rather than silent.
-
-Legacy or non-authenticating messages remain readable and correctly attributed; nothing
-that a peer legitimately sent disappears.
-
-*This guarantee is provided by the marmot-ts library, which resolves the authenticated
-sender from the group's cryptographic state and drops mismatches at the library boundary.
-The app is pinned to the forks that carry it — `ts-mls` at
-`941design/ts-mls#9f0c7bd251429f6e56bc7a41c86d7d3e74b27b13` (branch `feat/app-message-sender`)
-and `@internet-privacy/marmot-ts` at
-`941design/marmot-ts#cb0025c0ae3ffd053bf4a6ec528869716148ffb2` (branch
-`authenticated-sender`).*
+Group messages are attributed to the member authenticated by the group's
+cryptographic state. The name or author claimed inside the message cannot confer
+another member's identity or authority. Where a system announcement names an actor,
+the app checks the claim against the authenticated sender and the group's current
+membership or admin rules before applying it.
 
 ---
 
@@ -535,10 +368,8 @@ and `@internet-privacy/marmot-ts` at
 
 - **What you gain:** membership and the group's name can only be changed by a small,
   trusted set of admins, not by anyone who happens to be a member.
-- **What you pay:** because only admins can finalise departures, roster cleanup and the
-  associated key-healing happen more slowly — whenever an admin is next online.
-- **What you never pay:** conversation is never interrupted. No configuration of offline
-  admins, departing members, or pending removals can freeze the chat.
+- **What you pay:** if no admin is reachable, members cannot make changes that require
+  admin authority. Existing members can still exchange messages or leave if eligible.
 
 The one genuinely hard failure is narrow and is about **control, never conversation**:
 if no admin is ever reachable again — the sole admin lost their key or abandoned the app
@@ -550,12 +381,10 @@ members early; there is no recovery after the fact.
 
 ## 11. Edge cases and how they resolve
 
-**A message no relay accepts.** A group message that no relay acknowledges within 10 seconds
-(or that is rejected) is treated as not sent: it disappears from the conversation, its text
-returns to the composer of the conversation it was sent in (placed ahead of anything newer you have typed meanwhile), once the composer is back to plain text (if you started editing or attached an image meanwhile, it waits until you finish or cancel), and a
-"Failed to send message" notice with a retry link appears above the composer. The notice
-clears when you send again, start editing, or attach an image. Direct messages behave the
-same way.
+**A group send is not confirmed.** The message stays in the conversation. If it fails,
+you can retry the same message (see [Fork withdrawal and send retry](#fork-withdrawal-and-send-retry)).
+Direct messages have their own send-failure behaviour in
+[Contacts & direct messages](contacts-and-direct-messages.md#7-direct-messages).
 
 **Inviting someone with no published identity keys.** The invitation is refused with an
 explanation that the person hasn't set up their identity; it is not silently lost.
@@ -580,46 +409,12 @@ outright.
 **A Welcome accepted too late.** If the group's cryptographic state has moved past the
 Welcome, accepting fails with a "no longer valid" message and the entry is discarded.
 
-**Re-inviting someone who left.** Works like a first invitation and starts with no
-earlier history. If they accept before their leave has finished deleting the group's
-keys from the device (§7), that leftover state is deleted on accept (nothing is sent)
-and they rejoin; the earlier leave's pending deletion then leaves the rejoined group
-alone.
+**Re-inviting someone who left or was removed.** Once their previous membership is gone,
+a fresh Welcome lets them rejoin with fresh history (§7–§8).
 
-**Re-inviting someone who was removed.** A removed member keeps their old copy of the
-group on their device until they act on it. If an admin re-invites them and they accept,
-that old copy is replaced by the new invitation: the stale group state, messages and
-other local data of that group are deleted on the device (nothing is sent) and the person
-rejoins with fresh history, able to send and receive again. Their other groups are not
-interrupted by this: their messages keep arriving live meanwhile. This applies only when they
-are no longer in the group's member list as their own device sees it, or that state
-cannot be read; an invitation for a group they are still a member of never wipes local
-data, whatever its age. The invitation stays available across a reload until accepted.
-What a removed member sees of the group before re-joining is not specified here.
-Limitation: if the device never processed the removal (it is still in the group's member
-list as that device sees it), a re-invite is treated as already joined and does not replace
-the local copy. A refused invitation (one that cannot be read with a key this device still holds, or is
-for a different group) is removed and local data is left untouched, unless an unfinished
-replacement of that same group is pending, in which case it is kept. If the old
-background work of the group does not stop in time, the replacement is postponed the same
-way: nothing is deleted, the invitation is kept and can be accepted again. Declining an
-invitation whose replacement is unfinished, once no group state is left on the device,
-abandons that recovery. A full data reset also discards it. Once a replacement has started, any failure keeps the
-invitation and shows a "try again" notice instead of "no longer valid"; this holds across
-a reload, and repeated failures, until a join succeeds and the leftover local data is
-cleaned up.
-
-**An accept cut short by a reload or a closed tab.** After reopening, the person ends
-up either in the group with the invitation gone, or still seeing the invitation and
-able to accept it again. They never end up in a group that isn't shown to them. A
-leftover invitation for a group they are already in is cleared as the app starts, so
-group and invitation can show together only briefly. Accepting such an invitation
-just clears it. Accepting the same invitation in two tabs at once joins only once.
-
-**The app open in several tabs.** What one tab stores — a group joined, renamed or left, a
-message received or edited, a reaction, a poll or vote — shows up in the other open tabs of the same
-browser without a reload. This keeps what each tab *shows* current; it does not coordinate
-the tabs' own group processing — each tab still receives and sends as its own client.
+**An accept cut short by a reload or a closed tab.** After reopening, the app reads
+the saved membership and the remaining pending invitations. If the join took effect,
+the group appears. If the Welcome is still pending, it can be accepted again.
 
 **The link's admin leaves or is unreachable.** Requests made against that link go
 unanswered — no other admin receives them. This is the single-admin-per-link limitation.
@@ -628,37 +423,11 @@ unanswered — no other admin receives them. This is the single-admin-per-link l
 an error, and a lost grant is re-issued once the privilege is seen not to have taken.
 Granting the same member twice is a harmless no-op.
 
-**Cancelling an invitation during the accept window.** If the invitee's profile has
-already arrived they are confirmed and the cancel is a no-op; in the brief window before
-it arrives, cancelling still removes them.
+**A departing admin.** The departure removes their admin authority as the membership
+change syncs. Remaining admins keep their authority and no successor is auto-promoted.
 
-**A departing admin.** They are dropped from the admin list as part of the same step
-that removes them; remaining admins keep their authority. No successor is auto-promoted.
-
-**The group's membership can't be read when leaving.** The decision fails safe: the
-destructive "abandon" outcome is never offered on unknown membership.
-
-**Two co-admins leaving at nearly the same moment.** Each leave re-checks the admin
-list at execution (§7), so the second leaver is stopped once the first departure's
-removal has been committed on their device, a few seconds after it arrives. If both
-leave within that window, the group ends with no admins — the residual window described in §8, resolving to the
-read-only-for-membership state of §10. Keeping more than two admins avoids exposure to
-this window.
-
-**A leaver's departure signal never reaches the group.** If the signal fails to send
-(e.g. the leaver was offline), they still purge locally but persist in every remaining
-roster as an ordinary member, with no pending-cleanup state and nothing for an admin to
-finalise — a ghost that never resolves.
-
-**A second device holds a restored backup of an abandoned group.** Abandoning erases the
-group from the device that abandons it, but since a solo group has no other member to
-notify, no signal is sent — another device of the same identity that restored a backup
-keeps the group until it is cleaned up there.
-
-**A declined invitation leaves the person pending on the admin's side.** Declining a
-Welcome (or simply ignoring an invite) publishes nothing, so on the admin's roster the
-person stays pending indefinitely — nothing distinguishes "declined" from "hasn't
-answered yet", and only an admin cancelling clears it.
+**The departure announcement fails.** The app still attempts the leave. The roster
+change comes from membership state when others sync.
 
 **The join-through-link tally counts approvals, not completed joins.** The count rises
 when an admin approves a request, even if that person never accepts the resulting
@@ -720,36 +489,14 @@ the shipped implementation, and the automated test suite:
 - `specs/invite-group-member-from-contacts-spec-request.md`,
   `specs/epic-invite-group-member-from-contacts/`, and
   `specs/epic-invite-contact-picker-redesign/` — inviting from contacts.
-- `specs/epic-cancel-pending-invitations/` — cancelling a pending invitation. (Note:
-  `specs/scope-withdraw-invite-to-direct-invites-spec-request.md` is a *pre-spec*
-  proposing a narrower, marker-based withdraw restricted to direct invites; it is **not
-  shipped** — the current behaviour is the derived-pending mechanism described in §4.4.)
 - `specs/epic-walled-garden-v2/` — pull-only invitations and ever-known peers.
-- `specs/epic-out-of-band-leave/` and `specs/epic-abandon-last-member-group/` — leaving,
-  removal finalisation, and abandon.
-- `docs/adr/ADR-002` (mutual-contact graph and pull-only invitations) and
-  `docs/adr/ADR-003` (last-writer-wins for MLS metadata; the basis for admin being
-  add-only).
-- `docs/adr/ADR-012` (MLS sender binding in the fork) and
-  `specs/epic-marmot-ts-authenticated-sender-migration/` — the authenticated message
-  sender of §9: the library resolves who really sent each group message and drops any
-  message whose claimed author does not match, backing the roster and leave gates.
-- Implementation under `app/src/context/MarmotContext.tsx`, `app/src/lib/marmot/`
-  (invite links, join requests, cancel, leave, grant, welcome subscription), and the
-  group components and page under `app/src/components/groups/` and `app/pages/`.
-- `app/src/lib/marmot/leaveGroupImpl.ts`, `app/src/lib/marmot/leftGroupTombstones.ts`,
-  `tests/unit/marmot/leftGroupStatePurge.test.ts` and the end-to-end
-  `groups-leave-purges-mls-state.spec.ts` — deleting a left group's keys after the
-  departure is sent (§7). `specs/epic-invite-rescind-and-member-removal/` and
-  `groups-remove-member.spec.ts` — removing a member (§4.5).
-- `app/src/lib/marmot/rumorJournal.ts`, `tests/unit/marmot/epochResolver.journalOrdering.test.ts`
-  and the end-to-end `groups-rumor-reload-atomic.spec.ts` — the message kept on the
-  device before the advanced group keys are saved (receiving after reopening).
-- `app/src/lib/marmot/applicationRumorDispatcher.ts`, `tests/unit/marmot/applicationRumorDispatcher.journal.test.ts`
-  — a kept message is discarded only after its processing completed (receiving after reopening).
-- `app/src/lib/marmot/pendingRemovalStorage.ts`, `tests/unit/marmot/pendingRemovalStorage.test.ts`,
-  `tests/unit/marmot/autoCommitLeave.test.ts`, `tests/unit/marmot/leaveJournalReplay.test.ts` and
-  `tests/unit/marmot/senderLeafIdentity.test.ts` — a pending removal kept across a reload and
-  checked against the membership that sent the departure (§8).
-- The group-* end-to-end specs and the unit tests for the pure implementations. A few
-  behaviours are verified by manual validation rather than automated tests.
+- `specs/epic-marmot-library-adoption/acceptance-criteria.md` — AC-MT, AC-LEAVE,
+  AC-MEM, AC-HIST, AC-WDR, AC-KP, AC-CAP, AC-CTX and AC-AUTO.
+- ADR-002 and ADR-003 under `docs/adr/` — consent and the add-only admin policy.
+- `app/src/context/MarmotContext.tsx` and `app/src/lib/marmot/client/` — active tab
+  and group startup. `app/src/lib/marmot/membership/` and
+  `app/src/lib/marmot/invitations/` — leaving, removal, and invitations.
+- `app/src/lib/marmot/history/`, `app/src/lib/marmot/handlers/` and
+  `app/src/lib/marmot/send/` — history, withdrawal and
+  send confirmation. See the history, send, membership and invitation suites under
+  `app/tests/unit/marmot/`.

@@ -399,10 +399,7 @@ Spans modules: history, handlers, send
 
 ## Manual Validation
 
-No rows are claimed. All ACs above are automated (unit, library harness, or e2e) or genuinely structural; the Deferred Human Review items in the spec are owner confirmations of product decisions, not behaviours that only a human can observe.
-
-| MV id | Behavioral intent | Gap evidence | Owner | Blocked on | Adjudicated |
-|-------|-------------------|--------------|-------|------------|-------------|
+None required.
 
 ## Coverage Map (Design Decisions / Constraints / Assumptions)
 

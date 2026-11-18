@@ -108,3 +108,11 @@ export async function clearAllMedia(): Promise<void> {
  * after a reload without the service decrypting again.
  */
 export const groupMediaCachePort = { getBlob, setBlob, addMessageRef };
+
+/** Clear group media while retaining any direct-message cache entries. */
+export async function clearAllGroupMedia(): Promise<void> {
+  for (const store of [blobStore, metaStore]) {
+    const all = await keys<string>(store);
+    await Promise.all(all.filter((key) => typeof key === 'string' && !key.startsWith('dm:')).map((key) => del(key, store)));
+  }
+}

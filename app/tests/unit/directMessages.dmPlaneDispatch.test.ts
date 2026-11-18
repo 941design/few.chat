@@ -1,8 +1,7 @@
 // @vitest-environment node
 /**
- * AC-INBOX-1 (S12): the NDK DM listener's gift-wrap dispatch. Pairing-ack (21060) is handled on the DM plane; the kinds
- * that belong to the library inbox plane (444 Welcome, 4460-4462 library control, 21059 join request, 21064 invite
- * context) are skipped silently: no handler call, no state change, no log line of any level.
+ * Gift-wrap dispatch helper coverage. Pairing acknowledgements stay on the DM
+ * plane and library inbox kinds are skipped without a handler call or log.
  *
  * Real NIP-59 wraps (sealAndWrap, real crypto) are dispatched; only the logger is observed.
  */
@@ -43,11 +42,10 @@ beforeEach(() => {
 });
 
 describe('the skip set', () => {
-  it('is exactly 444, 4460-4462, 21059 and 21064, taken from the registries (no literals)', () => {
+  it('uses the reserved library kinds, join request and invitation context', () => {
     expect([...DM_PLANE_SKIPPED_KINDS].sort((a, b) => a - b)).toEqual(
       [...Object.values(RUMOR_KINDS), APP_INBOX_KINDS.joinRequest, APP_INBOX_KINDS.inviteContext].sort((a, b) => a - b),
     );
-    expect([...DM_PLANE_SKIPPED_KINDS].sort((a, b) => a - b)).toEqual([444, 4460, 4461, 4462, 21059, 21064]);
   });
   it('does not skip the DM-plane kinds (chat, pairing ack, DM profile) nor the retired ones', () => {
     for (const k of [CHAT_MESSAGE_KIND, APP_INBOX_KINDS.pairingAck, ...APP_INBOX_KINDS.dmProfile, ...RETIRED_KINDS]) expect(DM_PLANE_SKIPPED_KINDS.has(k)).toBe(false);

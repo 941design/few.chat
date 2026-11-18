@@ -1,51 +1,35 @@
-/**
- * IndexedDB-backed group state storage using idb-keyval.
- *
- * Stores:
- * - Group metadata list (name, members, relays) in 'few_groups_v1'
- * - MLS group state bytes (passed directly to MarmotClient as groupStateStore)
- * - KeyPackage private material (passed directly as keyPackageStore)
- */
-
+/** IndexedDB-backed app overlays for groups and member profiles. */
 import { createStore, get, set, del, keys, clear } from 'idb-keyval';
 import type { Group, MemberProfile } from '@/src/types';
-import type { StoredKeyPackage, SerializedClientState } from '@internet-privacy/marmot-ts';
 import { clearProfileRequestMemos } from '@/src/lib/marmot/profileRequestStorage';
 import { clearAllPendingDirectInvites } from '@/src/lib/marmot/pendingDirectInviteStorage';
-import { clearAllRumorJournal } from '@/src/lib/marmot/rumorJournal';
-import { clearAllLeftGroupTombstones } from '@/src/lib/marmot/leftGroupTombstones';
-import { clearAllPendingRemovals } from '@/src/lib/marmot/pendingRemovalStorage';
-import { postStoreChanged } from '@/src/lib/crossTab';
 import { sanitizeStoredAvatar } from '@/src/lib/dmProfile/kinds';
-// KeyValueStoreBackend is an internal utility type — import directly from subpath
-type KeyValueStoreBackend<T> = {
-  getItem(key: string): Promise<T | null>;
-  setItem(key: string, value: T): Promise<T>;
-  removeItem(key: string): Promise<void>;
-  clear(): Promise<void>;
-  keys(): Promise<string[]>;
-};
-
 // ---------------------------------------------------------------------------
 // IDB stores (separate IDB object stores for isolation)
 // ---------------------------------------------------------------------------
 
 const groupMetaStore = createStore('few-groups-meta', 'groups');
-const groupStateStore = createStore('few-groups-state', 'state');
-const keyPackageStore = createStore('few-keypackages', 'keypackages');
 const memberProfileStore = createStore('few-member-profiles', 'profiles');
+const groupKey = (id: string, owner?: string) => owner ? `${owner}:${id}` : id;
 
 // ---------------------------------------------------------------------------
 // Group metadata (name, members, relays) — our own overlay, not MLS state
 // ---------------------------------------------------------------------------
 
 export async function saveGroup(group: Group): Promise<void> {
-  await set(group.id, group, groupMetaStore);
-  postStoreChanged('groups', group.id);
+  await set(groupKey(group.id, group.accountPubkey), group, groupMetaStore);
+  if (!group.accountPubkey) return;
+  const previous = await get<Group>(group.id, groupMetaStore);
+  if (previous && (!previous.accountPubkey || previous.accountPubkey === group.accountPubkey)) {
+    await del(group.id, groupMetaStore);
+  }
 }
 
-export async function loadGroup(id: string): Promise<Group | undefined> {
-  return get<Group>(id, groupMetaStore);
+export async function loadGroup(id: string, owner?: string): Promise<Group | undefined> {
+  const current = await get<Group>(groupKey(id, owner), groupMetaStore);
+  if (current || !owner) return current;
+  const previous = await get<Group>(id, groupMetaStore);
+  return previous && (!previous.accountPubkey || previous.accountPubkey === owner) ? previous : undefined;
 }
 
 export async function loadAllGroups(): Promise<Group[]> {
@@ -56,14 +40,26 @@ export async function loadAllGroups(): Promise<Group[]> {
   return groups.filter((g): g is Group => g !== undefined);
 }
 
-export async function deleteGroup(id: string): Promise<void> {
-  await del(id, groupMetaStore);
-  postStoreChanged('groups', id);
+/** Whether another account has an explicit owner-scoped overlay for this group. */
+export async function hasOtherGroupOwner(id: string, owner: string): Promise<boolean> {
+  const groupKeys = await keys<string>(groupMetaStore);
+  const suffix = `:${id}`;
+  const candidates = groupKeys.filter((key) => typeof key === 'string' && key.endsWith(suffix));
+  const groups = await Promise.all(candidates.map((key) => get<Group>(key, groupMetaStore)));
+  return groups.some((group, index) => !!group?.accountPubkey && group.id === id &&
+    candidates[index] === groupKey(id, group.accountPubkey) &&
+    group.accountPubkey.toLowerCase() !== owner.toLowerCase());
+}
+
+export async function deleteGroup(id: string, owner?: string): Promise<void> {
+  await del(groupKey(id, owner), groupMetaStore);
+  if (!owner) return;
+  const previous = await get<Group>(id, groupMetaStore);
+  if (previous && (!previous.accountPubkey || previous.accountPubkey === owner)) await del(id, groupMetaStore);
 }
 
 export async function clearAllGroupMeta(): Promise<void> {
   await clear(groupMetaStore);
-  postStoreChanged('groups');
 }
 
 // ---------------------------------------------------------------------------
@@ -142,72 +138,10 @@ export async function deleteMemberProfile(groupId: string, pubkey: string): Prom
 // Clear all group data (for resetAllData)
 // ---------------------------------------------------------------------------
 
-export async function clearAllGroupData(): Promise<void> {
+export async function clearAllGroupData(sponsorPubkey?: string): Promise<void> {
   await clear(groupMetaStore);
-  await clear(groupStateStore);
-  await clear(keyPackageStore);
   await clear(memberProfileStore);
   await clearProfileRequestMemos('*'); // clear all — groupId filter handled internally
-  await clearAllPendingDirectInvites();
-  // Write-ahead rumor journal (rumorJournal.ts): decrypted plaintext of the
-  // previous identity's groups must not survive an account clear.
-  await clearAllRumorJournal();
-  // Left-group tombstones (leftGroupTombstones.ts) belong to the previous
-  // identity's groups; its MLS state was cleared above.
-  await clearAllLeftGroupTombstones();
-  // Durable pending member removals (pendingRemovalStorage.ts) name members of
-  // the previous identity's groups.
-  await clearAllPendingRemovals();
-}
-
-// ---------------------------------------------------------------------------
-// KeyValueStoreBackend implementations for marmot-ts
-// ---------------------------------------------------------------------------
-
-/** MLS group state backend backed by IndexedDB */
-export class IdbGroupStateBackend implements KeyValueStoreBackend<SerializedClientState> {
-  async getItem(key: string): Promise<SerializedClientState | null> {
-    return (await get<SerializedClientState>(key, groupStateStore)) ?? null;
-  }
-
-  async setItem(key: string, value: SerializedClientState): Promise<SerializedClientState> {
-    await set(key, value, groupStateStore);
-    return value;
-  }
-
-  async removeItem(key: string): Promise<void> {
-    await del(key, groupStateStore);
-  }
-
-  async clear(): Promise<void> {
-    await clear(groupStateStore);
-  }
-
-  async keys(): Promise<string[]> {
-    return keys<string>(groupStateStore);
-  }
-}
-
-/** KeyPackage private material backend backed by IndexedDB */
-export class IdbKeyPackageBackend implements KeyValueStoreBackend<StoredKeyPackage> {
-  async getItem(key: string): Promise<StoredKeyPackage | null> {
-    return (await get<StoredKeyPackage>(key, keyPackageStore)) ?? null;
-  }
-
-  async setItem(key: string, value: StoredKeyPackage): Promise<StoredKeyPackage> {
-    await set(key, value, keyPackageStore);
-    return value;
-  }
-
-  async removeItem(key: string): Promise<void> {
-    await del(key, keyPackageStore);
-  }
-
-  async clear(): Promise<void> {
-    await clear(keyPackageStore);
-  }
-
-  async keys(): Promise<string[]> {
-    return keys<string>(keyPackageStore);
-  }
+  if (sponsorPubkey === undefined) await clearAllPendingDirectInvites();
+  else await clearAllPendingDirectInvites(sponsorPubkey);
 }

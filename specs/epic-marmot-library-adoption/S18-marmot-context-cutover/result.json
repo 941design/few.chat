@@ -1,0 +1,37 @@
+{
+  "story_id": "S18",
+  "status": "done",
+  "modules_touched": [
+    "consumer"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/groupSessionHistory.ts",
+    "app/src/lib/marmot/groupSessionMembership.ts",
+    "app/src/lib/marmot/groupSessionProfile.ts"
+  ],
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/context/NostrIdentityContext.tsx",
+    "app/src/context/ChatStoreContext.tsx",
+    "app/src/context/PollStoreContext.tsx",
+    "app/src/lib/directMessageNotifications.ts"
+  ],
+  "remediation_rounds": 5,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "checkpoint": "The initial subset ran against strfry with 26 passes, one failure where a joined member stayed Pending, and ten tests not run. The joined profile callback was then wired. This subset is a development checkpoint.",
+    "unit": "Integrated real-IDB handler composition covers own delivery, withdraw, profile, polls and lifecycle announcement deduplication. Pairing acknowledgement regression suite delivers real signed and encrypted messages to the production NDK receiver.",
+    "build": "Static export plus actual two-account round trip passed on an intermediate revision. Final-tree gate pending.",
+    "checkpoint_r3": "Development checkpoint returned 27 passed, 4 failed and 5 not run. The waiting tab assertion expected null for an absent test hook. Three nickname-propagation cases retained Bob. Corrected both paths and began a fresh checkpoint.",
+    "latest": "Both DM receive paths now obtain current library membership from one live snapshot accessor, with matching-account overlay fallback and separate historical admission readiness. NIP-46 connect/reload persistence is covered by the identity storage extraction. Targeted kept browser run pending."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol verified the React context boundary and the documented checkpoint. The remediation removed the overlay-only primary DM gate and tied admission to committed reads.",
+    "adversarial": "GPT-6 Astra rechecked both production receive sites, NIP-46 persisted session read/write, authenticated history, and the cleared blockers. Retained group-member DM tests passed all three browser checks."
+  }
+}

@@ -6,9 +6,10 @@
  * requested. Requesting `sign_event:0` does not publish anything: kind 0 is
  * never broadcast (privacy invariant).
  *
- * Pure: no React, no storage access; wiring lives in NostrIdentityContext (S18).
+ * Session storage is injected by the identity provider.
  */
 import { permissions } from '@941design/marmot';
+import { STORAGE_KEYS } from '@/src/types';
 import { BLOSSOM_AUTH_KIND } from '@/src/lib/media/blossomAuthKind';
 import {
   CALL_ANSWER_KIND,
@@ -83,4 +84,39 @@ export function shouldDiscardStoredNip46Session(
     return true;
   }
   return buildNip46Permissions().some((perm) => !have.has(perm));
+}
+
+export function saveNip46Session(storage: Pick<Storage, 'setItem'>, payload: string): void {
+  storage.setItem(STORAGE_KEYS.nip46Session, payload);
+  storage.setItem(STORAGE_KEYS.nip46Permissions, buildNip46PermsParam());
+}
+
+export function loadNip46Session(storage: Pick<Storage, 'getItem' | 'removeItem'>): string | null {
+  const payload = storage.getItem(STORAGE_KEYS.nip46Session);
+  if (!payload) return null;
+  if (!shouldDiscardStoredNip46Session(storage.getItem(STORAGE_KEYS.nip46Permissions))) return payload;
+  storage.removeItem(STORAGE_KEYS.nip46Session);
+  storage.removeItem(STORAGE_KEYS.nip46Permissions);
+  return null;
+}
+
+/** Add permissions to the connect request made by NDK's bunker handshake. */
+export async function connectBunkerWithPermissions(
+  signer: Pick<import('@nostr-dev-kit/ndk').NDKNip46Signer, 'rpc' | 'blockUntilReady'>,
+) {
+  const rpc = signer.rpc;
+  const original = rpc.sendRequest;
+  rpc.sendRequest = (recipient, method, params, kind, callback) => original.call(
+    rpc,
+    recipient,
+    method,
+    method === 'connect' ? [params?.[0] ?? '', params?.[1] ?? '', buildNip46PermsParam()] : params,
+    kind,
+    callback,
+  );
+  try {
+    return await signer.blockUntilReady();
+  } finally {
+    rpc.sendRequest = original;
+  }
 }

@@ -21,6 +21,8 @@
  *   - The posting and the listening channel are the same object, and a
  *     `BroadcastChannel` never delivers a message to the object that posted
  *     it, so a tab never receives its own changes (no echo filtering needed).
+ *     A caller may separately request a same-tab refresh via
+ *     {@link notifyStoreChangedLocally} after an out-of-band write.
  *   - On the server / in Node (no `window` or no `BroadcastChannel`) every
  *     call is a no-op.
  *
@@ -35,7 +37,7 @@
 export const CROSS_TAB_CHANNEL_NAME = 'few-tabs';
 
 /** The stores whose writes are announced to other tabs. */
-export const CROSS_TAB_STORES = ['blocked', 'known', 'contacts', 'groups', 'chat', 'polls', 'reactions'] as const;
+export const CROSS_TAB_STORES = ['blocked', 'known', 'contacts', 'chat', 'reactions'] as const;
 
 export type CrossTabStore = (typeof CROSS_TAB_STORES)[number];
 
@@ -115,6 +117,12 @@ function closeChannel(): void {
   }
 }
 
+function hasValidScope(store: CrossTabStore, id: string | undefined): boolean {
+  if (store === 'chat') return id?.startsWith('dm:') === true;
+  if (store === 'reactions') return id?.startsWith('few:reactions:dm:') === true;
+  return true;
+}
+
 /**
  * Validates an incoming message. Anything that is not a well-formed
  * `store-changed` message for a known store is dropped (returns null).
@@ -126,7 +134,7 @@ export function parseStoreChanged(data: unknown): StoreChangedMessage | null {
   if (!(CROSS_TAB_STORES as readonly unknown[]).includes(d.store)) return null;
   const message: StoreChangedMessage = { type: 'store-changed', store: d.store as CrossTabStore };
   if (typeof d.id === 'string') message.id = d.id;
-  return message;
+  return hasValidScope(message.store, message.id) ? message : null;
 }
 
 /** Validates an incoming `account-changed` message (it carries nothing else). */
@@ -182,6 +190,7 @@ export function subscribeAccountChanged(listener: (message: AccountChangedMessag
  * succeeded. Never throws.
  */
 export function postStoreChanged(store: CrossTabStore, id?: string): void {
+  if (!hasValidScope(store, id)) return;
   try {
     const target = openChannel();
     if (!target) return;
@@ -194,8 +203,13 @@ export function postStoreChanged(store: CrossTabStore, id?: string): void {
   }
 }
 
+/** Refresh local subscribers after an out-of-band write that also needs a same-tab update. */
+export function notifyStoreChangedLocally(store: CrossTabStore): void {
+  notify(listeners, { type: 'store-changed', store });
+}
+
 /**
- * Listens for other tabs' changes. Returns the unsubscribe function; the
+ * Listens for other tabs' changes and explicit local refreshes. Returns the unsubscribe function; the
  * channel is closed when the last listener unsubscribes.
  */
 export function subscribeStoreChanged(listener: (message: StoreChangedMessage) => void): () => void {

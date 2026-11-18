@@ -28,7 +28,7 @@ export interface GateGroup {
 /** Resolves a held group, or `undefined` when the group is no longer held. */
 export type GroupOf = (groupId: string) => Promise<GateGroup | undefined>;
 
-export interface GroupGates {
+interface GroupGates {
   /** True iff `pubkeyHex` is a current admin of the group (live `group.admins`). */
   isGroupAdmin: (groupId: string, pubkeyHex: string) => Promise<boolean>;
   /** True iff `pubkeyHex` is a current member of the group (live `group.members()`). */

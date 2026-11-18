@@ -20,13 +20,10 @@ vi.mock('idb-keyval', () => ({
   delMany: vi.fn(async (ks: string[]) => { ks.forEach((k) => idbStore.delete(k)); }),
 }));
 
-// ─── @internet-privacy/marmot-ts mock ────────────────────────────────────────
-vi.mock('@internet-privacy/marmot-ts', () => ({
-  parseMediaImetaTag: vi.fn(() => null),
-}));
+import { makeTag } from '../media/groupMediaFixtures';
 
 // ─── Dynamic imports (after vi.mock) ─────────────────────────────────────────
-const { createChatHandler } = await import('@/src/lib/marmot/handlers/chatHandler');
+const { createChatHandler } = await import('./handlers/reducerFixtures');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -133,39 +130,20 @@ describe('chatHandler', () => {
     expect(msg.createdAt).toBe(rumor.created_at * 1000);
   });
 
-  it('AC-AR-7: imeta tag parse — attachments populated from tags', async () => {
-    // Mock parseMediaImetaTag to return a proper attachment
-    const { parseMediaImetaTag } = await import('@internet-privacy/marmot-ts');
-    vi.mocked(parseMediaImetaTag).mockImplementation((tag: string[]) => {
-      // Parse the url and m fields from the imeta tag entries
-      const fields: Record<string, string> = {};
-      for (let i = 1; i < tag.length; i++) {
-        const [key, ...rest] = tag[i].split(' ');
-        if (key && rest.length > 0) fields[key] = rest.join(' ');
-      }
-      if (!fields['url']) return null;
-      return { url: fields['url'], type: fields['m'] ?? 'application/octet-stream' } as any;
-    });
-
+  it('retains the authenticated library imeta with the stored attachment', async () => {
     const deps = makeDeps();
     const handler = createChatHandler(deps);
-    // Image message with imeta tag
-    const imageContent = JSON.stringify({ type: 'image', version: 1, caption: 'test' });
+    const tag = makeTag();
     const rumor = makeRumor({
-      content: imageContent,
-      tags: [['imeta', 'url https://img.example/a.jpg', 'm image/jpeg']],
+      content: JSON.stringify({ type: 'image', version: 1, caption: 'test' }),
+      tags: [tag],
     });
-    const ctx = makeCtx();
 
-    await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
+    await handler.handle(rumor, makeCtx(), makeSender(rumor.pubkey));
 
     expect(deps.appendMessage).toHaveBeenCalledOnce();
     const [, msg] = deps.appendMessage.mock.calls[0];
-    expect(msg.attachments).toBeDefined();
-    // The attachment was parsed — should have full set to the parsed attachment
-    expect(msg.attachments?.full).toBeDefined();
-    expect(msg.attachments?.full?.url).toBe('https://img.example/a.jpg');
-    expect((msg.attachments?.full as any)?.type).toBe('image/jpeg');
+    expect(msg.attachments?.full).toMatchObject({ imeta: tag, attachment: { mediaType: 'image/webp' } });
   });
 
   it('malformed payload: non-string content does not throw', async () => {

@@ -1,0 +1,22 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Rewrite groups-seed-phrase, groups-seed-recovery, groups-backup-restore-outcomes (settings+profile restored, no groups, rejoin by invitation) and groups-invitation-preview (generic label / sponsor context) and verify all 11 rewritten specs differ from the pre-run tag and assert their named behaviour.",
+  "public_api": [],
+  "private_files": [
+    "app/src/lib/testHooks/marmotSession.ts (preview description fixture)"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/e2e/groups-seed-phrase.spec.ts",
+    "app/tests/e2e/groups-seed-recovery.spec.ts",
+    "app/tests/e2e/groups-backup-restore-outcomes.spec.ts",
+    "app/tests/e2e/groups-invitation-preview.spec.ts"
+  ]
+}

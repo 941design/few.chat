@@ -1,57 +1,9 @@
 /**
- * Decline durability (D7, seam `PendingDirectInviteMarker`, AC-DECL-1/2, AC-DEL-2).
- *
- * The library emits `welcomeDeclined {groupId, inviteeRef}` ONCE per decline and the sponsor must then remove the
- * invitee's LEAF. A decline must survive an unsynced group, an offline sponsor and a restart:
- *
- *  1. invite time: `createMarkerRecordingInviter` writes the marker `{inviteeRef, pubkey, declined:false, leafKey?}`
- *     for the invited account (best-effort: a failing write is reported, never turns a committed invite into a
- *     rejection). `leafKey` is the signature key of the leaf the invite ADDED: the account's leaves after the invite
- *     minus the ones it held before, recorded only when that is exactly one leaf (otherwise none is recorded and the
- *     removal falls back to the account, see 3). The decline is bound to that leaf, not to the account;
- *  2. `onWelcomeDeclined` (the client-event listener, synchronous, no client call, no await): starts the durable
- *     write of `declined:true` for the marker carrying that `inviteeRef` IMMEDIATELY, then enqueues the removal
- *     on the client job queue as its last action. An unknown `inviteeRef` (or only legacy markers) is persisted as
- *     an ORPHAN decline (bounded, 7-day TTL) and reported: when `record()` later writes that ref the marker starts
- *     `declined` and `onRecordedDeclined` fires (wire it to `replayMarker`), so the removal still happens once. The
- *     removal never starts before the marker write has settled; a failing write means no removal (only reported);
- *  3. the removal (outside the listener frame, from a queued job) goes through the S6 `GroupOpQueue` (`runCommit`:
- *     bounded `await group.synced()`, abortable, `commit-pending` retried). INSIDE the queued op, after the sync, the
- *     marker is re-read and the op aborts as `no-marker` unless it is still declined with the SAME `inviteeRef` (a
- *     re-invite replaced it, or it was cleared meanwhile). Then, on the current member list:
- *       - the recorded leaf is gone -> `already-removed` (clear, no announcement) unless the phase says the Remove
- *         was started (`removing`), then the announcement is owed (see 4);
- *       - the account holds OTHER leaves besides the declined one -> only the declined leaf may go: `group.removeLeaf`
- *         when the handle exposes it (the library 0.x `MarmotGroup` does not), else NOTHING is removed and the
- *         marker is cleared as `superseded` and reported (a re-add or a second device must not be evicted);
- *       - the declined leaf is the account's sole leaf -> `removeMember`;
- *       - no leaf was recorded: the account is removed only when it holds exactly one leaf, else `superseded`;
- *  4. phased marker: `declined` -> `removing` (written BEFORE `removeMember`) -> `announce-pending` (written after it
- *     resolved) -> announcement -> marker cleared (compare-and-clear on `inviteeRef`). A replay that finds `removing`
- *     with the leaf gone, or `announce-pending`, announces without a second Remove. The announcement is at-LEAST-once
- *     (a failing send keeps `announce-pending` and is retried; a crash after the send and before the clear
- *     re-sends) and carries a stable dedup `id` (`groupId:inviteeRef`) so a receiver can de-duplicate (receiver-side
- *     dedupe is an S18/S19 follow-up: `parseStructured` currently drops the extra field);
- *  5. a rejected removal (not-synced timeout, abort, publish failure, ...) leaves the marker as it is and sends nothing.
- *     A TERMINAL rejection (`isTerminalRemovalError`: not-admin, not-a-member, group disbanded / abandoned) can never
- *     succeed: the marker is compare-and-cleared, the error reported once and the outcome is `terminal` (no backoff).
- *     A declined marker older than `DECLINED_MARKER_MAX_AGE_MS` (30 days, the library's invite retention) is dropped
- *     by the replay (`expired`: cleared, reported). A marker with an unknown `phase` is invalid: ignored and reported.
- *     Replays: `startupRetry`, `retryDeclined` (call it on reconnect / sync, S18) and an in-session bounded backoff
- *     (30 s, 2 min, 10 min, abortable by `dispose`) after `retry-later` / `group-missing`. Replays are idempotent
- *     (marker re-read, per-key in-flight de-duplication, the leaf checks), so a duplicate event or a retry racing a
- *     live decline removes and announces once.
- *
- * The removal job only STARTS the work: the bounded `synced()` wait (30 s by default) of one group must not
- * stall the serial client job queue behind it, so the job returns while the removal runs on. `idle()` awaits it.
- *
- * Privacy: the announcement is an MLS group message to the members (never public); its content is the invitee's
- * pubkey (as the legacy announcement), the dedup id and no profile data.
- *
- * Re-entrancy: `onWelcomeDeclined` is the only member to call from a library frame (it makes no client call).
- * `retryDeclined` calls the client and must run outside one (from a job).
- *
- * Pure module: no React, no browser API; every port is injected and validated at construction.
+ * Replays a declined Welcome after the sponsor has synced, including after
+ * restart. The marker binds the decline to the KeyPackage leaf and records
+ * progress before the removal and before the announcement. Unknown
+ * references are held briefly so a decline can arrive during the original
+ * invite. Retries reuse the announcement identity for receiver deduplication.
  */
 import type { MarmotGroup } from '@941design/marmot';
 import type { ClientJobQueue } from '../client';
@@ -69,7 +21,7 @@ export type DeclineGroup = Pick<MarmotGroup, 'id' | 'synced' | 'removeMember' | 
 };
 
 /** What happened to one declined marker. */
-export type DeclineOutcome =
+type DeclineOutcome =
   /** The Remove resolved (or had landed) and the announcement was sent: marker cleared. */
   | 'removed'
   /** The declined leaf no longer exists: marker cleared, no Remove, no announcement. */
@@ -101,7 +53,7 @@ const TERMINAL_CODES: ReadonlySet<string> = new Set(['not-admin', 'not-a-member'
  * an admin), or any of those names as a plain `code` / `details.reason`. Everything else (timeouts, aborts, publish
  * failures, `commit-pending`, unknown errors) is retryable.
  */
-export function isTerminalRemovalError(error: unknown): boolean {
+function isTerminalRemovalError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const { code, details } = error as { code?: unknown; details?: unknown };
   if (typeof code === 'string' && TERMINAL_CODES.has(code)) return true;
@@ -133,12 +85,12 @@ export interface DeclineDurabilityDeps {
 export interface DeclineDurability {
   /** `client.on('welcomeDeclined')` listener: synchronous, makes no client call, enqueues as its last action. */
   onWelcomeDeclined: (payload: { readonly groupId: string; readonly inviteeRef: string }) => void;
-  /** Schedules the replay of every `declined` marker on the job queue (call once after bootstrap). */
+  /** Schedules replay of declined markers and owed notices on the job queue (call once after bootstrap). */
   startupRetry: () => void;
-  /** Replays every `declined` marker now and resolves with each outcome (S18: call on reconnect / sync). Never from inside a library frame. */
+  /** Replays declined markers and owed notices now and resolves with each outcome. Never from inside a library frame. */
   retryDeclined: () => Promise<DeclineOutcome[]>;
-  /** Replays the one marker of (groupId, pubkey) from a queued job (wire to `onRecordedDeclined` of the inviter). */
-  replayMarker: (groupId: string, pubkey: string) => void;
+  /** Queues replay of a recorded decline. If no reference is supplied, reads the current account marker. */
+  replayMarker: (groupId: string, pubkey: string, inviteeRef?: string) => void;
   /** Resolves once every removal started so far settled (test / teardown aid). */
   idle: () => Promise<void>;
   /** Aborts removals still waiting for `synced()` and pending backoff replays; later events and retries are ignored. The markers stay. */
@@ -173,14 +125,16 @@ function reporter(onError: ((e: unknown) => void) | undefined) {
 }
 
 /** What the queued op decided. */
-type Verdict = 'no-marker' | 'already-removed' | 'superseded' | 'removed' | 'announce-only';
+type Verdict = 'no-marker' | 'already-removed' | 'superseded' | 'announce';
 
 export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDurability {
   const who = 'createDeclineDurability';
   if (!deps || typeof deps !== 'object') throw new TypeError(`${who}: dependencies are required`);
   const { store, queue } = deps;
   if (!store || typeof store !== 'object') throw new TypeError(`${who}: required dependency "store" is missing`);
-  for (const method of ['get', 'markDeclined', 'listDeclined', 'setPhase', 'clearIfRef'] as const) requireFn(store[method], `store.${method}`, who);
+  for (const method of ['get', 'getDeclined', 'markDeclined', 'listDeclined', 'setPhase', 'clearIfRef', 'clearAnnouncement'] as const) {
+    requireFn(store[method], `store.${method}`, who);
+  }
   requireFn(queue?.runCommit, 'queue.runCommit', who);
   requireFn(deps.getGroup, 'getGroup', who);
   requireFn(deps.announce, 'announce', who);
@@ -199,10 +153,10 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
   const { getGroup, announce, enqueue } = deps;
   const report = reporter(deps.onError);
   const abort = new AbortController();
-  /** Removals in flight, by marker key: a duplicate request joins it. */
+  /** Replays in flight, by invite reference: a duplicate request joins it. */
   const inFlight = new Map<string, Promise<DeclineOutcome>>();
   const active = new Set<Promise<unknown>>();
-  /** In-session backoff: replays already scheduled per marker key, and the pending timer. */
+  /** In-session backoff: replays already scheduled per reference, and the pending timer. */
   const retryCount = new Map<string, number>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -213,31 +167,42 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
     return p;
   };
 
-  /** Best-effort phase write: a failing write is reported and the removal goes on (a replay recovers from the older phase). */
+  /** Persist the start of a removal. A failed completion write can recover from that checkpoint. */
   async function setPhase(groupId: string, pubkey: string, ref: string, phase: 'removing' | 'announce-pending'): Promise<boolean> {
     try {
       return await store.setPhase(groupId, pubkey, ref, phase);
     } catch (error) {
+      if (phase === 'removing') throw error;
       report(error);
       return true;
     }
   }
 
-  async function processMarker(groupId: string, pubkey: string): Promise<DeclineOutcome> {
-    const marker = await store.get(groupId, pubkey);
-    if (!marker || !marker.declined) return 'no-marker';
-    if (marker.declinedAt !== undefined && now() - marker.declinedAt > maxAgeMs) {
-      report(new Error(`decline of ${marker.pubkey} in ${groupId} dropped: older than the maximum age; nothing removed`));
+  async function processMarker(groupId: string, pubkey: string, ref: string): Promise<DeclineOutcome> {
+    const initial = await store.getDeclined(groupId, pubkey, ref);
+    if (!initial || abort.signal.aborted) return 'no-marker';
+    const { marker } = initial;
+    const getDeclined = async () => {
+      const current = await store.getDeclined(groupId, pubkey, ref);
+      if (!current || current.marker.sponsorPubkey !== marker.sponsorPubkey || current.marker.invitedAt !== marker.invitedAt) return undefined;
+      if (marker.declinedAt !== undefined && current.marker.declinedAt !== marker.declinedAt) return undefined;
+      if (initial.archived && !current.archived) return undefined;
+      return current;
+    };
+    const clearAnnouncement = async (replay: typeof initial) => {
       try {
-        await store.clearIfRef(groupId, marker.pubkey, marker.inviteeRef);
+        await store.clearAnnouncement(groupId, replay);
       } catch (error) {
         report(error);
       }
+    };
+    if (marker.declinedAt !== undefined && now() - marker.declinedAt > maxAgeMs) {
+      report(new Error(`decline of ${marker.pubkey} in ${groupId} dropped: older than the maximum age; nothing removed`));
+      await clearAnnouncement(initial);
       return 'expired';
     }
     const group = await getGroup(groupId);
     if (!group) return 'group-missing';
-    const ref = marker.inviteeRef;
     const clear = async () => {
       try {
         await store.clearIfRef(groupId, marker.pubkey, ref);
@@ -250,33 +215,35 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
       verdict = await queue.runCommit(
         group,
         async (): Promise<Verdict> => {
-          // Authoritative: after the bounded synced(), re-read the marker (it may have been replaced or cleared
-          // while this waited) and decide on the CURRENT member list.
-          const cur = await store.get(groupId, pubkey);
-          if (!cur || !cur.declined || cur.inviteeRef !== ref) return 'no-marker';
+          // Re-read after sync. A re-invite can move an owed notice while this waits.
+          const cur = (await getDeclined())?.marker;
+          if (!cur || abort.signal.aborted) return 'no-marker';
           const phase = cur.phase ?? 'declined';
-          if (phase === 'announce-pending') return 'announce-only';
+          if (phase === 'announce-pending') return 'announce';
           const held = group.leaves(cur.pubkey);
-          const leafGone = cur.leafKey ? !held.some((l) => l.leafKey === cur.leafKey) : held.length === 0;
-          if (leafGone) return phase === 'removing' ? 'announce-only' : 'already-removed';
-          const others = cur.leafKey ? held.filter((l) => l.leafKey !== cur.leafKey).length : held.length - 1;
-          if (others > 0) {
+          if (!cur.leafKey && held.length > 0) return 'superseded';
+          const leafGone = !held.some((leaf) => leaf.leafKey === cur.leafKey);
+          if (leafGone && phase !== 'removing') return 'already-removed';
+          if (!leafGone) {
             // Another leaf of the account exists (re-added, second device): only the declined leaf may go.
-            if (!cur.leafKey || typeof group.removeLeaf !== 'function') return 'superseded';
-            if (!(await setPhase(groupId, pubkey, ref, 'removing'))) return 'no-marker';
-            await group.removeLeaf(cur.leafKey);
-          } else {
-            if (!(await setPhase(groupId, pubkey, ref, 'removing'))) return 'no-marker';
-            await group.removeMember(cur.pubkey);
+            const hasOtherLeaf = held.some((leaf) => leaf.leafKey !== cur.leafKey);
+            if (hasOtherLeaf) {
+              if (!cur.leafKey || typeof group.removeLeaf !== 'function') return 'superseded';
+              if (!(await setPhase(groupId, pubkey, ref, 'removing')) || abort.signal.aborted) return 'no-marker';
+              await group.removeLeaf(cur.leafKey);
+            } else {
+              if (!(await setPhase(groupId, pubkey, ref, 'removing')) || abort.signal.aborted) return 'no-marker';
+              await group.removeMember(cur.pubkey);
+            }
           }
           await setPhase(groupId, pubkey, ref, 'announce-pending');
-          return 'removed';
+          return 'announce';
         },
         { signal: abort.signal, syncTimeoutMs: deps.syncTimeoutMs },
       );
     } catch (error) {
       report(error);
-      if (isTerminalRemovalError(error)) {
+      if (marker.phase !== 'announce-pending' && isTerminalRemovalError(error)) {
         await clear();
         return 'terminal';
       }
@@ -290,21 +257,22 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
       await clear();
       return verdict;
     }
-    // The Remove resolved (now or earlier): announce, at least once; the marker goes only after the send.
-    if (verdict === 'announce-only') await setPhase(groupId, marker.pubkey, ref, 'announce-pending');
+    // A purge or another replay may have cleared the notice while this job was queued.
+    if (abort.signal.aborted) return 'no-marker';
+    const owed = await getDeclined();
+    if (!owed || abort.signal.aborted) return 'no-marker';
     try {
       await announce(group, buildDeclinedAnnouncementContent(marker.pubkey, declinedDedupId(groupId, ref)));
     } catch (error) {
       report(error);
-      return 'retry-later'; // marker stays announce-pending: the replay announces without a second Remove
+      return 'retry-later';
     }
-    await clear();
+    if (!abort.signal.aborted) await clearAnnouncement(owed);
     return 'removed';
   }
 
   const reportInvalid = (key: string, phase: unknown) =>
     report(new Error(`marker ${key} ignored: invalid phase ${JSON.stringify(phase) ?? String(phase)}`));
-  const keyOf = (groupId: string, pubkey: string) => `${groupId}:${pubkey}`;
 
   function cancelRetry(key: string): void {
     const t = retryTimers.get(key);
@@ -313,8 +281,8 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
   }
 
   /** After a replay settled: a retryable outcome schedules the next bounded backoff replay. */
-  function settle(groupId: string, pubkey: string, outcome: DeclineOutcome): void {
-    const key = keyOf(groupId, pubkey);
+  function settle(groupId: string, pubkey: string, ref: string, outcome: DeclineOutcome): void {
+    const key = declinedDedupId(groupId, ref);
     if (outcome !== 'retry-later' && outcome !== 'group-missing') {
       retryCount.delete(key);
       cancelRetry(key);
@@ -330,15 +298,16 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
         retryTimers.delete(key);
         if (abort.signal.aborted) return;
         enqueue(async () => {
-          if (!abort.signal.aborted) void start(groupId, pubkey, true);
+          if (!abort.signal.aborted) void start(groupId, pubkey, ref, true);
         });
       }, retryDelays[n]),
     );
   }
 
-  /** `processMarker` joined per marker key: one removal in flight per (group, invitee). A timer replay keeps the backoff count; any other start resets it. */
-  function start(groupId: string, pubkey: string, fromTimer = false): Promise<DeclineOutcome> {
-    const key = keyOf(groupId, pubkey);
+  /** A timer replay keeps the backoff count for its reference. Other starts reset it. */
+  function start(groupId: string, pubkey: string, ref: string, fromTimer = false): Promise<DeclineOutcome> {
+    if (abort.signal.aborted) return Promise.resolve('no-marker');
+    const key = declinedDedupId(groupId, ref);
     if (!fromTimer) {
       retryCount.delete(key);
       cancelRetry(key);
@@ -346,13 +315,13 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
     const running = inFlight.get(key);
     if (running) return running;
     const p = track(
-      processMarker(groupId, pubkey)
+      processMarker(groupId, pubkey, ref)
         .catch((error: unknown): DeclineOutcome => {
           report(error);
           return 'retry-later';
         })
         .then((outcome) => {
-          settle(groupId, pubkey, outcome);
+          settle(groupId, pubkey, ref, outcome);
           return outcome;
         })
         .finally(() => void inFlight.delete(key)),
@@ -386,7 +355,7 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
       enqueue(async () => {
         const entry = await marked;
         if (!entry || abort.signal.aborted) return; // unknown inviteeRef (orphan stored) / legacy marker
-        void start(entry.groupId, entry.marker.pubkey);
+        void start(entry.groupId, entry.marker.pubkey, entry.marker.inviteeRef);
       });
     },
 
@@ -396,7 +365,7 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
         const declined = await store.listDeclined(reportInvalid);
         for (const { groupId, marker } of declined) {
           if (abort.signal.aborted) return;
-          void start(groupId, marker.pubkey);
+          void start(groupId, marker.pubkey, marker.inviteeRef);
         }
       });
     },
@@ -404,13 +373,20 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
     async retryDeclined() {
       if (abort.signal.aborted) return [];
       const declined = await store.listDeclined(reportInvalid);
-      return Promise.all(declined.map(({ groupId, marker }) => start(groupId, marker.pubkey)));
+      if (abort.signal.aborted) return [];
+      return Promise.all(declined.map(({ groupId, marker }) => start(groupId, marker.pubkey, marker.inviteeRef)));
     },
 
-    replayMarker(groupId, pubkey) {
+    replayMarker(groupId, pubkey, inviteeRef) {
       if (abort.signal.aborted || !nonEmpty(groupId) || !nonEmpty(pubkey)) return;
       enqueue(async () => {
-        if (!abort.signal.aborted) void start(groupId, pubkey.toLowerCase());
+        if (abort.signal.aborted) return;
+        if (nonEmpty(inviteeRef)) {
+          void start(groupId, pubkey.toLowerCase(), inviteeRef);
+          return;
+        }
+        const marker = await store.get(groupId, pubkey);
+        if (marker?.declined) void start(groupId, marker.pubkey, marker.inviteeRef);
       });
     },
 
@@ -429,37 +405,22 @@ export function createDeclineDurability(deps: DeclineDurabilityDeps): DeclineDur
 // Invite time
 // ---------------------------------------------------------------------------
 
-export interface MarkerRecordingInviterDeps {
+interface MarkerRecordingInviterDeps {
   inviter: Pick<KeyPackageInviter, 'inviteByPubkey'>;
-  store: Pick<DeclineMarkerStore, 'record'>;
+  store: Pick<DeclineMarkerStore, 'record'> & Partial<Pick<DeclineMarkerStore, 'get'>>;
   /**
    * REQUIRED. Called (never throws out) when the record consumed an orphan decline and started `declined`: wire it to
    * `DeclineDurability.replayMarker` so the removal is enqueued. Without a handler an adopted decline would never be removed.
    */
-  onRecordedDeclined: (groupId: string, pubkey: string) => void;
+  onRecordedDeclined: (groupId: string, pubkey: string, inviteeRef: string) => void;
   onError?: (error: unknown) => void;
   /** Clock (epoch ms; default `Date.now`): `invitedAt` is read from it before the invite runs. */
   now?: () => number;
 }
 
-/** The leaf signature keys `account` holds in `group` now; `undefined` when the handle cannot say. */
-function leafKeysOf(group: InviteGroup, account: string): string[] | undefined {
-  if (typeof group.leaves !== 'function') return undefined;
-  try {
-    return group.leaves(account).map((l) => l.leafKey).filter((k): k is string => typeof k === 'string' && k !== '');
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * Wraps the invite: after an accepted invite (`outcome`), persists `inviteeRef -> pubkey` (and the added leaf's
- * `leafKey`) in the pending-direct-invite marker (`declined:false`) before the result is returned, so a later
- * `welcomeDeclined` can be matched and bound to that leaf. `leafKey` = the account's leaves after the invite minus
- * the ones before it; recorded only when that is exactly one leaf, otherwise none (the removal then falls back to
- * the account and only when it holds a single leaf). The marker write is best-effort: a failure is reported and
- * the committed invite is returned unchanged. A result that is an `error` value records nothing. Same
- * re-entrancy rule as `inviteByPubkey`.
+ * Persist the Welcome reference and its KeyPackage leaf after an invite commits.
+ * A storage failure is reported and the invite outcome is returned.
  */
 export function createMarkerRecordingInviter(deps: MarkerRecordingInviterDeps): Pick<KeyPackageInviter, 'inviteByPubkey'> {
   const who = 'createMarkerRecordingInviter';
@@ -473,23 +434,25 @@ export function createMarkerRecordingInviter(deps: MarkerRecordingInviterDeps): 
   const report = reporter(deps.onError);
   return {
     async inviteByPubkey(group: InviteGroup, pubkey: string, opts) {
-      const account = typeof pubkey === 'string' ? pubkey.toLowerCase() : pubkey;
-      const before = leafKeysOf(group, account);
       // Before the invite: a decline of an EARLIER invite of the same ref that is older than this is stale, never adopted.
       const invitedAt = clock();
+      // Bind the Add's roster evidence to the removing marker that predates it.
+      // The marker is compared again inside the replacement transaction.
+      let previous: Awaited<ReturnType<DeclineMarkerStore['get']>>;
+      try {
+        previous = await store.get?.(group.id, pubkey);
+      } catch (error) {
+        report(error);
+      }
       const result = await inviter.inviteByPubkey(group, pubkey, opts);
       if ('outcome' in result) {
         try {
-          let leafKey: string | undefined;
-          const after = before === undefined ? undefined : leafKeysOf(group, account);
-          if (before && after) {
-            const added = after.filter((k) => !before.includes(k));
-            if (added.length === 1) leafKey = added[0];
-          }
-          const marker = await store.record(group.id, pubkey, result.outcome.inviteeRef, leafKey, invitedAt);
+          const removingBeforeInvite = result.inviteeAbsentBeforeAdd === true && previous?.phase === 'removing' ? previous : undefined;
+          const marker = await store.record(group.id, pubkey, result.outcome.inviteeRef,
+            result.invitedLeafKey, invitedAt, opts?.viaJoinRequest, { removingBeforeInvite });
           if (marker?.declined) {
             try {
-              deps.onRecordedDeclined(group.id, marker.pubkey);
+              deps.onRecordedDeclined(group.id, marker.pubkey, marker.inviteeRef);
             } catch (error) {
               report(error);
             }

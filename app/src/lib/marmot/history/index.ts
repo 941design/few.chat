@@ -6,12 +6,9 @@
 export {
   createHistoryBackend,
   HISTORY_SETTLE_TIMEOUT_MS,
-  MAX_RECOVERY_FAILURES,
   type AppHistoryBackend,
   type GroupHistoryHandlers,
   type GroupRumorInput,
-  type HistoryBackendOptions,
-  type RemainingRow,
   type RetractInput,
 } from './historyBackend';
 export { createAccountHistoryStore, createIdbHistoryStore, historyDbName, HISTORY_DB_NAME, type HistoryRow, type HistoryStore } from './historyStore';

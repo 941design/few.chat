@@ -1,0 +1,45 @@
+{
+  "module_name": "client",
+  "purpose": "Publish the account inbox relay list when owned by Few, and rebuild and rotate discoverability to the newly configured relays.",
+  "public_api": [
+    {
+      "name": "ensureInboxRelayList",
+      "signature": "InboxRelayListEnsure.ensure",
+      "description": "Read latest own 10050 on the current and optional previous relay set. Do not overwrite a foreign list or a partial lookup. Sign only the configured relay tags and Few client tag."
+    },
+    {
+      "name": "rebuildAccountForRelays",
+      "signature": "(previous, input) => Promise<RelayRebuildResult>",
+      "description": "Tear down the old session before bootstrapping with new defaults and rotating the active key packages in the replacement session."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "Few-owned kind 10050 list (client tag few)"
+  ],
+  "dependencies_allowed": [
+    "client bootstrap and transport",
+    "public library keyPackages API and event signer",
+    "nostr-events parsers"
+  ],
+  "dependencies_forbidden": [
+    "NDK",
+    "profile data"
+  ],
+  "external_ports": [
+    "requestWithDeadline",
+    "signEvent",
+    "publish",
+    "client.keyPackages.list and rotate"
+  ],
+  "events_emitted": [
+    "10050, 30443"
+  ],
+  "events_consumed": [
+    "10050"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/client/inboxRelayList.test.ts",
+    "app/tests/unit/marmot/client/bootstrap.harness.test.ts"
+  ]
+}

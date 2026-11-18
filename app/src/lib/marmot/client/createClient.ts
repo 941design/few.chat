@@ -42,6 +42,8 @@
  * API; the library is only exercised when `bootstrapAccountClient` runs.
  */
 import { createMarmotClient as libCreateMarmotClient } from '@941design/marmot';
+import { verifyEvent } from '@941design/nostr-events/event';
+import { parseDmRelayList10050 } from '@941design/nostr-events/parsers';
 import type {
   ClientOptions,
   GroupNotification,
@@ -51,6 +53,7 @@ import type {
   MarmotClientEvents,
   MarmotGroup,
 } from '@941design/marmot';
+import type { Signer } from '@941design/nostr-events/signer';
 import type { WritableStores } from '@941design/marmot/storage';
 import {
   createAccountSigner,
@@ -61,12 +64,12 @@ import {
 import { APP_INBOX_KINDS } from '../kinds';
 import { createClientTransport, type ClientTransport } from './transport';
 import { openAccountStores, type OpenStoresResult } from './storage';
-import { createJobQueue, type ClientJobQueue, type JobQueue } from './fifo';
+import { createJobQueue, INBOX_CALLBACK, type ClientJobQueue, type JobQueue } from './fifo';
 import { ensureKeyPackage, type KeyPackageEnsureOutcome } from './keyPackageEnsure';
 import { createTeardown } from './lifecycle';
 
 /** Library timing options the app pins (everything else keeps the library default). */
-export const CLIENT_TIMING_OPTIONS = { leaveTimeoutMs: 10_000, removalSettleMs: 5_000 } as const;
+const CLIENT_TIMING_OPTIONS = { leaveTimeoutMs: 10_000, removalSettleMs: 5_000 } as const;
 
 /** Lifecycle events the app listens to; every one needs a handler. */
 export const CLIENT_EVENT_NAMES = [
@@ -77,14 +80,21 @@ export const CLIENT_EVENT_NAMES = [
   'storeIncompatible',
   'groupBranchSwitched',
 ] as const;
-export type ClientEventName = (typeof CLIENT_EVENT_NAMES)[number];
-export type ClientEventHandlers = {
+type ClientEventName = (typeof CLIENT_EVENT_NAMES)[number];
+type ClientEventHandlers = {
   [E in ClientEventName]: (payload: MarmotClientEvents[E]) => void;
 };
 
 /** Seam `InboxRelayListEnsure`: publishes the account's kind-10050 when policy allows (policy is not owned here). */
 export interface InboxRelayListEnsure {
-  ensure: (ctx: { pubkey: string; relays: string[] }) => Promise<void>;
+  ensure: (ctx: {
+    pubkey: string;
+    relays: string[];
+    previousRelays?: readonly string[];
+    transport: ClientTransport['transport'];
+    signer: Pick<Signer, 'signEvent'>;
+    signal?: AbortSignal;
+  }) => Promise<void>;
 }
 
 /** Seam `AccountClientHandle`: what feature modules receive by injection. */
@@ -123,11 +133,40 @@ export interface BootstrapSeams {
   signerTimeoutMs?: number;
 }
 
+/** Account-scoped record of relays previously configured for discovery. */
+interface DiscoverySourcesStore {
+  load(pubkey: string): readonly string[] | Promise<readonly string[]>;
+  save(pubkey: string, relays: readonly string[]): void | Promise<void>;
+}
+
+const discoverySourcesKey = (pubkey: string) => `lp_marmotInboxDiscovery:${pubkey}`;
+const localDiscoverySources: DiscoverySourcesStore = {
+  load(pubkey) {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(discoverySourcesKey(pubkey));
+    if (raw === null) return [];
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value) || !value.every((relay) => typeof relay === 'string')) {
+      throw new Error('Invalid inbox discovery sources');
+    }
+    return value;
+  },
+  save(pubkey, relays) {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(discoverySourcesKey(pubkey), JSON.stringify(relays));
+  },
+};
+
 export interface BootstrapInput {
   eventSigner: AppEventSigner;
   signerKind: SignerKind;
+  /** Called after signer identity resolves and before account lease acquisition. */
+  onAccountResolved?: (pubkey: string) => void | Promise<void>;
+  /** Optional persistence adapter; defaults to account-scoped browser localStorage. */
+  discoverySourcesStore?: DiscoverySourcesStore;
   /** The user's configured relays: library defaults, and the 10050 list. */
   relays: readonly string[];
+  /** Relay-settings rebuild: retain discovery access without retaining old defaults. */
+  relayRebuild?: { previousRelays: readonly string[]; rotatingKeyPackages: () => boolean; expectedPubkey?: string };
   /**
    * The app sink (S3); the library retains accepted group messages through it. Its `sweep()` (structural
    * port: client/ does not import history/) runs after `groups.list()` and before `inbox.start()`; its
@@ -145,12 +184,21 @@ export interface BootstrapInput {
   onError?: (step: BootstrapStep, error: unknown) => void;
   /** Aborts an in-flight bootstrap: whatever was acquired is released, the result is `{ status: 'aborted' }`. */
   signal?: AbortSignal;
+  /** Compose account-scoped ports before group loading can deliver history. */
+  onAccountOpened?: (handle: AccountClientHandle, transport: ClientTransport['transport'], attachGroup: AccountClient['attachGroup']) => void;
+  /** Reconcile overlay rows before inbox delivery. */
+  afterGroupsListed?: (groups: readonly MarmotGroup[]) => Promise<void>;
+  /** Runs after disposal, while the session still owns the store lease. */
+  beforeStoresClose?: (stores: WritableStores) => Promise<void>;
+  /** Recover committed app cleanup while holding the lease, before constructing the client. */
+  beforeClientConstruction?: (stores: WritableStores) => Promise<void>;
   seams?: BootstrapSeams;
 }
 
 export interface AccountClient {
   handle: AccountClientHandle;
   stores: WritableStores;
+  transport: ClientTransport['transport'];
   groups: readonly MarmotGroup[];
   /** Outcome of the two non-fatal ensure steps (`failed` is also sent to `onError`). */
   ensure: { keyPackage: KeyPackageEnsureOutcome | 'failed'; inboxRelayList: 'ok' | 'failed' };
@@ -284,6 +332,9 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
   }
   if (aborted()) return { status: 'aborted' };
 
+  await input.onAccountResolved?.(pubkey);
+  if (aborted()) return { status: 'aborted' };
+
   // 2. stores (lease)
   const opened = await (seams.openStores ?? ((pk: string) => openAccountStores(pk)))(pubkey);
   if (opened.status === 'unsupported') return aborted() ? { status: 'aborted' } : { status: 'unsupported', reason: opened.reason };
@@ -295,17 +346,18 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
   let transport: ClientTransport | undefined;
   let client: MarmotClient | undefined;
   let tornDown = false;
-  const teardownNow = async () => {
-    // Failed or aborted bootstrap: release whatever was acquired, in the contract order.
-    tornDown = true;
-    await createTeardown({
+  const teardownOnce = createTeardown({
       client: { dispose: () => client?.dispose() },
       stores,
+      beforeStoresClose: () => input.beforeStoresClose?.(stores),
       closePool: () => transport?.closePool(),
       queue,
       history: input.history,
       unsubscribers,
-    })();
+    });
+  const teardownNow = () => {
+    tornDown = true;
+    return teardownOnce();
   };
   const abortNow = async (): Promise<BootstrapResult> => {
     await teardownNow();
@@ -315,18 +367,95 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
   try {
     if (aborted()) return await abortNow();
 
+    await input.beforeClientConstruction?.(stores);
+    if (aborted()) return await abortNow();
+
+    const sourceStore = input.discoverySourcesStore ?? localDiscoverySources;
+    const savedSources = await sourceStore.load(pubkey);
+    if (!Array.isArray(savedSources) || !savedSources.every((relay) => typeof relay === 'string')) {
+      throw new Error('Invalid inbox discovery sources');
+    }
+    const transition = input.relayRebuild;
+    const rebuild = transition?.expectedPubkey && transition.expectedPubkey !== pubkey ? undefined : transition;
+    const discoverySources = [...new Set([...savedSources, ...(rebuild?.previousRelays ?? []), ...input.relays])];
+    if (aborted()) return await abortNow();
+    await sourceStore.save(pubkey, discoverySources);
+    if (aborted()) return await abortNow();
+
     // 3. client
     transport = (seams.createTransport ?? ((relays) => createClientTransport({ relays })))(input.relays);
+    const ensureTransport = transport.transport;
+    {
+      const network = transport.transport;
+      const rotatingKeyPackages = rebuild?.rotatingKeyPackages ?? (() => false);
+      const previousRelays = discoverySources;
+      transport = {
+        ...transport,
+        transport: {
+          subscription: (relays, filters) => network.subscription(relays, filters),
+          async requestWithDeadline(relays, filters, opts) {
+            const queries = Array.isArray(filters) ? filters : [filters];
+            const ownWriteList = queries.every((filter) =>
+              filter.kinds?.length === 1 && filter.kinds[0] === 10002 &&
+              filter.authors?.length === 1 && filter.authors[0] === pubkey);
+            // A relay-settings save explicitly chooses this account's defaults.
+            // Do not let its old NIP-65 list override that choice. Returning no
+            // candidate makes the library select defaults before persisting the
+            // publish targets and classifying their real acknowledgments.
+            if (ownWriteList && rotatingKeyPackages()) {
+              const result = await network.requestWithDeadline(relays, filters, opts);
+              return { ...result, events: [] };
+            }
+            const ownInboxList = queries.every((filter) =>
+              filter.kinds?.length === 1 && filter.kinds[0] === 10050 &&
+              filter.authors?.length === 1 && filter.authors[0] === pubkey);
+            const extraRelays = previousRelays.filter((relay) => !relays.includes(relay));
+            if (!ownInboxList) {
+              return network.requestWithDeadline(relays, filters, opts);
+            }
+            // The library treats any timeout as unknown, even if a verified
+            // foreign list is available. Allow that list for receiving, but keep
+            // the ensure's separate lookup honest before it may publish.
+            const [current, previous] = await Promise.all([
+              network.requestWithDeadline(relays, filters, opts),
+              extraRelays.length ? network.requestWithDeadline(extraRelays, filters, opts)
+                : Promise.resolve({ events: [], timedOut: false, eosedRelays: [], silentRelays: [] }),
+            ]);
+            const events = [...current.events, ...previous.events];
+            const latest = events.filter((event) =>
+              event.kind === 10050 && event.pubkey === pubkey && verifyEvent(event))
+              .sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : Number(a.id > b.id)))[0];
+            const verifiedForeign = latest && !latest.tags.some((tag) => tag[0] === 'client' && tag[1] === 'few') &&
+              parseDmRelayList10050(latest).relay.length > 0;
+            return {
+              events,
+              timedOut: (current.timedOut || previous.timedOut) && !verifiedForeign,
+              eosedRelays: [...current.eosedRelays, ...previous.eosedRelays],
+              silentRelays: [...current.silentRelays, ...previous.silentRelays],
+            };
+          },
+          publish: (relays, event, opts) => network.publish(relays, event, opts),
+        },
+      };
+    }
     client = (seams.createMarmotClient ?? libCreateMarmotClient)({
       signer: accountSigner.signer,
       budget: accountSigner.budget,
       transport: transport.transport,
       stores,
       relays: { defaults: [...input.relays], mode: 'discover' },
-      history: input.history,
+      history: {
+        append: (entry) => queue.runInCallback(entry.groupId, () => input.history.append(entry)),
+        withdraw: (groupId, ids) => queue.runInCallback(groupId, () => input.history.withdraw(groupId, ids)),
+        list: (groupId) => input.history.list(groupId),
+        purge: (groupId) => input.history.purge(groupId),
+      },
       options: { ...CLIENT_TIMING_OPTIONS, ...input.clientOptions },
     });
     const liveClient = client;
+    const handle: AccountClientHandle = {
+      client: liveClient, pubkey, leaseHeld: () => !tornDown && stores.lease.held, enqueue: queue.enqueue,
+    };
 
     // Per-group notification listeners. Attachment is tracked by handle identity: the library builds a new
     // runtime + handle when a group id is rejoined after an abandon/purge, and that handle needs its own listener.
@@ -344,6 +473,8 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
         }),
       );
     };
+
+    input.onAccountOpened?.(handle, transport.transport, attachGroup);
 
     // 4. listeners (attached before groups load: groupRemoved for offline-settled removals fires on first load)
     for (const name of CLIENT_EVENT_NAMES) {
@@ -383,8 +514,10 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
 
     // 5. inbox handlers
     unsubscribers.push(
-      liveClient.extensions.registerInboxHandler(APP_INBOX_KINDS.joinRequest, input.inboxHandlers.joinRequest),
-      liveClient.extensions.registerInboxHandler(APP_INBOX_KINDS.inviteContext, input.inboxHandlers.inviteContext),
+      liveClient.extensions.registerInboxHandler(APP_INBOX_KINDS.joinRequest, (rumor, ctx) =>
+        queue.runInCallback(INBOX_CALLBACK, () => input.inboxHandlers.joinRequest(rumor, ctx))),
+      liveClient.extensions.registerInboxHandler(APP_INBOX_KINDS.inviteContext, (rumor, ctx) =>
+        queue.runInCallback(INBOX_CALLBACK, () => input.inboxHandlers.inviteContext(rumor, ctx))),
     );
 
     // 6. groups (this starts every stored group's relay sync)
@@ -393,6 +526,8 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
 
     // 7. per-group notification listeners
     for (const group of groups) attachGroup(group);
+    await input.afterGroupsListed?.(groups);
+    if (aborted()) return await abortNow();
 
     // 8. history sweep (non-fatal: a failed sweep leaves rows undispatched for the next first-touch / startup)
     // Bounded: waits for the sweep at most HISTORY_SWEEP_WAIT_MS and stops waiting on abort. Past the cap the
@@ -417,36 +552,36 @@ export async function bootstrapAccountClient(input: BootstrapInput): Promise<Boo
     }
     if (aborted()) return await abortNow();
     try {
-      await input.inboxRelayList.ensure({ pubkey, relays: [...input.relays] });
+      await input.inboxRelayList.ensure({
+        pubkey, relays: [...input.relays], previousRelays: discoverySources, transport: ensureTransport, signer: liveClient.signer, signal,
+      });
       ensure.inboxRelayList = 'ok';
     } catch (error) {
       reportError('inboxRelayListEnsure', error);
     }
     if (aborted()) return await abortNow();
 
-    const teardown = createTeardown({
-      client: liveClient,
-      stores,
-      closePool: () => transport?.closePool(),
-      queue,
-      history: input.history,
-      unsubscribers,
-    });
     const account: AccountClient = {
-      handle: { client: liveClient, pubkey, leaseHeld: () => stores.lease.held, enqueue: queue.enqueue },
+      handle,
       stores,
+      transport: transport.transport,
       groups,
       ensure,
       attachGroup,
       queue,
       teardown: () => {
-        tornDown = true;
-        return teardown();
+        return teardownNow();
       },
     };
     return { status: 'ready', account };
   } catch (error) {
-    await teardownNow().catch(() => undefined);
+    try {
+      await teardownNow();
+    } catch (closeError) {
+      if (closeError !== error) {
+        throw new AggregateError([error, closeError], 'Group client startup and teardown failed');
+      }
+    }
     throw error;
   }
 }

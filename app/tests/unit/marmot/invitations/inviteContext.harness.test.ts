@@ -77,7 +77,12 @@ async function startRelay() {
   return { relay, url };
 }
 
-async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
+async function startPeer(
+  secretHex: string,
+  defaults: string[],
+  contextPort = memoryPort().port,
+  onDisposition?: (kind: string) => void,
+): Promise<Peer> {
   const backend = createMemoryStorage({ persistence: createMemoryPersistence(), leaseTimeoutMs: 200 });
   const pubkey = pub(secretHex);
   let transport: ReturnType<typeof createClientTransport> | undefined;
@@ -85,7 +90,7 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
   const blocked = new Set<string>();
   const errors: unknown[] = [];
   let view!: PendingInvitationView;
-  const store = createInviteContextStore({ port: memoryPort().port, now: () => Date.now(), getPending: () => (view ? view.pending() : []), onError: (e) => void errors.push(e) });
+  const store = createInviteContextStore({ port: contextPort, now: () => Date.now(), getPending: () => (view ? view.pending() : []), onError: (e) => void errors.push(e) });
   await store.load();
   const handler = createInviteContextHandler({ store, denyLayer: createDenyLayer({ loadBlockedPeers: () => blocked }), onError: (e) => void errors.push(e) });
   const result = await bootstrapAccountClient({
@@ -95,7 +100,7 @@ async function startPeer(secretHex: string, defaults: string[]): Promise<Peer> {
     history: Object.assign(createMemoryHistoryBackend(), { sweep: async () => undefined, dispose: () => undefined }),
     clientEvents: {
       groupRemoved: () => undefined,
-      inboxDisposition: (d) => forward(d),
+      inboxDisposition: (d) => { onDisposition?.(d.kind); forward(d); },
       welcomeDeclined: () => undefined,
       intentFailed: () => undefined,
       storeIncompatible: () => undefined,
@@ -179,6 +184,32 @@ async function inviteWithContext(from: Peer, to: Peer, name: string) {
 }
 
 describe('invite context over real clients', () => {
+  it('AC-CTX-4: Marmot defers a failed context save and retries the same delivery before acknowledging it', async () => {
+    const { relay, url } = await startRelay();
+    const alice = await startPeer(SECRETS.a, [url]);
+    const context = memoryPort();
+    const dispositions: string[] = [];
+    const failure = new Error('context storage unavailable');
+    let attempts = 0;
+    const bob = await startPeer(SECRETS.b, [url], {
+      ...context.port,
+      save: async (...args) => {
+        if (++attempts === 1) throw failure;
+        await context.port.save(...args);
+      },
+    }, (kind) => dispositions.push(kind));
+    const sender = createInviteContextSender({ inbox: alice.account.handle.client.extensions, ownPubkey: alice.pubkey, now: Date.now });
+    expect(await sender.sendAfterInvite({ outcome: { status: 'delivered' } } as never, {
+      to: bob.pubkey, groupId: 'ab', name: 'Retry club',
+    })).toBe('sent');
+    await expect.poll(() => dispositions, { timeout: 15_000 }).toEqual(['deferred', 'delivered']);
+    expect(context.stored).toEqual(bob.store.snapshot());
+    expect(context.stored?.map(({ name }) => name)).toEqual(['Retry club']);
+    expect(attempts).toBe(2);
+    expect(wraps(relay)).toBe(1);
+    expect(bob.errors.splice(0)).toEqual([failure]);
+  }, 20_000);
+
   it('AC-CTX-1/2 + AC-PRIV-2: one addressed wrap carries the name; the card shows it; accept deletes it', async () => {
     const { relay, url } = await startRelay();
     const alice = await startPeer(SECRETS.a, [url]);

@@ -1,0 +1,30 @@
+{
+  "story_id": "S28",
+  "status": "done",
+  "modules_touched": [
+    "behavior-docs"
+  ],
+  "files_created": [],
+  "files_modified": [
+    "docs/behavior/README.md",
+    "docs/behavior/groups.md",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/notifications-and-unread.md",
+    "docs/behavior/contacts-and-direct-messages.md"
+  ],
+  "remediation_rounds": 0,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "static": "Documentation and index updated for lease ownership, fork withdrawal, leave, privacy, settings/profile recovery and DM inbox separation. Local links and anchors passed the scoped check."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol verified all five behavior files and their synchronized index.",
+    "adversarial": "GPT-6 Astra accepted the single-tab, withdrawal, leave and recovery documentation."
+  }
+}

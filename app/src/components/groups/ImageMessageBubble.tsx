@@ -31,7 +31,7 @@ export default function ImageMessageBubble({ groupId, caption, attachments, send
 
   const displayState = useDecryptedImage(groupId, displayAttachment, decryptMedia);
 
-  const blurhash = displayAttachment?.blurhash;
+  const blurhash = displayAttachment && 'blurhash' in displayAttachment ? displayAttachment.blurhash : undefined;
 
   return (
     <Box maxW="260px">

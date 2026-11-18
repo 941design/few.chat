@@ -1,0 +1,48 @@
+{
+  "module_name": "consumer",
+  "purpose": "Wire the library account lifecycle and all app-owned persistence, history/inbox handlers and group actions to the existing React consumers and test hooks.",
+  "public_api": [
+    {
+      "name": "useMarmot",
+      "signature": "() => MarmotContextValue",
+      "description": "Read-only overlay for the waiting tab, live library readiness and group mutations for the lease holder. Preserve DM/contacts signals."
+    },
+    {
+      "name": "groupSessionHistory",
+      "signature": "Account-specific sink, tracker and sender",
+      "description": "Compose production group handlers and store ports, with lock-safe enqueue for follow-up work."
+    },
+    {
+      "name": "groupSessionMembership",
+      "signature": "Account-specific group membership and inbox actions",
+      "description": "Compose the app membership, invitation, join-request and overlay seams."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "React snapshots and revision notifications"
+  ],
+  "dependencies_allowed": [
+    "client, history, handlers, send, membership, invitations and existing app stores"
+  ],
+  "dependencies_forbidden": [
+    "legacy Marmot APIs",
+    "raw relay publishes of profiles",
+    "account client constructor in React"
+  ],
+  "external_ports": [
+    "React context facade",
+    "GroupOpQueue",
+    "AccountClientHandle"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "lease state",
+    "library lifecycle and group notifications",
+    "DM-only cross-tab storage changes"
+  ],
+  "test_targets": [
+    "context consumer typecheck",
+    "checkpoint subset specified in AC-GATE-2"
+  ]
+}

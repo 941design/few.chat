@@ -32,13 +32,17 @@ export const inv = (id: string, sponsor: number, groupId = `g${id}`): PendingInv
  * which tests deliberately choose out of `seq` order.
  */
 export function memoryPort(initial?: InviteContextRecord[]) {
-  let stored: InviteContextRecord[] | undefined = initial;
+  let snapshot: Awaited<ReturnType<InviteContextStorePort['load']>> = initial;
   const saves: InviteContextRecord[][] = [];
   const port: InviteContextStorePort = {
-    load: async () => stored?.map((r) => ({ ...r })),
-    save: async (records) => { stored = records.map((r) => ({ ...r })); saves.push(stored); },
+    load: async () => structuredClone(snapshot),
+    save: async (records, tombstones = []) => {
+      const copied = records.map((r) => ({ ...r }));
+      snapshot = { records: copied, tombstones: structuredClone(tombstones) };
+      saves.push(copied);
+    },
   };
-  return { port, saves, get stored() { return stored; } };
+  return { port, saves, get stored() { return snapshot && ('records' in snapshot ? snapshot.records : snapshot); } };
 }
 
 export const rumor = (over: Partial<Rumor> & { groupId?: string; name?: string }): Rumor => ({

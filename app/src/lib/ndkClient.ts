@@ -68,8 +68,7 @@ export async function connectNdk(privateKeyHex: string): Promise<NDK> {
  * a relay that has not acked within 2.5 s. Under load a relay that DID store the
  * event acks later, the relay-set publish throws "Not enough relays received the
  * event", and the sender rolls back a message the peer actually receives (resend
- * then duplicates). Groups already use 10 s (NdkNetworkAdapter.rawPublish); DMs
- * share this single value.
+ * then duplicates).
  */
 export const PUBLISH_TIMEOUT_MS = 10_000;
 

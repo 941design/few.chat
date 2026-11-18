@@ -48,7 +48,7 @@ const applyInboundRumor = ((thread: Parameters<typeof applyInboundRumorReal>[0],
 const { buildReactionRumor } = await import('@/src/lib/reactions/rumor');
 
 import type { Reaction } from '@/src/lib/reactions/types';
-import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { AuthenticatedSender } from '@/src/lib/marmot/handlers/types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

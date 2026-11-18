@@ -9,10 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HistoryEntry } from '@941design/marmot';
 
-const { dbs, failSet } = vi.hoisted(() => ({
-  dbs: new Map<string, Map<string, unknown>>(),
-  failSet: { when: undefined as undefined | ((k: string, v: unknown) => boolean) },
-}));
+const { dbs } = vi.hoisted(() => ({ dbs: new Map<string, Map<string, unknown>>() }));
 const mapOf = (db: string): Map<string, unknown> => {
   let m = dbs.get(db);
   if (!m) dbs.set(db, (m = new Map()));
@@ -24,10 +21,7 @@ vi.mock('idb-keyval', async () => {
   return {
     createStore: (db: string) => mapUseStore(mapOf(db)),
     get: async (k: string, s: MapUseStore) => (s.map.has(k) ? structuredClone(s.map.get(k)) : undefined),
-    set: async (k: string, v: unknown, s: MapUseStore) => {
-      if (failSet.when?.(k, v)) throw new Error('idb write failed');
-      s.map.set(k, structuredClone(v));
-    },
+    set: async (k: string, v: unknown, s: MapUseStore) => void s.map.set(k, structuredClone(v)),
     del: async (k: string, s: MapUseStore) => void s.map.delete(k),
     delMany: async (ks: string[], s: MapUseStore) => void ks.forEach((k) => s.map.delete(k)),
     keys: async (s: MapUseStore) => [...s.map.keys()],
@@ -71,7 +65,6 @@ function fixture() {
 
 beforeEach(() => {
   for (const m of dbs.values()) m.clear();
-  failSet.when = undefined;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -200,24 +193,5 @@ describe('RetractInput.batch', () => {
       { batch: ['e1', 'e3'], remaining: ['e2'] },
       { batch: ['e1', 'e3'], remaining: ['e2'] },
     ]);
-  });
-});
-
-describe('a withdraw whose mark step fails part-way', () => {
-  it('is finished by the next append of the touched group (not only by a later withdraw or restart)', async () => {
-    const fx = fixture();
-    const sink = createHistoryBackend({ accountPubkey: ALICE, handlers: fx.handlers });
-    for (const l of ['e1', 'e2']) await sink.append(entry(l));
-    // Marking e1 succeeds, marking e2 fails: e1 is left marked (hidden from list()) with its effect still stored.
-    failSet.when = (k, v) => k === rowKey('e2') && (v as RawRow).withdrawing === true;
-    await expect(sink.withdraw(G, [hex('e1'), hex('e2')])).rejects.toThrow('idb write failed');
-    expect(row('e1')?.withdrawing).toBe(true);
-    expect(fx.calls).not.toContain('retract:e1');
-    failSet.when = undefined;
-    await sink.append(entry('e3'));
-    expect(fx.calls).toContain('retract:e1');
-    expect(row('e1')).toBeUndefined();
-    expect(row('e2')?.withdrawing).toBeUndefined();
-    expect(row('e3')?.dispatched).toBe(true);
   });
 });

@@ -119,9 +119,10 @@ const {
 const { postStoreChanged } = await import('@/src/lib/crossTab');
 const postFn = postStoreChanged as unknown as ReturnType<typeof vi.fn>;
 const { guardDeps, MaintenanceCancelled } = await import('@/src/lib/marmot/handlers/pollHandler');
-const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, createHeldCloseSettler, createHeldPollStateSweeper } =
-  await import('@/src/lib/marmot/handlers/pollHandler');
-const { createChatHandler, createPollCloseAnnouncementReplayer } = await import('@/src/lib/marmot/handlers/chatHandler');
+const { createHeldCloseSettler, createHeldPollStateSweeper } = await import('@/src/lib/marmot/handlers/pollHandler');
+const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } = await import('./handlers/reducerFixtures');
+const { createPollCloseAnnouncementReplayer } = await import('@/src/lib/marmot/handlers/chatHandler');
+const { createChatHandler } = await import('./handlers/reducerFixtures');
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND } = await import('@/src/lib/marmot/pollSync');
 
 type Poll = import('@/src/lib/marmot/pollPersistence').Poll;
@@ -978,8 +979,8 @@ describe('R1 MEDIUM: closing is monotonic and idempotent at the storage layer (f
   });
 });
 
-describe('R1 MEDIUM: recovery that stores votes notifies the poll store (UI bump + cross-tab notice)', () => {
-  it('sweep: early votes applied to an open poll (no close) → setPollVersion bumped once; the vote write posted polls', async () => {
+describe('R1 MEDIUM: recovery that stores votes notifies the poll store (UI bump; no cross-tab notice)', () => {
+  it('sweep: early votes applied to an open poll (no close) → setPollVersion bumped once; the vote write stays local', async () => {
     await open();
     await queuePendingVote({ groupId: GROUP, pollId: POLL_ID, voterPubkey: USER, responses: ['A'], votedAt: 1, seq: 1, rumorId: 'q' });
     postFn.mockClear();
@@ -988,7 +989,7 @@ describe('R1 MEDIUM: recovery that stores votes notifies the poll store (UI bump
     expect(deps.setPollVersion).toHaveBeenCalledTimes(1);
     const updater = (deps.setPollVersion as ReturnType<typeof vi.fn>).mock.calls[0][0] as (v: number) => number;
     expect(updater(2)).toBe(3);
-    expect(postFn).toHaveBeenCalledWith('polls', GROUP);
+    expect(postFn).not.toHaveBeenCalled();
   });
 
   it('a repeated open that recovers early votes bumps the poll UI too', async () => {
@@ -1010,14 +1011,14 @@ describe('R1 MEDIUM: recovery that stores votes notifies the poll store (UI bump
     expect(await loadPendingVotes(GROUP, POLL_ID)).toEqual([]);
   });
 
-  it('closing in a sweep posts polls (the closed write), the UI is bumped', async () => {
+  it('closing in a sweep stays local (the closed write), the UI is bumped', async () => {
     await open();
     await closeHeldAfterFailure();
     postFn.mockClear();
     const { sweep, deps } = sweeper();
     await sweep(ctx());
     expect(deps.setPollVersion).toHaveBeenCalledTimes(1);
-    expect(postFn).toHaveBeenCalledWith('polls', GROUP);
+    expect(postFn).not.toHaveBeenCalled();
   });
 });
 
@@ -1284,7 +1285,7 @@ describe('R2 MED: a partial early-vote replay still refreshes the poll UI', () =
     tx.failPut = (k) => k === VOTES_KEY && ++puts >= n;
   }
 
-  it.each(['sweep', 'repeated open'] as const)('%s: A stored, B fails → A stored, pollVersion bumped once, B (and A) still queued, warned, one cross-tab notice', async (path) => {
+  it.each(['sweep', 'repeated open'] as const)('%s: A stored, B fails → A stored, pollVersion bumped once, B (and A) still queued, warned, no cross-tab notice', async (path) => {
     await twoPending();
     clearLogs();
     failVotePutsFrom(2);
@@ -1301,7 +1302,7 @@ describe('R2 MED: a partial early-vote replay still refreshes the poll UI', () =
     expect(((deps.setPollVersion as ReturnType<typeof vi.fn>).mock.calls[0][0] as (v: number) => number)(1)).toBe(2);
     expect((await loadPendingVotes(GROUP, POLL_ID)).map((e) => e.voterPubkey).sort()).toEqual([USER, OTHER].sort());
     expect(warned('early-vote replay failed after storing 1')).toBe(true);
-    expect(postFn.mock.calls).toEqual([['polls', GROUP]]);
+    expect(postFn).not.toHaveBeenCalled();
   });
 
   it('every write fails → no bump, entries stay queued', async () => {
@@ -1623,57 +1624,5 @@ describe('purge vs queue writes: no few:poll-pending* key survives clearPollData
     await createPollVoteHandler(realDeps() as never).handle(voteRumor(USER, ['A'], 1, 'unseen'), ctx(), sender(USER));
     await createPollCloseHandler(realDeps() as never).handle(closeRumor('unseen'), ctx(), sender(CREATOR));
     expect(await pendingKeys()).toEqual([]);
-  });
-});
-
-// ─── Remediation round 1: the purge mark across a leave's outcomes ───────────
-
-describe('purge mark vs the leave outcome (leaveGroupImpl with the real clearPollData)', () => {
-  const VOTES_Q = `few:poll-pending-votes:${GROUP}`;
-  const earlyVote = () => queuePendingVote({ groupId: GROUP, pollId: 'p', voterPubkey: USER, responses: ['A'], votedAt: 1, seq: 1 });
-  const stubDeps = (over: Record<string, unknown> = {}) => {
-    const ok = vi.fn(async () => undefined);
-    return {
-      getGroup: vi.fn(async () => null), getGroupMembers: vi.fn(() => []), sendRumorSafe: ok, buildRumor: vi.fn(),
-      removeGroupFromStorage: vi.fn(async () => undefined), clearMemberProfiles: vi.fn(async () => undefined),
-      clearMessages: vi.fn(async () => undefined), clearPollData,
-      clearGroupMedia: vi.fn(async () => undefined), clearProfileRequestMemos: vi.fn(async () => undefined), clearUnreadGroup: vi.fn(),
-      clearPendingJoinRequestsForGroup: vi.fn(async () => undefined), clearInviteLinksForGroup: vi.fn(async () => undefined),
-      clearInviteExpiries: vi.fn(), clearPendingDirectInvitesForGroup: vi.fn(async () => undefined),
-      clearRumorJournalForGroup: vi.fn(async () => undefined), clearPendingRemovalsForGroup: vi.fn(async () => undefined),
-      putLeftGroupTombstone: vi.fn(async () => undefined), deleteLeftGroupTombstone: vi.fn(async () => undefined),
-      destroyGroupState: vi.fn(async () => undefined), reloadGroups: vi.fn(async () => undefined), markBackupDirty: vi.fn(),
-      ...over,
-    };
-  };
-  const leave = async (deps: ReturnType<typeof stubDeps>) =>
-    (await import('@/src/lib/marmot/leaveGroupImpl')).leaveGroupImpl(deps as never, GROUP, 'cc'.repeat(32));
-
-  it.each(['removeGroupFromStorage', 'clearMemberProfiles', 'clearMessages'] as const)(
-    'a leave that aborts before clearPollData (%s rejects) never sets the mark: the still-joined group\'s queues are written',
-    async (step) => {
-      const deps = stubDeps({ [step]: vi.fn(async () => { throw new Error('idb down'); }) });
-      await expect(leave(deps)).rejects.toThrow('idb down');
-      expect(await earlyVote()).toBe(true);
-      expect(await real.get(VOTES_Q)).toHaveLength(1);
-    },
-  );
-
-  it('clearPollData fails during the leave: the leave completes (group gone), the mark stays (harmless), a re-join releases it', async () => {
-    tx.failAllKeys = true;
-    const deps = stubDeps();
-    await expect(leave(deps)).resolves.toBe(true);
-    tx.failAllKeys = false;
-    expect(deps.removeGroupFromStorage).toHaveBeenCalledWith(GROUP);
-    expect(deps.reloadGroups).toHaveBeenCalled();
-    expect(await earlyVote()).toBe(false);
-    persistence.releasePollPurgeMark(GROUP);
-    expect(await earlyVote()).toBe(true);
-  });
-
-  it('a successful leave keeps the mark: an in-flight early vote of the left group is not held', async () => {
-    await expect(leave(stubDeps())).resolves.toBe(true);
-    expect(await earlyVote()).toBe(false);
-    expect(await real.get(VOTES_Q)).toBeUndefined();
   });
 });

@@ -47,7 +47,7 @@ export function isNewerVote(a: VoteOrderKey, b: VoteOrderKey): boolean {
  */
 export const MAX_VOTES_KEPT_PER_VOTER = 20;
 
-export const receivedRank = (v: { receivedAt?: number }) => v.receivedAt ?? -Infinity;
+const receivedRank = (v: { receivedAt?: number }) => v.receivedAt ?? -Infinity;
 
 /**
  * The votes that can still decide a tally "as of" some receipt time: a vote
@@ -63,7 +63,7 @@ export function keptVotes<T extends VoteOrderKey & { receivedAt?: number }>(vote
   return capKept(undominated(votes), cutoffs);
 }
 
-export function undominated<T extends VoteOrderKey & { receivedAt?: number }>(votes: T[]): T[] {
+function undominated<T extends VoteOrderKey & { receivedAt?: number }>(votes: T[]): T[] {
   const kept = votes.filter((e, i) =>
     !votes.some((f, j) => {
       if (j === i || receivedRank(f) > receivedRank(e)) return false;
@@ -77,7 +77,7 @@ export function undominated<T extends VoteOrderKey & { receivedAt?: number }>(vo
 }
 
 /** `sorted` is undominated(): ascending by receipt and by the order. */
-export function capKept<T extends { receivedAt?: number }>(sorted: T[], cutoffs: readonly number[]): T[] {
+function capKept<T extends { receivedAt?: number }>(sorted: T[], cutoffs: readonly number[]): T[] {
   const required = new Set<T>(sorted.slice(-1));
   for (const cutoff of cutoffs) {
     // The newest vote received no later than the cut-off = the last such one.
@@ -106,7 +106,7 @@ export function voteAsOf(row: PollVote, cutoff: number): PollVote | null {
   return best === row ? row : { ...row, ...snapshotOf(best) };
 }
 
-export function snapshotOf(v: VoteSnapshot): VoteSnapshot {
+function snapshotOf(v: VoteSnapshot): VoteSnapshot {
   return {
     responses: v.responses,
     votedAt: v.votedAt,
@@ -116,7 +116,7 @@ export function snapshotOf(v: VoteSnapshot): VoteSnapshot {
   };
 }
 
-export const canonical = (vs: VoteSnapshot[]) => JSON.stringify(vs.map(snapshotOf));
+const canonical = (vs: VoteSnapshot[]) => JSON.stringify(vs.map(snapshotOf));
 
 // ---- Pending (early) votes — AC-9 ----
 

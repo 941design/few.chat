@@ -16,7 +16,8 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_C, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { dismissErrorOverlay, suppressErrorOverlay } from './helpers/dismiss-error-overlay';
-import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
+import { waitForLibraryGroupAbsent } from './helpers/session-cutover';
+import { createGroup, inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 const GROUP_NAME = 'Reinvite After Removal E2E Group';
@@ -41,17 +42,6 @@ async function bootUser(
     page.getByTestId('groups-empty-state').or(page.getByTestId('groups-list')),
   ).toBeVisible({ timeout: 60_000 });
   return { context, page };
-}
-
-async function createGroup(page: Page, name: string): Promise<void> {
-  await page.getByTestId('create-group-btn').click();
-  await expect(page.getByTestId('create-group-modal-content')).toBeVisible();
-  await page.getByTestId('create-group-name-input').fill(name);
-  await page.getByTestId('create-group-submit-btn').click();
-  await expect(page.getByText(name)).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('create-group-modal-content')).not.toBeVisible({ timeout: 10_000 });
-  await dismissErrorOverlay(page);
-  await page.waitForTimeout(3_000);
 }
 
 async function openGroupDetail(page: Page, groupName: string): Promise<void> {
@@ -104,6 +94,7 @@ test.describe.serial('Re-invite after removal — the evicted member adopts the 
   let ctxC: BrowserContext;
   let pageA: Page;
   let pageC: Page;
+  let groupId: string;
 
   test.beforeAll(async ({ browser }) => {
     await computeTestKeypairs();
@@ -117,14 +108,17 @@ test.describe.serial('Re-invite after removal — the evicted member adopts the 
   });
 
   test('A creates the group, invites C; C joins as a confirmed member', async () => {
+    await pageA.goto('/groups/');
     await createGroup(pageA, GROUP_NAME);
     await openGroupDetail(pageA, GROUP_NAME);
+    groupId = new URL(pageA.url()).searchParams.get('id')!;
+    expect(groupId).toBeTruthy();
     await inviteMember(pageA, USER_C.npub);
     await acceptInvitation(pageC, GROUP_NAME);
 
     const cPrefix = USER_C.pubkeyHex.slice(0, 8);
     await expect(pageA.getByTestId(`member-item-${cPrefix}`)).toBeVisible({ timeout: 30_000 });
-    await expect(pageA.getByTestId(`member-pending-${cPrefix}`)).not.toBeVisible({ timeout: 90_000 });
+    await expect(pageA.getByTestId(`member-pending-${cPrefix}`)).toHaveCount(0);
   });
 
   test('A removes C, then re-invites C', async () => {
@@ -133,20 +127,23 @@ test.describe.serial('Re-invite after removal — the evicted member adopts the 
     await removeMemberViaUI(pageA, USER_C.pubkeyHex);
     await expect(pageA.getByTestId(`member-item-${cPrefix}`)).toHaveCount(0, { timeout: 15_000 });
 
+    await waitForLibraryGroupAbsent(pageC, groupId);
+    await pageC.goto('/groups/');
+    await expect(pageC.locator('[data-testid^="group-card-"]', { hasText: GROUP_NAME })).toHaveCount(0);
     await inviteMember(pageA, USER_C.npub);
     await expect(pageA.getByTestId(`member-item-${cPrefix}`)).toBeVisible({ timeout: 30_000 });
+    await expect(pageA.getByTestId(`member-pending-${cPrefix}`)).toBeVisible();
   });
 
   test('C accepts the re-invite and joins with a working group', async () => {
-    // C still holds the group from before the removal: the new invitation is
-    // listed next to the (stale) joined card, and accepting must replace the
-    // dead local state with the fresh Welcome.
-    await acceptInvitation(pageC, GROUP_NAME, { replacesStaleGroup: true });
+    // The removal has purged the old group; the fresh Welcome must join it again.
+    await acceptInvitation(pageC, GROUP_NAME);
     await openGroupDetail(pageC, GROUP_NAME);
     await expect(pageC.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
 
     const cPrefix = USER_C.pubkeyHex.slice(0, 8);
-    await expect(pageA.getByTestId(`member-pending-${cPrefix}`)).not.toBeVisible({ timeout: 90_000 });
+    await expect(pageA.getByTestId(`member-item-${cPrefix}`)).toBeVisible();
+    await expect(pageA.getByTestId(`member-pending-${cPrefix}`)).toHaveCount(0);
   });
 
   test('A and C exchange messages in both directions', async () => {

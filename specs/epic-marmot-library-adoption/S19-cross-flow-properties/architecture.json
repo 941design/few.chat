@@ -1,0 +1,31 @@
+{
+  "module_name": "integration",
+  "purpose": "Integration properties through production seams",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "history, handlers, send, invitations, joinRequests, client, membership, backup",
+    "existing app test fixtures",
+    "pinned fast-check and Vitest",
+    "FakeRelay and library memory storage"
+  ],
+  "dependencies_forbidden": [
+    "replacement domain implementations",
+    "raw relay publish for an operation the app performs"
+  ],
+  "external_ports": [
+    "A seeded generator drives real app modules with the appropriate client or storage boundaries. Persisted rows, invitation views, marker state and lifecycle order are compared with independent expected results."
+  ],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/properties/inboundConvergence.property.test.ts",
+    "app/tests/unit/marmot/properties/ownSendLifecycle.property.test.ts",
+    "app/tests/unit/marmot/properties/invitationFlow.property.test.ts",
+    "app/tests/unit/marmot/properties/declineDurability.property.test.ts",
+    "app/tests/unit/marmot/properties/lifecycleLease.property.test.ts",
+    "app/tests/unit/marmot/properties/privacy.harness.property.test.ts",
+    "app/tests/unit/marmot/properties/senderBinding.harness.property.test.ts"
+  ]
+}

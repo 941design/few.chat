@@ -79,7 +79,7 @@ const {
 const { runInviteExpirySweep } = await import('@/src/lib/marmot/inviteExpirySweep');
 const unreadStoreModule = await import('@/src/lib/unreadStore');
 const { initInviteExpiries, markInviteExpiriesRead, useUnreadCounts } = unreadStoreModule;
-const { approveJoinRequestImpl } = await import('@/src/context/MarmotContext');
+const { createJoinRequestApproval } = await import('@/src/lib/marmot/joinRequestApproval');
 
 // ── shared fixtures (mirrors the sibling S1/S4 test files' convention) ─────
 
@@ -498,104 +498,24 @@ describe('AC-INV-4 — an interruption between "compute expired" and "bump in-me
 // AC-INV-5 — usageCount has no lost updates under concurrent approvals
 // ─────────────────────────────────────────────────────────────────────────
 
-function makeApproveDeps(overrides: Partial<Parameters<typeof approveJoinRequestImpl>[0]> = {}) {
-  return {
-    inviteByNpub: vi.fn(async () => ({ ok: true }) as { ok: boolean; error?: string }),
-    pubkeyToNpub: vi.fn((pubkeyHex: string) => `npub-${pubkeyHex}`),
-    deletePendingJoinRequest: vi.fn(async () => {}),
-    // The REAL S1 function — the only permitted non-mock is inviteByNpub
-    // (external network I/O); everything else in the invite-link/join-flow
-    // seam runs for real (VQ-S5-011).
-    incrementInviteLinkUsage,
-    decrementJoinRequest: vi.fn(),
-    filterPendingRequest: vi.fn(),
-    mergeMemberProfile: vi.fn(async () => true),
-    bumpProfileVersion: vi.fn(),
-    ...overrides,
-  };
-}
-
-function makeApproveRequest(overrides: Partial<PendingJoinRequest> = {}): PendingJoinRequest {
-  return {
-    pubkeyHex: 'requester',
-    nonce: 'nonce',
-    groupId: 'group',
-    receivedAt: 1000,
-    nickname: 'Requester',
-    eventId: 'evt',
-    ...overrides,
-  };
-}
-
-describe('AC-INV-5 — concurrent approveJoinRequest calls on the same nonce never lose a usageCount increment', () => {
-  it.each([2, 3, 4])(
-    '%i concurrent approvals referencing the same nonce increase usageCount by exactly that many (starting from a non-zero baseline)',
-    async (n) => {
-      const nonce = `inv5-nonce-${n}`;
-      const groupId = `inv5-group-${n}`;
-      await saveInviteLink(makeLink({ nonce, groupId, usageCount: 5 })); // non-zero baseline — proves "relative to pre-call value"
-
-      const requests = Array.from({ length: n }, (_, i) =>
-        makeApproveRequest({ nonce, groupId, pubkeyHex: `requester-${i}`, eventId: `evt-${i}` }),
-      );
-
-      await Promise.all(
-        requests.map((req, i) =>
-          approveJoinRequestImpl(
-            makeApproveDeps({
-              // Staggered resolution times force the load→modify→save cycles
-              // of the concurrent `incrementInviteLinkUsage` calls to
-              // genuinely interleave rather than merely appear concurrent
-              // (VQ-S5-011: "injected artificial delay ... is acceptable and
-              // encouraged, since a naive load-modify-save is prone to
-              // passing by luck under fast, non-delayed execution").
-              inviteByNpub: vi.fn(
-                () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), i % 3)),
-              ),
-            }),
-            req,
-          ),
-        ),
-      );
-
-      // Gate-remediation ripple (Finding 2, epic invite-link-lifecycle):
-      // `approveJoinRequestImpl` now fires `incrementInviteLinkUsage`
-      // fire-and-forget (it no longer blocks the approval return on the
-      // write), so the persisted `usageCount` may not have landed the
-      // instant `Promise.all` above resolves. Flush with `vi.waitFor` —
-      // polling, not a fixed-length flush — so this doesn't race the
-      // real load-modify-save cycle inside `withNonceLock`.
-      await vi.waitFor(async () => {
-        const persisted = await getInviteLink(nonce);
-        expect(persisted?.usageCount).toBe(5 + n);
-      });
-    },
-  );
-
-  it('repeated trials of 2 concurrent approvals consistently produce +2 (no flaky lost update across independent runs)', async () => {
-    for (let trial = 0; trial < 5; trial++) {
-      const nonce = `inv5-trial-${trial}`;
-      const groupId = `inv5-trial-group-${trial}`;
-      await saveInviteLink(makeLink({ nonce, groupId, usageCount: 0 }));
-
-      await Promise.all([
-        approveJoinRequestImpl(
-          makeApproveDeps(),
-          makeApproveRequest({ nonce, groupId, pubkeyHex: 'p0', eventId: `e${trial}-0` }),
-        ),
-        approveJoinRequestImpl(
-          makeApproveDeps(),
-          makeApproveRequest({ nonce, groupId, pubkeyHex: 'p1', eventId: `e${trial}-1` }),
-        ),
-      ]);
-
-      // Gate-remediation ripple (Finding 2) — see comment above; the
-      // increment write is now fire-and-forget from approveJoinRequestImpl.
-      await vi.waitFor(async () => {
-        const persisted = await getInviteLink(nonce);
-        expect(persisted?.usageCount).toBe(2);
-      });
-    }
+// D8: approvals use the queued key-package inviter and an onApproved follow-up.
+describe('AC-INV-5 — concurrent approvals preserve invite-link usage', () => {
+  it.each([2, 3, 4])('%i approvals increment the same link', async (count) => {
+    const nonce = `concurrent-${count}`;
+    const groupId = `group-${count}`;
+    await saveInviteLink(makeLink({ nonce, groupId, usageCount: 5 }));
+    const approval = createJoinRequestApproval({
+      inviter: { inviteByPubkey: vi.fn(async () => ({ outcome: { status: 'delivered' } })) } as never,
+      getGroup: async () => ({ id: groupId }) as never,
+      enqueue: (job) => { void job(); },
+      consumeRequest: async () => {},
+      onApproved: async (request) => incrementInviteLinkUsage(request.nonce),
+    });
+    const results = await Promise.all(Array.from({ length: count }, (_, i) => approval.approve({
+      nonce, groupId, pubkeyHex: `requester-${i}`, eventId: `event-${i}`, receivedAt: Date.now(),
+    })));
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect((await getInviteLink(nonce))?.usageCount).toBe(5 + count);
   });
 });
 

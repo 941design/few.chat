@@ -20,7 +20,7 @@ export const CHAT_MESSAGE_KIND = 9;
  * The delete/edit-owned fields of a row as they were BEFORE the first edit/delete signal was
  * applied to it (see `ChatMessage.original`). An absent field means the row did not carry it.
  */
-export interface MessageOriginal {
+interface MessageOriginal {
   content: string;
   edited?: boolean;
   tombstoned?: boolean;
@@ -510,18 +510,6 @@ async function addCarrierLocked(groupId: string, rumorId: string, eventId: strin
 }
 
 /**
- * Records `eventId` as another carrier of the stored row `rumorId` (a duplicate
- * delivery under a different event id). Idempotent; a no-op for a missing row
- * and for a legacy row (no carrier field: it already counts as one unknown carrier).
- * With `sender`, also a no-op unless it is the stored row's sender (see `addCarrierLocked`).
- * Prefer `appendOrAddCarrier` on a delivery path: a separate insert and
- * add-carrier is not atomic against a concurrent `retractMessageCarrier`.
- */
-export function addMessageCarrier(groupId: string, rumorId: string, eventId: string, sender?: string): Promise<void> {
-  return serialised(groupId, async () => void (await addCarrierLocked(groupId, rumorId, eventId, sender)));
-}
-
-/**
  * The sink's delivery write: insert-if-absent of `message` (which should carry
  * `carrierEventIds: [eventId]`) OR, when the row already exists, add `eventId`
  * as another carrier — both inside ONE per-group queue task, so a concurrent
@@ -554,10 +542,11 @@ export function appendOrAddCarrier(groupId: string, message: ChatMessage, eventI
  * if its stored sender equals `sender` (case-insensitive). Resolves the number
  * of rows removed; a retract for a carrier the row never had changes nothing.
  */
-export function retractMessageCarrier(groupId: string, rumorId: string, eventId: string, sender: string): Promise<number> {
+export function retractMessageCarrier(groupId: string, rumorId: string, eventId: string, sender: string, cancelled?: () => boolean): Promise<number> {
   const key = storageKey(groupId);
   return serialised(groupId, async () => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
+    if (cancelled?.()) return 0;
     const idx = existing.findIndex((m) => m.id === rumorId);
     if (idx === -1) return 0;
     const row = existing[idx];
@@ -765,12 +754,13 @@ export function updateMessageInPlace(
   groupId: string,
   id: string,
   patch: MessagePatch,
-  options?: { captureOriginal?: boolean },
+  options?: { captureOriginal?: boolean; cancelled?: () => boolean },
 ): Promise<void> {
   const key = storageKey(groupId);
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(async () => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
+    if (options?.cancelled?.()) return;
     const updatedRows = mergePatchCore(existing, id, patch, options);
     if (updatedRows === null) return;
     await set(key, updatedRows);
@@ -795,11 +785,12 @@ export function updateMessageInPlace(
  *   - any other row (no signal ever applied, or edited before `original` existed) is left as it is.
  * Positions are kept. Idempotent. Resolves the thread's rows AFTER the reset (the fold's starting snapshot).
  */
-export function resetSlotsToOriginal(groupId: string, ids: readonly string[]): Promise<ChatMessage[]> {
+export function resetSlotsToOriginal(groupId: string, ids: readonly string[], cancelled?: () => boolean): Promise<ChatMessage[]> {
   const key = storageKey(groupId);
   const slots = new Set(ids);
   return serialised(groupId, async () => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
+    if (cancelled?.()) return existing;
     let changed = false;
     const next: ChatMessage[] = [];
     for (const row of existing) {
@@ -841,7 +832,7 @@ export function resetSlotsToOriginal(groupId: string, ids: readonly string[]): P
  * tombstone lands in storage, so it never simply trusts a caller's prior
  * decision).
  */
-export interface TombstoneAuthorization {
+interface TombstoneAuthorization {
   /** The delete/tombstone signal's own sender pubkey (ADR-006 self-asserted, member-attested, not identity-bound). */
   senderPubkeyHex: string;
   /**
@@ -900,7 +891,7 @@ export function tombstoneMessage(
   id: string,
   rev: number,
   authorization?: TombstoneAuthorization,
-  options?: { restoreBase?: boolean; captureOriginal?: boolean },
+  options?: { restoreBase?: boolean; captureOriginal?: boolean; cancelled?: () => boolean },
 ): Promise<boolean> {
   if (typeof rev !== 'number' || !Number.isFinite(rev) || rev < 1) {
     return Promise.resolve(false);
@@ -910,6 +901,7 @@ export function tombstoneMessage(
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(async (): Promise<boolean> => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
+    if (options?.cancelled?.()) return false;
 
     if (authorization) {
       const target = existing.find((m) => m.id === id);
@@ -966,13 +958,14 @@ export function filterVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
  * Resolves the number of rows actually removed (0 when none was present), so a
  * caller can tell a real removal from a no-op.
  */
-export function removeMessages(groupId: string, ids: readonly string[]): Promise<number> {
+export function removeMessages(groupId: string, ids: readonly string[], cancelled?: () => boolean): Promise<number> {
   if (ids.length === 0) return Promise.resolve(0);
   const key = storageKey(groupId);
   const dropSet = new Set(ids);
   const prev = appendQueues.get(key) ?? Promise.resolve();
   const next = prev.then(async (): Promise<number> => {
     const existing = (await get<ChatMessage[]>(key)) ?? [];
+    if (cancelled?.()) return 0;
     const filtered = existing.filter((m) => !dropSet.has(m.id));
     if (filtered.length === existing.length) return 0;
     await set(key, filtered);
@@ -1140,6 +1133,17 @@ export async function clearAllMessages(): Promise<void> {
   if (messageKeys.length > 0) {
     await delMany(messageKeys);
   }
+}
+
+/** Clear group threads, including orphaned threads, while retaining direct messages. */
+export async function clearAllGroupMessages(): Promise<void> {
+  await Promise.allSettled(Array.from(appendQueues.values()));
+  const prefix = 'few:messages:';
+  const allKeys = await keys();
+  const groupIds = allKeys.filter((key): key is string =>
+    typeof key === 'string' && key.startsWith(prefix) && !key.slice(prefix.length).startsWith('dm:'),
+  ).map((key) => key.slice(prefix.length));
+  await Promise.all(groupIds.map(clearMessages));
 }
 
 /**

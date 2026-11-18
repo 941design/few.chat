@@ -18,11 +18,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get as idbGet } from 'idb-keyval';
 
 // One-shot failure injection for the reactions rows write (held-queue writes are never failed).
-const inject = vi.hoisted(() => ({ failNextRowsWrite: false }));
+const inject = vi.hoisted(() => ({
+  failNextRowsWrite: false,
+  beforeRead: undefined as ((key: IDBValidKey) => Promise<void> | undefined) | undefined,
+}));
 vi.mock('idb-keyval', async (importOriginal) => {
   const real = await importOriginal<typeof import('idb-keyval')>();
   return {
     ...real,
+    get: async (key: IDBValidKey, store?: Parameters<typeof real.get>[1]) => {
+      await inject.beforeRead?.(key);
+      return real.get(key, store);
+    },
     set: (key: IDBValidKey, value: unknown, store?: Parameters<typeof real.set>[2]) => {
       if (inject.failNextRowsWrite && typeof key === 'string' && key.startsWith('few:reactions:group:')) {
         inject.failNextRowsWrite = false;
@@ -70,6 +77,7 @@ beforeEach(() => {
   heldKey = `few:reactions:held:group:${G}`;
 });
 afterEach(() => {
+  inject.beforeRead = undefined;
   vi.useRealTimers();
 });
 
@@ -268,12 +276,50 @@ describe('recomputeMessageReactions (the store contract; the oracle equivalence 
 
   it('a target that is not stored HOLDS the signals instead of applying them; storing it and releasing applies them', async () => {
     const add = rx('r1', 'm9', '👍');
-    expect(await recomputeMessageReactions(thread, 'm9', [sig(add, BOB, 1)])).toBe(false);
+    expect(await recomputeMessageReactions(thread, 'm9', [{ ...sig(add, BOB, 1), receivedAt: Date.now() }])).toBe(false);
     expect(await live()).toEqual([]);
     expect(await heldIds()).toEqual(['r1']);
     await appendMessage(G, { id: 'm9', content: 'hello', senderPubkey: BOB, groupId: G, createdAt: 1_700_000_000_000 });
     expect(await releaseHeldReactions(thread, 'm9')).toBe(true);
     expect(await live()).toEqual([['m9', BOB, '👍']]);
+  });
+
+  it('a later replay of a held reaction does not renew its original expiry', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const signal = sig(rx('r1', 'm9', '👍'), BOB, 1);
+    vi.setSystemTime(signal.receivedAt);
+    await recomputeMessageReactions(thread, 'm9', [signal]);
+    vi.setSystemTime(signal.receivedAt + HELD_REACTION_TTL_MS - 1);
+    await recomputeMessageReactions(thread, 'm9', [signal]);
+    expect(await idbGet(heldKey)).toEqual([expect.objectContaining({ heldAt: signal.receivedAt })]);
+
+    vi.setSystemTime(signal.receivedAt + HELD_REACTION_TTL_MS);
+    await appendMessage(G, { id: 'm9', content: 'hello', senderPubkey: BOB, groupId: G, createdAt: Date.now() });
+    expect(await releaseHeldReactions(thread, 'm9')).toBe(false);
+    expect(await live()).toEqual([]);
+  });
+
+  it('cancellation during the rows read preserves visible and held reactions', async () => {
+    await applyInboundRumor(thread, rx('visible', 'm1', '👍'), sender(BOB));
+    await holdReaction(thread, rx('held', 'm1', '🎉'), sender(ALICE));
+    let startRead!: () => void;
+    let resume!: () => void;
+    const reading = new Promise<void>((resolve) => { startRead = resolve; });
+    const pausedRead = new Promise<void>((resolve) => { resume = resolve; });
+    inject.beforeRead = (key) => {
+      if (key !== `few:reactions:group:${G}`) return;
+      startRead();
+      return pausedRead;
+    };
+    let cancelled = false;
+    const recompute = recomputeMessageReactions(thread, 'm1', [], () => cancelled);
+    await reading;
+    cancelled = true;
+    resume();
+
+    expect(await recompute).toBe(false);
+    expect(await live()).toEqual([['m1', BOB, '👍']]);
+    expect(await heldIds()).toEqual(['held']);
   });
 
   it('keeps the local optimistic (in-flight) rows of the message unchanged', async () => {

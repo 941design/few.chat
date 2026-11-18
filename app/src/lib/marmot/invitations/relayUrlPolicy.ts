@@ -40,7 +40,7 @@ function isIpLiteral(hostname: string): boolean {
 }
 
 /** True for a DNS name that can plausibly be resolved on the public internet (lexical rule; see module doc). */
-export function isPublicDnsHost(hostname: string): boolean {
+function isPublicDnsHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, '');
   if (host.length === 0 || isIpLiteral(host)) return false;
   if (host === 'localhost' || !host.includes('.')) return false;

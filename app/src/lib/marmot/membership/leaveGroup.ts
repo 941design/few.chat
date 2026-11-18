@@ -51,18 +51,18 @@
  * Ports are validated at construction. Pure module: no React, no storage, no browser API.
  */
 import { decideLeave, readRosterFacts, type RosterReadableGroup } from './leaveEligibility';
-import { PurgeError, type GroupDataPurger } from './purgeLocalGroup';
+import { type GroupDataPurger } from './purgeLocalGroup';
 
 /** The kind-9 chat announcement kind ("<name> left the group"). */
-export const LEFT_ANNOUNCEMENT_KIND = 9;
+const LEFT_ANNOUNCEMENT_KIND = 9;
 /** Bound of the announcement wait before `leave()` starts (the send itself continues in the background). */
-export const DEFAULT_ANNOUNCE_TIMEOUT_MS = 2_000;
+const DEFAULT_ANNOUNCE_TIMEOUT_MS = 2_000;
 /**
  * ONE deadline for the whole background leave (announcement wait + `leave()`), measured from the click's background
  * start: library `leaveTimeoutMs` 10 s + `removalSettleMs` 5 s + slack. Click-to-settle never exceeds it (plus the
  * post-failure lookup).
  */
-export const DEFAULT_LEAVE_DEADLINE_MS = 20_000;
+const DEFAULT_LEAVE_DEADLINE_MS = 20_000;
 
 /** The slice of `MarmotGroup` the leaver uses (also what `GroupOpQueue.runCommit` needs of a group). */
 export interface LeavableGroup extends RosterReadableGroup {
@@ -72,9 +72,9 @@ export interface LeavableGroup extends RosterReadableGroup {
   leave: () => Promise<void>;
 }
 
-export type LeaveMode = 'leave' | 'abandon';
+type LeaveMode = 'leave' | 'abandon';
 
-export type LeaveSettled =
+type LeaveSettled =
   | { status: 'left'; mode: LeaveMode }
   /** `leave()` failed or timed out: the group is back in the list, the toast was raised. */
   | { status: 'failed'; error: unknown }
@@ -83,7 +83,7 @@ export type LeaveSettled =
   /** The leaver was disposed (account teardown): nothing is restored or announced. */
   | { status: 'aborted' };
 
-export type LeaveResult =
+type LeaveResult =
   | { status: 'blocked'; reason: 'last-admin' }
   | { status: 'started'; mode: LeaveMode; settled: Promise<LeaveSettled> };
 
@@ -225,11 +225,14 @@ export function createGroupLeaver(deps: GroupLeaverDeps): GroupLeaver {
     notify(raise, groupId);
   };
 
-  async function runAbandon(groupId: string, ownAccountIsMember: boolean): Promise<LeaveSettled> {
+  async function runAbandon(groupId: string, soloGroup?: LeavableGroup): Promise<LeaveSettled> {
     try {
-      // The bypass of the purger's re-join guard is for the genuine sole-member abandon only (decided from a
-      // READABLE roster that holds just the own account); every other purge leaves a re-joined group alone.
-      await deps.purger.purgeLocalGroup(groupId, ownAccountIsMember ? { ownAccountIsMember: true } : undefined);
+      if (soloGroup) {
+        await deps.queue.runCommit(soloGroup, () =>
+          deps.purger.purgeLocalGroup(groupId, { ownAccountIsMember: true }), { skipSync: true, signal: controller.signal });
+      } else {
+        await deps.purger.purgeLocalGroup(groupId);
+      }
     } catch (error) {
       if (disposed) return { status: 'aborted' };
       restoreWith(groupId, () => deps.notifyLeaveFailed(groupId, error));
@@ -316,7 +319,15 @@ export function createGroupLeaver(deps: GroupLeaverDeps): GroupLeaver {
         await announce(group, groupId);
         // A deadline or a teardown that fired meanwhile: leave() must never start after the outcome was decided.
         if (disposed || attempt.signal.aborted) return;
-        leaveCall = deps.queue.runCommit(group, () => group.leave(), { skipSync: true, signal: attempt.signal });
+        leaveCall = deps.queue.runCommit(group, async () => {
+          if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
+            const { beforeGroupLeave } = await import('../../testHooks/marmotSession');
+            await beforeGroupLeave(groupId);
+            // A paused test hook must not start a leave after the deadline or teardown.
+            if (disposed || attempt.signal.aborted) throw new Error('leave attempt aborted');
+          }
+          await group.leave();
+        }, { skipSync: true, signal: attempt.signal });
         await leaveCall;
       })();
       await withDeadline(sequence, leaveDeadlineMs, () => new LeaveTimeoutError(groupId, leaveDeadlineMs));
@@ -387,7 +398,7 @@ export function createGroupLeaver(deps: GroupLeaverDeps): GroupLeaver {
       const mode: LeaveMode = decision.action === 'leave' ? 'leave' : 'abandon';
       const work =
         decision.action === 'abandon'
-          ? runAbandon(groupId, decision.reason === 'sole-member')
+          ? runAbandon(groupId, decision.reason === 'sole-member' ? group : undefined)
           : group
             ? runLeave(group, groupId)
             : runLeaveWithoutHandle(groupId);

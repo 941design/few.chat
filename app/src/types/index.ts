@@ -40,19 +40,17 @@ export const STORAGE_KEYS = {
   userProfile: 'lp_userProfile_v1',
   nostrIdentity: 'lp_nostrIdentity_v1',
   nostrBackedUp: 'lp_nostrIdentityBackedUp_v1',
-  processedGiftWraps: 'lp_processedGiftWraps',
   contactCache: 'lp_contactCache_v1',
   contacts: 'lp_contacts_v1',
   knownPeers: 'lp_knownPeers_v1',
   knownPeersMigrated: 'lp_knownPeersMigrated_v2',
-  pendingInvitations: 'lp_pendingInvitations_v1',
   relays: 'lp_relays_v1',
   signerMode: 'lp_signerMode_v1',
   nip46Session: 'lp_nip46Session_v1',
+  nip46Permissions: 'lp_nip46Permissions_v1',
   // MIP-00 KeyPackage addressable slot (`d` tag) identifier, minted once via
   // generateKeyPackageSlot() and reused across launches/rotations. See
   // storage.ts's readOrCreateKeyPackageSlot().
-  keyPackageSlot: 'lp_keyPackageSlot_v1',
   // Pubkey of a recovered identity whose relay backup the user has not yet
   // restored or skipped; scheduled backups must not overwrite it meanwhile.
   backupRestorePending: 'lp_backupRestorePending_v1',
@@ -86,6 +84,8 @@ export type NostrIdentity = {
 export type Group = {
   /** hex-encoded MLS group ID */
   id: string;
+  /** Account that wrote this local overlay. Absent on pre-adoption rows. */
+  accountPubkey?: string;
   name: string;
   /** Unix timestamp of creation/join */
   createdAt: number;
@@ -93,6 +93,8 @@ export type Group = {
   memberPubkeys: string[];
   /** Relay URLs this group uses */
   relays: string[];
+  disbanded?: { actor?: string; at: number };
+  unloadable?: boolean;
 };
 
 export type GroupMember = {

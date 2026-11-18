@@ -61,7 +61,7 @@ export interface OwnRowStatusPort {
   forget?: (groupId: string, rumorId: string) => void;
 }
 
-export interface OwnRowTrackerOptions {
+interface OwnRowTrackerOptions {
   ports: OwnRowStatusPort;
   /** D6 trigger (d): ms a row may stay unconfirmed after `send()` resolved. Default 60 000. */
   timeoutMs?: number;
@@ -74,7 +74,7 @@ export interface OwnRowTrackerOptions {
 export const OWN_SEND_CONFIRM_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_CONFIRMED = 500;
 
-export interface RegisterOptions {
+interface RegisterOptions {
   /** The stored rumor of the row: what `retry` hands back. Also carried over a recompute while `sending` when `signal`. */
   rumor?: Rumor;
   /** The rumor is an optimistic own SIGNAL (vote, edit, delete, reaction): `pendingSignals` returns it while `sending`. Default FALSE: a plain row is never carried over a recompute unless the caller says so. */

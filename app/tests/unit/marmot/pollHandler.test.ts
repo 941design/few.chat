@@ -39,15 +39,10 @@ vi.mock('idb-keyval', () => ({
   delMany: vi.fn(async (ks: string[]) => { ks.forEach((k) => idbStore.delete(k)); }),
 }));
 
-// ─── @internet-privacy/marmot-ts mock ────────────────────────────────────────
 let mockRumor: ReturnType<typeof makePollOpenRumor> | null = null;
-vi.mock('@internet-privacy/marmot-ts', () => ({
-  deserializeApplicationData: vi.fn((_data: Uint8Array) => mockRumor),
-}));
 
 // ─── Dynamic imports (after vi.mock) ─────────────────────────────────────────
-const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } = await import('@/src/lib/marmot/handlers/pollHandler');
-const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
+const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } = await import('./handlers/reducerFixtures');
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND } = await import('@/src/lib/marmot/pollSync');
 // Real storage layer (AC-XCUT-2 duplication test, epic: group-message-author-auth-app-layer
 // S9) — exercises the actual upsert-by-id behavior of saveVoteIfNewer/loadVotes against the
@@ -278,23 +273,6 @@ describe('pollHandler / POLL_OPEN', () => {
     expect(deps.setPollVersion).not.toHaveBeenCalled();
   });
 
-  it('duplicate-id: dispatcher LRU prevents second savePoll call', async () => {
-    const deps = makeDeps();
-    const handler = createPollOpenHandler(deps);
-    const dispatcher = createDispatcher([handler]);
-    const group = makeFakeGroup();
-    const ctx = makeCtx();
-
-    dispatcher.subscribe(group as any, ctx);
-
-    const rumor = makePollOpenRumor({ id: 'dup-open-id-1' });
-    mockRumor = rumor;
-
-    await group.emit();
-    await group.emit();
-
-    expect(deps.savePoll).toHaveBeenCalledOnce();
-  });
 
   // ─── AC-POLL-1 (epic: group-message-author-auth-app-layer S5) ──────────────
 
@@ -466,24 +444,6 @@ describe('pollHandler / POLL_VOTE', () => {
     expect(deps.saveVoteIfNewer).not.toHaveBeenCalled();
   });
 
-  it('duplicate-id: dispatcher LRU prevents second saveVoteIfNewer call', async () => {
-    const storedPoll = makeStoredPoll(false);
-    const deps = makeDeps(storedPoll);
-    const handler = createPollVoteHandler(deps);
-    const dispatcher = createDispatcher([handler]);
-    const group = makeFakeGroup();
-    const ctx = makeCtx();
-
-    dispatcher.subscribe(group as any, ctx);
-
-    const rumor = makePollVoteRumor(POLL_ID, { id: 'dup-vote-id-1' });
-    mockRumor = rumor;
-
-    await group.emit();
-    await group.emit();
-
-    expect(deps.saveVoteIfNewer).toHaveBeenCalledOnce();
-  });
 });
 
 // ---- POLL_VOTE response sanitization (F4) -------------------------------------
@@ -678,24 +638,6 @@ describe('pollHandler / POLL_CLOSE', () => {
     expect(deps.savePoll).not.toHaveBeenCalled();
   });
 
-  it('duplicate-id: dispatcher LRU prevents second savePoll call', async () => {
-    const storedPoll = makeStoredPoll(false);
-    const deps = makeDeps(storedPoll);
-    const handler = createPollCloseHandler(deps);
-    const dispatcher = createDispatcher([handler]);
-    const group = makeFakeGroup();
-    const ctx = makeCtx();
-
-    dispatcher.subscribe(group as any, ctx);
-
-    const rumor = makePollCloseRumor(CREATOR_PUBKEY, { id: 'dup-close-id-1' });
-    mockRumor = rumor;
-
-    await group.emit();
-    await group.emit();
-
-    expect(deps.savePoll).toHaveBeenCalledOnce();
-  });
 
   it('AC-POLL-3 fail-closed: a rejected close leaves no residual state — a subsequent legitimate close from the true creator still succeeds', async () => {
     const storedPoll = makeStoredPoll(false);

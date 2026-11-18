@@ -5,7 +5,7 @@
 **Type**: Lightweight
 **Affects**: specs/epic-feature-request-admin-role-management-for-groups/, specs/epic-mls-fork-resolution/, specs/epic-feature-request-message-edit-and-delete/, project-wide
 **Supersedes**: none
-**Superseded by**: none
+**Superseded in part by**: [ADR-013](ADR-013-consume-marmot-client-and-retained-history.md) for the marmot-ts-specific protocol claims. App-level revision clocks are reaffirmed.
 
 ## Context
 

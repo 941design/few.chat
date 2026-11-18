@@ -1,7 +1,7 @@
 {
   "story_id": "S6",
   "status": "done",
-  "final_outcome": "completed",
+  "final_outcome": "accepted_with_caveats",
   "completed_at": "2026-11-17T17:30:00Z",
   "files_created": [
     "app/src/lib/marmot/send/index.ts",
@@ -29,13 +29,7 @@
     "specs/epic-marmot-library-adoption/S6-send-helper-own-lifecycle/architecture.json"
   ],
   "adjacent_fixes": [],
-  "tests_added": {
-    "unit": "sendGroupRumor (23), groupOpQueue (16), groupOpQueue.bounded (20: timeout/abort/skipSync, per-reason commit-pending), ownRowTracker (30), ownSendHardening (31: intent matching, timer after synced, queued stays sending, retry same id, same-second, signal-only, caps, forgetGroup)",
-    "property": "ownRowLifecycle.property (3, now also clause v: last port report equals final status), ownRowLifecycle.store.property (1: exhaustive length 1..3 over the real chat store, clause i exactly one row)",
-    "integration": "ownEcho.integration (15: pendingOwnSends multi-transition status through the port incl. register-failed-echo and register-echo-withdraw, carrier bookkeeping via handler adapter)",
-    "harness": "send.harness (5)",
-    "follow_up": "ownSendFollowUp (12: forgotten rows incl. eviction/forgetGroup, confirmed-visible during own action, bounded/abortable/logged barrier, attempt generation, warn-once pendingIntents, signal default)"
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 7450,
     "final": 7519
@@ -103,5 +97,13 @@
     "commits_made": [],
     "absorbed_from": [],
     "lead_clarifications": []
-  }
+  },
+  "legacy_tests_added": {
+    "unit": "sendGroupRumor (23), groupOpQueue (16), groupOpQueue.bounded (20: timeout/abort/skipSync, per-reason commit-pending), ownRowTracker (30), ownSendHardening (31: intent matching, timer after synced, queued stays sending, retry same id, same-second, signal-only, caps, forgetGroup)",
+    "property": "ownRowLifecycle.property (3, now also clause v: last port report equals final status), ownRowLifecycle.store.property (1: exhaustive length 1..3 over the real chat store, clause i exactly one row)",
+    "integration": "ownEcho.integration (15: pendingOwnSends multi-transition status through the port incl. register-failed-echo and register-echo-withdraw, carrier bookkeeping via handler adapter)",
+    "harness": "send.harness (5)",
+    "follow_up": "ownSendFollowUp (12: forgotten rows incl. eviction/forgetGroup, confirmed-visible during own action, bounded/abortable/logged barrier, attempt generation, warn-once pendingIntents, signal default)"
+  },
+  "legacy_final_outcome": "completed"
 }

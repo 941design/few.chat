@@ -58,7 +58,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [],
@@ -92,7 +92,7 @@
       "complexity": "low",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [],
@@ -136,7 +136,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -175,7 +175,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
@@ -229,7 +229,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
@@ -272,7 +272,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -308,7 +308,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
@@ -345,7 +345,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -385,7 +385,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -424,7 +424,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -460,7 +460,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "in_progress",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -511,7 +511,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -555,7 +555,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "completed",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -583,7 +583,11 @@
           "app/src/lib/marmot/membership/setAdmins.ts",
           "app/src/lib/marmot/membership/renameGroup.ts",
           "app/tests/unit/marmot/membership/adminOps*.test.ts",
-          "app/tests/unit/marmot/membership/adminOps.harness.test.ts"
+          "app/tests/unit/marmot/membership/adminOps.harness.test.ts",
+          "app/src/lib/marmot/membership/index.ts",
+          "app/src/lib/marmot/handlers/groupRumorDispatch.ts",
+          "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts",
+          "app/tests/unit/marmot/membership/leave.harness.test.ts"
         ],
         "excludes": [
           "Deleting grantAdminImpl/renameGroupImpl/cancelInvitationImpl (S22)"
@@ -592,14 +596,14 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
         "GroupOpQueue",
         "PendingDirectInviteMarker"
       ],
-      "notes": "Thin calls with app policy only.",
+      "notes": "Thin calls with app policy only. Own-change-lost uses the existing notification router. The real-client harness reuses the membership fixtures in leave.harness.test.ts. S18 carries the exact inviteeRef captured by the row into cancellation and does not show success for a stale row.",
       "owning_module": "membership",
       "story_dir": "S14-membership-admin-ops"
     },
@@ -620,7 +624,8 @@
           "app/src/lib/backup/relayBackup.ts",
           "app/src/lib/backup/dirtyMark.ts",
           "app/src/context/BackupContext.tsx",
-          "app/tests/unit/backup/*.test.ts"
+          "app/tests/unit/backup/*.test.ts",
+          "app/src/lib/i18n.ts (restore prompt only)"
         ],
         "excludes": [
           "e2e seed-phrase/recovery rewrites (S26)",
@@ -630,7 +635,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -652,7 +657,10 @@
           "app/src/lib/marmot/client/inboxRelayList.ts",
           "app/src/lib/marmot/client/relaySettingsRebuild.ts",
           "app/tests/unit/marmot/client/inboxRelayList*.test.ts",
-          "app/tests/unit/marmot/client/relayRebuild.harness.test.ts"
+          "app/tests/unit/marmot/client/relayRebuild.harness.test.ts",
+          "app/src/lib/marmot/client/createClient.ts",
+          "app/src/lib/marmot/client/index.ts",
+          "app/tests/unit/marmot/client/bootstrap.harness.test.ts"
         ],
         "excludes": [
           "Deleting republishDiscoverability (S22)",
@@ -662,7 +670,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
@@ -694,7 +702,10 @@
           "app/src/lib/marmot/client/clearAllGroupData.ts",
           "app/src/lib/i18n.ts (another-tab string en+de)",
           "app/src/lib/walledGarden.ts (membership read)",
-          "app/tests/unit/marmot/client/*.test.ts"
+          "app/tests/unit/marmot/client/*.test.ts",
+          "app/src/lib/marmot/client/createClient.ts",
+          "app/src/lib/marmot/client/lifecycle.ts",
+          "app/src/lib/marmot/client/index.ts"
         ],
         "excludes": [
           "Removing cross-tab group store sync (S18)",
@@ -704,7 +715,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": true,
       "lighter_path": false,
       "consumes_seams": [
@@ -712,7 +723,7 @@
         "AccountClientHandle",
         "LeaseState"
       ],
-      "notes": "Purges through purgeLocalGroup (S13). 'client' ownership is shared with S1/S16/S20. A failed key-package ensure at bootstrap is never retried by S1 (snapshot ensure.keyPackage=failed); S17 owns a retry (e.g. on next lease acquisition/visibility) so the account does not stay un-invitable.",
+      "notes": "Purges through purgeLocalGroup (S13). 'client' ownership is shared with S1/S16/S20. A failed key-package ensure at bootstrap is never retried by S1 (snapshot ensure.keyPackage=failed); S17 owns a retry (e.g. on next lease acquisition/visibility) so the account does not stay un-invitable. Any additional group persistence port required for safe group-only wiping is part of this story.",
       "owning_module": "client",
       "story_dir": "S17-client-lifecycle-lease-wipe"
     },
@@ -745,7 +756,8 @@
           "app/src/pages/groups.tsx and related pages",
           "app/src/lib/crossTab.ts, crossTabReceiver.ts",
           "app/tests/e2e/helpers/group-setup.ts (minimum to run the checkpoint subset)",
-          "app/tests/unit consumer-surface/structure tests"
+          "app/tests/unit consumer-surface/structure tests",
+          "app/src/lib/marmot/groupSession*.ts"
         ],
         "excludes": [
           "Deleting old modules (S22)",
@@ -755,7 +767,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [
@@ -808,7 +820,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "in_progress",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -837,7 +849,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -868,7 +880,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -905,7 +917,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -937,7 +949,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -960,7 +972,10 @@
           "app/tests/e2e/helpers/*.ts",
           "app/tests/e2e/groups-blackout-guard.spec.ts (delete)",
           "app/tests/e2e/*.spec.ts (helper-only changes)",
-          "app/src/lib/testHooks (__fewTest hooks)"
+          "app/src/lib/testHooks (__fewTest hooks)",
+          "app/playwright.config.ts",
+          "app/scripts/run-e2e.mjs",
+          "scripts/blossom-mock.mjs"
         ],
         "excludes": [
           "Rewritten specs (S25, S26)"
@@ -969,7 +984,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -1000,7 +1015,11 @@
           "app/tests/e2e/groups-dispatch-isolation.spec.ts",
           "app/tests/e2e/groups-admin.spec.ts",
           "app/tests/e2e/groups-multi-tab.spec.ts (new; two pages, one context, real Web Locks)",
-          "app/tests/e2e/helpers/*"
+          "app/tests/e2e/helpers/*",
+          "app/src/context/MarmotContext.tsx",
+          "app/src/lib/marmot/groupSessionProfile.ts",
+          "app/src/lib/marmot/invitations/acceptDecline.ts",
+          "app/src/lib/testHooks/marmotSession.ts"
         ],
         "excludes": [
           "Backup and preview specs (S26)"
@@ -1009,7 +1028,7 @@
       "complexity": "high",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -1031,14 +1050,15 @@
           "app/tests/e2e/groups-seed-phrase.spec.ts",
           "app/tests/e2e/groups-seed-recovery.spec.ts",
           "app/tests/e2e/groups-backup-restore-outcomes.spec.ts",
-          "app/tests/e2e/groups-invitation-preview.spec.ts"
+          "app/tests/e2e/groups-invitation-preview.spec.ts",
+          "app/src/lib/testHooks/marmotSession.ts (preview description fixture)"
         ],
         "excludes": []
       },
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -1066,7 +1086,7 @@
       "complexity": "low",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],
@@ -1098,7 +1118,7 @@
       "complexity": "low",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": true,
       "consumes_seams": [],
@@ -1132,7 +1152,7 @@
       "complexity": "medium",
       "mock_dependencies": [],
       "introduces_mocks": [],
-      "status": "pending",
+      "status": "done",
       "creates_seam": false,
       "lighter_path": false,
       "consumes_seams": [],

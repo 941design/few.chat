@@ -160,7 +160,19 @@ export default function SettingsPage() {
   const { profile: savedProfile, saveProfile } = useProfile();
   const { language, setLanguage } = useLanguage();
   const { themeName, setTheme, activeThemeDefinition } = useAppTheme();
-  const { republishDiscoverability } = useMarmot();
+  const { rebuildForRelays, wipeLocalGroups } = useMarmot();
+  const wipeIdentity = useRef({ pubkeyHex, privateKeyHex, signerMode, signerAvailable, identityHydrated });
+  const previousWipeIdentity = wipeIdentity.current;
+  if (previousWipeIdentity.pubkeyHex !== pubkeyHex || previousWipeIdentity.privateKeyHex !== privateKeyHex ||
+      previousWipeIdentity.signerMode !== signerMode || previousWipeIdentity.signerAvailable !== signerAvailable ||
+      previousWipeIdentity.identityHydrated !== identityHydrated) {
+    wipeIdentity.current = { pubkeyHex, privateKeyHex, signerMode, signerAvailable, identityHydrated };
+  }
+  const wipePageMounted = useRef(false);
+  useEffect(() => {
+    wipePageMounted.current = true;
+    return () => { wipePageMounted.current = false; };
+  }, []);
   const ownQrDisclosure = useDisclosure();
   const advancedDisclosure = useDisclosure();
   const wipeDisclosure = useDisclosure();
@@ -241,16 +253,20 @@ export default function SettingsPage() {
     saveRelays(next);
     applyRelayChangesToPool(previous, next);
     prevRelayListRef.current = next;
-    await republishDiscoverability(next).catch((err) =>
-      console.warn('[Settings] republishDiscoverability failed:', err),
-    );
+    let groupDiscoveryUpdated = true;
+    try {
+      await rebuildForRelays(next);
+    } catch (error) {
+      groupDiscoveryUpdated = false;
+      console.warn('[Settings] updating group discovery failed:', error);
+    }
     toast({
-      title: copy.advanced.relays.savedSuccess,
-      status: 'success',
+      title: groupDiscoveryUpdated ? copy.advanced.relays.savedSuccess : copy.advanced.relays.groupDiscoveryPending,
+      status: groupDiscoveryUpdated ? 'success' : 'warning',
       duration: 3000,
       isClosable: true,
     });
-  }, [relayList, republishDiscoverability, toast, copy.advanced.relays.savedSuccess]);
+  }, [relayList, rebuildForRelays, toast, copy.advanced.relays]);
 
   // Backup flow state
   const [mnemonic, setMnemonic] = useState<string | null>(null);
@@ -1512,8 +1528,22 @@ export default function SettingsPage() {
                           isDisabled={wipeConfirmInput !== copy.advanced.dangerZone.wipeConfirmWord}
                           onClick={async () => {
                             // Await the wipe: reloading first can abort the IndexedDB clears.
-                            await resetAllData();
-                            window.location.reload();
+                            const identity = wipeIdentity.current;
+                            const assertCurrent = () => {
+                              if (!wipePageMounted.current || wipeIdentity.current !== identity) {
+                                throw new Error('The account changed while waiting to reset it');
+                              }
+                            };
+                            try {
+                              await wipeLocalGroups();
+                              assertCurrent();
+                              await resetAllData();
+                              assertCurrent();
+                              window.location.reload();
+                            } catch (error) {
+                              console.warn('[Settings] local wipe failed', error);
+                              toast({ title: copy.advanced.dangerZone.wipeError, status: 'error' });
+                            }
                           }}
                           data-testid="danger-zone-confirm-btn"
                         >

@@ -39,15 +39,15 @@ export interface ListedGroup {
 }
 
 /** A group handle as the disband sync sees it (`MarmotGroup.disbanded`). */
-export interface DisbandableGroup {
+interface DisbandableGroup {
   readonly id: string;
   /** `MarmotGroup.disbanded` (`GroupDisbanded`: `actor`, `at` and the commit evidence). */
   readonly disbanded?: { readonly actor?: string; readonly at?: number } | undefined;
 }
 
-export type EnqueueJob = (job: () => Promise<void>) => boolean | void;
+type EnqueueJob = (job: () => Promise<void>) => boolean | void;
 
-export interface GroupRemovalDeps {
+interface GroupRemovalDeps {
   /** Lowercase hex account. */
   ownPubkey: string;
   purger: GroupDataPurger;
@@ -63,9 +63,9 @@ export interface GroupRemovalDeps {
   wait?: (ms: number) => Promise<void>;
 }
 
-export const DEFAULT_REMOVAL_SETTLE_MS = 5_000;
+const DEFAULT_REMOVAL_SETTLE_MS = 5_000;
 
-export interface GroupRemovalHandlers {
+interface GroupRemovalHandlers {
   /** `clientEvents.groupRemoved`: frame-safe, only enqueues the purge. */
   onGroupRemoved: (payload: { readonly groupId: string; readonly actor?: string }) => void;
   /** Startup check over `groups.list()`. Outside frames. Resolves with the ids it purged. */
@@ -175,7 +175,7 @@ export function createGroupRemovalHandlers(deps: GroupRemovalDeps): GroupRemoval
 }
 
 /** What the overlay row records about a disband. */
-export interface DisbandedMark {
+interface DisbandedMark {
   actor?: string;
   /** Client-clock milliseconds. */
   at: number;
@@ -188,7 +188,7 @@ export interface OverlayRecord {
   [field: string]: unknown;
 }
 
-export interface DisbandMarkerDeps {
+interface DisbandMarkerDeps {
   overlay: {
     load: (groupId: string) => Promise<OverlayRecord | undefined>;
     save: (record: OverlayRecord) => Promise<void>;
@@ -200,7 +200,7 @@ export interface DisbandMarkerDeps {
   onError?: (groupId: string, error: unknown) => void;
 }
 
-export interface DisbandMarker {
+interface DisbandMarker {
   /** Marks the overlay row of `groupId` disbanded. Resolves `true` when it newly marked, `false` for a no-op (already marked, no overlay row). */
   markDisbanded: (groupId: string, info?: { actor?: string; at?: number }) => Promise<boolean>;
   /** The router's `disband` target: fire-and-forget (a frame), failures reported. */

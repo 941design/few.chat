@@ -1,0 +1,20 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Delete groups-library-smoke.spec.ts and its dev-only __fewTest hook; ensure each remaining hook has an e2e consumer and none references deleted internals.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/e2e/groups-library-smoke.spec.ts (delete)",
+    "app/src/lib/testHooks (smoke hook removal)",
+    "app/src/context/MarmotContext.tsx (remove only the groupLibrary smoke-hook effect)",
+    "app/tests/e2e/helpers/relay-query.ts (keep #h/ids/since filter fields if any remaining spec uses them, else remove)"
+  ]
+}

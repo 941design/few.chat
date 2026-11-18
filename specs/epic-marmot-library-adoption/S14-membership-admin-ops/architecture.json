@@ -1,0 +1,63 @@
+{
+  "module_name": "membership",
+  "purpose": "Apply admin operations through the serialized group commit queue and refresh views from current library state.",
+  "public_api": [
+    {
+      "name": "removeMember",
+      "signature": "(queue, group, account, refresh) => Promise<void>",
+      "description": "Library validates admin authority. Refresh after commit."
+    },
+    {
+      "name": "cancelInvitation",
+      "signature": "(queue, group, { account, inviteeRef }, markers, refresh) => Promise<void>",
+      "description": "Confirm the pending marker reference after sync inside the queue, remove the invitee and compare-and-clear that reference. Refresh the roster even when post-commit cleanup fails."
+    },
+    {
+      "name": "grantAdmin",
+      "signature": "(queue, group, account, refresh) => Promise<void>",
+      "description": "Read active admins in the queued operation and add the target."
+    },
+    {
+      "name": "renameGroup",
+      "signature": "(queue, group, name, refresh) => Promise<void>",
+      "description": "Commit the name through the group queue."
+    },
+    {
+      "name": "Group notification router",
+      "signature": "(groupId, notification) => void",
+      "description": "Log own-change-lost and refresh members, admins and name without raising a notice."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "No new persistence. Cancel uses the pending direct invite marker store through its clear port."
+  ],
+  "dependencies_allowed": [
+    "send barrel GroupOpQueue",
+    "library group methods through structural ports",
+    "existing handlers notification router"
+  ],
+  "dependencies_forbidden": [
+    "React contexts",
+    "legacy MLS packages",
+    "account operations from inside notification callbacks"
+  ],
+  "external_ports": [
+    "runCommit",
+    "removeMember",
+    "activeAdmins",
+    "setAdmins",
+    "rename",
+    "DeclineMarkerStore.get and clearIfRef, keyed by the ref captured when the row was displayed",
+    "schedule view refresh"
+  ],
+  "events_emitted": [],
+  "events_consumed": [
+    "own-change-lost"
+  ],
+  "test_targets": [
+    "app/tests/unit/marmot/membership/adminOps.test.ts",
+    "app/tests/unit/marmot/membership/leave.harness.test.ts",
+    "app/tests/unit/marmot/handlers/groupRumorDispatch.test.ts"
+  ]
+}

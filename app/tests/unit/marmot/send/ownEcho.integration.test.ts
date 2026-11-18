@@ -40,8 +40,8 @@ beforeEach(() => {
   statuses = [];
   tracker = createOwnRowTracker({ ports: { setStatus: (_g, id, s) => void statuses.push([id, s]) } });
   // the production wiring (S18): the handler ports ARE the tracker's methods
-  app.spies.onOwnEcho.mockImplementation((g: string, id: string) => tracker.onOwnEcho(g, id));
-  app.spies.onOwnWithdrawn.mockImplementation((g: string, id: string) => tracker.onOwnWithdrawn(g, id));
+  app.spies.onOwnEcho.mockImplementation(tracker.onOwnEcho);
+  app.spies.onOwnWithdrawn.mockImplementation(tracker.onOwnWithdrawn);
 });
 afterEach(async () => {
   tracker.dispose();
@@ -110,7 +110,7 @@ describe('AC-OWN-1: one row, unread and bell untouched', () => {
     await s.writeOptimisticRow();
     await s.echo();
     expect((await app.messages())[0].id).toBe(s.prepared.rumor.id);
-    expect(app.spies.onOwnEcho).toHaveBeenCalledWith(app.groupId, s.prepared.id);
+    expect(app.spies.onOwnEcho).toHaveBeenCalledWith(app.groupId, s.prepared.id, ev('own1')[0]);
   });
 });
 
@@ -160,7 +160,7 @@ describe('AC-WDR-2: an own withdrawn message ends failed/retry through the real 
     await s.echo('own1');
     await app.sink.withdraw(app.groupId, ev('own1'));
     expect(await ids()).toEqual([s.prepared.id]); // not deleted
-    expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, s.prepared.id);
+    expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, s.prepared.id, ev('own1')[0]);
     expect(tracker.statusOf(app.groupId, s.prepared.id)).toBe('failed');
     expect(s.send).toHaveBeenCalledTimes(1);
     // a re-canonicalised branch delivers it again: confirmed, still one row
@@ -263,30 +263,21 @@ describe('pendingOwnSends is the module-scope status for a row the tracker drive
 
 describe('carrier bookkeeping through the real handler (the adapter S18 wires: ports carry the kind-445 event id)', () => {
   it('two carriers of one own row, one withdrawn: the row stays confirmed and stored; withdrawing the last carrier ends it failed', async () => {
-    // The handler ports do not pass `input.eventId` yet (S18 widens them): the adapter reads the carrier of
-    // the sink call in flight, which is what S18's `input.eventId` is.
-    let carrier: string | undefined;
-    app.spies.onOwnEcho.mockImplementation((g: string, id: string) => tracker.onOwnEcho(g, id, carrier));
-    app.spies.onOwnWithdrawn.mockImplementation((g: string, id: string) => tracker.onOwnWithdrawn(g, id, carrier));
     const s = startSend('two carriers');
     await s.writeOptimisticRow();
     const sent = s.prepared.send();
     s.release();
     await sent;
-    carrier = ev('own1')[0];
     await s.echo('own1');
-    carrier = ev('own2')[0];
     await s.echo('own2');
     expect(tracker.statusOf(app.groupId, s.prepared.id)).toBe('confirmed');
 
-    carrier = ev('own1')[0];
     await app.sink.withdraw(app.groupId, ev('own1'));
     expect(app.spies.onOwnWithdrawn).toHaveBeenCalledTimes(1); // the handler does hand the first withdraw over: only the carrier rule keeps the row
     expect(tracker.statusOf(app.groupId, s.prepared.id)).toBe('confirmed'); // the other carrier still holds it
     expect(await ids()).toEqual([s.prepared.id]);
     expect(statuses).toEqual([[s.prepared.id, 'confirmed']]);
 
-    carrier = ev('own2')[0];
     await app.sink.withdraw(app.groupId, ev('own2'));
     expect(tracker.statusOf(app.groupId, s.prepared.id)).toBe('failed');
     expect(await ids()).toEqual([s.prepared.id]); // failed/retry, never deleted

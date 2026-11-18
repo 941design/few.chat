@@ -3,14 +3,12 @@
  * epic: group-invite-link-onboarding).
  *
  * IndexedDB-backed record of join requests THIS device has sent, keyed by
- * nonce, using idb-keyval — mirrors joinRequestStorage.ts / inviteLinkStorage.ts
- * conventions.
+ * requester account and nonce. Legacy nonce-only rows remain available to the UI.
  *
  * Written only on a SUCCESSFUL join-request send (joinRequestSender.ts) — a
  * failed send writes nothing (AC-AUTO-1). Consulted by the auto-accept
- * correlation (invitations/autoAccept.ts; until the cut-over also by
- * welcomeSubscription.ts) to match an invitation's sponsor against an admin
- * this device requested to join.
+ * correlation (invitations/autoAccept.ts) to match an invitation's sponsor
+ * against an admin this device requested to join.
  *
  * Pure of React (AC-BOUND-1): the `useOutboundJoinRequests` hook lives in
  * `src/hooks/useOutboundJoinRequests.ts` and reads this module's
@@ -24,15 +22,14 @@
  * purely for identity/lookup purposes on the sender's own device.
  */
 
-import { createStore, set, del, entries, clear } from 'idb-keyval';
+import { createStore, set, del, entries, clear, promisifyRequest } from 'idb-keyval';
 
 export interface OutboundJoinRequestRecord {
-  /** Hex nonce from the invite link — primary key (idb-keyval key), never
-   *  read back from an inbound Welcome. */
+  /** Hex nonce from the invite link, never read back from an inbound Welcome. */
   nonce: string;
-  /** The admin's pubkey (hex) this device sent the join request to. The
-   *  ONLY field correlation reads (against the Welcome's authenticated
-   *  sender pubkey). */
+  /** Authenticated requester account. Missing on legacy rows, which confer no automatic consent. */
+  accountPubkey?: string;
+  /** The admin's pubkey (hex), matched against the Welcome's authenticated sponsor. */
   adminPubkeyHex: string;
   /** The group name from the invite link, used to disambiguate when this
    *  admin has more than one unexpired record (AC-AUTO-4a). */
@@ -41,11 +38,25 @@ export interface OutboundJoinRequestRecord {
   sentAt: number;
 }
 
+export interface OutboundJoinRequestConsent extends OutboundJoinRequestRecord {
+  accountPubkey: string;
+  /** Missing on fresh sends. A claim survives failed accepts and deletes. */
+  claimedInvitationId?: string;
+}
+
+type StoredOutboundJoinRequestConsent = OutboundJoinRequestConsent & { claimToken?: string };
+
+export type OutboundJoinRequestClaimResult =
+  | { kind: 'unavailable' }
+  | { kind: 'existing' }
+  | { kind: 'acquired'; token: string };
+
 // ---------------------------------------------------------------------------
 // IDB store
 // ---------------------------------------------------------------------------
 
 const outboundJoinRequestStore = createStore('few-outbound-join-requests', 'requests');
+const ownedKey = (accountPubkey: string, nonce: string): [string, string] => [accountPubkey, nonce];
 
 export function createOutboundJoinRequestStore() {
   return outboundJoinRequestStore;
@@ -63,7 +74,7 @@ export const OUTBOUND_JOIN_REQUEST_CAP = 256;
  *  the TTL floor is generous (>= 7 days, AC-AUTO-6). */
 export const OUTBOUND_JOIN_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-function isExpired(record: OutboundJoinRequestRecord, now: number): boolean {
+export function isOutboundJoinRequestExpired(record: Pick<OutboundJoinRequestRecord, 'sentAt'>, now: number): boolean {
   return now - record.sentAt >= OUTBOUND_JOIN_REQUEST_TTL_MS;
 }
 
@@ -93,23 +104,23 @@ let _loadStarted = false;
  * guarantee below since "now" changes constantly).
  *
  * Replaces `_snapshot` with a NEW array reference only when the filtered
- * content actually differs from the current snapshot (by nonce identity +
- * length) — repeated calls with no real change return the SAME reference.
+ * visible fields differ from the current snapshot.
  */
 function _recomputeSnapshot(all: OutboundJoinRequestRecord[]): void {
   const now = Date.now();
-  const unexpired = all.filter((record) => !isExpired(record, now));
+  const unexpired = all.filter((record) => !isOutboundJoinRequestExpired(record, now));
 
-  // NB: the unchanged-check compares by nonce identity + length only, which
-  // is sound because every write is keyed by a unique nonce and records are
-  // write-once (saved once on send, deleted on cancel/auto-accept — never
-  // re-saved with mutated content). If a future caller ever re-saves an
-  // existing nonce with a changed field (e.g. a different groupName), this
-  // check would retain the stale snapshot reference; extend it to compare
-  // record content if that invariant is ever relaxed.
+  // A claim changes correlation eligibility, while the awaiting card stays visible.
   const unchanged =
     unexpired.length === _snapshot.length &&
-    unexpired.every((record, i) => record.nonce === _snapshot[i].nonce);
+    unexpired.every((record, i) => {
+      const previous = _snapshot[i];
+      return record.nonce === previous.nonce &&
+        record.accountPubkey === previous.accountPubkey &&
+        record.adminPubkeyHex === previous.adminPubkeyHex &&
+        record.groupName === previous.groupName &&
+        record.sentAt === previous.sentAt;
+    });
   if (unchanged) return;
 
   _snapshot = unexpired;
@@ -202,7 +213,7 @@ if (typeof window !== 'undefined') {
 // ---------------------------------------------------------------------------
 
 /**
- * Persist an outbound join-request record, keyed by nonce.
+ * Persist a send under its account and nonce, or its nonce for legacy callers.
  *
  * Enforces the global 256-record bound by dropping the single oldest record
  * (by `sentAt`) on overflow — mirroring pendingInvitations.ts's global-cap
@@ -213,19 +224,26 @@ if (typeof window !== 'undefined') {
  */
 export async function saveOutboundJoinRequest(record: OutboundJoinRequestRecord): Promise<void> {
   try {
-    const all = await entries<string, OutboundJoinRequestRecord>(outboundJoinRequestStore);
-    if (all.length >= OUTBOUND_JOIN_REQUEST_CAP) {
+    const key = record.accountPubkey === undefined ? record.nonce : ownedKey(record.accountPubkey, record.nonce);
+    const all = await entries<IDBValidKey, OutboundJoinRequestRecord>(outboundJoinRequestStore);
+    const replacing = all.some(([existing]) => {
+      return Array.isArray(key) && Array.isArray(existing)
+        ? key[0] === existing[0] && key[1] === existing[1] && existing.length === 2
+        : key === existing;
+    });
+    if (!replacing && all.length >= OUTBOUND_JOIN_REQUEST_CAP) {
       const [oldestKey] = all.reduce((a, b) => (a[1].sentAt < b[1].sentAt ? a : b));
       await del(oldestKey, outboundJoinRequestStore);
     }
-    await set(record.nonce, record, outboundJoinRequestStore);
+    await set(key, record, outboundJoinRequestStore);
   } catch {
     // Never throw — see doc comment above.
   }
 
-  // Reactive-store funnel point (AC-STORE-4): every mutation of this IDB store
-  // MUST recompute the cached snapshot and emit here — this is the ONLY place
-  // saveOutboundJoinRequest notifies subscribers.
+  await refreshSnapshotAfterMutation();
+}
+
+async function refreshSnapshotAfterMutation(): Promise<void> {
   try {
     const persisted = await entries<string, OutboundJoinRequestRecord>(outboundJoinRequestStore);
     _recomputeSnapshot(persisted.map(([, r]) => r));
@@ -238,49 +256,117 @@ export async function saveOutboundJoinRequest(record: OutboundJoinRequestRecord)
 }
 
 /**
- * Returns all UNEXPIRED outbound records whose `adminPubkeyHex` matches.
- *
- * Expired records are treated as absent for correlation purposes (AC-AUTO-6)
- * but are NOT deleted by this read path — eviction happens opportunistically
- * via the write-time cap in `saveOutboundJoinRequest`, or explicitly via
- * `deleteOutboundJoinRequest` after a correlated auto-accept consumes a
- * record.
+ * Scoped reads require the account to match both the key and the row.
+ * The one-argument form reads legacy records for manual use.
  */
 export async function loadUnexpiredOutboundJoinRequestsForAdmin(
   adminPubkeyHex: string,
+): Promise<OutboundJoinRequestRecord[]>;
+export async function loadUnexpiredOutboundJoinRequestsForAdmin(
+  accountPubkey: string,
+  adminPubkeyHex: string,
+): Promise<OutboundJoinRequestConsent[]>;
+export async function loadUnexpiredOutboundJoinRequestsForAdmin(
+  accountPubkey: string,
+  adminPubkeyHex?: string,
 ): Promise<OutboundJoinRequestRecord[]> {
-  const all = await entries<string, OutboundJoinRequestRecord>(outboundJoinRequestStore);
+  const all = await entries<IDBValidKey, OutboundJoinRequestRecord & { claimToken?: string }>(outboundJoinRequestStore);
   const now = Date.now();
-  return all
-    .map(([, record]) => record)
-    .filter((record) => record.adminPubkeyHex === adminPubkeyHex && !isExpired(record, now));
+  return all.flatMap(([key, { claimToken: _token, ...record }]) => {
+    if (record.adminPubkeyHex !== (adminPubkeyHex ?? accountPubkey) || isOutboundJoinRequestExpired(record, now)) return [];
+    const matches = adminPubkeyHex === undefined
+      ? key === record.nonce && record.accountPubkey === undefined
+      : accountPubkey.length > 0 && record.accountPubkey === accountPubkey &&
+        Array.isArray(key) && key.length === 2 && key[0] === accountPubkey && key[1] === record.nonce;
+    return matches ? [record] : [];
+  });
+}
+
+/** Compare the send observed by correlation with the current row, then commit the change atomically. */
+function changeOutboundJoinRequest<Result>(
+  accountPubkey: string,
+  expected: Readonly<OutboundJoinRequestConsent>,
+  unmatched: Result,
+  change: (store: IDBObjectStore, current: StoredOutboundJoinRequestConsent, key: [string, string]) => Result,
+): Promise<Result> {
+  if (!accountPubkey || expected.accountPubkey !== accountPubkey) return Promise.resolve(unmatched);
+  const key = ownedKey(accountPubkey, expected.nonce);
+  return outboundJoinRequestStore('readwrite', (store) => {
+    const read = store.get(key);
+    let result = unmatched;
+    read.onsuccess = () => {
+      const current = read.result as StoredOutboundJoinRequestConsent | undefined;
+      if (
+        current?.accountPubkey !== accountPubkey ||
+        current.nonce !== expected.nonce ||
+        current.adminPubkeyHex !== expected.adminPubkeyHex ||
+        current.groupName !== expected.groupName ||
+        current.sentAt !== expected.sentAt
+      ) return;
+      result = change(store, current, key);
+    };
+    return promisifyRequest(store.transaction).then(() => result);
+  });
+}
+
+/** Bind an unexpired send to one invitation, or confirm that invitation's existing claim. */
+export function claimOutboundJoinRequest(
+  accountPubkey: string,
+  expected: Readonly<OutboundJoinRequestConsent>,
+  invitationId: string,
+): Promise<OutboundJoinRequestClaimResult> {
+  const unavailable = { kind: 'unavailable' } as const;
+  const token = crypto.randomUUID();
+  return changeOutboundJoinRequest<OutboundJoinRequestClaimResult>(accountPubkey, expected, unavailable, (store, current, key) => {
+    if (isOutboundJoinRequestExpired(current, Date.now())) return unavailable;
+    if (current.claimedInvitationId !== undefined) {
+      return current.claimedInvitationId === invitationId ? { kind: 'existing' } : unavailable;
+    }
+    store.put({ ...current, claimedInvitationId: invitationId, claimToken: token }, key);
+    return { kind: 'acquired', token };
+  });
+}
+
+/** Release the exact acquisition. An earlier or replacement claim is left intact. */
+export function releaseOutboundJoinRequestClaim(
+  accountPubkey: string,
+  expected: Readonly<OutboundJoinRequestConsent>,
+  invitationId: string,
+  token: string,
+): Promise<boolean> {
+  return changeOutboundJoinRequest<boolean>(accountPubkey, expected, false, (store, current, key) => {
+    if (!current.claimToken || current.claimToken !== token || current.claimedInvitationId !== invitationId) return false;
+    const { claimedInvitationId: _invitationId, claimToken: _token, ...unclaimed } = current;
+    store.put(unclaimed, key);
+    return true;
+  });
+}
+
+/** Remove only the claimed send. A failed delete leaves the binding in place. */
+export async function consumeOutboundJoinRequestClaim(
+  accountPubkey: string,
+  expected: Readonly<OutboundJoinRequestConsent>,
+  invitationId: string,
+): Promise<void> {
+  const deleted = await changeOutboundJoinRequest<boolean>(accountPubkey, expected, false, (store, current, key) => {
+    if (current.claimedInvitationId !== invitationId) return false;
+    store.delete(key);
+    return true;
+  });
+  if (deleted) await refreshSnapshotAfterMutation();
 }
 
 /**
- * Removes a single outbound record by nonce — the record consumed after a
- * correlated auto-accept (AC-AUTO-5). Other records (including siblings for
- * the same admin) are untouched. Idempotent; never throws.
+ * Removes a single outbound record by nonce on cancellation. Idempotent.
  */
-export async function deleteOutboundJoinRequest(nonce: string): Promise<void> {
+export async function deleteOutboundJoinRequest(nonce: string, accountPubkey?: string): Promise<void> {
   try {
-    await del(nonce, outboundJoinRequestStore);
+    await del(accountPubkey === undefined ? nonce : ownedKey(accountPubkey, nonce), outboundJoinRequestStore);
   } catch {
     // Never throw
   }
 
-  // Reactive-store funnel point (AC-STORE-4): every mutation of this IDB store
-  // MUST recompute the cached snapshot and emit here — this is the ONLY place
-  // deleteOutboundJoinRequest notifies subscribers. Every caller (the auto-accept consume
-  // port, the UI cancel) is therefore reactive without any edit of its own.
-  try {
-    const persisted = await entries<string, OutboundJoinRequestRecord>(outboundJoinRequestStore);
-    _recomputeSnapshot(persisted.map(([, r]) => r));
-  } catch {
-    // Never throw
-  } finally {
-    _loaded = true;
-    _emit();
-  }
+  await refreshSnapshotAfterMutation();
 }
 
 /**
@@ -289,21 +375,30 @@ export async function deleteOutboundJoinRequest(nonce: string): Promise<void> {
  * reactive-store funnel point above stays the single source of truth for
  * this mutation's recompute+emit.
  */
-export async function cancelOutboundJoinRequest(nonce: string): Promise<void> {
-  return deleteOutboundJoinRequest(nonce);
+export async function cancelOutboundJoinRequest(nonce: string, accountPubkey?: string): Promise<void> {
+  return deleteOutboundJoinRequest(nonce, accountPubkey);
 }
 
 /**
- * Drop every outbound join-request record (account-wide reset).
- *
- * Nothing calls it yet; the recompute+emit below is for funnel consistency
- * only and is not load-bearing for any behavior beyond "it still clears the
- * store."
+ * Clear one account's rows and optionally legacy rows. No argument clears the entire store.
  */
-export async function clearAllOutboundJoinRequests(): Promise<void> {
-  await clear(outboundJoinRequestStore);
-
-  _recomputeSnapshot([]);
-  _loaded = true;
-  _emit();
+export async function clearAllOutboundJoinRequests(accountPubkey?: string, includeLegacy = false): Promise<void> {
+  if (accountPubkey === undefined) {
+    await clear(outboundJoinRequestStore);
+  } else {
+    await outboundJoinRequestStore('readwrite', (store) => {
+      const read = store.openKeyCursor();
+      read.onsuccess = () => {
+        const cursor = read.result;
+        if (!cursor) return;
+        const key = cursor.primaryKey;
+        if ((Array.isArray(key) && key[0] === accountPubkey) || (includeLegacy && typeof key === 'string')) {
+          store.delete(key);
+        }
+        cursor.continue();
+      };
+      return promisifyRequest(store.transaction);
+    });
+  }
+  await refreshSnapshotAfterMutation();
 }

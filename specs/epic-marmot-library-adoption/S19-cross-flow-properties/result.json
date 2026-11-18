@@ -1,0 +1,29 @@
+{
+  "story_id": "S19",
+  "status": "in_progress",
+  "modules_touched": [
+    "cross-flow-properties"
+  ],
+  "files_created": [
+    "app/tests/unit/marmot/properties/history.property.test.ts",
+    "app/tests/unit/marmot/properties/invitationFlow.property.test.ts",
+    "app/tests/unit/marmot/properties/declineDurability.property.test.ts",
+    "app/tests/unit/marmot/properties/lifecycleLease.property.test.ts",
+    "app/tests/unit/marmot/properties/privacy.harness.property.test.ts",
+    "app/tests/unit/marmot/properties/senderBinding.harness.property.test.ts"
+  ],
+  "files_modified": [
+    "app/package.json",
+    "app/package-lock.json"
+  ],
+  "remediation_rounds": 2,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "properties": "OBS-6 and OBS-7 passed at 200 seeded runs each. The two pure history and own-send properties and bounded invitation, decline and lifecycle properties passed after remediations.",
+    "open": "The literal exactly-once network-send interpretation of OBS-4 conflicts with replay after a crash once the relay accepts the announcement. The implementation retries with stable identity and the retained chat row is deduplicated. Lease and invitation properties exercise bounded interleavings."
+  }
+}

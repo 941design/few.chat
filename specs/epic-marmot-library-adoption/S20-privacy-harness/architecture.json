@@ -1,0 +1,26 @@
+{
+  "module_name": "client",
+  "purpose": "Publication privacy on real client flows",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "client, invitations, send, joinRequests, backup",
+    "existing app test fixtures",
+    "pinned fast-check and Vitest",
+    "FakeRelay and library memory storage"
+  ],
+  "dependencies_forbidden": [
+    "replacement domain implementations",
+    "raw relay publish for an operation the app performs"
+  ],
+  "external_ports": [
+    "Record every network publish attempt before forwarding. Run complete account flows through app composition and verify group data and metadata privacy in the top-level events."
+  ],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/marmot/privacy.harness.test.ts",
+    "app/tests/unit/marmot/helpers/recordingTransport.ts"
+  ]
+}

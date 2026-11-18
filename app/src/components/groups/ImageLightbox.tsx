@@ -44,18 +44,19 @@ export default function ImageLightbox({
   decryptMedia,
 }: ImageLightboxProps) {
   const copy = useCopy();
+  const mediaType = 'imeta' in attachment ? attachment.attachment.mediaType : attachment.type;
   const imageState = useDecryptedImage(groupId, attachment, decryptMedia);
 
   const handleDownload = useCallback(() => {
     if (imageState.status !== 'ready') return;
-    const filename = formatFilename(senderShortId, createdAt, attachment.type ?? 'image/webp');
+    const filename = formatFilename(senderShortId, createdAt, mediaType ?? 'image/webp');
     const a = document.createElement('a');
     a.href = imageState.url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [imageState, senderShortId, createdAt, attachment.type]);
+  }, [imageState, senderShortId, createdAt, mediaType]);
 
   return (
     <Modal

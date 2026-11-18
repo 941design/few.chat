@@ -30,7 +30,7 @@ import type { InviteGroup, KeyPackageInviter } from './invitations';
 
 export type ApprovalKind = 'invited' | 'already-member';
 
-export type ApprovalResult =
+type ApprovalResult =
   | { ok: true; kind: 'invited'; welcomeStatus: string }
   | { ok: true; kind: 'already-member' }
   | { ok: false; error: 'no-usable-key-package'; reason: string }
@@ -39,7 +39,7 @@ export type ApprovalResult =
   | { ok: false; error: 'queue-unavailable' }
   | { ok: false; error: 'invite-failed'; detail: string };
 
-export interface JoinRequestApprovalDeps {
+interface JoinRequestApprovalDeps {
   inviter: Pick<KeyPackageInviter, 'inviteByPubkey'>;
   /** `client.groups.get`: account-scope, only ever called inside the queued job. `undefined` = the group is gone. */
   getGroup: (groupId: string) => Promise<InviteGroup | undefined>;
@@ -55,7 +55,7 @@ export interface JoinRequestApprovalDeps {
   onError?: (error: unknown) => void;
 }
 
-export interface JoinRequestApproval {
+interface JoinRequestApproval {
   approve: (request: PendingJoinRequest) => Promise<ApprovalResult>;
 }
 

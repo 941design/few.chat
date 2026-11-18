@@ -4,6 +4,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { STORAGE_KEYS } from '@/src/types';
 import { permissions } from '@941design/marmot';
 import { BLOSSOM_AUTH_KIND } from '@/src/lib/media/blossomClient';
 import {
@@ -19,6 +20,8 @@ import {
   buildNip46Permissions,
   buildNip46PermsParam,
   shouldDiscardStoredNip46Session,
+  loadNip46Session,
+  saveNip46Session,
 } from '@/src/lib/nip46Perms';
 
 const libPerms = permissions.toNip46Perms().split(',');
@@ -117,7 +120,7 @@ describe('AC-SIGN-3 requested permissions', () => {
       }
     }
 
-    expect(found.length).toBeGreaterThanOrEqual(8); // the scan found the known call sites
+    expect(found.length).toBeGreaterThanOrEqual(6); // D9 moves signing to the client
     const unresolved = found.filter((f) => f.kind === undefined).map((f) => f.site);
     expect(new Set(unresolved)).toEqual(UNRESOLVED_SITES);
     for (const { site, kind } of found) {
@@ -174,5 +177,32 @@ describe('AC-SIGN-4 stored-session discard', () => {
     expect(shouldDiscardStoredNip46Session(null)).toBe(true);
     expect(shouldDiscardStoredNip46Session(undefined)).toBe(true);
     expect(shouldDiscardStoredNip46Session([])).toBe(true);
+  });
+});
+
+describe('NIP-46 settings connect and reload', () => {
+  function storage() {
+    const state = new Map<string, string>();
+    return {
+      getItem: (key: string) => state.get(key) ?? null,
+      setItem: (key: string, value: string) => void state.set(key, value),
+      removeItem: (key: string) => void state.delete(key),
+    };
+  }
+
+  it('reopens a payload saved by the identity provider using the current permission list', () => {
+    const persisted = storage();
+    saveNip46Session(persisted, 'current bunker payload');
+    expect(persisted.getItem(STORAGE_KEYS.nip46Permissions)).toBe(buildNip46PermsParam());
+    expect(loadNip46Session(persisted)).toBe('current bunker payload');
+  });
+
+  it.each([undefined, OLD_SET.join(',')])('clears an old payload with permission record %s', (recorded) => {
+    const persisted = storage();
+    persisted.setItem(STORAGE_KEYS.nip46Session, 'legacy bunker payload');
+    if (recorded !== undefined) persisted.setItem(STORAGE_KEYS.nip46Permissions, recorded);
+    expect(loadNip46Session(persisted)).toBeNull();
+    expect(persisted.getItem(STORAGE_KEYS.nip46Session)).toBeNull();
+    expect(persisted.getItem(STORAGE_KEYS.nip46Permissions)).toBeNull();
   });
 });

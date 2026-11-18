@@ -42,13 +42,13 @@
 export type CommitOpGroup<K extends string> = CommitGroup & Record<K, (...args: never[]) => Promise<unknown>>;
 
 /** What `runCommit` needs of a group. `ingest([])` is the barrier before a retry (optional: absent, only the backoff waits). */
-export interface CommitGroup {
+interface CommitGroup {
   readonly id: string;
   synced: () => Promise<void>;
   ingest?: (events: readonly never[]) => Promise<unknown>;
 }
 
-export type GroupOpErrorCode = 'not-synced' | 'aborted';
+type GroupOpErrorCode = 'not-synced' | 'aborted';
 
 /**
  * A wait was lost and no attempt is in flight: the sync wait timed out (`not-synced`), or the caller aborted
@@ -74,7 +74,7 @@ export interface GroupOpOptions {
   skipSync?: boolean;
 }
 
-export interface GroupOpQueueOptions {
+interface GroupOpQueueOptions {
   /** Retries of one op after a retryable `commit-pending` rejection. Default 3. */
   maxCommitPendingRetries?: number;
   /** Backoff before retry n (the last entry repeats). Default [250, 1000, 3000]. */

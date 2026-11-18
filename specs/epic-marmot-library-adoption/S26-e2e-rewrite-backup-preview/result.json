@@ -1,0 +1,30 @@
+{
+  "story_id": "S26",
+  "status": "done",
+  "modules_touched": [
+    "e2e-recovery-and-preview"
+  ],
+  "files_created": [],
+  "files_modified": [
+    "app/tests/e2e/groups-seed-phrase.spec.ts",
+    "app/tests/e2e/groups-seed-recovery.spec.ts",
+    "app/tests/e2e/groups-backup-restore-outcomes.spec.ts",
+    "app/tests/e2e/groups-invitation-preview.spec.ts",
+    "app/src/lib/testHooks/marmotSession.ts"
+  ],
+  "remediation_rounds": 3,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "static": "Compared against pre-marmot-library-adoption. All eleven designated files remain, differ from the tag and assert their named behavior. Relay discovery stays at 372 checks.",
+    "browser": "The focused recovery run passed seed phrase and seed recovery, including restoring settings and the profile into an empty group list and joining again. Both backup outcomes passed in the integrated relay run. The latest clean-relay run passed all three revised invitation preview cases, including exact sponsor attribution and absence of a private description stored in the real group."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "Zeno verified all eleven designated rewrites against the pre-run tag, the three real post-join backup/recovery scenarios, and the revised preview with the exact sponsor label and a nonempty member-only description.",
+    "adversarial": "Volta established that the preview uses an actual library metadata commit and preserved Accept, Decline and generic-state coverage. Its remaining exact-attribution requirement was added and all three preview scenarios passed on the next valid Chromium run."
+  }
+}

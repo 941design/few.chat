@@ -279,19 +279,19 @@ describe('contactCache.ts', () => {
 describe('groupStorage.ts', () => {
   const group = { id: 'g1', name: 'G', createdAt: 1, memberPubkeys: [], relays: [] };
 
-  it('saveGroup posts groups with the group id', async () => {
+  it('saveGroup does not broadcast group writes', async () => {
     await groupStorage.saveGroup(group);
-    expect(posted).toEqual([sc('groups', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
-  it('deleteGroup posts groups with the group id', async () => {
+  it('deleteGroup does not broadcast group writes', async () => {
     await groupStorage.deleteGroup('g1');
-    expect(posted).toEqual([sc('groups', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
-  it('clearAllGroupMeta posts groups', async () => {
+  it('clearAllGroupMeta does not broadcast group writes', async () => {
     await groupStorage.clearAllGroupMeta();
-    expect(posted).toEqual([sc('groups')]);
+    expect(posted).toEqual([]);
   });
 
   it.each([
@@ -323,18 +323,18 @@ describe('chatPersistence.ts', () => {
   });
   const ID = '1'.repeat(64);
 
-  it('appendMessage posts chat for the group; an insert-if-absent no-op posts nothing', async () => {
+  it('appendMessage does not broadcast group chat; an insert-if-absent no-op posts nothing', async () => {
     expect(await chat.appendMessage('g1', msg(ID))).toBe(true);
     expect(await chat.appendMessage('g1', msg(ID))).toBe(false);
-    expect(posted).toEqual([sc('chat', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
-  it('appendMessage posts chat when an announcement supersedes a materialized placeholder', async () => {
+  it('appendMessage does not broadcast group chat when an announcement supersedes a materialized placeholder', async () => {
     await chat.appendMessage('g1', { ...msg(ID), materializedFromEdit: true } as never);
     posted.length = 0;
     const announcement = JSON.stringify({ type: 'member_admitted', pubkey: 'b'.repeat(64) });
     expect(await chat.appendMessage('g1', { ...msg(ID), content: announcement })).toBe(true);
-    expect(posted).toEqual([sc('chat', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
   it('appendMessage: a failed write rejects and posts nothing', async () => {
@@ -350,43 +350,43 @@ describe('chatPersistence.ts', () => {
     warn.mockRestore();
   });
 
-  it('updateMessageInPlace posts chat when it wrote, nothing for a rejected patch', async () => {
+  it('updateMessageInPlace does not broadcast group chat when it wrote, nothing for a rejected patch', async () => {
     await chat.appendMessage('g1', msg(ID));
     posted.length = 0;
     await chat.updateMessageInPlace('g1', ID, { content: 'edited', edited: true, rev: 5 });
-    expect(posted).toEqual([sc('chat', 'g1')]);
+    expect(posted).toEqual([]);
     posted.length = 0;
     await chat.updateMessageInPlace('g1', ID, { content: 'older', edited: true, rev: 1 });
     await chat.updateMessageInPlace('g1', 'missing', { content: 'x', rev: 9 });
     expect(posted).toEqual([]);
   });
 
-  it('tombstoneMessage posts chat when it wrote, nothing otherwise', async () => {
+  it('tombstoneMessage does not broadcast group chat when it wrote, nothing otherwise', async () => {
     await chat.appendMessage('g1', msg(ID));
     posted.length = 0;
     expect(await chat.tombstoneMessage('g1', ID, 3)).toBe(true);
-    expect(posted).toEqual([sc('chat', 'g1')]);
+    expect(posted).toEqual([]);
     posted.length = 0;
     expect(await chat.tombstoneMessage('g1', 'missing', 3)).toBe(false);
     expect(posted).toEqual([]);
   });
 
-  it('removeMessages posts chat when rows were removed, nothing otherwise', async () => {
+  it('removeMessages does not broadcast group chat when rows were removed, nothing otherwise', async () => {
     await chat.appendMessage('g1', msg(ID));
     posted.length = 0;
     await chat.removeMessages('g1', ['missing']);
     expect(posted).toEqual([]);
     await chat.removeMessages('g1', [ID]);
-    expect(posted).toEqual([sc('chat', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
-  it('clearMessages posts chat only when the thread existed', async () => {
+  it('clearMessages does not broadcast group chat when the thread existed', async () => {
     await chat.clearMessages('g1');
     expect(posted).toEqual([]);
     await chat.appendMessage('g1', msg(ID));
     posted.length = 0;
     await chat.clearMessages('g1');
-    expect(posted).toEqual([sc('chat', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
   it.each([
@@ -423,15 +423,15 @@ describe('pollPersistence.ts', () => {
     votedAt,
   });
 
-  it('savePoll posts polls for the group', async () => {
+  it('savePoll does not broadcast group polls', async () => {
     await polls.savePoll(poll);
-    expect(posted).toEqual([sc('polls', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
-  it('saveVoteIfNewer posts polls only when it wrote', async () => {
+  it('saveVoteIfNewer does not broadcast votes', async () => {
     expect(await polls.saveVoteIfNewer(vote(10))).toBe(true);
     expect(await polls.saveVoteIfNewer(vote(5))).toBe(false);
-    expect(posted).toEqual([sc('polls', 'g1')]);
+    expect(posted).toEqual([]);
   });
 
   it.each([

@@ -37,7 +37,9 @@
  * Mocking convention: idb-keyval backed by a Map. No fast-check, no jsdom —
  * table-driven/hand-rolled loops per project + architecture.md convention.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createGroupRumorSender, createOwnRowTracker } from '@/src/lib/marmot/send';
+import type { MarmotGroup } from '@941design/marmot';
 import { webcrypto } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,15 +71,11 @@ vi.mock('idb-keyval', () => ({
   createStore: vi.fn(() => ({})),
 }));
 
-// ── @internet-privacy/marmot-ts mock (deserialization boundary) ────────────
 // Hoisted per vi.mock semantics — applicationRumorDispatcher.ts's static
 // `import { deserializeApplicationData }` binds to this mock, so the
 // single-dispatch test below can inject a rumor by kind without a real MLS
 // decrypt step (mirrors registerHandlers.test.ts's identical pattern).
 let mockDispatcherRumor: unknown = null;
-vi.mock('@internet-privacy/marmot-ts', () => ({
-  deserializeApplicationData: vi.fn(() => mockDispatcherRumor),
-}));
 
 // ── Key helpers ──────────────────────────────────────────────────────────────
 
@@ -109,8 +107,7 @@ const { buildDeleteRumor, buildEditReplacementRumor, buildEditMarkedCompanionKin
 const { appendMessage, loadMessages, clearAllMessages, CHAT_MESSAGE_KIND } = await import(
   '@/src/lib/marmot/chatPersistence'
 );
-const { createDeleteEditHandler } = await import('@/src/lib/marmot/handlers/deleteEditHandler');
-const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
+const { createDeleteEditGroupHandler } = await import('@/src/lib/marmot/handlers/deleteEditHandler');
 const {
   applyOptimisticDeleteView,
   rollbackOptimisticDeleteView,
@@ -121,9 +118,22 @@ const {
   performGroupEditMessage,
 } = await import('@/src/context/ChatStoreContext');
 
+// Compatibility call shape is confined to the fixture; the real sink handler owns all effects.
+function createDeleteEditHandler(deps: any) {
+  const jobs: Array<() => Promise<void>> = [];
+  const handler = createDeleteEditGroupHandler({ ...deps, recomputeSlot: async () => {} });
+  expect(handler).not.toHaveProperty('handle');
+  return {
+    async handle(rumor: any, ctx: any, sender?: { pubkey: string }) {
+      await handler.dispatch({ groupId: ctx.groupId, eventId: rumor.id, rumor, sender: sender?.pubkey ?? rumor.pubkey }, ctx);
+      while (jobs.length) await jobs.shift()!();
+    },
+  };
+}
+
 type ChatMessageFixture = import('@/src/lib/marmot/chatPersistence').ChatMessage;
 type ChangeResultFixture = import('@/src/lib/messageEdits/api').ChangeResult;
-type AuthenticatedSender = import('@/src/lib/marmot/applicationRumorDispatcher').AuthenticatedSender;
+type AuthenticatedSender = import('@/src/lib/marmot/handlers/types').AuthenticatedSender;
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -235,52 +245,9 @@ describe('createDeleteEditHandler (S5): routes every kind-5 unconditionally, no 
     const rumor = buildDeleteRumor('x', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
 
     await expect(handler.handle(rumor as any, makeCtx())).rejects.toThrow('boom');
-    expect(deps.applyDeleteEditSignal).toHaveBeenCalledWith({ kind: 'group', groupId: GROUP_ID }, rumor, undefined);
+    expect(deps.applyDeleteEditSignal).toHaveBeenCalledWith({ kind: 'group', groupId: GROUP_ID }, rumor, { pubkey: rumor.pubkey, authenticity: 'mls' });
     expect(deps.setChatVersion).toHaveBeenCalledOnce();
     expect(deps.setChatVersion.mock.calls[0][0](4)).toBe(5); // an increment
-  });
-});
-
-// ─── Single-dispatch (no double-dispatch) ────────────────────────────────────
-
-describe('Single-dispatch: applicationRumorDispatcher LRU dedup prevents double-apply for kind-5', () => {
-  it('a duplicate wire delivery of the same rumor id invokes handle() exactly once', async () => {
-    await appendMessage(GROUP_ID, makeGroupTarget({ id: 'dedup-target' }));
-    const applySpy = vi.fn(applyDeleteEditSignal);
-    const deps = { applyDeleteEditSignal: applySpy, setChatVersion: vi.fn() };
-    const handler = createDeleteEditHandler(deps);
-    const dispatcher = createDispatcher([handler]);
-
-    // S3 (marmot-ts 0.7.0 authenticated-sender migration): the dispatcher now
-    // registers TWO listeners — 'authenticatedApplicationMessage'
-    // (message-carrying) and 'unauthenticatedMessage' (diagnostic-only,
-    // AC-OBS-1). A single shared `listener` variable would be silently
-    // overwritten by the second .on() call; listeners are tracked per event
-    // name instead. The payload now carries senderPubkey, sourced from the
-    // rumor's own pubkey so the dispatcher's sender-vs-rumor choke-point
-    // trivially matches (mirroring the old fallback sender).
-    const listeners = new Map<string, (payload: never) => void | Promise<void>>();
-    const fakeGroup = {
-      on: (event: string, fn: (payload: never) => void | Promise<void>) => {
-        listeners.set(event, fn);
-      },
-      off: (event: string) => {
-        listeners.delete(event);
-      },
-    };
-
-    const rumor = buildDeleteRumor('dedup-target', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
-    mockDispatcherRumor = rumor;
-
-    dispatcher.subscribe(fakeGroup as any, makeCtx());
-    const listener = listeners.get('authenticatedApplicationMessage');
-    expect(listener).not.toBeUndefined();
-
-    // Same rumor id "delivered" twice over the wire.
-    await listener!({ message: new Uint8Array([1]), senderPubkey: rumor.pubkey, senderLeafIndex: 0 } as never);
-    await listener!({ message: new Uint8Array([1]), senderPubkey: rumor.pubkey, senderLeafIndex: 0 } as never);
-
-    expect(applySpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -684,19 +651,21 @@ describe('AC-DEL-4 (group half): the delete/edit signal is an author-signed inne
     expect(CHAT_STORE_SOURCE).not.toMatch(/NDKEvent|@nostr-dev-kit\/ndk|\.publish\(/);
   });
 
-  it('buildDeleteRumor output is kind 5, sent via a mocked group.sendApplicationRumor (never a relay-publish stub)', async () => {
+  it('sends the signed kind-5 delete through the application intent port', async () => {
     const rumor = buildDeleteRumor('some-id', [], CHAT_MESSAGE_KIND, 1_000, alicePrivHex);
     expect(rumor.kind).toBe(DELETE_EDIT_RUMOR_KIND);
     expect(rumor.kind).toBe(5);
 
-    const sendApplicationRumor = vi.fn(async () => {});
-    const relayPublishStub = vi.fn(); // must never be called by the group send path
-    const fakeGroup = { sendApplicationRumor, unappliedProposals: {}, commit: vi.fn() };
-
-    await fakeGroup.sendApplicationRumor(rumor as any);
-
-    expect(sendApplicationRumor).toHaveBeenCalledWith(rumor);
-    expect(relayPublishStub).not.toHaveBeenCalled();
+    const send = vi.fn(async () => {});
+    const group = { id: GROUP_ID, send, pendingIntents: async () => [] };
+    const tracker = createOwnRowTracker({ ports: { setStatus: () => {} } });
+    try {
+      const sender = createGroupRumorSender({ ownPubkey: alicePubHex, tracker });
+      await sender.sendGroupRumor(group, rumor.kind, rumor.content, rumor.tags, { createdAt: rumor.created_at });
+      expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'application', rumor });
+    } finally {
+      tracker.dispose();
+    }
   });
 });
 
@@ -802,14 +771,26 @@ describe('group delete/edit send orchestration (S5 gate-remediation, finding 3: 
     };
   }
 
+  const activeTrackers: ReturnType<typeof createOwnRowTracker>[] = [];
+  afterEach(() => { for (const tracker of activeTrackers.splice(0)) tracker.dispose(); });
+
   function makeDeps(
     harness: ReturnType<typeof makeHarness>,
     targetId: string,
     group: { sendApplicationRumor: (rumor: unknown) => Promise<void> },
     overrides: Partial<{ pubkey: string; privateKeyHex: string }> = {},
   ) {
+    const tracker = createOwnRowTracker({ ports: { setStatus: () => {} } });
+    activeTrackers.push(tracker);
+    const sender = createGroupRumorSender({ ownPubkey: overrides.pubkey ?? alicePubHex, tracker });
+    const libraryGroup = {
+      id: GROUP_ID,
+      pendingIntents: async () => [],
+      send: ({ rumor }: { rumor: unknown }) => group.sendApplicationRumor(rumor),
+    } as unknown as MarmotGroup;
     return {
-      group,
+      group: libraryGroup,
+      sender,
       groupId: GROUP_ID,
       privateKeyHex: overrides.privateKeyHex ?? alicePrivHex,
       pubkey: overrides.pubkey ?? alicePubHex,
@@ -1241,7 +1222,7 @@ describe('sendMessage / sendImageMessage resolve-after-append (S5 gate-remediati
     const sendImageMessageBody = CHAT_STORE_SOURCE.slice(sendImageMessageStart, sendReactionStart);
 
     expect(sendMessageBody).toMatch(/appendMessage\(groupId, optimistic\)[\s\S]*?resolvePendingSignalsForSlot/);
-    expect(sendImageMessageBody).toMatch(/appendMessage\(groupId, finalMsg\)[\s\S]*?resolvePendingSignalsForSlot/);
+    expect(sendImageMessageBody).toMatch(/appendMessage\(groupId, row\)[\s\S]*?resolvePendingSignalsForSlot/);
   });
 
   it('resolvePendingSignalsForSlot resolves a buffered pending signal once the original is appended (the underlying mechanism the send paths now trigger)', async () => {

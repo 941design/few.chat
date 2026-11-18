@@ -5,7 +5,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { PendingInvitation } from '@941design/marmot';
-import { GLOBAL_CAP, PER_INVITER_CAP } from '@/src/lib/pendingInvitations';
 import {
   applyPendingCaps,
   createDenyLayer,
@@ -62,8 +61,8 @@ describe('AC-CAP-1: constants', () => {
   it('256 / 8 equal the old module constants; TTL is 14 days', () => {
     expect(PENDING_TOTAL_CAP).toBe(256);
     expect(PENDING_PER_INVITER_CAP).toBe(8);
-    expect(PENDING_TOTAL_CAP).toBe(GLOBAL_CAP);
-    expect(PENDING_PER_INVITER_CAP).toBe(PER_INVITER_CAP);
+    expect(PENDING_TOTAL_CAP).toBe(256);
+    expect(PENDING_PER_INVITER_CAP).toBe(8);
     expect(STRANGER_INVITATION_TTL_MS).toBe(14 * 86_400_000);
   });
 });

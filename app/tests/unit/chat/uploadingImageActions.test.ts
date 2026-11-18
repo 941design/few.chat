@@ -49,9 +49,20 @@ describe('uploading image rows', () => {
   });
 
   it('the group image send flags the optimistic row and not the final one', () => {
-    const send = between(read('context/ChatStoreContext.tsx'), 'const tempId = crypto.randomUUID();', 'appendMessage(groupId, finalMsg)');
+    const send = between(read('context/ChatStoreContext.tsx'), 'const tempId = crypto.randomUUID();', 'appendMessage(groupId, row)');
     expect(send).toMatch(/attachments: \{ full: null, thumb: null \},\s*localMediaRefs: \[\],\s*uploading: true,/);
-    expect(send).toMatch(/const finalMsg: ChatMessage = \{\s*\.\.\.optimistic,\s*uploading: undefined,/);
+    expect(send).toMatch(/finalMsg = \{\s*\.\.\.optimistic,\s*uploading: undefined,/);
+  });
+
+  it('a prepared group image keeps its canonical row after send failure for retry', () => {
+    const src = read('context/ChatStoreContext.tsx');
+    const send = between(src, 'const tempId = crypto.randomUUID();', '[groupId, group, groupImages, pubkey]');
+    expect(send).toContain('id: rumorId');
+    expect(send).toContain('registerPendingOwnSend(pubkey, finalMsg)');
+    expect(send).toContain('if (finalMsg) return;');
+    expect(send).toContain('prev.filter(m => m.id !== tempId)');
+    const retry = between(src, 'const retryMessage = useCallback', 'const [loading');
+    expect(retry).toContain('groupSender.retry(group, id)');
   });
 
   it('an uploading row offers no reactions; any other row does', () => {

@@ -35,7 +35,7 @@ function setup(over: { upload?: (c: Uint8Array) => Promise<string>; download?: (
   const download = vi.fn(over.download ?? (async (a: { ciphertextSha256: string }) => store.get(a.ciphertextSha256)!));
   const warn = vi.fn(over.warn);
   const service = createGroupImageService({ sender, upload, download: download as never, cache, blossomServers: [`${SERVER}/`], warn });
-  return { service, uploads, store, cache, download, warn, tracker };
+  return { service, sender, uploads, store, cache, download, warn, tracker };
 }
 
 describe('createGroupImageService: required ports are validated at construction', () => {
@@ -56,6 +56,28 @@ describe('createGroupImageService: required ports are validated at construction'
 });
 
 describe('AC-MEDIA-1 sendImage', () => {
+  it('exposes the prepared image before dispatch and retries the identical rumor after failure without re-uploading', async () => {
+    const t = setup();
+    const g = fakeMediaGroup();
+    const intents: Array<{ rumor: { id: string } }> = [];
+    let attempts = 0;
+    g.group.send = async (intent: unknown) => {
+      intents.push(intent as { rumor: { id: string } });
+      if (++attempts === 1) throw new Error('publish failed');
+    };
+    let preparedId = '';
+    await expect(t.service.sendImage(g.group, {
+      caption: 'caption', full: { bytes: FULL }, thumb: { bytes: THUMB },
+      onPrepared: image => { preparedId = image.rumorId; },
+    })).rejects.toThrow('publish failed');
+    expect(preparedId).toBe(intents[0].rumor.id);
+    expect(t.tracker.statusOf(g.group.id, preparedId)).toBe('failed');
+    await t.sender.retry(g.group, preparedId);
+    expect(intents[1].rumor).toEqual(intents[0].rumor);
+    expect(t.uploads).toHaveLength(2);
+    t.tracker.dispose();
+  });
+
   it('encrypts both blobs through group.encryptMedia with the Blossom server and the image metadata', async () => {
     const t = setup();
     const g = fakeMediaGroup();

@@ -52,7 +52,8 @@ const {
   queuePendingVote, loadPendingVotes, removePendingVotes, migrateLegacyVotes,
   PENDING_VOTE_TTL_MS, MAX_PENDING_VOTES_PER_GROUP, MAX_PENDING_VOTES_PER_VOTER,
 } = persistence;
-const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, replayPendingVotes } = await import('@/src/lib/marmot/handlers/pollHandler');
+const { replayPendingVotes } = await import('@/src/lib/marmot/handlers/pollHandler');
+const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } = await import('./handlers/reducerFixtures');
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, POLL_LIMITS, POLL_ID_LIMITS, parsePollOpen, parsePollVote, parsePollClose } = await import('@/src/lib/marmot/pollSync');
 
 type Poll = import('@/src/lib/marmot/pollPersistence').Poll;
@@ -393,7 +394,7 @@ describe('VQ-3: early votes are queued and applied on poll-open (AC-9)', () => {
     await vote(GROUP_A, VOTER_A, ['A']);
     vi.resetModules();
     const fresh = await import('@/src/lib/marmot/pollPersistence');
-    const handlers = await import('@/src/lib/marmot/handlers/pollHandler');
+    const handlers = await import('./handlers/reducerFixtures');
     await handlers.createPollOpenHandler({ ...fresh, setPollVersion: vi.fn() }).handle(rumor(POLL_OPEN_KIND, CREATOR, openPayload()), ctx(GROUP_A), sender(CREATOR));
     expect(await fresh.loadVotes(GROUP_A, POLL_ID)).toHaveLength(1);
   });
@@ -801,7 +802,7 @@ describe('stranded queued votes are recovered at the next poll message (re-entra
   });
 
   it('(v) the poll_close chat announcement includes the recovered vote, matching the persisted close', async () => {
-    const { createChatHandler } = await import('@/src/lib/marmot/handlers/chatHandler');
+    const { createChatHandler } = await import('./handlers/reducerFixtures');
     await vote(GROUP_A, VOTER_A, ['B']);
     await expect(openWith({ ...realDeps(), loadPendingVotes: failOnce(loadPendingVotes) })).rejects.toThrow();
 

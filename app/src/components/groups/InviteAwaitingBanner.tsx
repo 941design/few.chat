@@ -52,7 +52,6 @@ import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { useProfile } from '@/src/context/ProfileContext';
 import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
-import { sendJoinRequest } from '@/src/lib/marmot/joinRequestSender';
 import { useOutboundJoinRequests } from '@/src/hooks/useOutboundJoinRequests';
 import { isWelcomeJoinRequestDisabled } from '@/src/components/groups/JoinRequestCard';
 import { resolveInviteBannerState, computeGroupsPathAfterJoinSend } from '@/src/lib/inviteBannerState';
@@ -66,8 +65,8 @@ type InviteAwaitingBannerProps = {
 export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: InviteAwaitingBannerProps) {
   const copy = useCopy();
   const router = useRouter();
-  const { hydrated, pubkeyHex, privateKeyHex } = useNostrIdentity();
-  const { groups } = useMarmot();
+  const { hydrated, pubkeyHex } = useNostrIdentity();
+  const { groups, sendJoinRequest, ready } = useMarmot();
   const { profile, saveProfile } = useProfile();
   const { records, loaded } = useOutboundJoinRequests();
 
@@ -94,7 +93,8 @@ export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: In
       )?.id
     : null;
 
-  const nonceHasUnexpiredRecord = records.some((r) => r.nonce === nonce);
+  const account = pubkeyHex?.toLowerCase();
+  const nonceHasUnexpiredRecord = !!account && records.some((r) => r.accountPubkey === account && r.nonce === nonce);
 
   const state = resolveInviteBannerState({
     hasJoinParams: true,
@@ -110,7 +110,7 @@ export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: In
   // Identity not yet hydrated, or an invalid admin npub on the link: render
   // nothing rather than a half-ready banner. Neither is a target state of
   // this story's ACs.
-  if (!hydrated || !pubkeyHex || !privateKeyHex || !adminPubkeyHex) return null;
+  if (!hydrated || !pubkeyHex || !ready || !adminPubkeyHex) return null;
 
   if (state === 'loading' || state === 'none' || state === 'first-visit') return null;
 
@@ -147,7 +147,7 @@ export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: In
   const requestDisabled = isWelcomeJoinRequestDisabled(nameDraft);
 
   async function handleSend() {
-    if (!pubkeyHex || !privateKeyHex || !adminPubkeyHex) return;
+    if (!pubkeyHex || !ready || !adminPubkeyHex) return;
     if (isWelcomeJoinRequestDisabled(nameDraft)) return;
 
     if (nameDraft.trim() !== profile.nickname.trim()) {
@@ -158,11 +158,9 @@ export default function InviteAwaitingBanner({ nonce, adminNpub, groupName }: In
     setError(null);
     try {
       await sendJoinRequest({
-        requesterPubkeyHex: pubkeyHex,
         adminPubkeyHex,
         nonce,
         groupName,
-        requesterPrivateKeyHex: privateKeyHex,
         requesterName: nameDraft,
       });
       // AC-LAND-3: strip join/admin/name from the URL. AC-REACT-3: the

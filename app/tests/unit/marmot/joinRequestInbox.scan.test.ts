@@ -4,21 +4,17 @@
  *
  *  AC-AUTO-2   auto-accept has exactly one mechanism: no `keyPackages.offer` and no `expectWelcome` call exists in app/src.
  *  AC-INBOX-2  kind 21063 is neither sent nor handled anywhere in app/src: it appears only as the retired-kind registry
- *              entry (kinds.ts). The old Welcome-subscription flow still carries its decline-kind literal until S22 deletes
- *              the file; that one file is the explicit, self-expiring exemption below.
+ *              entry (kinds.ts).
  *  AC-JOIN-1   the inbox join-request path uses `sendInboxRumor` / `registerInboxHandler(21059)` and not a raw WebSocket publish.
  *  AC-BOUND-1  the join-request modules import no React and no React context.
  */
 import { describe, expect, it } from 'vitest';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const APP_ROOT = resolve(__dirname, '../../..');
 const SRC = join(APP_ROOT, 'src');
 const MARMOT = join(SRC, 'lib/marmot');
-
-/** Files that still carry the retired decline kind until S22 deletes them (remove the entry with the file). */
-const LEGACY_21063_UNTIL_S22 = new Set(['lib/marmot/welcomeSubscription.ts']);
 
 function listSrc(dir: string): string[] {
   const out: string[] = [];
@@ -46,11 +42,11 @@ describe('AC-AUTO-2: one auto-accept mechanism', () => {
 });
 
 describe('AC-INBOX-2: kind 21063', () => {
-  it('appears nowhere in app/src code except the retired-kind registry entry (and the exempt legacy file)', () => {
+  it('appears nowhere in app/src code except the retired-kind registry entry', () => {
     const offenders = files
       .filter((f) => /\b21063\b/.test(code(f)))
       .map(rel)
-      .filter((f) => f !== 'lib/marmot/kinds.ts' && !LEGACY_21063_UNTIL_S22.has(f));
+      .filter((f) => f !== 'lib/marmot/kinds.ts');
     expect(offenders).toEqual([]);
   });
   it('kinds.ts carries it only inside RETIRED_KINDS', () => {
@@ -59,9 +55,7 @@ describe('AC-INBOX-2: kind 21063', () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatch(/RETIRED_KINDS/);
   });
-  it('the exemption list holds only files that still exist (it expires with S22)', () => {
-    for (const f of LEGACY_21063_UNTIL_S22) expect(existsSync(join(SRC, f)), f).toBe(true);
-  });
+
 });
 
 describe('AC-JOIN-1 / AC-BOUND-1: the join-request modules', () => {

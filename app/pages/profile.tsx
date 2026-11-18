@@ -32,7 +32,6 @@ import { ConfirmButton } from '@/src/components/UserCard';
 import { confirmPendingContact } from '@/src/components/contacts/PendingConfirmationPrompt';
 import { clearPendingContact } from '@/src/lib/unreadStore';
 import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
-import { markPendingDirectInvite, clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import { drainPendingIntents, type PendingIntentSendContext } from '@/src/lib/pairing/pendingIntent';
 import { capNickname, NICKNAME_MAX_BYTES } from '@/src/config/profile';
 import { utf8ByteLength } from '@/src/lib/contactCard';
@@ -539,54 +538,6 @@ function OwnProfileSection() {
   );
 }
 
-export type ProfileAddToGroupMarkerDeps = {
-  markPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void>;
-  clearPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void>;
-};
-
-/**
- * Wraps the profile-page direct-invite call with pending-direct-invite
- * marker bookkeeping (epic: invite-rescind-and-member-removal S8 — the
- * profile.tsx mirror of InviteMemberModal.tsx's submitInviteWithMarker,
- * S7). Ordering guarantee (AC-MARKER-1): the marker write is fully
- * awaited BEFORE inviteByNpub is ever called, so the marker exists at the
- * exact moment inviteByNpub could be invoked. Both the write
- * (AC-MARKER-2) and the failure-path clear (AC-MARKER-3) are best-effort:
- * a thrown/rejected marker op is caught, logged via console.warn, and
- * never blocks or rethrows. The marker is cleared only when
- * inviteByNpub resolves {ok:false} — a successful invite deliberately
- * keeps its marker so the UI can keep offering "Cancel Invite".
- *
- * inviteByNpub itself is never modified by this wrapper — approveJoinRequestImpl
- * calls inviteByNpub directly via a different call path (MarmotContext.tsx:515)
- * and must never pick up a marker write (AC-MARKER-4), which is exactly why this
- * bookkeeping lives in a wrapper here rather than inside inviteByNpub.
- */
-export async function addToGroupWithMarker(
-  pubkeyHex: string,
-  groupId: string,
-  inviteByNpub: (groupId: string, npub: string) => Promise<{ ok: boolean; error?: string }>,
-  markerDeps: ProfileAddToGroupMarkerDeps,
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    await markerDeps.markPendingDirectInvite(groupId, pubkeyHex);
-  } catch (err) {
-    console.warn('[ProfilePage] pending-invite marker write failed (non-blocking):', err);
-  }
-
-  const result = await inviteByNpub(groupId, pubkeyToNpub(pubkeyHex));
-
-  if (!result.ok) {
-    try {
-      await markerDeps.clearPendingDirectInvite(groupId, pubkeyHex);
-    } catch (err) {
-      console.warn('[ProfilePage] pending-invite marker clear failed (non-blocking):', err);
-    }
-  }
-
-  return result;
-}
-
 /**
  * Code-level guard behind the profile page's "Add to group" action (epic:
  * pending-contact-profile-gate, AC-PEND-6). Returns `true` only for a contact
@@ -680,7 +631,7 @@ export default function ProfilePage() {
     void Promise.all(
       candidates.map(async (group) => {
         const mlsGroup = await getGroup(group.id).catch(() => null);
-        const admins = mlsGroup?.groupData?.adminPubkeys ?? [];
+        const admins = mlsGroup?.activeAdmins() ?? [];
         const isAdmin = admins.some((pk) => pk.toLowerCase() === ownPubkeyHex.toLowerCase());
         return isAdmin ? group.id : null;
       }),
@@ -758,10 +709,7 @@ export default function ProfilePage() {
     const target = pubkeyHex;
     setAddToGroupAttempt({ pubkey: target, status: 'loading' });
     try {
-      const result = await addToGroupWithMarker(pubkeyHex, effectiveGroupId, inviteByNpub, {
-        markPendingDirectInvite,
-        clearPendingDirectInvite,
-      });
+      const result = await inviteByNpub(effectiveGroupId, pubkeyToNpub(target));
       if (result.ok) {
         setAddToGroupAttempt({ pubkey: target, status: 'success' });
         setSelectedGroupId('');

@@ -1,0 +1,22 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Delete NdkNetworkAdapter, welcomeSubscription, epochResolver, rumorJournal, applicationRumorDispatcher, keyPackages, state/key-package backends in groupStorage, pendingRemovalStorage, leftGroupTombstones, staleLocalGroup, staleReplaceMarker, replaceTeardown, membersChangedSync, inviteeKeyPackageLookup, relayRequest (if no other importer), the standalone *Impl files, sendRumorSafe copies and old signerAdapter; remove @internet-privacy/marmot-ts and ts-mls (and @hpke/@noble/post-quantum if unused) via make deps; zero fork imports; make build.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [
+    "Storage keys/stores grep and dead exports (S23)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/src/lib/marmot/* (listed deletions)",
+    "app/package.json + lockfile (make deps)",
+    "app/next.config.mjs (keeps ts-mls include)",
+    "remaining importers of deleted modules"
+  ]
+}

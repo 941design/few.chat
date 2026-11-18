@@ -1,28 +1,5 @@
 import type { Page } from '@playwright/test';
 
-const INDEXEDDB_DATABASES = [
-  'few-groups-meta',
-  'few-groups-state',
-  'few-keypackages',
-  'few-member-scores',
-  'few-member-profiles',
-  'few-invite-links',
-  'few-join-requests',
-  // epic: group-invite-link-onboarding, S4 -- outbound join-request records
-  // (outboundJoinRequests.ts). Omitted here previously; a mid-test
-  // clearAppState() call on a context that had already sent a join request
-  // would leave a stale record behind, able to auto-correlate a LATER,
-  // unrelated Welcome.
-  'few-outbound-join-requests',
-  'few-media-blobs',
-  'few-media-meta',
-  // Left-group tombstones (leftGroupTombstones.ts) and the write-ahead rumor
-  // journal (rumorJournal.ts): per-account local group state.
-  'few-left-groups',
-  'few-rumor-journal',
-  'keyval-store', // DM message storage
-];
-
 /**
  * Clear all app state: remove lp_* localStorage keys and delete all IndexedDB databases.
  * IndexedDB deletions are properly awaited to prevent stale data on page reload.
@@ -32,7 +9,7 @@ export async function clearAppState(page: Page): Promise<void> {
   // to localStorage and indexedDB, which would otherwise throw a SecurityError
   // and mask the real test failure that prevented navigation.
   if (page.url() === 'about:blank') return;
-  await page.evaluate(async (dbNames) => {
+  await page.evaluate(async () => {
     // Clear lp_* localStorage keys
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -41,7 +18,9 @@ export async function clearAppState(page: Page): Promise<void> {
     }
     keysToRemove.forEach((k) => localStorage.removeItem(k));
 
-    // Delete IndexedDB databases — await each deletion
+    const databases = await indexedDB.databases();
+    const dbNames = databases.flatMap(({ name }) => name ? [name] : []);
+    // Delete each database on this isolated test origin.
     await Promise.all(
       dbNames.map(
         (name) =>
@@ -53,5 +32,5 @@ export async function clearAppState(page: Page): Promise<void> {
           }),
       ),
     );
-  }, INDEXEDDB_DATABASES);
+  });
 }

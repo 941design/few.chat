@@ -12,6 +12,7 @@ import {
   HISTORY_SWEEP_WAIT_MS,
   type AccountClientHandle,
   type BootstrapInput,
+  type ClientCallbackScope,
 } from '@/src/lib/marmot/client';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { APP_INBOX_KINDS } from '@/src/lib/marmot/kinds';
@@ -266,7 +267,7 @@ describe('AccountClientHandle seam shape', () => {
     expectTypeOf<keyof AccountClientHandle>().toEqualTypeOf<'client' | 'pubkey' | 'leaseHeld' | 'enqueue'>();
     expectTypeOf<AccountClientHandle['pubkey']>().toEqualTypeOf<string>();
     expectTypeOf<AccountClientHandle['leaseHeld']>().toEqualTypeOf<() => boolean>();
-    expectTypeOf<AccountClientHandle['enqueue']>().toEqualTypeOf<(job: () => Promise<void>) => void>();
+    expectTypeOf<AccountClientHandle['enqueue']>().toEqualTypeOf<(job: () => Promise<void>, scope?: ClientCallbackScope) => void>();
   });
   it('runtime: the handle the bootstrap returns carries exactly those keys', async () => {
     const rig = makeRig();
@@ -334,20 +335,26 @@ describe('client construction (AC-BOOT-6, AC-TRANS-1)', () => {
     expect(rig.captured.capturedOptions).toMatchObject({ leaveTimeoutMs: 10000, removalSettleMs: 5000 });
   });
 
-  it('constructs the library client with exactly the seam-provided collaborators', async () => {
+  it('constructs the client with the seam-provided collaborators and delegates transport calls', async () => {
     const rig = makeRig();
-    const transport = { transport: { tag: 'seam-transport' } as never, pool: {} as never, closePool: () => undefined };
+    const subscription = vi.fn(() => 'seam subscription');
+    const transport = { transport: { subscription } as never, pool: {} as never, closePool: () => undefined };
     rig.input.seams!.createTransport = () => transport;
     const stores = rig.stores;
+    const append = vi.spyOn(rig.input.history, 'append');
     rig.input.seams!.openStores = async () => ({ status: 'opened', stores: stores as never });
     await bootstrapAccountClient(rig.input);
     const all = rig.captured.capturedAll as Record<string, unknown>;
     expect(all.verifier).toBeUndefined();
     expect(all.relays).toEqual({ defaults: rig.input.relays, mode: 'discover' });
     expect(all.relays).not.toHaveProperty('verifier');
-    expect(all.history).toBe(rig.input.history);
+    const entry = { groupId: 'fixture-group' } as Parameters<BootstrapInput['history']['append']>[0];
+    await (all.history as BootstrapInput['history']).append(entry);
+    expect(append).toHaveBeenCalledExactlyOnceWith(entry);
     expect(all.stores).toBe(stores);
-    expect(all.transport).toBe(transport.transport);
+    const wired = all.transport as { subscription: (relays: string[], filters: object) => string };
+    expect(wired.subscription(rig.input.relays as string[], {})).toBe('seam subscription');
+    expect(subscription).toHaveBeenCalledWith(rig.input.relays, {});
     expect(all.signer).toBe(rig.captured.capturedSigner);
     expect(all.budget).toBe(rig.captured.capturedBudget);
     // the signer is the adapter's (not the raw app signer)
@@ -668,4 +675,17 @@ describe('remote signer getPublicKey budget', () => {
     rig.input.seams!.signerTimeoutMs = 5_000;
     expect((await bootstrapAccountClient(rig.input)).status).toBe('ready');
   });
+});
+
+it('attempts teardown once when abort cleanup fails', async () => {
+  const rig = makeRig();
+  const controller = new AbortController();
+  rig.input.signal = controller.signal;
+  rig.input.beforeClientConstruction = async () => { controller.abort(); };
+  const failure = new Error('close failed');
+  rig.stores.close = async () => { rig.log.push('stores.close'); throw failure; };
+  await expect(bootstrapAccountClient(rig.input)).rejects.toBe(failure);
+  expect(rig.log.filter((entry) => entry === 'stores.close')).toHaveLength(1);
+  expect(rig.log.filter((entry) => entry === 'history.dispose')).toHaveLength(1);
+  expect(rig.captured.createCalls).toBe(0);
 });

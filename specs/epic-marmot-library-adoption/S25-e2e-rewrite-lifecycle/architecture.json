@@ -1,0 +1,33 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Rewrite groups-leave-intent, groups-leave-purges-mls-state, groups-reinvite-after-leave, groups-reinvite-after-removal, groups-rumor-reload-atomic, groups-accept-reload-atomic, groups-dispatch-isolation against new behaviour, and add the new groups-multi-tab spec (wait for library group absence via groups.list() hook; sink startup sweep; own echo reconciles without unread/bell); drop pending-removal assertions from groups-admin.",
+  "public_api": [],
+  "private_files": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/groupSessionProfile.ts",
+    "app/src/lib/marmot/invitations/acceptDecline.ts",
+    "app/src/lib/testHooks/marmotSession.ts"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [
+    "Backup and preview specs (S26)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/e2e/groups-leave-intent.spec.ts",
+    "app/tests/e2e/groups-leave-purges-mls-state.spec.ts",
+    "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+    "app/tests/e2e/groups-reinvite-after-removal.spec.ts",
+    "app/tests/e2e/groups-rumor-reload-atomic.spec.ts",
+    "app/tests/e2e/groups-accept-reload-atomic.spec.ts",
+    "app/tests/e2e/groups-dispatch-isolation.spec.ts",
+    "app/tests/e2e/groups-admin.spec.ts",
+    "app/tests/e2e/groups-multi-tab.spec.ts (new; two pages, one context, real Web Locks)",
+    "app/tests/e2e/helpers/*"
+  ]
+}

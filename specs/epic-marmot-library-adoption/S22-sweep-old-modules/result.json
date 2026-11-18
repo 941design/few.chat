@@ -1,0 +1,28 @@
+{
+  "story_id": "S22",
+  "status": "done",
+  "modules_touched": [
+    "legacy-sweep"
+  ],
+  "files_created": [],
+  "files_modified": [
+    "app/package.json",
+    "app/package-lock.json",
+    "app/src/lib/marmot/groupStorage.ts"
+  ],
+  "remediation_rounds": 1,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "static": "Old protocol and persistence adapters removed. Source/test fork and raw ts-mls import scan returned no matches. Static build passed after the dependency cleanup. Independent final review pending.",
+    "latest": "Production handler .handle adapters and the retired Welcome join request entry point were removed. Migrated suites share domain reducers or drive sink-path/inbox factories. The actual poll carriers and account wipe paths have focused behavioral tests."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol checked the retired files, source scans and latest runtime factories and inbox routes.",
+    "adversarial": "GPT-6 Astra accepted the legacy adapter, old dependency and retired key removal."
+  }
+}

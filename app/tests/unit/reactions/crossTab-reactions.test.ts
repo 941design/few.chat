@@ -149,11 +149,11 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 const SELF = 'aa'.repeat(32);
 const PEER = 'bb'.repeat(32);
-const G1: ReactionThreadKey = { kind: 'group', groupId: 'g1' };
-const G2: ReactionThreadKey = { kind: 'group', groupId: 'g2' };
+const G1: ReactionThreadKey = { kind: 'dm', peerPubkeyHex: '11'.repeat(32) };
+const G2: ReactionThreadKey = { kind: 'dm', peerPubkeyHex: '22'.repeat(32) };
 const DM: ReactionThreadKey = { kind: 'dm', peerPubkeyHex: PEER };
-const G1_KEY = 'few:reactions:group:g1';
-const G2_KEY = 'few:reactions:group:g2';
+const G1_KEY = `few:reactions:dm:${'11'.repeat(32)}`;
+const G2_KEY = `few:reactions:dm:${'22'.repeat(32)}`;
 const DM_KEY = `few:reactions:dm:${PEER}`;
 
 function row(overrides: Partial<Reaction> = {}): Reaction {
@@ -229,8 +229,26 @@ afterEach(() => {
   bus.clear();
 });
 
+describe('D4 group reactions stay in the active tab', () => {
+  it('updates the local cache and listeners without broadcasting to another tab', async () => {
+    const group: ReactionThreadKey = { kind: 'group', groupId: 'g1' };
+    const local = vi.fn();
+    const remote = vi.fn();
+    await tabB.api.loadReactions(group);
+    tabA.api.subscribeReactions(group, local);
+    tabB.api.subscribeReactions(group, remote);
+    await tabA.api.applyInboundRumor(group, rumor());
+    await settle();
+    expect(live(await tabA.api.loadReactions(group))).toEqual(['bb:❤️']);
+    expect(local).toHaveBeenCalledTimes(1);
+    expect(remote).not.toHaveBeenCalled();
+    expect(await tabB.api.loadReactions(group)).toEqual([]);
+    expect(tabA.posts).toEqual([]);
+  });
+});
+
 describe('a reaction write in one tab shows in the other without reload', () => {
-  it('inbound group reaction: tab B cache refreshes and its thread listener fires', async () => {
+  it('inbound DM reaction: tab B cache refreshes and its thread listener fires', async () => {
     expect(await tabB.api.loadReactions(G1)).toEqual([]); // B's cache is warm (and empty)
     const onB = vi.fn();
     tabB.api.subscribeReactions(G1, onB);
@@ -507,7 +525,7 @@ describe('peer wipes propagate', () => {
 
   it('purgeStrangerDmReactions announces each purged thread', async () => {
     shared.idb.set(DM_KEY, [row({ id: 'x', reactorPubkey: PEER })]);
-    shared.idb.set(G1_KEY, [row({ id: 'g' })]);
+    shared.idb.set('few:reactions:group:g1', [row({ id: 'g' })]);
     await tabB.api.loadReactions(DM);
     await tabA.api.purgeStrangerDmReactions(() => ({ groups: [], knownPeers: new Set(), ownPubkeyHex: SELF }) as never);
     await settle();

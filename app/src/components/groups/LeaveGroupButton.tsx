@@ -14,7 +14,7 @@ import {
 import { useRouter } from 'next/router';
 import { useCopy } from '@/src/context/LanguageContext';
 import { useMarmot } from '@/src/context/MarmotContext';
-import { selectLeaveModalState, resolveLeaveModalState } from '@/src/lib/marmot/leaveEligibility';
+import { selectLeaveModalState } from '@/src/lib/marmot/membership';
 
 type LeaveGroupButtonProps = {
   groupId: string;
@@ -24,17 +24,6 @@ type LeaveGroupButtonProps = {
   ownPubkeyHex?: string | null;
 };
 
-/**
- * Soft-leave: purges local state only — no MLS Remove proposal is sent.
- *
- * An MLS Remove proposal would block the entire group from sending
- * messages until an admin commits it (ts-mls enforces this per RFC 9420).
- * Instead we just delete local data and navigate away. The member becomes
- * a "ghost leaf" in the ratchet tree but cannot decrypt future messages.
- *
- * See specs/out-of-band-leave.md for the planned protocol-level solution
- * (kind 13 leave-intent application message + admin auto-remove).
- */
 export default function LeaveGroupButton({ groupId, adminPubkeys, ownPubkeyHex }: LeaveGroupButtonProps) {
   const copy = useCopy();
   const { leaveGroup, getLiveMemberPubkeys } = useMarmot();
@@ -60,21 +49,16 @@ export default function LeaveGroupButton({ groupId, adminPubkeys, ownPubkeyHex }
     onOpen();
   }
 
-  const modalState = resolveLeaveModalState(
-    selectLeaveModalState(liveMembers, adminPubkeys, ownPubkeyHex),
-    leaveAborted,
+  const modalState = leaveAborted ? 'blocked' : selectLeaveModalState(
+    { members: liveMembers, admins: adminPubkeys }, ownPubkeyHex ?? '',
   );
 
   async function handleLeave() {
     setIsLoading(true);
     try {
-      const left = await leaveGroup(groupId);
-      if (!left) {
-        // Aborted at execution time: nothing was sent or purged. Stay on the
-        // page and swap the modal body for the blocked notice.
-        setLeaveAborted(true);
-        return;
-      }
+      const result = await leaveGroup(groupId);
+      if (result === 'blocked') setLeaveAborted(true);
+      if (result !== 'accepted') return;
       onClose();
       await router.push('/groups');
     } catch (err) {

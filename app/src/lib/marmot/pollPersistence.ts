@@ -13,11 +13,10 @@
  */
 
 // Never idb-keyval update(): it is not transaction-bound and can hang on a
-// read error/abort (see rumorJournal.ts). Read-check-write steps use the store
+// read error or abort. Read-check-write steps use the store
 // callback + promisifyRequest(os.transaction) (pollTxn below).
 import { get, set, del, keys, delMany, createStore, promisifyRequest } from 'idb-keyval';
 import type { UseStore } from 'idb-keyval';
-import { postStoreChanged } from '@/src/lib/crossTab';
 import type { RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 import { foldPollSignals } from './pollFold';
 import {
@@ -35,7 +34,6 @@ import {
   samePendingVote as samePending,
   liveEntries,
   liveCloseCutoffs,
-  snapshotOf,
   mergeVoteRows,
   queueVoteEntries,
   addBoundedEntry,
@@ -191,6 +189,8 @@ export interface PendingCloseAnnouncement {
   /** Authenticated sender of the announcement rumor. */
   senderPubkey: string;
   rumorId: string;
+  /** Sink carrier; absent on announcements stored by older clients. */
+  carrierEventId?: string;
   /** Rumor created_at, in SECONDS (as on the wire). */
   createdAt: number;
   /** Local receipt time (ms). */
@@ -450,7 +450,6 @@ export async function savePoll(poll: Poll): Promise<Poll | null> {
       }, false);
     });
     if (!wrote) return null;
-    postStoreChanged('polls', poll.groupId);
     return poll;
   }
   // The closed write (bug: poll-followups remediation 1): the poll is re-read
@@ -461,21 +460,16 @@ export async function savePoll(poll: Poll): Promise<Poll | null> {
   // Resolves the poll as stored afterwards (the earlier close when one won),
   // or null when there is no such poll.
   let stored: Poll | null = null;
-  let wrote = false;
   await enqueue(key, async () => {
     stored = await pollTxn<Poll | null>((txn, done) => {
       txn.read(key, (value) => {
         const result = writeClosedPoll(Array.isArray(value) ? (value as Poll[]) : [], poll);
-        if (result.wrote) {
-          txn.put(key, result.list);
-          wrote = true;
-        }
+        if (result.wrote) txn.put(key, result.list);
         done(result.stored);
       });
     }, null);
   });
   if (stored === null) return null;
-  if (wrote) postStoreChanged('polls', poll.groupId);
   // Also when an earlier close won (nothing written): a prune that failed at
   // that first close is retried by every later closed write of the poll.
   try {
@@ -692,7 +686,6 @@ export async function saveVoteIfNewer(vote: PollVote, opts: { requirePoll?: bool
       });
     }, false);
   });
-  if (wrote) postStoreChanged('polls', vote.groupId);
   return wrote;
 }
 
@@ -889,6 +882,7 @@ interface BoundedQueueSpec<T> {
   prefix: string;
   sender: (e: T) => string;
   isShaped: (e: unknown) => e is T;
+  add?: (entries: T[], entry: T) => T[];
 }
 
 /**
@@ -904,18 +898,20 @@ function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: Bo
   const loadLive = async (key: string, now: number): Promise<T[]> => liveEntries(await get<unknown>(key), spec.isShaped, now);
   // Read-decide-write in one readwrite transaction; nothing for a purged group
   // (see writeQueue and purgedGroups).
-  const modify = (groupId: string, now: number, compute: (entries: T[]) => T[]): Promise<void> => {
+  const modify = (groupId: string, now: number, compute: (entries: T[]) => T[], cancelled?: () => boolean): Promise<void> => {
     const key = keyOf(groupId);
     return enqueue(key, () =>
       pollTxn<void>((txn) => {
-        if (purgedGroups.has(groupId)) return;
-        txn.read(key, (raw) => writeQueue(txn, key, raw, compute(liveEntries(raw, spec.isShaped, now))));
+        if (cancelled?.() || purgedGroups.has(groupId)) return;
+        txn.read(key, (raw) => {
+          if (!cancelled?.()) writeQueue(txn, key, raw, compute(liveEntries(raw, spec.isShaped, now)));
+        });
       }, undefined),
     );
   };
   return {
     queue(groupId: string, entry: T, now: number): Promise<void> {
-      return modify(groupId, now, (entries) => addBoundedEntry(entries, entry, spec.sender));
+      return modify(groupId, now, (entries) => spec.add ? spec.add(entries, entry) : addBoundedEntry(entries, entry, spec.sender));
     },
     async load(groupId: string, pollId: string, now: number): Promise<T[]> {
       return (await loadLive(keyOf(groupId), now)).filter((e) => e.pollId === pollId);
@@ -923,8 +919,8 @@ function boundedQueue<T extends { pollId: string; receivedAt: number }>(spec: Bo
     loadAll(groupId: string, now: number): Promise<T[]> {
       return loadLive(keyOf(groupId), now);
     },
-    remove(groupId: string, match: (e: T) => boolean, now: number): Promise<void> {
-      return modify(groupId, now, (entries) => entries.filter((e) => !match(e)));
+    remove(groupId: string, match: (e: T) => boolean, now: number, cancelled?: () => boolean): Promise<void> {
+      return modify(groupId, now, (entries) => entries.filter((e) => !match(e)), cancelled);
     },
   };
 }
@@ -939,6 +935,19 @@ const closeQueue = boundedQueue<PendingPollClose>({
 const announcementQueue = boundedQueue<PendingCloseAnnouncement>({
   prefix: PENDING_ANNOUNCEMENTS_PREFIX,
   sender: (e) => e.senderPubkey,
+  add: (entries, entry) => {
+    const own = entries.filter((e) => e.senderPubkey === entry.senderPubkey);
+    const samePoll = own.filter((e) => e.pollId === entry.pollId);
+    if (samePoll.length === 0) return addBoundedEntry(entries, entry, (e) => e.senderPubkey);
+    // Preserve the first rumor for a poll/sender, but retain its distinct
+    // carriers. Each carrier counts toward both existing queue bounds.
+    if (!entry.carrierEventId || samePoll.some((e) => e.rumorId !== entry.rumorId || e.carrierEventId === entry.carrierEventId)) return entries;
+    // A redelivery supplies the carrier missing from a pre-upgrade hold.
+    const legacy = samePoll.find((e) => e.carrierEventId === undefined);
+    if (legacy) return entries.map((e) => e === legacy ? { ...e, carrierEventId: entry.carrierEventId } : e);
+    if (own.length >= MAX_PENDING_CLOSES_PER_SENDER) return entries;
+    return [...entries, entry].sort((a, b) => a.receivedAt - b.receivedAt).slice(-MAX_PENDING_CLOSES_PER_GROUP);
+  },
   isShaped: (e): e is PendingCloseAnnouncement => {
     if (!e || typeof e !== 'object') return false;
     const o = e as Record<string, unknown>;
@@ -946,6 +955,7 @@ const announcementQueue = boundedQueue<PendingCloseAnnouncement>({
       typeof o.pollId === 'string' &&
       typeof o.senderPubkey === 'string' &&
       typeof o.rumorId === 'string' &&
+      (o.carrierEventId === undefined || typeof o.carrierEventId === 'string') &&
       typeof o.createdAt === 'number' &&
       typeof o.receivedAt === 'number'
     );
@@ -993,16 +1003,18 @@ export function loadPendingCloseAnnouncements(
   return announcementQueue.load(groupId, pollId, now);
 }
 
-/** Remove exactly the given announcements (matched by poll, sender and rumor id). */
+/** Remove matching carriers; legacy carrierless entries retain their old removal behavior. */
 export function removePendingCloseAnnouncements(
   groupId: string,
   applied: PendingCloseAnnouncement[],
   now: number = Date.now(),
+  cancelled?: () => boolean,
 ): Promise<void> {
   return announcementQueue.remove(
     groupId,
-    (e) => applied.some((a) => a.pollId === e.pollId && a.senderPubkey === e.senderPubkey && a.rumorId === e.rumorId),
+    (e) => applied.some((a) => a.pollId === e.pollId && a.senderPubkey === e.senderPubkey && a.rumorId === e.rumorId && (a.carrierEventId === e.carrierEventId || e.carrierEventId === undefined)),
     now,
+    cancelled,
   );
 }
 
@@ -1063,6 +1075,15 @@ export async function clearPollData(groupId: string): Promise<void> {
  * deleted groups are also removed.
  */
 export async function clearAllPollData(): Promise<void> {
+  await clearPollDataByNamespace(false);
+}
+
+/** Clear group poll rows while preserving any direct-message namespace. */
+export async function clearAllGroupPollData(): Promise<void> {
+  await clearPollDataByNamespace(true);
+}
+
+async function clearPollDataByNamespace(groupsOnly: boolean): Promise<void> {
   // Let an in-flight migration finish first, so it cannot write keys back
   // after the reset deleted them.
   if (migration) await migration.catch(() => {});
@@ -1075,7 +1096,8 @@ export async function clearAllPollData(): Promise<void> {
         k.startsWith(PENDING_PREFIX) ||
         k.startsWith(PENDING_CLOSES_PREFIX) ||
         k.startsWith(PENDING_ANNOUNCEMENTS_PREFIX) ||
-        k.startsWith(SEQ_RESERVATIONS_PREFIX)),
+        k.startsWith(SEQ_RESERVATIONS_PREFIX)) &&
+      (!groupsOnly || ![POLLS_PREFIX, VOTES_PREFIX, PENDING_PREFIX, PENDING_CLOSES_PREFIX, PENDING_ANNOUNCEMENTS_PREFIX, SEQ_RESERVATIONS_PREFIX].some((prefix) => k.startsWith(`${prefix}dm:`))),
   );
   if (targets.length > 0) {
     await delMany(targets);
@@ -1134,6 +1156,7 @@ export async function recomputePoll(
   pollId: string,
   signals: readonly RecomputeSignal[],
   selfPubkeyHex = '',
+  cancelled?: () => boolean,
 ): Promise<boolean> {
   await settleVotesMigration();
   const pollsK = pollsKey(groupId);
@@ -1145,7 +1168,7 @@ export async function recomputePoll(
     enqueue(votesK, () =>
       enqueue(pendingK, () =>
         enqueue(closesK, async () => {
-          if (purgedGroups.has(groupId)) return;
+          if (cancelled?.() || purgedGroups.has(groupId)) return;
           const [rawPolls, rawVotes, rawPending, rawCloses] = await Promise.all([
             get<unknown>(pollsK),
             get<unknown>(votesK),
@@ -1170,10 +1193,9 @@ export async function recomputePoll(
             selfPubkeyHex,
           );
           const after = visibleState(folded.polls.find((p) => p.id === pollId), folded.votes);
-          changed = before !== after;
-
           await pollTxn<void>((txn) => {
-            if (purgedGroups.has(groupId)) return; // purged meanwhile: write nothing
+            if (cancelled?.() || purgedGroups.has(groupId)) return;
+            changed = before !== after;
             if (folded.polls.length === 0) {
               if (rawPolls !== undefined) txn.delete(pollsK);
             } else if (JSON.stringify(folded.polls) !== JSON.stringify(storedPolls) || !Array.isArray(rawPolls)) {
@@ -1187,7 +1209,6 @@ export async function recomputePoll(
             writeQueue(txn, pendingK, rawPending, folded.pendingVotes);
             writeQueue(txn, closesK, rawCloses, folded.pendingCloses);
           }, undefined);
-          if (changed) postStoreChanged('polls', groupId);
         }),
       ),
     ),

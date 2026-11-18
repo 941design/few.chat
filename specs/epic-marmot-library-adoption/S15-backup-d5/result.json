@@ -1,0 +1,32 @@
+{
+  "story_id": "S15",
+  "status": "done",
+  "remediation_rounds": 1,
+  "files_created": [],
+  "files_modified": [
+    "app/src/lib/backup/relayBackup.ts",
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/backup/coldStartRetry.test.ts",
+    "app/tests/unit/backup/publishGuardRealPublish.test.ts",
+    "app/src/lib/i18n.ts"
+  ],
+  "modules_touched": [
+    "backup"
+  ],
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "before": "204 backup tests passed",
+    "after": "142 backup tests passed, including decryption of the actual published event, wrong-key refusal and legacy restore without group writes",
+    "typecheck": "tsc -p tsconfig.tests-marmot.json --noEmit passed",
+    "pending": "S26 recovery browser specs; old kind-30051 publisher removal in S18/S22"
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol accepted after strengthening the actual publish test and updating restore copy",
+    "adversarial": "GPT-6 Astra clean; independently ran the 142 backup tests"
+  }
+}

@@ -25,6 +25,7 @@ import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
 import { readIdbRecord } from './helpers/idb-record';
 import { inviteContactViaPicker, acceptInvitationAndWaitJoined } from './helpers/group-setup';
+import { waitForHistoryDispatch } from './helpers/session-cutover';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3100';
 
@@ -38,7 +39,7 @@ const CHAT_IDB_STORE = 'keyval';
  */
 async function bootUserWithProfile(
   browser: { newContext: (opts: object) => Promise<BrowserContext> },
-  user: typeof USER_A,
+  user: typeof USER_A | typeof USER_B,
   nickname: string,
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ baseURL: BASE_URL });
@@ -84,17 +85,12 @@ async function getMessageIdByText(page: Page, text: string): Promise<string> {
   return testId.replace(/^msg-/, '');
 }
 
-type ChatIdbWrite = { groupId: string; messageId: string };
 
-/**
- * Every chat-row insert reported by the dev-only `__fewTest.onChatIdbWrite`
- * hook since the page booted (installed inline in beforeAll), in order.
- * The counter is NOT scoped to one message: background lifecycle
- * announcements (e.g. the `accepted` announcement Alice authors when Bob's
- * join profile reaches her) also fire it, so assertions must filter by id.
- */
-async function getChatIdbWrites(page: Page): Promise<ChatIdbWrite[]> {
-  return page.evaluate(() => (window as any).__chatIdbWrites ?? []);
+async function badgeCount(page: Page, testId: string): Promise<number> {
+  return page.evaluate((id) => {
+    const badge = document.querySelector(`[data-testid="${id}"]`);
+    return badge ? parseInt(badge.textContent || '0', 10) || 0 : 0;
+  }, testId);
 }
 
 // ─── Module-scoped state shared across serial tests ───────────────────────
@@ -118,12 +114,10 @@ test.describe.serial('groups-dispatch-isolation', () => {
     await contextA.addInitScript(({ privateKeyHex, pubkeyHex, seedHex, nickname }) => {
       localStorage.setItem('lp_nostrIdentity_v1', JSON.stringify({ privateKeyHex, pubkeyHex, seedHex }));
       localStorage.setItem('lp_userProfile_v1', JSON.stringify({ nickname, avatar: null }));
-      // IDB write recorder for AC-AR-22
       (window as any).__fewTest = (window as any).__fewTest ?? {};
       (window as any).__chatIdbWrites = [];
-      (window as any).__fewTest.onChatIdbWrite = (args: { groupId: string; messageId: string }) => {
-        (window as any).__chatIdbWrites.push({ groupId: args.groupId, messageId: args.messageId });
-      };
+      (window as any).__fewTest.onChatIdbWrite = (event: { groupId: string; messageId: string }) => { (window as any).__chatIdbWrites.push(event); };
+
     }, {
       privateKeyHex: USER_A.privateKeyHex,
       pubkeyHex: USER_A.pubkeyHex,
@@ -195,18 +189,30 @@ test.describe.serial('groups-dispatch-isolation', () => {
    * Scenario 1 (AC-AR-21, AC-AR-22): own-send produces exactly one IDB row
    * and exactly one rendered bubble.
    *
-   * The IDB write hook (onChatIdbWrite) must fire exactly once FOR THE SENT
-   * MESSAGE: the optimistic write from sendMessage.  marmot-ts drops the
-   * relay echo of an own-send (#sentEventIds), so it normally never reaches
-   * the dispatcher; should one ever get through, appendMessage's
-   * insert-if-absent check (same rumor id) skips it without firing the hook,
-   * so the sent id is still reported once.  The hook is global to the page, so it is
-   * filtered by message id: unrelated background writes (the `accepted`
-   * lifecycle announcement Alice authors when Bob's join profile arrives)
-   * legitimately fire it too and are not a double-write.
+   * The IDB write hook is filtered by message id: unrelated background
+   * writes, including invitation announcements, are not double-writes.
+   * The retained history row must also be dispatched, proving that the own
+   * echo reached the sink and confirmed the optimistic message.
    */
   test('own-send: exactly one IDB row and one rendered bubble (AC-AR-21, AC-AR-22)', async () => {
+    test.setTimeout(120_000);
     const uniqueText = `dispatch-isolation-${Date.now()}`;
+    // Hold this specific own echo at the real sink until Alice leaves the view.
+    await pageA.evaluate(({ groupId, content }) => {
+      const w = window as any;
+      if (!w.__fewTest?.marmotSession) throw new Error('marmotSession test hook unavailable');
+      w.__ownRowStatusEvents = [];
+      w.__stopObservingOwnRows = w.__fewTest.marmotSession.observeOwnRowStatus(groupId, (event: { id: string; status: string }) => {
+        w.__ownRowStatusEvents.push({ id: event.id, status: event.status });
+      });
+      w.__fewTest.beforeGroupDispatch = (event: { groupId: string; content: string; rumorId: string }) => {
+        if (event.groupId !== groupId || !event.content.includes(content)) return;
+        w.__heldOwnRumor = event.rumorId;
+        return new Promise<void>((resolve) => { w.__releaseOwnRumor = resolve; });
+      };
+    }, { groupId: sharedGroupId, content: uniqueText });
+    // Wait for opening the group to clear any unread invitation announcement.
+    await expect(pageB.getByTestId('groups-nav-badge')).toHaveCount(0);
     await pageA.getByTestId('chat-input').fill(uniqueText);
     await pageA.getByTestId('chat-send-btn').click();
 
@@ -216,9 +222,26 @@ test.describe.serial('groups-dispatch-isolation', () => {
     // Capture the message id from the rendered bubble.
     sharedMessageId = await getMessageIdByText(pageA, uniqueText);
 
-    // Allow the relay round-trip time to settle — if a double-write were to
-    // occur it would happen within this window.
-    await pageA.waitForTimeout(5_000);
+    await expect.poll(() => pageA.evaluate(() => (window as any).__heldOwnRumor), { timeout: 30_000 }).toBe(sharedMessageId);
+    await pageA.getByTestId('group-detail-page').getByRole('link', { name: /Groups/i }).click();
+    await expect(pageA.getByTestId('groups-list')).toBeVisible();
+    const ownBaseline = await badgeCount(pageA, 'groups-nav-badge');
+    await pageA.evaluate(() => {
+      const w = window as any;
+      delete w.__fewTest.beforeGroupDispatch;
+      w.__releaseOwnRumor();
+    });
+    await waitForHistoryDispatch(pageA, USER_A.pubkeyHex, sharedGroupId, sharedMessageId);
+    await expect.poll(() => pageA.evaluate((id) => {
+      const events = (window as any).__ownRowStatusEvents as Array<{ id: string; status: string }>;
+      return events.filter((event) => event.id === id).map((event) => event.status);
+    }, sharedMessageId)).toContain('confirmed');
+    await pageA.evaluate(() => (window as any).__stopObservingOwnRows());
+    expect(await badgeCount(pageA, 'groups-nav-badge')).toBe(ownBaseline);
+    // Bob's active view is a positive delivery control; it must remain read.
+    await expect(pageB.locator(`[data-testid="msg-${sharedMessageId}"]`)).toBeVisible({ timeout: 30_000 });
+    await waitForHistoryDispatch(pageB, USER_B.pubkeyHex, sharedGroupId, sharedMessageId);
+    await expect(pageB.getByTestId('groups-nav-badge')).toHaveCount(0);
 
     // --- IDB row count assertion (AC-AR-21) ---
     // Read the raw array stored under "few:messages:{groupId}".
@@ -237,17 +260,21 @@ test.describe.serial('groups-dispatch-isolation', () => {
     // the count at the IDB level after all writes have settled).
     expect(matching).toHaveLength(1);
 
+    await pageA.locator('[data-testid^="group-card-"]', { hasText: 'Dispatch Isolation Test' }).click();
     // --- Rendered bubble count (AC-AR-21) ---
     // Exactly one [data-testid="msg-{id}"] element must be in the DOM.
     await expect(pageA.locator(`[data-testid="msg-${sharedMessageId}"]`)).toHaveCount(1);
 
-    // --- onChatIdbWrite hook (AC-AR-22) ---
-    // Exactly one insert for the sent message: the optimistic write.  Writes
-    // for other messages (lifecycle announcements) are out of scope here.
-    const writes = await getChatIdbWrites(pageA);
-    const sentWrites = writes.filter((w) => w.messageId === sharedMessageId);
-    expect(sentWrites).toHaveLength(1);
-    expect(sentWrites[0].groupId).toBe(sharedGroupId);
+    const writes = await pageA.evaluate(() => (window as any).__chatIdbWrites as Array<{ groupId: string; messageId: string }>);
+    expect(writes.filter((write) => write.messageId === sharedMessageId)).toEqual([{ groupId: sharedGroupId, messageId: sharedMessageId }]);
+    // D13: own echoes reconcile the optimistic row without creating unread.
+    await pageA.goto('/groups/');
+    await expect(pageA.getByTestId(`group-unread-badge-${sharedGroupId}`)).toHaveCount(0);
+    await pageA.reload();
+    await expect(pageA.getByTestId(`group-unread-badge-${sharedGroupId}`)).toHaveCount(0);
+    await pageA.locator('[data-testid^="group-card-"]', { hasText: 'Dispatch Isolation Test' }).click();
+    await expect(pageA.locator(`[data-testid="msg-${sharedMessageId}"]`)).toHaveCount(1);
+
   });
 
   /**
@@ -258,6 +285,7 @@ test.describe.serial('groups-dispatch-isolation', () => {
    * the relay delivers the event.
    */
   test('peer sees exactly one bubble (AC-AR-21)', async () => {
+    test.setTimeout(120_000);
     // Bob is already on the group detail page from beforeAll.
     // Wait for Alice's message to propagate.
     await expect(pageB.locator(`[data-testid="msg-${sharedMessageId}"]`)).toBeVisible({ timeout: 30_000 });
@@ -274,5 +302,22 @@ test.describe.serial('groups-dispatch-isolation', () => {
     expect(storedMessages).not.toBeNull();
     const matching = (storedMessages ?? []).filter((m) => m.id === sharedMessageId);
     expect(matching).toHaveLength(1);
+
+    // With Bob off the group, a second real peer delivery must raise both
+    // the domain bell and this group's unread badge exactly once.
+    await pageB.goto('/groups/');
+    await expect(pageB.getByTestId('groups-list')).toBeVisible({ timeout: 60_000 });
+    const navBaseline = await badgeCount(pageB, 'groups-nav-badge');
+    const groupBadge = `group-unread-badge-${sharedGroupId}`;
+    const unreadBaseline = await badgeCount(pageB, groupBadge);
+    const content = `dispatch-peer-unread-${Date.now()}`;
+    await pageA.getByTestId('chat-input').fill(content);
+    await pageA.getByTestId('chat-send-btn').click();
+    const id = await getMessageIdByText(pageA, content);
+    await waitForHistoryDispatch(pageB, USER_B.pubkeyHex, sharedGroupId, id);
+    await expect.poll(() => badgeCount(pageB, groupBadge), { timeout: 30_000 }).toBe(unreadBaseline + 1);
+    await expect.poll(() => badgeCount(pageB, 'groups-nav-badge'), { timeout: 30_000 }).toBe(navBaseline + 1);
+    await pageB.locator('[data-testid^="group-card-"]', { hasText: 'Dispatch Isolation Test' }).click();
+    await expect(pageB.locator(`[data-testid="msg-${id}"]`)).toBeVisible();
   });
 });

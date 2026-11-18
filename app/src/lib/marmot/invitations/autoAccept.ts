@@ -7,23 +7,25 @@
  * (ADR-002, pull-only).
  *
  * The existing AC-AUTO correlation rules are kept unchanged. A request is matched on the SPONSOR (the admin this device
- * asked: `sponsorAccount === record.adminPubkeyHex`) and only while it is unexpired (the store's TTL filter). The
+ * asked: `sponsorAccount === record.adminPubkeyHex`) and only for the authenticated requester, while the request
+ * is unexpired and the invitation was received at or after the request's send time. The
  * requester never learns the group id (an invite link carries admin, nonce and name), so "the same group" is the group
  * NAME, compared after the same normalisation the invite context uses (`sanitizeContextName`):
- *   - the invitation's name is known (a context from that sponsor for that group is held): the candidates are narrowed
- *     to the records of that name and EXACTLY ONE must remain; zero or several never guess;
+ *   - the invitation's name is known (a context from that sponsor for that group is held): retry its matching claim
+ *     if present, otherwise require exactly one unclaimed record of that name;
  *   - the name is NOT known (no context yet, or none ever): NEVER auto-accepted, even with a single record. The sponsor
  *     alone is not enough consent (a sponsor we asked about one group could invite us into another); the invitation stays
  *     a manual card, and `evaluate()` re-runs the correlation when the context arrives.
  * A record of another admin never matches, so an invitation from anyone else (stranger, other group or other sponsor)
  * stays pending with zero accept calls.
  *
- * Exactly once: the accept runs on the owned job queue (the listener only enqueues, as its last action, and enqueue
- * calls collapse while one is queued), jobs run one at a time, an invitation id that was accepted is remembered and never
- * accepted again, and the record is consumed after a SUCCESSFUL accept (a failed accept leaves it, so the user can accept
- * by hand and a later event may retry; ids whose accept failed are not remembered). Only invitations the pending view SHOWS
- * are considered (`view.refresh()` returns the shown set, so a blocked sponsor's invitation is never auto-accepted: a block
- * beats a correlation). The job's LAST action is `view.scheduleRefresh()` (the pending list changed).
+ * The owned queue runs one job at a time. Inside the group lock, the accept action calls back into auto-accept
+ * to recheck eligibility and commit a claim binding the request to the invitation id. A failed accept leaves
+ * the invitation available for manual acceptance or retry.
+ * A successful accept is remembered in the session, then the claimed record is deleted. If deletion fails or the
+ * process stops before cleanup, the persisted claim prevents another invitation from using the record.
+ * Only invitations returned by `view.refresh()` are considered, so a blocked sponsor's invitation is never auto-accepted.
+ * The job's last action is `view.scheduleRefresh()`.
  *
  * Purge exclusion: the accept goes through `actions.accept`, which runs the library accept inside the purger's per-group
  * lock, so it waits for a running purge of the invitation's group and a purge started meanwhile waits for it. The
@@ -34,35 +36,42 @@
  * after the invitation (the name just became known).
  *
  * Re-entrancy: `onInboxDisposition` is a client listener: synchronous, no client call, enqueue last. `view.refresh`,
- * `actions.accept` and the stores run inside the job only. Pure module: ports are injected and validated at
- * construction; no React, no storage (the outbound store is a port, its production adapter lives in
- * `outboundJoinRequests.ts`).
+ * `actions.accept` and the store ports run inside the job only. Ports are injected and validated at construction.
  */
 import type { PendingInvitation } from '@941design/marmot';
 import { sanitizeContextName } from './inviteContext';
-import type { InvitationActions } from './acceptDecline';
+import type { InvitationActions, VerifyInvitationAccept } from './acceptDecline';
 import type { LocalGroupPurger } from '../membership/purgeLocalGroup';
+import {
+  isOutboundJoinRequestExpired,
+  type OutboundJoinRequestClaimResult,
+  type OutboundJoinRequestConsent,
+} from '../outboundJoinRequests';
 import type { PendingInvitationView } from './pendingView';
 
-/** The slice of an outbound join-request record the correlation reads. */
-export interface OutboundRequestRef {
-  readonly nonce: string;
-  /** Hex pubkey of the admin the request was sent to. */
-  readonly adminPubkeyHex: string;
-  /** The group name from the invite link. */
-  readonly groupName: string;
-}
+export type OutboundRequestRef = Readonly<OutboundJoinRequestConsent>;
 
-export interface AutoAcceptDeps {
+interface AutoAcceptDeps {
+  accountPubkey: string;
+  /** Throws if the session no longer owns the lease. */
+  assertLease: () => void;
+  now?: () => number;
   view: Pick<PendingInvitationView, 'refresh' | 'scheduleRefresh'>;
-  actions: Pick<InvitationActions, 'accept'>;
+  actions: {
+    /** Runs beforeJoin inside the group lock. False or rejection aborts before calling the SDK. */
+    accept: (id: string, beforeJoin: VerifyInvitationAccept) => ReturnType<InvitationActions['accept']>;
+  };
   /** `AccountClientHandle.enqueue`; `false` = not accepted (queue disposed). */
   enqueue: (job: () => Promise<void>) => boolean | void;
   outbound: {
     /** The UNEXPIRED outbound records of one admin (production: `loadUnexpiredOutboundJoinRequestsForAdmin`). */
-    loadUnexpiredForAdmin: (adminPubkeyHex: string) => Promise<readonly OutboundRequestRef[]>;
-    /** Consumes one record by nonce (production: `deleteOutboundJoinRequest`). */
-    consume: (nonce: string) => Promise<void>;
+    loadUnexpiredForAdmin: (accountPubkey: string, adminPubkeyHex: string) => Promise<readonly OutboundRequestRef[]>;
+    /** Returns an acquisition token only when this call created the claim. */
+    claim: (accountPubkey: string, record: OutboundRequestRef, invitationId: string) => Promise<OutboundJoinRequestClaimResult>;
+    /** Clears the exact acquisition and returns false if it has already changed or disappeared. */
+    releaseClaim: (accountPubkey: string, record: OutboundRequestRef, invitationId: string, token: string) => Promise<boolean>;
+    /** Deletes this send only if it is still claimed by this invitation id. */
+    consume: (accountPubkey: string, record: OutboundRequestRef, invitationId: string) => Promise<void>;
   };
   /**
    * The local purger (`LocalGroupPurger`), REQUIRED. The exclusion itself is the per-group lock inside
@@ -75,7 +84,7 @@ export interface AutoAcceptDeps {
   onError?: (error: unknown) => void;
 }
 
-export interface AutoAccept {
+interface AutoAccept {
   /** Client-listener entry (`clientEvents.inboxDisposition`): frame-safe, only enqueues the correlation job. */
   onInboxDisposition: (disposition: { readonly kind: string }) => void;
   /** Enqueues the correlation job (startup, a late invite context). Frame-safe. */
@@ -93,15 +102,22 @@ const lower = (s: string) => s.toLowerCase();
 
 export function createAutoAccept(deps: AutoAcceptDeps): AutoAccept {
   if (!deps) throw new TypeError('createAutoAccept: dependencies are required');
+  if (typeof deps.accountPubkey !== 'string' || !deps.accountPubkey) {
+    throw new TypeError('createAutoAccept: accountPubkey is required');
+  }
+  requireFn(deps.assertLease, 'assertLease');
   requireFn(deps.view?.refresh, 'view.refresh');
   requireFn(deps.view?.scheduleRefresh, 'view.scheduleRefresh');
   requireFn(deps.actions?.accept, 'actions.accept');
   requireFn(deps.enqueue, 'enqueue');
   requireFn(deps.outbound?.loadUnexpiredForAdmin, 'outbound.loadUnexpiredForAdmin');
+  requireFn(deps.outbound?.claim, 'outbound.claim');
+  requireFn(deps.outbound?.releaseClaim, 'outbound.releaseClaim');
   requireFn(deps.outbound?.consume, 'outbound.consume');
   requireFn(deps.groupNameOf, 'groupNameOf');
   requireFn(deps.purge?.whenPurged, 'purge.whenPurged');
-  const { view, actions, enqueue, outbound, groupNameOf } = deps;
+  const { accountPubkey, assertLease, view, actions, enqueue, outbound, groupNameOf } = deps;
+  const now = deps.now ?? Date.now;
   const onError = deps.onError ?? ((e: unknown) => console.error('[marmot/invitations] auto-accept', e));
 
   let disposed = false;
@@ -109,28 +125,67 @@ export function createAutoAccept(deps: AutoAcceptDeps): AutoAccept {
   let running: Promise<void> = Promise.resolve();
   /** Invitation ids whose accept succeeded: never accepted twice. */
   const accepted = new Set<string>();
-  /** Nonces whose record was used by a successful accept, even when deleting it failed: never matched again. */
-  const consumedNonces = new Set<string>();
 
   /** The single outbound record this invitation answers, or `undefined` (never guesses). */
   async function resolveRecord(invitation: PendingInvitation): Promise<OutboundRequestRef | undefined> {
-    const candidates = await outbound.loadUnexpiredForAdmin(lower(invitation.sponsorAccount));
-    const forSponsor = candidates.filter(
-      (c) => lower(c.adminPubkeyHex) === lower(invitation.sponsorAccount) && !consumedNonces.has(c.nonce),
-    );
-    if (forSponsor.length === 0) return undefined;
+    const sponsor = lower(invitation.sponsorAccount);
+    const candidates = await outbound.loadUnexpiredForAdmin(accountPubkey, sponsor);
     const claimed = groupNameOf(invitation);
     if (claimed === undefined) return undefined; // consent needs the sponsor-claimed name
     const name = sanitizeContextName(claimed);
     if (name.length === 0) return undefined;
-    const byName = forSponsor.filter((c) => sanitizeContextName(c.groupName) === name);
-    return byName.length === 1 ? byName[0] : undefined;
+    const checkedAt = now();
+    const byName = candidates.filter((record) =>
+      record.accountPubkey === accountPubkey &&
+      lower(record.adminPubkeyHex) === sponsor &&
+      invitation.receivedAt >= record.sentAt &&
+      !isOutboundJoinRequestExpired(record, checkedAt) &&
+      sanitizeContextName(record.groupName) === name,
+    );
+    const existing = byName.filter((c) => c.claimedInvitationId === invitation.id);
+    const eligible = existing.length > 0 ? existing : byName.filter((c) => c.claimedInvitationId === undefined);
+    return eligible.length === 1 ? eligible[0] : undefined;
+  }
+
+  async function authorizeJoin(invitation: PendingInvitation, record: OutboundRequestRef): Promise<boolean> {
+    if (disposed) return false;
+    assertLease();
+    const current = (await view.refresh()).find((item) => item.id === invitation.id);
+    if (!current || current.groupId !== invitation.groupId ||
+      lower(current.sponsorAccount) !== lower(invitation.sponsorAccount)) return false;
+
+    const fresh = await resolveRecord(current);
+    if (disposed || !fresh || fresh.nonce !== record.nonce || fresh.sentAt !== record.sentAt ||
+      fresh.adminPubkeyHex !== record.adminPubkeyHex || fresh.groupName !== record.groupName) return false;
+    assertLease();
+    const claim = await outbound.claim(accountPubkey, fresh, invitation.id);
+    if (claim?.kind !== 'acquired' && claim?.kind !== 'existing') return false;
+
+    let authorized = false;
+    try {
+      if (disposed) return false;
+      const name = groupNameOf(current);
+      if (name === undefined || sanitizeContextName(name) !== sanitizeContextName(fresh.groupName)) return false;
+      assertLease();
+      authorized = !isOutboundJoinRequestExpired(fresh, now());
+      return authorized;
+    } finally {
+      // A veto here precedes SDK accept. An earlier claim may already have reached the SDK.
+      if (!authorized && claim.kind === 'acquired') {
+        try {
+          assertLease();
+          await outbound.releaseClaim(accountPubkey, fresh, invitation.id, claim.token);
+        } catch (error) {
+          onError(new Error('Could not release the new outbound join request claim after the accept veto', { cause: error }));
+        }
+      }
+    }
   }
 
   async function correlate(): Promise<void> {
-    let shown: readonly PendingInvitation[] = [];
     try {
-      shown = await view.refresh();
+      assertLease();
+      const shown = await view.refresh();
       for (const invitation of shown) {
         if (disposed) return;
         if (accepted.has(invitation.id)) continue;
@@ -142,21 +197,28 @@ export function createAutoAccept(deps: AutoAcceptDeps): AutoAccept {
           continue; // correlation never blocks the pending fallback
         }
         if (!record) continue;
+        let authorized: boolean | undefined;
         try {
-          // Wait out a running purge of the same group id first; the actual exclusion (a purge starting meanwhile) is the
-          // lock `actions.accept` holds around the library accept.
           await deps.purge.whenPurged(invitation.groupId);
-          await actions.accept(invitation.id);
+          if (disposed) return;
+          await actions.accept(invitation.id, async () => {
+            authorized = await authorizeJoin(invitation, record);
+            return authorized;
+          });
         } catch (e) {
-          onError(e); // stays pending: the user can accept by hand; the record is kept
+          if (authorized !== false) onError(e);
           continue;
         }
+        if (!authorized) continue;
         accepted.add(invitation.id);
-        consumedNonces.add(record.nonce);
-        try {
-          await outbound.consume(record.nonce);
-        } catch (e) {
-          onError(e);
+        for (let attempt = 0; attempt < 2 && !disposed; attempt += 1) {
+          assertLease();
+          try {
+            await outbound.consume(accountPubkey, record, invitation.id);
+            break;
+          } catch (e) {
+            onError(e);
+          }
         }
       }
     } catch (e) {

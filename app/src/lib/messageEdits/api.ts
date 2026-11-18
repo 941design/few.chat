@@ -153,7 +153,7 @@ import {
 } from '@/src/lib/marmot/chatPersistence';
 import { DELETE_EDIT_RUMOR_KIND, hasEditMarkerTag } from '@/src/lib/messageEdits/rumor';
 import { isInformativeAnnouncementContent } from '@/src/lib/marmot/announcementFamily';
-import type { AuthenticatedSender } from '@/src/lib/marmot/applicationRumorDispatcher';
+import type { AuthenticatedSender } from '@/src/lib/marmot/handlers/types';
 import type { RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 
 // ─── Public types ─────────────────────────────────────────────────────────
@@ -458,14 +458,15 @@ async function findPendingAll(threadKey: string, targetId: string): Promise<Pend
  * self-reported clock; well-behaved devices never trigger this because
  * their revs never approach the skew ceiling.
  */
-async function insertOrCollapsePending(candidate: PendingSignal): Promise<void> {
+async function insertOrCollapsePending(candidate: PendingSignal, cancelled?: () => boolean): Promise<void> {
   const all = await readPendingAll();
+  if (cancelled?.()) return;
   const idx = all.findIndex(
     (e) => e.threadKey === candidate.threadKey && e.targetId === candidate.targetId && sameAuthor(e.authorPubkeyHex, candidate.authorPubkeyHex),
   );
   if (idx === -1) {
     const next = await evictOldestPendingIfOverCap([...all, candidate]);
-    await writePendingAll(next);
+    if (!cancelled?.()) await writePendingAll(next);
     return;
   }
   const existing = all[idx];
@@ -569,10 +570,13 @@ async function writeSlotMeta(
     lastKind: 'delete' | 'edit';
     lastAuthorPubkeyHex: string;
   },
+  cancelled?: () => boolean,
+  receivedAt?: number,
 ): Promise<void> {
   const all = await readSlotMetaAll();
+  if (cancelled?.()) return;
   const idx = all.findIndex((m) => m.threadKey === threadKey && m.slotId === slotId);
-  const entry: SlotMeta = { threadKey, slotId, ...data, lastTouchedAt: Date.now() };
+  const entry: SlotMeta = { threadKey, slotId, ...data, lastTouchedAt: receivedAt ?? Date.now() };
   if (idx === -1) {
     await set(SLOT_META_KEY, evictOldestSlotMetaIfOverCap([...all, entry]));
   } else {
@@ -593,8 +597,7 @@ async function writeSlotMeta(
  * read-modify-write runs as ONE readwrite IndexedDB transaction on idb-keyval's
  * default database/object store (the same key `get`/`set` use) — IndexedDB
  * serializes overlapping readwrite transactions, in every tab, with no lock
- * fallback needed. Never idb-keyval `update()` (not transaction-bound; see
- * rumorJournal.ts). Created lazily: nothing touches IndexedDB at module init.
+ * fallback needed. The store opens lazily on the first pin operation.
  */
 let pinStore: UseStore | null = null;
 function pinTxnStore(): UseStore {
@@ -636,7 +639,7 @@ function modifyPinsAtomically<R>(modify: (all: PinnedRev[]) => { next: PinnedRev
  * read or write rejects (nothing applied yet; the caller's journal replays
  * the rumor).
  */
-async function resolvePinnedRev(threadKey: string, rumorId: string, rev: number, capped: boolean): Promise<number> {
+async function resolvePinnedRev(threadKey: string, rumorId: string, rev: number, capped: boolean, cancelled?: () => boolean, receivedAt?: number): Promise<number> {
   const find = (all: PinnedRev[]) => all.find((p) => p.threadKey === threadKey && p.rumorId === rumorId);
   const pinned = find(await readArray<PinnedRev>(PINNED_REVS_KEY));
   if (pinned) return pinned.rev;
@@ -644,7 +647,8 @@ async function resolvePinnedRev(threadKey: string, rumorId: string, rev: number,
   return modifyPinsAtomically((all) => {
     const existing = find(all);
     if (existing) return { next: null, result: existing.rev };
-    return { next: evictOldestIfOverCap([...all, { threadKey, rumorId, rev, receivedAt: Date.now() }]), result: rev };
+    if (cancelled?.()) return { next: null, result: rev };
+    return { next: evictOldestIfOverCap([...all, { threadKey, rumorId, rev, receivedAt: receivedAt ?? Date.now() }]), result: rev };
   });
 }
 
@@ -936,6 +940,8 @@ async function applyToKnownSlotCore(
   threadKey: string,
   row: ChatMessage,
   incoming: KnownSlotIncoming,
+  cancelled?: () => boolean,
+  receivedAt?: number,
 ): Promise<{ slotId: string; kind: ChangeResultKind }> {
   const meta = await readSlotMeta(threadKey, row.id);
   const captureOriginal = incoming.captureOriginal ?? isGroupThreadKey(threadKey);
@@ -975,7 +981,7 @@ async function applyToKnownSlotCore(
     }
   }
 
-  if (!wins) return { slotId: row.id, kind: 'noop' };
+  if (!wins || cancelled?.()) return { slotId: row.id, kind: 'noop' };
 
   // The row's write-once base (`original`) is captured by the very write below
   // (chatPersistence `mergePatchCore`), so a recompute can always reset the slot.
@@ -1001,23 +1007,24 @@ async function applyToKnownSlotCore(
           row.id,
           incoming.rev,
           { senderPubkeyHex: incoming.senderPubkeyHex, adminPubkeysHex: incoming.adminPubkeysHex },
-          { ...TOMBSTONE_OPTIONS, captureOriginal },
+          { ...TOMBSTONE_OPTIONS, captureOriginal, ...(cancelled && { cancelled }) },
         )
-      : await tombstoneMessage(threadKey, row.id, incoming.rev, undefined, { ...TOMBSTONE_OPTIONS, captureOriginal });
+      : await tombstoneMessage(threadKey, row.id, incoming.rev, undefined, { ...TOMBSTONE_OPTIONS, captureOriginal, ...(cancelled && { cancelled }) });
     if (!applied) return { slotId: row.id, kind: 'noop' };
   } else {
     // Always pass tombstoned:false explicitly — MessagePatch is merge-only
     // (S1 carry-forward obligation): omitting the field would leave an
     // already-tombstoned row hidden even though this edit just won.
-    await updateMessageInPlace(threadKey, row.id, editPatch(incoming.content ?? '', incoming.rev), { captureOriginal });
+    await updateMessageInPlace(threadKey, row.id, editPatch(incoming.content ?? '', incoming.rev), { captureOriginal, ...(cancelled && { cancelled }) });
   }
 
+  if (cancelled?.()) return { slotId: row.id, kind: 'noop' };
   await writeSlotMeta(threadKey, row.id, {
     lastRumorId: incoming.rumorId,
     lastRev: incoming.rev,
     lastKind: incoming.kind,
     lastAuthorPubkeyHex: incoming.senderPubkeyHex,
-  });
+  }, cancelled, receivedAt);
 
   return { slotId: row.id, kind: incoming.kind };
 }
@@ -1031,8 +1038,10 @@ async function applyToKnownSlot(
   threadKey: string,
   row: ChatMessage,
   incoming: KnownSlotIncoming,
+  cancelled?: () => boolean,
+  receivedAt?: number,
 ): Promise<ChangeResult> {
-  const result = await applyToKnownSlotCore(threadKey, row, incoming);
+  const result = await applyToKnownSlotCore(threadKey, row, incoming, cancelled, receivedAt);
   return { thread, ...result };
 }
 
@@ -1513,6 +1522,7 @@ interface FoldEnv {
    * folded history row's `receivedAt`, so the same remaining rows re-buffer identical entries whatever the clock.
    */
   bufferedAtMs: number;
+  cancelled?: () => boolean;
 }
 
 /**
@@ -1527,19 +1537,21 @@ async function foldClassifiedSignal(
   senderPubkey: string,
   classification: Exclude<Classification, { type: 'discard' }>,
 ): Promise<ChangeResult> {
-  const { thread, threadKey, slots, captureOriginal, bufferedAtMs: pendingStamp } = env;
+  const { thread, threadKey, slots, captureOriginal, bufferedAtMs: pendingStamp, cancelled } = env;
+  const receivedAt = slots ? pendingStamp : undefined;
   const touches = (id: string) => !slots || slots.has(id);
 
   // Replay-deterministic rev (see PinnedRev): a capped rev is pinned at
   // first processing and reused by every later one.
-  classification.rev = await resolvePinnedRev(threadKey, rumor.id, classification.rev, classification.capped);
+  classification.rev = await resolvePinnedRev(threadKey, rumor.id, classification.rev, classification.capped, cancelled, receivedAt);
 
   // Authorization needs the target row, i.e. storage: a failed read here
   // rejects (the signal is retried, never applied unauthorized) — the one
   // validity check that cannot be made without storage.
   const messages = await env.readRows();
+  if (cancelled?.()) return { thread, slotId: null, kind: 'noop' };
   const applyKnown = async (row: ChatMessage, incoming: KnownSlotIncoming): Promise<ChangeResult> => {
-    const result = await applyToKnownSlot(thread, threadKey, row, captureOriginal === undefined ? incoming : { ...incoming, captureOriginal });
+    const result = await applyToKnownSlot(thread, threadKey, row, captureOriginal === undefined ? incoming : { ...incoming, captureOriginal }, cancelled, receivedAt);
     if (result.kind === 'edit') env.applied?.(row.id, editPatch(incoming.content ?? '', incoming.rev));
     else if (result.kind === 'delete') env.applied?.(row.id, { tombstone: incoming.rev });
     return result;
@@ -1555,6 +1567,7 @@ async function foldClassifiedSignal(
       // them, and the entry for an id outside `slots` is the one the live dispatch would have buffered too (the
       // insert is idempotent per contribution, so an already-buffered one is left as it is).
       for (const targetId of classification.targetIds) {
+        if (cancelled?.()) break;
         await insertOrCollapsePending({
           kind: 'delete',
           threadKey,
@@ -1563,7 +1576,7 @@ async function foldClassifiedSignal(
           rumorId: rumor.id,
           authorPubkeyHex: senderPubkey,
           receivedAt: pendingStamp,
-        });
+        }, cancelled);
       }
       return { thread, slotId: null, kind: 'pending' as const };
     }
@@ -1579,7 +1592,7 @@ async function foldClassifiedSignal(
       senderPubkey,
       knownRow.senderPubkey,
     );
-    if (!authorized) {
+    if (!authorized || cancelled?.()) {
       return { thread, slotId: knownRow.id, kind: 'discarded' as const };
     }
 
@@ -1617,7 +1630,7 @@ async function foldClassifiedSignal(
       content: classification.content,
       createdAtSeconds: classification.createdAtSeconds,
       receivedAt: pendingStamp,
-    });
+    }, cancelled);
     return { thread, slotId: null, kind: 'pending' as const };
   }
 
@@ -1772,9 +1785,11 @@ export function recomputeSlot(
   thread: MessageEditsThreadKey,
   slotIds: readonly string[],
   signals: readonly RecomputeSignal[],
-  options?: { withdrawnRumorIds?: readonly string[] },
+  options?: { withdrawnRumorIds?: readonly string[]; cancelled?: () => boolean },
 ): Promise<void> {
   return serialize(async () => {
+    const cancelled = options?.cancelled;
+    if (cancelled?.()) return;
     const threadKey = groupIdFor(thread);
     const slots = new Set(slotIds);
     if (slots.size === 0) return;
@@ -1784,14 +1799,16 @@ export function recomputeSlot(
       .sort((a, b) => a.seq - b.seq);
 
     // ── Phase 1: reset to base ──
-    await dropSlotAuxState(threadKey, slots, [...folded.map((s) => s.rumor.id), ...(options?.withdrawnRumorIds ?? [])]);
-    let rows = await resetSlotsToOriginal(threadKey, [...slots]);
+    await dropSlotAuxState(threadKey, slots, [...folded.map((s) => s.rumor.id), ...(options?.withdrawnRumorIds ?? [])], cancelled);
+    if (cancelled?.()) return;
+    let rows = await resetSlotsToOriginal(threadKey, [...slots], cancelled);
 
     // ── Phase 2: fold ──
     const env: FoldEnv = {
       thread,
       threadKey,
       slots,
+      cancelled,
       bufferedAtMs: 0, // set per signal below
       readRows: async () => rows,
       applied: (slotId, change) => {
@@ -1800,9 +1817,10 @@ export function recomputeSlot(
     };
     let clockMs = 0;
     for (const signal of folded) {
+      if (cancelled?.()) return;
       // The row's own first-append time is the fold's clock (a row without one inherits its predecessor's).
       const valid = Number.isFinite(signal.receivedAt) && signal.receivedAt > 0;
-      const nowMs = valid ? foldClockMs(signal.receivedAt) : clockMs || Date.now();
+      const nowMs = valid ? signal.receivedAt : clockMs || signal.rumor.created_at * 1000;
       clockMs = nowMs;
       const classification = classifySignal(signal.rumor, Math.floor(nowMs / 1000));
       if (classification.type === 'discard') continue;
@@ -1816,16 +1834,19 @@ export function recomputeSlot(
  * Drops a thread's slot-owned aux state for `slots`: pending entries (every author), delete markers, slot meta,
  * and the pinned revs of `rumorIds`. Idempotent; part of the reset phase of `recomputeSlot`.
  */
-async function dropSlotAuxState(threadKey: string, slots: ReadonlySet<string>, rumorIds: readonly string[]): Promise<void> {
+async function dropSlotAuxState(threadKey: string, slots: ReadonlySet<string>, rumorIds: readonly string[], cancelled?: () => boolean): Promise<void> {
   const pending = await readPendingAll();
+  if (cancelled?.()) return;
   const nextPending = pending.filter((e) => !(e.threadKey === threadKey && slots.has(e.targetId)));
   if (nextPending.length !== pending.length) await writePendingAll(nextPending);
 
   const markers = await readMarkersAll();
+  if (cancelled?.()) return;
   const nextMarkers = markers.filter((m) => !(m.threadKey === threadKey && slots.has(m.targetId)));
   if (nextMarkers.length !== markers.length) await writeMarkersAll(nextMarkers);
 
   const metas = await readSlotMetaAll();
+  if (cancelled?.()) return;
   const nextMetas = metas.filter((m) => !(m.threadKey === threadKey && slots.has(m.slotId)));
   if (nextMetas.length !== metas.length) await set(SLOT_META_KEY, nextMetas);
 
@@ -1833,7 +1854,7 @@ async function dropSlotAuxState(threadKey: string, slots: ReadonlySet<string>, r
   const pins = await readArray<PinnedRev>(PINNED_REVS_KEY);
   if (pins.some((p) => p.threadKey === threadKey && ids.has(p.rumorId))) {
     await modifyPinsAtomically((current) => ({
-      next: current.filter((p) => !(p.threadKey === threadKey && ids.has(p.rumorId))),
+      next: cancelled?.() ? null : current.filter((p) => !(p.threadKey === threadKey && ids.has(p.rumorId))),
       result: undefined,
     }));
   }
@@ -1950,6 +1971,21 @@ export async function clearAllMessageEditsState(): Promise<void> {
     set(SLOT_META_KEY, []),
     set(PINNED_REVS_KEY, []),
   ]);
+}
+
+/** Remove group edit metadata, including entries without a surviving chat row. */
+export async function clearGroupMessageEditsState(): Promise<void> {
+  await serialize(async () => {
+    const [pending, markers, slots] = await Promise.all([
+      readPendingAll(), readMarkersAll(), readSlotMetaAll(),
+    ]);
+    await Promise.all([
+      writePendingAll(pending.filter((entry) => !isGroupThreadKey(entry.threadKey))),
+      writeMarkersAll(markers.filter((entry) => !isGroupThreadKey(entry.threadKey))),
+      set(SLOT_META_KEY, slots.filter((entry) => !isGroupThreadKey(entry.threadKey))),
+      modifyPinsAtomically((pins) => ({ next: pins.filter((entry) => !isGroupThreadKey(entry.threadKey)), result: undefined })),
+    ]);
+  });
 }
 
 /**

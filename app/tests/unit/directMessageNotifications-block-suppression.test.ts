@@ -340,13 +340,14 @@ describe('DirectMessageNotificationsWatcher.tsx — block-set ref wiring (source
   });
 
   it('the injected isAllowedSender closure passed to subscribeDirectMessageNotifications reads blockedPeersRef.current', () => {
-    expect(WATCHER_SOURCE).toMatch(/isAllowedDmSenderComposite\(\s*peer,\s*groupsRef\.current,\s*knownPeersRef\.current,\s*blockedPeersRef\.current,/);
+    expect(WATCHER_SOURCE).toMatch(/isAllowedDmSenderComposite\(\s*peer,\s*getDmGroups\(\),\s*knownPeersRef\.current,\s*blockedPeersRef\.current,/);
   });
 
   it('the subscription-owning effect\'s dependency array does NOT include blockedPeersRevision (no teardown/rebuild on block change)', () => {
-    // The subscription effect's own closing dependency array line.
-    expect(WATCHER_SOURCE).toMatch(/\},\s*\[hydrated,\s*pubkeyHex,\s*privateKeyHex\]\);/);
-    expect(WATCHER_SOURCE).not.toMatch(/\[hydrated,\s*pubkeyHex,\s*privateKeyHex,\s*blockedPeersRevision\]/);
+    const dependencies = WATCHER_SOURCE.match(/\},\s*\[hydrated,\s*pubkeyHex,\s*privateKeyHex,([^\]]*)\]\);/)?.[1];
+    expect(dependencies).toContain('getDmGroups');
+    expect(dependencies).toContain('whenDmGroupsReady');
+    expect(dependencies).not.toMatch(/blockedPeersRevision|blockedPeersRef/);
   });
 });
 

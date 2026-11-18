@@ -3,7 +3,7 @@
  *
  * Builds an unsigned NIP-25 kind-7 reaction rumor with a canonical NIP-01 id.
  * Transport-agnostic: callers (story-06 group, story-07 DM) pass the result to
- * their respective transports (sendRumorSafe / sealAndWrap).
+ * their respective transports (the group sender and sealAndWrap).
  *
  * Decisions in scope:
  *   D2  — multi-emoji; caller supplies the specific emoji glyph.

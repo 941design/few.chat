@@ -1,0 +1,40 @@
+{
+  "story_id": "S25",
+  "status": "done",
+  "modules_touched": [
+    "e2e-lifecycle"
+  ],
+  "files_created": [
+    "app/tests/e2e/groups-multi-tab.spec.ts",
+    "app/tests/e2e/helpers/session-cutover.ts"
+  ],
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/groupSessionProfile.ts",
+    "app/src/lib/marmot/invitations/acceptDecline.ts",
+    "app/src/lib/testHooks/marmotSession.ts",
+    "app/tests/e2e/groups-accept-reload-atomic.spec.ts",
+    "app/tests/e2e/groups-admin.spec.ts",
+    "app/tests/e2e/groups-dispatch-isolation.spec.ts",
+    "app/tests/e2e/groups-leave-intent.spec.ts",
+    "app/tests/e2e/groups-leave-purges-mls-state.spec.ts",
+    "app/tests/e2e/groups-reinvite-after-leave.spec.ts",
+    "app/tests/e2e/groups-reinvite-after-removal.spec.ts",
+    "app/tests/e2e/groups-rumor-reload-atomic.spec.ts"
+  ],
+  "remediation_rounds": 5,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "static": "All designated rewrites differ from the pre-run tag. Both reload directions isolate startup sweep from first-touch recovery in the actual sink.",
+    "browser": "Clean strfry Chromium runs passed leave failure and restart, MLS purge and roster removal, both re-invites, and the two deterministic reload cases. Removal restores sponsor confirmation and bidirectional messaging. The same account changed the real Web Lock owner without reloading. A later scoped run passed all 18 checks, including actual confirmation of the outgoing row and the invitee’s startup profile while live history was held."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "Zeno accepted both deterministic reload suites, leave and purge, the two fresh re-invites, and same-document Web Locks handoff after the lifecycle fixes. A voluntary leaver retains their member profile on the sponsor, so the revised fixture asserts sponsor roster presence and the invitee’s new Welcome and usable group.",
+    "adversarial": "Dalton’s last evidence gaps were an own-row confirmation and isolation of the startup profile send from peer requests. The revised browser run observes confirmed for the exact sent rumor ID and holds live invitee history across acceptance and reload until the sponsor receives its startup profile. Both checkpoints passed."
+  }
+}

@@ -38,15 +38,19 @@ protects — see the backup document); alternatively the app can delegate signin
 external signer — a browser extension or a remote signing service — in which case the private
 key lives there instead of on the device. While an external signer is connected, the
 messages, reactions and edits the app publishes are signed by it; disconnecting it returns
-signing to a key on the device.
+signing to a key on the device. Group features require a signer that supports
+NIP-44 encryption and decryption. The app reports group access as unsupported when
+the connected signer lacks that capability.
 
 Being invitable to groups requires publishing small **cryptographic key packages** to
-relays. These are the one identity-related thing that *is* public — but they carry **no
-personal data**: they are pure cryptographic material that lets someone add you to a
-group, and reveal nothing about your name or avatar. They are consumed as people invite
-you, so the app keeps a supply published. When the app starts and finds that the relays
-hold none of yours although the device has some (an earlier publish no relay accepted),
-it publishes one again, so the account becomes invitable again without any action.
+relays. These contain public cryptographic material and reveal nothing about your name
+or avatar. The app tries to create a reusable package when group startup finds none.
+Saving new relay settings rebuilds the group connection and attempts to rotate the
+listed packages onto the new relays.
+
+The app advertises its configured inbox relays when it finds no inbox list or finds
+one it owns. If another client owns your inbox list, the app uses those inbox relays
+and preserves the list. The announcement carries relay addresses and no profile data.
 
 ---
 
@@ -94,7 +98,9 @@ signed profile to a group when you join, and re-sends it to every group you are 
 you edit your profile, so members normally have it without asking. A member who is still
 missing someone's profile — or who holds one that has gone **stale** (more than about a week
 old) — **requests** a fresh copy from the group, and the owner (or a relayer, below)
-answers.
+answers. Group profile requests and publication run in the active group tab. A pending
+invitation can show a sponsor-supplied group name, with a generic label until it arrives.
+The invitation preview carries no member profiles (see [Groups](groups.md#51-a-welcome-must-be-accepted-pull-only)).
 
 The signature enables **relaying on someone's behalf**: if the person whose profile is
 needed is offline, any *other* member who already holds their signed profile can relay it to
@@ -150,6 +156,11 @@ Two properties of this channel are deliberate:
 ---
 
 ## 7. Edge cases and how they resolve
+
+**You recover your identity on a new device.** Your own profile can come back from
+the encrypted backup. Group memberships and learned member profiles stay outside
+recovery. You can exchange profiles again after rejoining.
+[Backup & recovery](backup-and-recovery.md#5-what-comes-back-and-what-does-not)
 
 **A member is offline when their profile is needed.** Another member who holds their signed
 profile relays it on their behalf (§5.1); no one has to wait for the absent member to come
@@ -223,13 +234,14 @@ shipped implementation, and the automated test suite:
 - `specs/epic-direct-contact-profile-exchange/` and
   `specs/direct-contact-profile-exchange-spec-request.md` — the 1:1 self-healing profile
   channel.
-- `docs/adr/ADR-007` (gift-wrapped 1:1 profile exchange; the unsigned-announce and
+- `docs/adr/ADR-007-adopt-gift-wrapped-1-1-direct-contact-profile-exchange.md` (gift-wrapped 1:1 profile exchange; the unsigned-announce and
   active-contact-disclosure reasoning), building on `ADR-002`/`ADR-005` (the reachability
   gate profile exchange rides on).
+- `specs/epic-marmot-library-adoption/acceptance-criteria.md` — AC-BOOT-2, AC-CTX,
+  AC-MT, AC-REL, AC-SIGN and AC-BKP.
 - Implementation under `app/src/lib/nostrKeys.ts`, `app/src/context/` (identity and
-  profile), `app/src/lib/marmot/profileSync.ts` and `profileRequestSync.ts` (group
-  profiles and relay-on-behalf), `app/src/lib/dmProfile/` (1:1 exchange), `app/src/lib/
-  avatar.ts`, and the profile/settings pages.
+  profile), `app/src/lib/marmot/groupSessionProfile.ts` and
+  `app/src/lib/marmot/handlers/profileHandler.ts` (group profiles and relay-on-behalf), `app/src/lib/dmProfile/` (1:1 exchange), `app/src/lib/avatar.ts`, and the profile/settings pages.
 - The profile, avatar, member-profile, and `dm-profile-*` end-to-end specs — including the
   test asserting **zero** public kind-0 events are published — and the unit tests for
   profile serialization and LWW merge.

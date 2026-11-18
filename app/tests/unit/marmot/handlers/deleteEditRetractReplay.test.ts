@@ -181,9 +181,9 @@ describe('(11) a withdraw interrupted at any step converges to the oracle in a n
       },
     });
     await expect(first.withdraw(app.groupId, ev('e2'))).rejects.toThrow();
-    // the live sink's next withdraw recovers the marked row first (first-touch recovery of its own instance)
+    // The SDK retries the original withdrawal IDs in the new instance.
     const second = openSink(app, app.dispatcher);
-    await second.withdraw(app.groupId, ev('never-seen'));
+    await second.withdraw(app.groupId, ev('e2'));
     await expectOracle(app, [...steps, withdraw('e2')], make);
   });
 });

@@ -1,0 +1,26 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Update helpers (group-setup.ts etc.), __fewTest hooks and store names so every kept spec keeps its titles/assertions; delete groups-blackout-guard.spec.ts; title-set diff against the pre-run tag; verify abandon/ever-known/poll-after-leave specs.",
+  "public_api": [],
+  "private_files": [
+    "app/playwright.config.ts",
+    "app/scripts/run-e2e.mjs",
+    "scripts/blossom-mock.mjs"
+  ],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [
+    "Rewritten specs (S25, S26)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/e2e/helpers/*.ts",
+    "app/tests/e2e/groups-blackout-guard.spec.ts (delete)",
+    "app/tests/e2e/*.spec.ts (helper-only changes)",
+    "app/src/lib/testHooks (__fewTest hooks)"
+  ]
+}

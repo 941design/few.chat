@@ -1,7 +1,7 @@
 {
   "story_id": "S10",
   "status": "done",
-  "final_outcome": "completed",
+  "final_outcome": "accepted_with_caveats",
   "completed_at": "2026-11-17T20:40:00Z",
   "files_created": [
     "app/src/lib/marmot/invitations/inviteContext.ts",
@@ -29,10 +29,7 @@
     "app/tests/unit/components/InvitationCard.test.ts"
   ],
   "adjacent_fixes": [],
-  "tests_added": {
-    "unit": "inviteContext.test.ts (AC-CTX-1 recording sendInboxRumor, sanitise/cap, strict parse), inviteContextStore.test.ts (AC-CTX-3 exact retained sets after 9 / 65 inserts, 7d+1ms fake time, sponsor validation, deletion on accept/decline/left-pending, dedupe, persistence incl. out-of-seq-order seeding), inviteContextHandler.test.ts (AC-CTX-4 dedupe + no client, AC-BLK-1 ctx leg, hostile matrix), inviteContextCard.test.ts (AC-CTX-2/5 pure view model, live either order, i18n en+de), inviteContextIdbPort.test.ts (idb-keyval port).",
-    "harness": "inviteContext.harness.test.ts (5): real clients over FakeRelay; one extra kind-1059 wrap, no top-level kind 21064, name absent from every stored relay event (AC-PRIV-2); card shows name; accept deletes context; non-sponsor context dropped; failed invite sends no wrap; blocked sponsor dropped with positive control."
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 7721,
     "final": 7907
@@ -93,5 +90,10 @@
     "commits_made": [],
     "absorbed_from": [],
     "lead_clarifications": []
-  }
+  },
+  "legacy_tests_added": {
+    "unit": "inviteContext.test.ts (AC-CTX-1 recording sendInboxRumor, sanitise/cap, strict parse), inviteContextStore.test.ts (AC-CTX-3 exact retained sets after 9 / 65 inserts, 7d+1ms fake time, sponsor validation, deletion on accept/decline/left-pending, dedupe, persistence incl. out-of-seq-order seeding), inviteContextHandler.test.ts (AC-CTX-4 dedupe + no client, AC-BLK-1 ctx leg, hostile matrix), inviteContextCard.test.ts (AC-CTX-2/5 pure view model, live either order, i18n en+de), inviteContextIdbPort.test.ts (idb-keyval port).",
+    "harness": "inviteContext.harness.test.ts (5): real clients over FakeRelay; one extra kind-1059 wrap, no top-level kind 21064, name absent from every stored relay event (AC-PRIV-2); card shows name; accept deletes context; non-sponsor context dropped; failed invite sends no wrap; blocked sponsor dropped with positive control."
+  },
+  "legacy_final_outcome": "completed"
 }

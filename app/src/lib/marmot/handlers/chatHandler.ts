@@ -11,9 +11,10 @@
  *   - All IDB and state-setter deps received via injection
  */
 
+import { getEventHash } from 'nostr-tools/pure';
 import { CHAT_MESSAGE_KIND } from '@/src/lib/marmot/chatPersistence';
 import type { ChatMessage } from '@/src/lib/marmot/chatPersistence';
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RecomputeSignal, RumorHandler } from '@/src/lib/marmot/handlers/types';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RecomputeSignal } from '@/src/lib/marmot/handlers/types';
 import { assertPorts, remainingSignals, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
 import { recomputeNamedSlots, slotRetractKey, type DeleteEditGroupHandlerDeps } from '@/src/lib/marmot/handlers/deleteEditHandler';
 import { createGroupGates, type GroupOf } from '@/src/lib/marmot/handlers/groupGates';
@@ -88,7 +89,7 @@ export interface ChatHandlerDeps {
   // (createPollCloseAnnouncementReplayer, wired to pollHandler's replayHeldCloseAnnouncements).
   queuePendingCloseAnnouncement: (announcement: Omit<PendingCloseAnnouncement, 'receivedAt'>) => Promise<void>;
   loadPendingCloseAnnouncements: (groupId: string, pollId: string) => Promise<PendingCloseAnnouncement[]>;
-  removePendingCloseAnnouncements: (groupId: string, applied: PendingCloseAnnouncement[]) => Promise<void>;
+  removePendingCloseAnnouncements: (groupId: string, applied: PendingCloseAnnouncement[], now?: number, cancelled?: () => boolean) => Promise<void>;
   /**
    * pollHandler createHeldCloseSettler: applies a held close of the poll
    * before its summary is judged (a summary is one more message of its poll —
@@ -119,6 +120,7 @@ async function gateAnnouncement(
   sender: AuthenticatedSender,
   deps: ChatHandlerDeps,
   strict: boolean,
+  carrierEventId?: string,
 ): Promise<string | null> {
   // A failed admin/roster lookup. Legacy path: fail closed (the answer is "no").
   // Sink path (`strict`): the failure propagates so the row stays undispatched
@@ -195,6 +197,7 @@ async function gateAnnouncement(
           pollId: structured.pollId,
           senderPubkey: sender.pubkey,
           rumorId: rumor.id,
+          ...(carrierEventId ? { carrierEventId } : {}),
           createdAt: rumor.created_at,
         });
       const holdAfterFailure = async (err: unknown): Promise<never> => {
@@ -257,7 +260,7 @@ async function gateAnnouncement(
 }
 
 /** What `handle` did with a kind-9 rumor (the sink path acts on it: own echo, known peers). */
-export type ChatHandleOutcome =
+type ChatHandleOutcome =
   /** An edit-marked replacement, routed to the reconciliation core. */
   | 'edit-signal'
   /** An announcement the actor rules rejected; nothing was written. */
@@ -286,6 +289,18 @@ interface SinkCarrier {
   receivedAt?: number;
 }
 
+/** The same durable decline may travel in multiple distinct application rumors. */
+function declineMessageId(structured: StructuredContent, groupId: string, sender: string): string | undefined {
+  if (structured?.type !== 'invite_lifecycle' || structured.event !== 'declined' || !structured.id) return;
+  return getEventHash({
+    pubkey: sender,
+    created_at: 0,
+    kind: CHAT_MESSAGE_KIND,
+    tags: [],
+    content: JSON.stringify(['invite_lifecycle', 'declined', groupId, structured.pubkey, structured.id]),
+  });
+}
+
 /**
  * `sink` (sink path only) carries the event id and the carrier port: the row
  * is inserted with `eventId` as its carrier, or `eventId` is added to the
@@ -299,7 +314,7 @@ interface SinkCarrier {
  * buffered delete/edit signal is never silently left unresolved); the legacy
  * path keeps its best-effort warning.
  */
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ChatHandlerDeps, sink?: SinkCarrier): Promise<ChatHandleOutcome> {
+export async function applyChatRumor(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ChatHandlerDeps, sink?: SinkCarrier): Promise<ChatHandleOutcome> {
   const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
 
   // S5 dispatch-routing check (mirrors ContactChat.tsx's isEditMarkedReplacement
@@ -335,20 +350,21 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
   let content = typeof rumor.content === 'string' ? rumor.content : '';
   const structured = parseStructured(content);
   if (structured) {
-    const gated = await gateAnnouncement(structured, content, rumor, ctx, sender, deps, sink !== undefined);
+    const gated = await gateAnnouncement(structured, content, rumor, ctx, sender, deps, sink !== undefined, sink?.eventId);
     if (gated === null) return 'rejected';
     content = gated;
   }
 
-  const { parseImageMessageContent, extractAttachmentsByRole } = await import('@/src/lib/media/imageMessage');
+  const { parseImageMessageContent, extractGroupAttachmentsByRole } = await import('@/src/lib/media/imageMessage');
   const parsed = parseImageMessageContent(content);
-  const attachments = (parsed?.type === 'image' && rumor.tags?.length)
-    ? extractAttachmentsByRole(rumor.tags)
-    : null;
+  let attachments: ChatMessage['attachments'];
+  if (parsed?.type === 'image' && rumor.tags?.length) {
+    attachments = extractGroupAttachmentsByRole(rumor.tags);
+  }
   const hasAttachment = attachments && (attachments.full || attachments.thumb);
 
   const msg: ChatMessage = {
-    id: rumor.id,
+    id: (sink && declineMessageId(structured, ctx.groupId, sender.pubkey)) || rumor.id,
     content,
     senderPubkey: sender.pubkey,
     groupId: ctx.groupId,
@@ -420,21 +436,6 @@ async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: A
 }
 
 /**
- * Old-dispatcher-path handler (`applicationRumorDispatcher`).
- * TEMPORARY: kept only so the existing suites and the old `buildDispatcher`
- * stay green until the context cut-over (S18); removed by S22 together with
- * the old dispatcher. New code uses `createChatGroupHandler`.
- */
-export function createChatHandler(deps: ChatHandlerDeps): RumorHandler {
-  return {
-    kind: CHAT_MESSAGE_KIND,
-    handle: async (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => {
-      await handle(rumor, ctx, sender, deps);
-    },
-  };
-}
-
-/**
  * Deps of the history-sink path: everything the old handler took, plus what
  * retract and own echo need. All REQUIRED: an unwired port must fail at
  * construction, not degrade into silence.
@@ -470,7 +471,7 @@ export interface ChatGroupHandlerDeps extends Omit<ChatHandlerDeps, 'isGroupAdmi
    * `purged` retract (see GroupRumorInput.reason): the group was left, so an
    * own row is removed, never parked as failed/retry.
    */
-  removeMessages: (groupId: string, ids: readonly string[]) => Promise<number>;
+  removeMessages: (groupId: string, ids: readonly string[], cancelled?: () => boolean) => Promise<number>;
   /**
    * Insert-if-absent of the message OR add `eventId` as another carrier of the
    * stored row, atomically (chatPersistence.appendOrAddCarrier). Idempotent.
@@ -481,7 +482,7 @@ export interface ChatGroupHandlerDeps extends Omit<ChatHandlerDeps, 'isGroupAdmi
    * its stored sender equals `sender` (chatPersistence.retractMessageCarrier).
    * Resolves the rows removed.
    */
-  retractMessageCarrier: (groupId: string, rumorId: string, eventId: string, sender: string) => Promise<number>;
+  retractMessageCarrier: (groupId: string, rumorId: string, eventId: string, sender: string, cancelled?: () => boolean) => Promise<number>;
   /** Whether a row with this id is stored, authored by `sender` when given (chatPersistence.hasMessage). */
   hasMessage: (groupId: string, id: string, sender?: string) => Promise<boolean>;
   /** Recomputes the group's unread count over the remaining rows (withdraw changed them). */
@@ -493,12 +494,12 @@ export interface ChatGroupHandlerDeps extends Omit<ChatHandlerDeps, 'isGroupAdmi
    * confirmed (D13). Raises no unread and no bell. Called on every own
    * delivery, first or repeated, so it must be idempotent.
    */
-  onOwnEcho: (groupId: string, rumorId: string) => void;
+  onOwnEcho: (groupId: string, rumorId: string, eventId: string) => void;
   /**
    * An OWN message was withdrawn from the sink: its row must end failed/retry,
    * not be deleted, and is never auto-resent (AC-WDR-2; wired by the own-send lifecycle).
    */
-  onOwnWithdrawn: (groupId: string, rumorId: string) => void;
+  onOwnWithdrawn: (groupId: string, rumorId: string, eventId: string) => void;
   /**
    * Withdrawn edit-marked kind-9, or a withdrawn base message: recomputes the delete/edit slots from the remaining
    * signals (messageEdits/api `recomputeSlot`).
@@ -513,6 +514,7 @@ export interface ChatGroupHandlerDeps extends Omit<ChatHandlerDeps, 'isGroupAdmi
     thread: { kind: 'group'; groupId: string },
     targetMessageId: string,
     signals: readonly RecomputeSignal[],
+    cancelled?: () => boolean,
   ) => Promise<boolean>;
 }
 
@@ -538,7 +540,7 @@ export interface ChatGroupHandlerDeps extends Omit<ChatHandlerDeps, 'isGroupAdmi
  *
  * Every required port is checked at construction (TypeError naming the port).
  */
-export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHandler & RumorHandler {
+export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHandler {
   assertPorts('createChatGroupHandler', deps, CHAT_GROUP_PORTS);
   const gates = createGroupGates(deps.groupOf);
   // The shared core reads every port from `deps` at call time (one source of truth); only the
@@ -547,12 +549,11 @@ export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHan
     isGroupAdmin: { value: gates.isGroupAdmin, enumerable: true },
     isGroupMember: { value: gates.isGroupMember, enumerable: true },
   }) as ChatHandlerDeps;
-  const legacy = createChatHandler(coreDeps);
   return {
-    ...legacy,
+    kind: 9,
     async dispatch(input: GroupRumorInput, env) {
       const { ctx, sender } = toHandlerArgs(input, env);
-      const outcome = await handle(input.rumor as ApplicationRumor, ctx, sender, coreDeps, {
+      const outcome = await applyChatRumor(input.rumor as ApplicationRumor, ctx, sender, coreDeps, {
         eventId: input.eventId,
         appendOrAddCarrier: deps.appendOrAddCarrier,
         ...(input.receivedAt !== undefined ? { receivedAt: input.receivedAt } : {}),
@@ -563,7 +564,9 @@ export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHan
       let releaseFailure: { err: unknown } | undefined;
       if (outcome === 'inserted' || outcome === 'duplicate') {
         try {
-          if (await deps.releaseHeldReactions(ctx.groupId, input.rumor.id)) deps.setReactionsVersion((v) => v + 1);
+          const decoded = parseStructured(input.rumor.content);
+          const messageId = declineMessageId(decoded, ctx.groupId, sender.pubkey) ?? input.rumor.id;
+          if (await deps.releaseHeldReactions(ctx.groupId, messageId)) deps.setReactionsVersion((v) => v + 1);
         } catch (err) {
           releaseFailure = { err };
         }
@@ -577,7 +580,7 @@ export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHan
         // already stored) skipped the version bump in handle(); the UI still
         // has to re-read the row as confirmed.
         if (outcome === 'duplicate') deps.setChatVersion((v) => v + 1);
-        deps.onOwnEcho(ctx.groupId, input.rumor.id);
+        deps.onOwnEcho(ctx.groupId, input.rumor.id, input.eventId);
         finish();
         return;
       }
@@ -588,6 +591,8 @@ export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHan
     // Only an edit-marked kind-9 recomputes a slot (per aggregate); a plain message retracts per row (carriers).
     retractKey: (input: RetractInput) => (hasEditMarkerTag((input.rumor as ApplicationRumor).tags) ? slotRetractKey(input) : undefined),
     async retract(input: RetractInput, env) {
+      const { cancelled } = input;
+      if (cancelled?.()) return;
       const { ctx, sender } = toHandlerArgs(input, env);
       const rumor = input.rumor as ApplicationRumor;
       const thread: MessageEditsThreadKey = { kind: 'group', groupId: ctx.groupId };
@@ -596,47 +601,52 @@ export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHan
           // A purged retract (the group was left) does no fold: its data is going away.
           if (input.reason !== 'purged') await recomputeNamedSlots(deps.recomputeSlot, thread, input);
         } finally {
-          deps.setChatVersion((v) => v + 1);
+          if (!cancelled?.()) deps.setChatVersion((v) => v + 1);
         }
         return;
       }
       // A withdrawn poll_close announcement must not be revived by a later
       // poll-open: drop the copy held for its not-yet-known poll (own or peer).
       const structured = parseStructured(typeof rumor.content === 'string' ? rumor.content : '');
+      const declineId = declineMessageId(structured, ctx.groupId, sender.pubkey);
+      const messageId = declineId ?? rumor.id;
       if (structured?.type === 'poll_close') {
         await deps.removePendingCloseAnnouncements(ctx.groupId, [
-          { groupId: ctx.groupId, pollId: structured.pollId, senderPubkey: sender.pubkey, rumorId: rumor.id, createdAt: rumor.created_at, receivedAt: 0 },
-        ]);
+          { groupId: ctx.groupId, pollId: structured.pollId, senderPubkey: sender.pubkey, rumorId: rumor.id, carrierEventId: input.eventId, createdAt: rumor.created_at, receivedAt: 0 },
+        ], input.receivedAt, cancelled);
       }
+      if (cancelled?.()) return;
       if (input.reason === 'purged') {
         // The group was left while this dispatch was still running: whatever it
         // wrote is dropped outright, an own row included (failed/retry would
         // park an unsendable row in a group that is no longer held).
-        await deps.removeMessages(ctx.groupId, [rumor.id]);
-        deps.setChatVersion((v) => v + 1);
+        await deps.removeMessages(ctx.groupId, [messageId], ...(cancelled ? [cancelled] : []));
+        if (!cancelled?.()) deps.setChatVersion((v) => v + 1);
         return;
       }
-      if (sameKey(sender.pubkey, env.selfPubkeyHex)) {
+      if (!declineId && sameKey(sender.pubkey, env.selfPubkeyHex)) {
         // Never applied (no own row, or the stored row of that id is another sender's copy): nothing to hand back,
         // nothing to bump (AC-WDR-8: a row is only ever removed / handed back on behalf of its own sender).
-        if (!(await deps.hasMessage(ctx.groupId, rumor.id, sender.pubkey))) return;
-        deps.onOwnWithdrawn(ctx.groupId, rumor.id);
+        if (!(await deps.hasMessage(ctx.groupId, rumor.id, sender.pubkey)) || cancelled?.()) return;
+        deps.onOwnWithdrawn(ctx.groupId, rumor.id, input.eventId);
         deps.setChatVersion((v) => v + 1);
         return;
       }
       // The removal count only says whether THIS carrier changed rows; the
       // tail always runs so a retry after a partial failure (removal committed,
       // recompute threw) still recomputes and bumps. Both are idempotent.
-      const removed = await deps.retractMessageCarrier(ctx.groupId, rumor.id, input.eventId, sender.pubkey);
+      const removed = await deps.retractMessageCarrier(ctx.groupId, messageId, input.eventId, sender.pubkey, ...(cancelled ? [cancelled] : []));
+      if (cancelled?.()) return;
       // The base message is gone (this retract removed it, or an earlier attempt did and its tail failed): the
       // slot and the reactions that depended on it recompute with the target absent. Its remaining dependents are
       // re-held (pending / held) by the same fold, so they re-apply if the message is appended again. A row that is
       // still stored (another carrier remains, or another sender's copy) has no dependent to recompute.
-      if (removed > 0 || !(await deps.hasMessage(ctx.groupId, rumor.id))) {
-        await recomputeBaseDependents(deps, thread, input);
+      if (removed > 0 || !(await deps.hasMessage(ctx.groupId, messageId))) {
+        await recomputeBaseDependents(deps, thread, input, messageId);
       }
+      if (cancelled?.()) return;
       await deps.recomputeUnread(ctx.groupId);
-      deps.setChatVersion((v) => v + 1);
+      if (!cancelled?.()) deps.setChatVersion((v) => v + 1);
     },
   };
 }
@@ -646,14 +656,18 @@ export function createChatGroupHandler(deps: ChatGroupHandlerDeps): GroupKindHan
  * reactions, both from the remaining history rows. The slot recompute runs first so that, should the reactions
  * recompute fail, a retry converges (both are idempotent).
  */
-async function recomputeBaseDependents(deps: ChatGroupHandlerDeps, thread: MessageEditsThreadKey, input: RetractInput): Promise<void> {
-  const targetId = input.rumor.id;
+async function recomputeBaseDependents(deps: ChatGroupHandlerDeps, thread: MessageEditsThreadKey, input: RetractInput, targetId: string): Promise<void> {
+  const { cancelled } = input;
+  if (cancelled?.()) return;
   const slotSignals = await remainingSignals(input, (r) => namesTarget(r, targetId));
-  await deps.recomputeSlot(thread, [targetId], slotSignals);
+  if (cancelled?.()) return;
+  await deps.recomputeSlot(thread, [targetId], slotSignals, ...(cancelled ? [{ cancelled }] : []));
+  if (cancelled?.()) return;
   const reactionSignals = await remainingSignals(input, (r) => r.kind === 7 && namesTarget(r, targetId));
-  await deps.recomputeMessageReactions({ kind: 'group', groupId: input.groupId }, targetId, reactionSignals);
+  if (cancelled?.()) return;
+  await deps.recomputeMessageReactions({ kind: 'group', groupId: input.groupId }, targetId, reactionSignals, ...(cancelled ? [cancelled] : []));
   // Always re-read the reaction state: a retry after a partial failure may find nothing changed any more.
-  deps.setReactionsVersion((v) => v + 1);
+  if (!cancelled?.()) deps.setReactionsVersion((v) => v + 1);
 }
 
 /** True iff `rumor` carries an e-tag naming `id` (the stores filter further; this only keeps the read set small). */
@@ -678,7 +692,7 @@ const namesTarget = (rumor: ApplicationRumor, id: string): boolean =>
  * there throws too, and the re-run is harmless (insert-if-absent rows, unread
  * counted only for an inserted row).
  */
-export function createPollCloseAnnouncementReplayer(deps: ChatHandlerDeps) {
+export function createPollCloseAnnouncementReplayer(deps: ChatHandlerDeps & { appendOrAddCarrier?: AppendOrAddCarrier }) {
   return async (poll: Poll, ctx: DispatcherContext): Promise<void> => {
     const pending = await deps.loadPendingCloseAnnouncements(ctx.groupId, poll.id);
     if (pending.length === 0) return;
@@ -695,7 +709,11 @@ export function createPollCloseAnnouncementReplayer(deps: ChatHandlerDeps) {
       };
       try {
         // The sender was authenticated when the announcement was received.
-        await handle(rumor, ctx, { pubkey: entry.senderPubkey, authenticity: 'mls' }, deps);
+        if (entry.carrierEventId && !deps.appendOrAddCarrier) throw new Error('missing carrier registration for held announcement');
+        const sink = entry.carrierEventId && deps.appendOrAddCarrier
+          ? { eventId: entry.carrierEventId, appendOrAddCarrier: deps.appendOrAddCarrier }
+          : undefined;
+        await applyChatRumor(rumor, ctx, { pubkey: entry.senderPubkey, authenticity: 'mls' }, deps, sink);
         completed.push(entry);
       } catch (err) {
         failure ??= err;

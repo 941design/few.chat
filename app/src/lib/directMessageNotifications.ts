@@ -32,10 +32,13 @@ import { createLogger } from '@/src/lib/logger';
 import {
   getDirectMessageLastReadAt,
   incrementDirectMessage,
+  incrementPendingContact,
   trackHeldDirectMessageWrite,
 } from '@/src/lib/unreadStore';
 import { isPendingConfirmation, rememberContact } from '@/src/lib/contacts';
 import { isActiveView } from '@/src/lib/activeViewStore';
+import { handlePairingAck, PAIRING_ACK_KIND } from '@/src/lib/pairing/pairingAck';
+import { notifyStoreChangedLocally } from '@/src/lib/crossTab';
 
 const logger = createLogger('dm');
 
@@ -189,7 +192,26 @@ export function subscribeDirectMessageNotifications(params: {
         privateKeyHex,
       );
 
-      // Only kind-14 (NIP-17 chat messages) bump the bell.
+      // Pairing acknowledgements admit new contacts, so they must be handled
+      // before the DM sender whitelist and without treating them as messages.
+      if (rumor.kind === PAIRING_ACK_KIND) {
+        const result = await handlePairingAck({
+          id: event.id,
+          pubkey: event.pubkey ?? '',
+          content: event.content ?? '',
+          created_at: event.created_at,
+          kind: event.kind,
+          tags: event.tags,
+        }, privateKeyHex, { ndk });
+        if (result.status === 'admitted') incrementPendingContact(result.senderPubkeyHex);
+        if (result.status === 'admitted' || result.status === 'already-admitted') {
+          notifyStoreChangedLocally('known');
+          onContactChanged?.();
+        }
+        return;
+      }
+
+      // Only kind-14 (NIP-17 chat messages) bump the DM bell.
       // kind-7 reactions, kind-444 welcomes, kind-21059 join requests — silently skip.
       if (rumor.kind !== CHAT_MESSAGE_KIND) return;
 

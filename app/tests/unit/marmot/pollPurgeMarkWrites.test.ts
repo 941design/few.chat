@@ -80,15 +80,15 @@ describe('open-poll save on a purged group', () => {
     const p = poll(G);
     expect(await savePoll(p)).toEqual(p);
     expect(await loadPolls(G)).toEqual([p]);
-    expect(postStoreChanged).toHaveBeenCalledWith('polls', G);
+    expect(postStoreChanged).not.toHaveBeenCalled();
   });
 
-  it('a normal save (no purge) stores and notifies once', async () => {
+  it('a normal save (no purge) stores without broadcasting', async () => {
     await savePoll(poll(G, 'a'));
     await savePoll(poll(G, 'b'));
     await savePoll({ ...poll(G, 'a'), title: 'x' });
     expect((await loadPolls(G)).map((p) => [p.id, p.title]).sort()).toEqual([['a', 'x'], ['b', 't']]);
-    expect(postStoreChanged).toHaveBeenCalledTimes(3);
+    expect(postStoreChanged).not.toHaveBeenCalled();
   });
 });
 

@@ -217,7 +217,7 @@ describe('AC-INV-3: native decline', () => {
     expect(bob.declineCalls).toEqual([{ id: shown.id, options: { declineRumor: true } }]);
     await expect.poll(() => alice.declined.length, { timeout: 20_000 }).toBe(1);
     expect(alice.declined[0].inviteeRef).toBe(res.outcome.inviteeRef);
-    expect(wraps(relay)).toBe(wrapsBefore + 1); // the library's addressed decline rumor (4462) and nothing else
+    expect(wraps(relay)).toBe(wrapsBefore + 1); // the library's addressed decline rumor
     // a second user decline of the same id is a quiet no-op: no library call, no further wrap
     await expect(bob.actions.decline(shown.id)).resolves.toBeUndefined();
     expect(bob.declineCalls).toHaveLength(1);

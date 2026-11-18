@@ -37,15 +37,39 @@ describe('AC-CTX-4: persist-and-return, no account-scope client call', () => {
     await handler(rumor({ pubkey: hex(1), groupId: 'ab' }), wrap);
     expect(calls).toEqual(['add:ab']);
   });
-  it('a store failure is reported, never thrown into the library frame', async () => {
+  it('rejects until a dirty duplicate is saved, so the library can defer delivery', async () => {
     const errors: unknown[] = [];
+    const mem = memoryPort();
+    const failure = new Error('idb down');
+    let unavailable = true;
+    let attempts = 0;
+    const store = createInviteContextStore({
+      port: { ...mem.port, save: async (...args) => {
+        attempts++;
+        if (unavailable) throw failure;
+        await mem.port.save(...args);
+      } },
+      now: () => 1,
+      getPending: () => [],
+    });
     const handler = createInviteContextHandler({
-      store: { add: async () => { throw new Error('idb down'); } },
+      store,
       denyLayer: createDenyLayer({ loadBlockedPeers: () => new Set() }),
       onError: (e) => void errors.push(e),
     });
-    await expect(handler(rumor({ pubkey: hex(1) }), wrap)).resolves.toBeUndefined();
-    expect(errors).toHaveLength(1);
+    const context = rumor({ pubkey: hex(1) });
+    await expect(handler(context, wrap)).rejects.toBe(failure);
+    const staged = store.snapshot();
+    expect(staged).toHaveLength(1);
+    await expect(handler(context, wrap)).rejects.toBe(failure);
+    expect(errors).toEqual([failure, failure]);
+    expect(mem.stored).toBeUndefined();
+
+    unavailable = false;
+    await expect(handler(context, wrap)).resolves.toBeUndefined();
+    expect(mem.stored).toEqual(staged);
+    await handler(context, wrap);
+    expect(attempts).toBe(3);
   });
   it('source scan: the handler module imports no client, context or React code and awaits no client call', async () => {
     const { readFileSync } = await import('node:fs');

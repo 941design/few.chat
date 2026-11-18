@@ -141,11 +141,7 @@ describe('MarmotContext wiring (source assertion — no jsdom in this repo)', ()
   const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const SOURCE = fs.readFileSync(path.join(APP_ROOT, 'src', 'context', 'MarmotContext.tsx'), 'utf8');
 
-  it('reloadGroups scopes invite-expiry counters only after the groups list has loaded', () => {
-    expect(SOURCE).toMatch(
-      // (a sequence guard may sit between the load and setGroups — a superseded
-      // reload returns before either applies)
-      /const loadAndSetGroups = useCallback\(async \(\): Promise<Group\[\]> => \{[^}]*?const loaded = await loadAllGroups\(\);\s*(?:if \(![^\n]*\) return(?: loaded)?;\s*)?setGroups\(loaded\);[\s\S]*?scopeInviteExpiriesToGroups\(loaded\.map\(\(g\) => g\.id\)\);/,
-    );
+  it('scopes invite expiry to the owner only after committing the visible overlay', () => {
+    expect(SOURCE).toMatch(/overlay = \(await loadAllGroups\(\)\)\.filter[\s\S]*?const shown = source \? source\.membership\.visibleGroups\(overlay\) : overlay;[\s\S]*?setGroups\(shown\);\s*scopeInviteExpiriesToOwner\(owner, shown\.map\(\(\{ id \}\) => id\)\)/);
   });
 });

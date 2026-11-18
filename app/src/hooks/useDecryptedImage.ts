@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { getBlob, setBlob, attachmentFingerprint } from '@/src/lib/marmot/mediaPersistence';
-import { get as blossomGet, BlossomNotFoundError } from '@/src/lib/media/blossomClient';
-import type { ChatMediaAttachment } from '@/src/lib/media/imageMessage';
+import { BlossomNotFoundError } from '@/src/lib/media/blossomClient';
+import type { ChatMediaAttachment, DirectMediaAttachment } from '@/src/lib/media/imageMessage';
 
 type State =
   | { status: 'loading' }
@@ -12,8 +12,6 @@ type State =
 
 type DecryptedMedia = { bytes: Uint8Array; type: string };
 
-type GroupLike = { decryptMedia: (encrypted: Uint8Array, attachment: ChatMediaAttachment) => Promise<{ data: Uint8Array }> };
-type GetGroupFn = (groupId: string) => Promise<GroupLike | null | undefined>;
 type DecryptMediaFn = (attachment: ChatMediaAttachment) => Promise<DecryptedMedia>;
 
 // Dedup the fetch+decrypt+cache work — NOT the resulting object URL.
@@ -27,9 +25,8 @@ export function __resetInFlightForTests(): void {
 
 export async function fetchDecryptedMedia(
   groupId: string,
-  attachment: ChatMediaAttachment,
-  getGroup: GetGroupFn,
-  decryptMedia?: DecryptMediaFn,
+  attachment: DirectMediaAttachment,
+  decryptMedia: DecryptMediaFn,
 ): Promise<DecryptedMedia> {
   const fingerprint = attachmentFingerprint(attachment);
   const cached = await getBlob(groupId, fingerprint);
@@ -40,15 +37,7 @@ export async function fetchDecryptedMedia(
   const key = `${groupId}:${fingerprint}`;
   if (!inFlightDecrypts.has(key)) {
     const promise = (async () => {
-      const decrypted = decryptMedia
-        ? await decryptMedia(attachment)
-        : await (async () => {
-            const group = await getGroup(groupId);
-            if (!group) throw new Error('group not found');
-            const encrypted = await blossomGet(attachment.url!);
-            const stored = await group.decryptMedia(encrypted, attachment);
-            return { bytes: stored.data, type: attachment.type ?? 'image/webp' };
-          })();
+      const decrypted = await decryptMedia(attachment);
 
       await setBlob(groupId, fingerprint, { bytes: decrypted.bytes, type: decrypted.type });
       return decrypted;
@@ -91,7 +80,7 @@ export function useDecryptedImage(
   decryptMedia?: DecryptMediaFn,
 ): State {
   const [state, setState] = useState<State>({ status: 'loading' });
-  const { getGroup } = useMarmot();
+  const { getGroup, groupImages } = useMarmot();
   const slotRef = useRef<ObjectUrlSlot | null>(null);
   if (slotRef.current === null) slotRef.current = new ObjectUrlSlot();
 
@@ -106,7 +95,17 @@ export function useDecryptedImage(
 
     setState({ status: 'loading' });
 
-    fetchDecryptedMedia(groupId, attachment, getGroup as GetGroupFn, decryptMedia)
+    const load = 'imeta' in attachment
+      ? (async () => {
+          if (!groupImages) throw new Error('Group image service unavailable');
+          const group = await getGroup(groupId);
+          if (!group) throw new Error('Group not found');
+          return groupImages.loadImage(group, { imeta: attachment.imeta });
+        })()
+      : decryptMedia
+        ? fetchDecryptedMedia(groupId, attachment, decryptMedia)
+        : Promise.reject(new Error('Direct image decryptor unavailable'));
+    load
       .then(({ bytes, type }) => {
         if (cancelled) return;
         const url = slot.set(new Blob([bytes as unknown as BlobPart], { type }));
@@ -128,7 +127,7 @@ export function useDecryptedImage(
     // Re-run on every field that participates in the cache fingerprint so
     // a swap to an attachment with the same sha256 but a different nonce
     // (e.g. a forged record) does not silently keep showing the prior blob.
-  }, [groupId, attachment?.sha256, attachment?.nonce, attachment?.version, decryptMedia, getGroup]);
+  }, [groupId, attachment, decryptMedia, getGroup, groupImages]);
 
   return state;
 }

@@ -1,0 +1,21 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Rewrite or delete (with decision justification recorded) source-scan and unit tests coupled to deleted internals while keeping behavioural suites; run Stryker (concurrency 1, scratch config, app/reports untouched) on the new pure modules and close or record survivors. Run report lists every deleted test file with its decision.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [
+    "Deleting production modules (S22)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/tests/unit/** (161 files referencing marmot-ts/ts-mls/MarmotContext, triaged)",
+    "scratch Stryker config in the scratchpad (not committed)",
+    "run report listing deleted tests"
+  ]
+}

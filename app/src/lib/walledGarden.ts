@@ -1,7 +1,7 @@
 /**
  * walledGarden.ts — Whitelist computation for the DM walled-garden feature.
  *
- * Single export: `isAllowedDmSender`. Pure function over the current MLS group
+ * Pure functions over the current MLS group
  * snapshot and the ever-known peers set — no IDB, no NDK, no React, no side effects.
  *
  * Whitelist definition (S1 — ever-known peers): a peer pubkey is allowed if it
@@ -23,8 +23,26 @@ import type { Group } from '@/src/types';
  * Carries the current group snapshot, ever-known peers, and own pubkey at the
  * time of the sweep.
  */
+type GroupRoster = Pick<Group, 'memberPubkeys'>;
+
+/** Use the live roster while this tab owns the lease, and the persisted roster while it waits. */
+export function selectDmMembership(
+  overlay: readonly GroupRoster[],
+  live: ReadonlyArray<{ members: () => readonly string[] }>,
+  leaseHeld: boolean,
+): readonly GroupRoster[] {
+  if (!leaseHeld) return overlay;
+  return live.flatMap((group) => {
+    try {
+      return [{ memberPubkeys: [...group.members()] }];
+    } catch {
+      return [];
+    }
+  });
+}
+
 export type WhitelistArgs = {
-  groups: ReadonlyArray<Group>;
+  groups: readonly GroupRoster[];
   knownPeers: ReadonlySet<string>;
   ownPubkeyHex: string | null | undefined;
 };
@@ -52,7 +70,7 @@ export type WhitelistArgs = {
  */
 export function isAllowedDmSender(
   peerHex: string,
-  groups: ReadonlyArray<Group>,
+  groups: readonly GroupRoster[],
   knownPeers: ReadonlySet<string>,
   ownPubkeyHex: string | null | undefined,
 ): boolean {

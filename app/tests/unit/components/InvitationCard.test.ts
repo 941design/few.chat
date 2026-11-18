@@ -48,8 +48,8 @@ describe('InvitationCard.tsx — accept/decline wiring', () => {
 // ── Delegates to S1 helpers rather than re-implementing them ────────────────
 
 describe('InvitationCard.tsx — delegates to S1 seams', () => {
-  it('calls getInvitationGroupData(', () => {
-    expect(CARD_SOURCE).toMatch(/getInvitationGroupData\(/);
+  it('uses the invitation view display name supplied by the session (D8)', () => {
+    expect(CARD_CODE).toMatch(/model\?\.displayName \?\? invitation\.displayName/);
   });
 
   it('calls resolveInviterLabel(', () => {
@@ -180,11 +180,8 @@ describe('selectCardViewModel: the library view model is used only for its own i
   it('no model: undefined', () => {
     expect(selectCardViewModel('inv-1', undefined)).toBeUndefined();
   });
-  it('the Welcome-decode effect is skipped when a (matching) model is supplied', () => {
-    // No render capability in this repo: pin the guard in the effect body and that the display name uses the checked model.
-    const effect = stripComments(CARD_SOURCE).match(/useEffect\(\(\) => \{([\s\S]*?)getInvitationGroupData\(/);
-    expect(effect?.[1]).toMatch(/if \(hasModel\) return;/);
-    expect(CARD_SOURCE).toMatch(/const model = selectCardViewModel\(invitation\.id, viewModel\);/);
-    expect(stripComments(CARD_SOURCE)).not.toMatch(/viewModel\s*\?\s*viewModel\.displayName/);
+  it('uses only the matched model when selecting a display name (D8)', () => {
+    expect(CARD_CODE).toMatch(/const model = selectCardViewModel\(invitation\.id, viewModel\)/);
+    expect(CARD_CODE).toMatch(/model\?\.displayName \?\? invitation\.displayName/);
   });
 });

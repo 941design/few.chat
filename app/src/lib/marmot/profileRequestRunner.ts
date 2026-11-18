@@ -33,7 +33,7 @@ type SendRumorFn = (groupId: string, content: string) => Promise<void>;
 // sweepStaleProfiles  (story 05)
 // ---------------------------------------------------------------------------
 
-export interface SweepStaleProfilesArgs {
+interface SweepStaleProfilesArgs {
   /** Group IDs to sweep. Each group's MLS member list is walked independently. */
   groupIds: string[];
   /** Our own pubkey — skipped unconditionally. */

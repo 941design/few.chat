@@ -5,7 +5,6 @@
 export {
   bootstrapAccountClient,
   CLIENT_EVENT_NAMES,
-  CLIENT_TIMING_OPTIONS,
   HISTORY_SWEEP_WAIT_MS,
   type AccountClient,
   type AccountClientHandle,
@@ -13,23 +12,23 @@ export {
   type BootstrapResult,
   type BootstrapSeams,
   type BootstrapStep,
-  type ClientEventHandlers,
-  type ClientEventName,
   type InboxRelayListEnsure,
 } from './createClient';
-export { createJobQueue, type ClientJobQueue, type JobQueue, type JobQueueOptions } from './fifo';
+export { createJobQueue, INBOX_CALLBACK, type ClientCallbackScope, type ClientJobQueue, type JobQueue } from './fifo';
 export {
   createAccountSigner,
   budgetPolicyFor,
   signerSupportsNip44,
-  LOCAL_SIGNER_BUDGET,
-  REMOTE_SIGNER_BUDGET,
   REMOTE_SIGNER_TIMEOUT_MS,
-  type AccountSignerResult,
   type AppEventSigner,
   type SignerKind,
 } from './signerAdapter';
 export { createClientTransport, type ClientPool, type ClientTransport } from './transport';
 export { openAccountStores, type OpenStoresResult } from './storage';
 export { ensureKeyPackage, type KeyPackageEnsureOutcome } from './keyPackageEnsure';
-export { createTeardown, type TeardownParts } from './lifecycle';
+export { createTeardown } from './lifecycle';
+export { inboxRelayList, ensureInboxRelayList } from './inboxRelayList';
+export { rebuildAccountForRelays } from './relaySettingsRebuild';
+export { startAccountLifecycle, type AccountLifecycle, type AccountLifecycleOptions, type LeaseState } from './lease';
+export { createStoreWipeGuard, type StoreWipeGuard } from './wipe';
+export { reconcileOverlayGroups } from './reconcile';

@@ -1,0 +1,231 @@
+{
+  "concepts": {
+    "client.InboxRelayListEnsure": {
+      "consumer": "S16"
+    },
+    "client.inbox-kinds-local": {
+      "resolve_in": "S2",
+      "status": "resolved in S2"
+    },
+    "testhooks.groupLibrary-smoke": {
+      "remove_in": "S27"
+    },
+    "library.own-confirmed-withdraw": {
+      "affects": [
+        "S3",
+        "S5",
+        "S6"
+      ]
+    },
+    "history.GroupHistoryHandlers": {
+      "consumers": [
+        "S4",
+        "S5",
+        "S6"
+      ]
+    },
+    "handlers.groupOf": {
+      "consumers": [
+        "S4",
+        "S5"
+      ]
+    },
+    "handlers.own-echo": {
+      "consumers": [
+        "S6"
+      ]
+    },
+    "handlers.notification-router": {
+      "consumers": [
+        "S18"
+      ]
+    }
+  },
+  "stories": {
+    "S1": {
+      "concepts_owned": [
+        "client",
+        "client.AccountClientHandle",
+        "client.ClientJobQueue",
+        "client.InboxRelayListEnsure"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S2": "replace INBOX_HANDLER_KINDS with AppKinds",
+        "S3/S5": "handlers enqueue as last action after own awaits; Node harness shows violations as queuedJob reentrant \u2014 add a harness test documenting it",
+        "S6": "own confirmed message withdrawn -> failed/retry (AC-WDR-2); detection triggers never downgrade confirmed",
+        "S17": "lease-held right after a same-tab abort is retryable (LeaseState waiting); call attachGroup after any reload/restore that yields a new handle; consider racing getPublicKey/inbox.start against abort",
+        "S18": "pass AbortSignal from effect cleanup; handle aborted and signer-timeout results; keep groupLibrary dev-hook effect until S27"
+      }
+    },
+    "S2": {
+      "concepts_owned": [
+        "kinds",
+        "nip46-perms"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "import nip46Perms (and kinds.ts) lazily \u2014 @941design/marmot root barrel has no sideEffects:false, static import from identity/DM code pulls the whole library into eager chunks; compare app/out chunk sizes before/after. On NIP-46 connect persist buildNip46Permissions() next to the session (recordedPerms) \u2014 else every load discards the session; add connect\u2192reload\u2192kept test.",
+        "S22/S23": "replace PAIRING_ACK_KIND, DM_PROFILE_*_KIND, JOIN_REQUEST_KIND, JOIN_REQUEST_RUMOR_KIND literals with APP_INBOX_KINDS; CALL_GIFT_WRAP_KIND=21059 is a WRAP kind on the calls plane \u2014 keep separate and comment it",
+        "S9/S10/S12": "consume APP_INBOX_KINDS from kinds.ts; never re-declare 21059/21064"
+      }
+    },
+    "S3": {
+      "concepts_owned": [
+        "history",
+        "history.GroupHistoryHandlers",
+        "history.store",
+        "history.sweep"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S1/S18": "exactly one sink per account (single writer for seq); sweep placed inside bootstrap under the lease (slot per decider ruling)",
+        "S4/S5": "handlers get groupOf(groupId) backed by client.groups.get; undefined -> fail closed (row marked dispatched), reject -> row stays undispatched; dependent kinds (5/7/10-12) must tolerate a missing target; enqueue follow-up WRITES last",
+        "S6": "own withdrawn row -> failed/retry driven from retract (AC-WDR-2)",
+        "S13": "purgeLocalGroup must remove history rows (sink.purge or rely on library purge call)",
+        "S17": "clearAllGroupData and storeIncompatible wipe must call clearAllGroupHistory; test the wipe leaves history empty",
+        "S18": "one sink per account passed as bootstrap history; sweep wait capped (HISTORY_SWEEP_WAIT_MS)",
+        "S5/S6/S13": "purge now late-retracts stragglers after a group is left; with AC-WDR-2 an own message could leave a failed/retry row for a left group \u2014 when real handlers land add case: own msg, hung dispatch, leave, release \u2192 no chat row for the left group (give retract a reason withdrawn|purged or order leave cleanup after purge settles)",
+        "S17/S18": "one history backend instance per bootstrap (disposed sink rejects all calls); teardown order queue > unsubscribe > history.dispose > client.dispose > stores.close > pool.destroy; clearAllGroupHistory only after dispose"
+      }
+    },
+    "S4": {
+      "concepts_owned": [
+        "handlers",
+        "handlers.notification-router"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S5": "reaction to an unknown target must be held back (like applyDeleteEditSignal pending signals) and applied when the target lands \u2014 not dropped; implement recomputeUnread in unreadStore (count of non-own rows after lastRead, as initUnreadCounts) with AC-WDR-1 concrete counts; implement retractReaction / retractDeleteEditSignal store APIs; move announcement gates to groupOf (AC-HIST-11)",
+        "S6": "onOwnEcho is called for EVERY own delivery incl. rejected/edit-signal outcomes \u2014 must tolerate a missing row; own retract ignores carriers (low-likelihood) \u2014 onOwnWithdrawn should ignore a row confirmed by a different eventId",
+        "S18": "wire every required port; rememberKnownPeer = rememberKnownPeers([hex]) + bumpKnownPeersRevision when changed; wire createGroupNotificationRouter into onGroupNotification; selfPubkeyHex lowercase",
+        "S22": "delete legacy factories createChatHandler/createReactionHandler/createDeleteEditHandler and old dispatcher; shared handle() cores stay",
+        "S5+": "add each new test dir to app/tsconfig.tests-marmot.json (typechecked by make test-unit); handler factories validate ports via assertPorts; held poll_close removal keyed by rumor id (not carrier) \u2014 accepted residual"
+      }
+    },
+    "S5": {
+      "concepts_owned": [
+        "handlers.gates",
+        "handlers.retract",
+        "reactions.held"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S6": "own optimistic poll votes and edits/deletes not yet echoed are reset by a recompute of their poll/slot (reactions keep eventId empty); re-apply from own-send state or adopt uniform carry-over; original captured for own optimistic group writes (never DMs)",
+        "S13": "purgeLocalGroup must purge reaction rows, few:reactions:held:group:<id> (purgeHeldReactionsForGroup), poll/vote rows, slot meta; purge late retracts carry reason purged and never read remaining()",
+        "S17/S18": "MUST assert the reconciliation purge of overlay groups absent from groups.list() completes BEFORE the first sink delivery (append/withdraw/sweep) \u2014 this makes recompute-from-sink equal full state (AC-WDR-7)",
+        "S18": "wire groupOf, enqueue, recomputeUnread(ownPubkey), registerGroupAdminsProvider(createGroupAdminsProvider(groupOf)), reaction hold/release ports, receiptNow port, recomputePoll selfPubkeyHex; sendAnnouncement/sendSelfProfile/handleIncomingProfileRequest via group.send ONLY (privacy)"
+      }
+    },
+    "S6": {
+      "concepts_owned": [
+        "send",
+        "send.ownRowTracker",
+        "send.groupOpQueue"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "widen chat handler ports to pass input.eventId to onOwnEcho/onOwnWithdrawn; wire onIntentFailed/onGroupBranchSwitched to client events; a retry MUST re-send the identical stored rumor (sender.retry(rumorId), same id) \u2014 never rebuild; recompute callers re-apply tracker.pendingSignals(groupId) after recomputePoll/recomputeSlot; failed rows stay visible as failed/retry (status port is multi-transition); failed/retry status is session-memory only \u2014 decide a durable failed flag (e.g. on the stored chat row) and how an earlier-session failed row is retried; forgotten rows (eviction/forgetGroup) are dropped from pendingOwnSends",
+        "S13/S14": "groupOpQueue awaits group.synced() with NO timeout \u2014 bound your own waits (leave/admin ops) so an offline group cannot block leave forever",
+        "S19": "A3 second half: an own send abandoned before publish ack surfaces ONLY as send() rejection (publish-failed); intentFailed/groupBranchSwitched do not fire",
+        "S8/S13/S14": "all commit ops go through groupOpQueue (bounded synced wait, abort signal); never from a library frame (enqueue); leave uses skipSync offline; S13 calls tracker.forgetGroup on purge"
+      }
+    },
+    "S7": {
+      "concepts_owned": [
+        "media.group"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "processImage produces a blurhash which the encrypted-media-v1 codec rejects \u2014 pass a thumbhash; new decrypted-cache fingerprint differs from legacy deliberately; wire createGroupImageService into useImageSend/useDecryptedImage",
+        "S24": "serve the Blossom mock over https (library refuses http/loopback locators); configure NEXT_PUBLIC_BLOSSOM_BASE_URL / TRUSTED_HOSTS for e2e",
+        "S16": "MarmotContext.tsx (~1628, ~2958) still signs kind 30051 with the account key; it is NOT in the NIP-46 requested set (AC-SIGN-3) \u2014 S16 must remove that publish (AC-REL-3); until then it is silently refused under permission-enforcing bunkers",
+        "S18/S22": "consider a media/index.ts public surface; nip46Perms imports dependency-free kind constant modules (calls/callKinds.ts, media/blossomAuthKind.ts)"
+      }
+    },
+    "S8": {
+      "concepts_owned": [
+        "invitations.keyPackageLookup",
+        "invitations.invite"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S12": "call inviteByPubkey only from a handle.enqueue job; handle {error:already-member} distinctly (one leaf per invited account is guarded inside the KeyPackageInvite seam)",
+        "S16": "relay-URL validation: user-configured relays (relay.ts) vs invitee-advertised (strict routable wss) \u2014 keep one shared routable-host rule with the media guard; 10050 publish must not advertise local/private hosts",
+        "S18": "build the lookup from the client transport requestWithDeadline + configured relays; allowLocalAdvertised only in e2e builds",
+        "S22": "delete legacy src/lib/marmot/inviteeKeyPackageLookup.ts (double owner with invitations/keyPackageLookup.ts until cut-over)"
+      }
+    },
+    "S9": {
+      "concepts_owned": [
+        "invitations.pendingView",
+        "invitations.denyLayer",
+        "invitations.caps"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S10/S12": "call denyLayer.isBlocked on the sender before storing anything or ringing a bell; auto-accept job must call view.scheduleRefresh()",
+        "S11": "only the user decline (declineRumor:true) needs durability; silent declines are local",
+        "S13": "leave path calls view.scheduleRefresh()",
+        "S18": "call view.seed() once after bootstrap; route clientEvents.inboxDisposition to view.onInboxDisposition; hook scheduleRefresh to block-set changes; inject isTrustedSponsor (own account or isKnownPeer) and now(); accept/decline only from UI handlers; bell count from view.pending().length; view disposed/recreated with the handle",
+        "S22/S23": "move GLOBAL_CAP/PER_INVITER_CAP into invitations/caps.ts when deleting lib/pendingInvitations.ts"
+      }
+    },
+    "S10": {
+      "concepts_owned": [
+        "invitations.inviteContext"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "cut-over wiring (result.json said S22 \u2014 it is S18): register inviteContext handler as inboxHandlers.inviteContext; build the store with inviteContextIdbPort; call bindInviteContextToPendingView(...).reconcileNow() after view.seed(); pass viewModel to InvitationCard; swap the invite call site to createContextSendingInviter",
+        "S22": "remove InvitationCard legacy Welcome-decode path once viewModel is always supplied",
+        "S26": "e2e halves of AC-CTX-2/5",
+        "S17": "the account wipe (clearAllGroupData / storeIncompatible) deletes the account few-invite-contexts entry",
+        "S18/S28": "pre-join card name is a sponsor claim \u2014 show sponsor identity next to it or label it; optional notice when joined MLS name differs"
+      }
+    },
+    "S11": {
+      "concepts_owned": [
+        "invitations.declineDurability",
+        "pendingDirectInvite.marker"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S14": "cancel-invitation clears through clearPendingDirectInvite (compare-and-clear); consider listing orphan declines",
+        "S17": "wipe calls clearAllPendingDirectInvites (incl. orphan declines)",
+        "S18": "wrap inviter createMarkerRecordingInviter(createContextSendingInviter(...)); clientEvents.welcomeDeclined -> onWelcomeDeclined; startupRetry() after bootstrap; retryDeclined on transportConnected and after a group sync; announce = S6 sender kind 9 with dedup id; getGroup = client.groups.get; dispose with the handle; receivers dedupe declined announcements by id",
+        "S22": "delete legacy markPendingDirectInvite and its callers",
+        "S13": "leave purge calls clearPendingDirectInvitesForGroup",
+        "S18/S19": "declined announcements now carry id groupId:inviteeRef (at-least-once); parseStructured currently DROPS the extra id field \u2014 receivers must keep it and dedupe declined announcements by id. Pass onRecordedDeclined: durability.replayMarker to the inviter; retryDeclined() on reconnect/group sync.",
+        "library": "MarmotGroup exposes no removeLeaf; multi-leaf decline resolves as superseded (nothing removed, onError)"
+      }
+    },
+    "S12": {
+      "concepts_owned": [
+        "joinRequests.inbox",
+        "invitations.autoAccept",
+        "directMessages.dmPlaneDispatch"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S18": "register createJoinRequestInboxHandler as inboxHandlers.joinRequest; createJoinRequestSender replaces raw-WebSocket sendJoinRequest in UI callers; approval via joinRequestApproval (enqueue); wire autoAccept listener to inboxDisposition; directMessageNotifications.ts must call dispatchDmGiftWrap; roster snapshot port for the join-request handler; auto-accept never runs without a known matching group name (AC-AUTO-1 amended); dispatchDmGiftWrap needs a signer-based nip44 decrypt port for NIP-07/46 accounts (it uses selfPrivKeyHex)",
+        "S22": "delete legacy raw-WebSocket sendJoinRequest and welcomeSubscription.ts, and remove the welcomeSubscription.ts exemption in the AC-INBOX structural scan"
+      }
+    },
+    "S13": {
+      "concepts_owned": [
+        "membership.leaveEligibility",
+        "membership.leaveGroup",
+        "membership.purgeLocalGroup",
+        "membership.groupNotifications"
+      ],
+      "findings_open": [],
+      "notes_for_later": {
+        "S17/S18": "wire getGroup=client.groups.get, groupOpQueue, sendGroupRumor for leave_intent, UI hide/restore, per-store clears; call checkListedGroups + syncListed after groups.list() under the lease; add optional disbanded to the Group overlay type and keep it on rewrite; never read a group handle after purge (library handle throws after abandon)",
+        "S17": "reconcile purges overlay groups absent from groups.list() via purgeLocalGroup BEFORE the first sink delivery; checkListedGroups/syncListed under the lease after the removal settle window",
+        "S18": "onPurged \u2192 UI reload + view.scheduleRefresh(); releasePollPurgeMark on join; wire purger isPurging/whenPurged into accept + auto-accept; add optional disbanded to the Group overlay type; withGroupLock is NOT re-entrant (actions.accept already holds it \u2014 callers inside must not re-take it); markUnloadable port for the overlay; purge port required in acceptDecline/autoAccept",
+        "S22": "delete leaveGroupImpl, pending-removal, tombstones, leaveHandler kind 13"
+      }
+    }
+  }
+}

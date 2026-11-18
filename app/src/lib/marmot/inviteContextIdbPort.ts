@@ -6,7 +6,7 @@
  * `createInviteContextStore`.
  */
 import { createStore, get, set, type UseStore } from 'idb-keyval';
-import type { InviteContextRecord, InviteContextStorePort } from './invitations';
+import type { InviteContextStorePort } from './invitations';
 
 export function createIdbInviteContextPort(accountPubkey: string): InviteContextStorePort {
   if (typeof accountPubkey !== 'string' || accountPubkey.length === 0) throw new TypeError('createIdbInviteContextPort: "accountPubkey" is required');
@@ -14,7 +14,7 @@ export function createIdbInviteContextPort(accountPubkey: string): InviteContext
   const key = accountPubkey.toLowerCase();
   const open = (): UseStore => (store ??= createStore('few-invite-contexts', 'contexts'));
   return {
-    load: () => get<InviteContextRecord[]>(key, open()),
-    save: (records) => set(key, [...records], open()),
+    load: () => get<Awaited<ReturnType<InviteContextStorePort['load']>>>(key, open()),
+    save: (records, tombstones) => set(key, tombstones?.length ? { records, tombstones } : [...records], open()),
   };
 }

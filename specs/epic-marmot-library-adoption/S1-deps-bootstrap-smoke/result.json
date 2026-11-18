@@ -1,7 +1,7 @@
 {
   "story_id": "S1",
   "status": "done",
-  "remediation_rounds": 0,
+  "remediation_rounds": 3,
   "files_created": [
     "app/src/lib/marmot/client/index.ts",
     "app/src/lib/marmot/client/createClient.ts",
@@ -54,7 +54,8 @@
     "make_build": "exit 0; library present in lazy chunk app/out/_next/static/chunks/349.*.js (contains marmot.group.profile.v1, state.1)",
     "smoke_e2e": "groups-library-smoke 3/3 passed on 3 consecutive fresh-relay runs: A3 pass, A1 pass, A2 pass",
     "old_flow_spot_check": "groups-lifecycle 5/5 passed (first run flagged INVALID by cold-compile reload, rerun valid and green)",
-    "git_tag": "pre-marmot-library-adoption resolves to 65a0805 (pre-existing)"
+    "git_tag": "pre-marmot-library-adoption resolves to 65a0805 (pre-existing)",
+    "callback_fifo": "A real-library harness reproduces a reentrant send during a delayed history append. The scoped queue passes that regression and fake timers verify overlapping callbacks, unrelated progress, rejection and disposal. Pascal accepted the production callback scope wiring. Chromium passed all 21 focused cases with that wiring."
   },
   "decisions": [
     "Adapter factory returns {signer,budget} separately (client takes budget as an option). nsec -> {policy:'none'}; nip07/nip46 -> {concurrency:2,minSpacingMs:200,timeoutMs:120000,leaseMs:150000}.",
@@ -83,6 +84,6 @@
     "lead_clarifications": []
   },
   "lead_notes": [
-    "2026-11-17 post-examiner: relay-query.ts gained #h/ids/since filter fields (Fable remediation, smoke-spec scoping); production build tree-shakes the dev hook call site, so make build proves compile+emit only \u2014 runtime proof moved to AC-GATE-6 (S29). bootstrap result union also includes unsupported(storage), aborted, signer-timeout."
+    "2026-11-17 post-examiner: relay-query.ts gained #h/ids/since filter fields (Fable remediation, smoke-spec scoping); production build tree-shakes the dev hook call site, so make build proves compile+emit only — runtime proof moved to AC-GATE-6 (S29). bootstrap result union also includes unsupported(storage), aborted, signer-timeout."
   ]
 }

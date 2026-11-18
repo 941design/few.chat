@@ -30,6 +30,9 @@ import { clearAllPendingDirectInvites } from '@/src/lib/marmot/pendingDirectInvi
 import { createKeyPackageInviter, createKeyPackageLookup, type KeyPackageInviter } from '@/src/lib/marmot/invitations';
 import { parseStructured } from '@/src/lib/marmot/parseStructured';
 import {
+  grantAdmin,
+  removeMember,
+  renameGroup,
   createDisbandMarker,
   createGroupLeaver,
   createGroupRemovalHandlers,
@@ -445,4 +448,31 @@ describe('AC-MEM-5: disband surfacing from the library marker', () => {
     // a second startup marks nothing more
     expect(await bob2.disband.syncListed(await bob2.account.handle.client.groups.list())).toEqual([]);
   }, 90_000);
+});
+
+describe('group administration', () => {
+  it('surfaces a non-admin removal error and propagates rename, promotion and removal', async () => {
+    const { url } = await startRelay();
+    const alice = await startPeer(SECRET_A, [url]);
+    const bob = await startPeer(SECRET_B, [url]);
+    const group = await groupOfTwo(alice, bob);
+    const bobGroup = (await bob.account.handle.client.groups.get(group.id))!;
+    const queue = createGroupOpQueue();
+    const groupId = group.id;
+    const refresh = (id: string) => alice.trace.push(id);
+
+    await expect(removeMember(queue, bobGroup, alice.pubkey, refresh)).rejects.toMatchObject({
+      details: { reason: 'not-admin' },
+    });
+    expect([...bobGroup.members()].sort()).toEqual([alice.pubkey, bob.pubkey].sort());
+    expect(alice.trace).toEqual([]);
+
+    await renameGroup(queue, group, 'Renamed group', refresh);
+    await expect.poll(() => bobGroup.name).toBe('Renamed group');
+    await grantAdmin(queue, group, bob.pubkey, refresh);
+    await expect.poll(() => [...bobGroup.activeAdmins()].sort()).toEqual([alice.pubkey, bob.pubkey].sort());
+    await removeMember(queue, bobGroup, alice.pubkey, refresh);
+    await expect.poll(() => bobGroup.members()).toEqual([bob.pubkey]);
+    expect(alice.trace.filter((entry) => entry === groupId)).toEqual([groupId, groupId, groupId]);
+  }, 60_000);
 });

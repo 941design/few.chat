@@ -5,18 +5,20 @@
  */
 import 'fake-indexeddb/auto';
 import { createStore, entries, set } from 'idb-keyval';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearAllPendingDirectInvites,
   clearPendingDirectInvite,
   clearPendingDirectInviteIfRef,
+  consumePendingDirectInviteMarker,
+  createSponsorDeclineMarkerStore,
   setPendingDirectInvitePhase,
   getPendingDirectInviteMarker,
   loadDeclinedPendingDirectInvites,
   loadPendingDirectInviteMarkers,
-  markPendingDirectInvite,
   markPendingDirectInviteDeclined,
   markerKey,
+  noteForwardedInviteProfile,
   pendingDirectInviteMarkerStore,
   PHASES,
   recordPendingDirectInvite,
@@ -47,6 +49,13 @@ describe('AC-DEL-2: marker shape carries inviteeRef and declined', () => {
     expect([...(await loadPendingDirectInviteMarkers(G1))]).toEqual([BOB]);
   });
 
+  it('keeps a join approval eligible for decline without reporting a direct acceptance', async () => {
+    await recordPendingDirectInvite(G1, BOB, 'ref-approval', undefined, undefined, true);
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ viaJoinRequest: true });
+    await expect(consumePendingDirectInviteMarker(G1, BOB)).resolves.toBe(false);
+    expect(await getPendingDirectInviteMarker(G1, BOB)).toBeUndefined();
+  });
+
   it('rejects an empty groupId, pubkey or inviteeRef instead of writing a marker that can never match', async () => {
     await expect(recordPendingDirectInvite('', BOB, 'r')).rejects.toThrow(TypeError);
     await expect(recordPendingDirectInvite(G1, '', 'r')).rejects.toThrow(TypeError);
@@ -55,7 +64,7 @@ describe('AC-DEL-2: marker shape carries inviteeRef and declined', () => {
   });
 
   it('legacy markers (bare true, record without inviteeRef, junk) are ignored without throwing', async () => {
-    await markPendingDirectInvite(G1, BOB); // legacy writer: a bare `true`
+    await set(markerKey(G1, BOB), true, raw);
     await set(markerKey(G1, CAROL), { pubkey: CAROL, declined: true }, raw); // no inviteeRef
     await set(markerKey(G1, DAVE), { inviteeRef: 'ref-dave', pubkey: DAVE, declined: 'yes' }, raw); // wrong type
     await set(markerKey(G2, DAVE), 'junk', raw);
@@ -71,6 +80,39 @@ describe('AC-DEL-2: marker shape carries inviteeRef and declined', () => {
 });
 
 describe('markPendingDirectInviteDeclined', () => {
+  it('an older decline is ignored when its rescan finds a newer invite carrying the same ref', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const receivedAt = Date.now();
+    try {
+      const decline = markPendingDirectInviteDeclined(G1, 'ref');
+      vi.setSystemTime(receivedAt + 1);
+      await recordPendingDirectInvite(G1, BOB, 'ref', 'matching-leaf', receivedAt + 1);
+      await expect(decline).resolves.toBeUndefined();
+      expect(await getPendingDirectInviteMarker(G1, BOB)).toMatchObject({ declined: false, invitedAt: receivedAt + 1 });
+      expect(await markPendingDirectInviteDeclined(G1, 'ref')).toMatchObject({ marker: { declined: true } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a forwarded profile received before a decline retains the reference for recovery', async () => {
+    await recordPendingDirectInvite(G1, BOB, 'ref', 'matching-leaf');
+    await noteForwardedInviteProfile(G1, BOB);
+    expect(await markPendingDirectInviteDeclined(G1, 'ref')).toMatchObject({
+      marker: { inviteeRef: 'ref', declined: true, leafKey: 'matching-leaf' },
+    });
+  });
+
+  it('direct and forwarded profiles leave a declined marker available for recovery', async () => {
+    await recordPendingDirectInvite(G1, BOB, 'ref', 'matching-leaf');
+    await markPendingDirectInviteDeclined(G1, 'ref');
+    await expect(consumePendingDirectInviteMarker(G1, BOB)).resolves.toBe(false);
+    await noteForwardedInviteProfile(G1, BOB);
+    expect(await loadDeclinedPendingDirectInvites()).toEqual([
+      { groupId: G1, marker: expect.objectContaining({ inviteeRef: 'ref', declined: true }) },
+    ]);
+  });
+
   it('sets declined:true on the marker with that inviteeRef of that group and returns its entry', async () => {
     // seeded out of key order on purpose
     await recordPendingDirectInvite(G1, CAROL, 'ref-carol');
@@ -157,4 +199,45 @@ describe('phase membership: an unknown phase makes the marker invalid (never coe
     expect(await clearPendingDirectInviteIfRef(G1, BOB, 'ref-bob')).toBe(false);
     expect((await entries(raw)).find(([k]) => k === markerKey(G1, BOB))?.[1]).toEqual(bad);
   });
+});
+
+it('an aborted re-invite transaction leaves the owed notice on the original marker', async () => {
+  const sponsor = createSponsorDeclineMarkerStore(CAROL);
+  await sponsor.record(G1, BOB, 'ref-old');
+  await sponsor.markDeclined(G1, 'ref-old');
+  await sponsor.setPhase(G1, BOB, 'ref-old', 'announce-pending');
+  const oldMarker = await sponsor.get(G1, BOB);
+
+  const put = IDBObjectStore.prototype.put;
+  const transactions: IDBTransaction[] = [];
+  const abortHandoff = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
+    const request = put.call(this, value, key);
+    if (key === markerKey(G1, BOB) || Array.isArray(key)) transactions.push(this.transaction);
+    if (Array.isArray(key)) this.transaction.abort();
+    return request;
+  });
+  try {
+    await expect(sponsor.record(G1, BOB, 'ref-new')).rejects.toBeDefined();
+  } finally {
+    abortHandoff.mockRestore();
+  }
+  expect(transactions).toHaveLength(2);
+  expect(transactions[0]).toBe(transactions[1]);
+  expect(await entries(raw)).toEqual([[markerKey(G1, BOB), oldMarker]]);
+});
+
+it('preflight evidence for an earlier marker cannot promote a different removing marker', async () => {
+  const sponsor = createSponsorDeclineMarkerStore(CAROL);
+  await sponsor.record(G1, BOB, 'ref-old', 'leaf-old');
+  await sponsor.markDeclined(G1, 'ref-old');
+  await sponsor.setPhase(G1, BOB, 'ref-old', 'removing');
+  const removingBeforeInvite = await sponsor.get(G1, BOB);
+  expect(removingBeforeInvite?.phase).toBe('removing');
+
+  await sponsor.record(G1, BOB, 'ref-intervening', 'leaf-intervening');
+  await sponsor.markDeclined(G1, 'ref-intervening');
+  await sponsor.setPhase(G1, BOB, 'ref-intervening', 'removing');
+  await sponsor.record(G1, BOB, 'ref-new', 'leaf-new', undefined, false, { removingBeforeInvite });
+  expect(await sponsor.listDeclined()).toEqual([]);
+  expect(await sponsor.get(G1, BOB)).toMatchObject({ inviteeRef: 'ref-new', declined: false });
 });

@@ -16,16 +16,8 @@
  *      received ack MUST come from `directMessages.ts#unwrapAndOpen` — the
  *      primitive that asserts `rumor.pubkey === seal.pubkey` and THROWS on
  *      mismatch, so a caller can treat a successful return as authenticated
- *      without an extra check. `welcomeSubscription.ts#unwrapGiftWrap` (as of
- *      the epic's S3 story) performs the SAME `rumor.pubkey === seal.pubkey`
- *      assertion internally, but degrades to a non-throwing
- *      `{ authenticated: false }` result instead of throwing — a caller that
- *      forgot to check that flag would silently treat a spoofed sender as
- *      genuine. It MUST NEVER be used here for exactly that reason: this
- *      module's contract relies on a thrown exception to signal failure, not
- *      a flag a future edit could stop checking. The enclosed card's claimed
- *      pubkey is admitted ONLY when it equals this authenticated sender —
- *      never the other way around, and never on its own.
+ *      without an extra check. The enclosed card's claimed pubkey is admitted
+ *      only when it equals the authenticated sender.
  *   2. Walled-garden bypass (AC-ADMIT-4). `isAllowedDmSender` is never called
  *      from this module. Admission is gated solely by nonce-admissibility +
  *      sender-binding, mirroring `joinRequestHandler.ts`'s precedent (nonce
@@ -72,12 +64,8 @@
  *     pending-contact-confirmation). This function's signature
  *     deliberately carries no `ndk` (architecture.md: receive-path modules
  *     never hold a singleton NDK reference) — the optional `opts.ndk` lets a
- *     caller that already has a live NDK instance in scope (e.g.
- *     `welcomeSubscription.ts`'s `subscribeToWelcomes`, which receives `ndk`
- *     as its own param) opt into this behavior. When `opts.ndk` is omitted,
- *     the announce step is a pure no-op — admission itself is completely
- *     unaffected either way, so this stays backward compatible with any
- *     existing call site that has not yet been updated to pass it.
+ *     direct message listener use its live NDK instance for the profile
+ *     announcement. The admission also works with `opts.ndk` omitted.
  *
  * ## §10.1 name-drop fix (epic: direct-contact-profile-exchange, story 07;
  * AC-CARD-1)
@@ -328,9 +316,7 @@ export type HandlePairingAckResult =
 
 /**
  * Minimal shape `handlePairingAck` needs from an inbound kind-1059 event.
- * Callers (welcomeSubscription.ts) normalize their NDK event into this shape
- * the same way `directMessageNotifications.ts`'s kind-1059 handler already
- * does for `unwrapAndOpen`.
+ * The direct message listener normalizes its NDK event to this shape.
  */
 export type GiftWrapEventLike = {
   id?: string;
@@ -345,8 +331,8 @@ export type GiftWrapEventLike = {
 /**
  * Process one received gift-wrapped pairing-ack candidate.
  *
- * Unwraps `giftWrapEvent` via `directMessages.ts#unwrapAndOpen` ONLY — never
- * `welcomeSubscription.ts#unwrapGiftWrap` (AC-SEC-2). On a genuine
+ * Unwraps `giftWrapEvent` with `unwrapAndOpen` to verify sender binding
+ * (AC-SEC-2). On a genuine
  * `PAIRING_ACK_KIND` rumor: validates the echoed nonce via
  * `nonceStore.isNonceAdmissible` (called verbatim — this function never
  * re-derives the grace math), decodes and verifies the enclosed card via
@@ -388,8 +374,7 @@ export async function handlePairingAck(
   opts?: { nowSec?: number; ndk?: NDK },
 ): Promise<HandlePairingAckResult> {
   try {
-    // Step 1: unwrap via the STRICT primitive only (AC-SEC-2) — never
-    // welcomeSubscription.ts's unwrapGiftWrap.
+    // Verify the rumor sender against the authenticated seal (AC-SEC-2).
     let rumor: UnsignedRumor;
     try {
       rumor = await unwrapAndOpen(giftWrapEvent as never, ownPrivateKeyHex);

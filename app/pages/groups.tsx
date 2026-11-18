@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { acceptErrorKind } from '@/src/lib/marmot/inviteAcceptError';
 import {
   Box,
@@ -38,38 +38,25 @@ import InviteAwaitingBanner from '@/src/components/groups/InviteAwaitingBanner';
 import OutboundJoinRequestCard from '@/src/components/groups/OutboundJoinRequestCard';
 import { useOutboundJoinRequests } from '@/src/hooks/useOutboundJoinRequests';
 import InvitationCard from '@/src/components/groups/InvitationCard';
-import {
-  subscribe as subscribePendingInvitations,
-  getSnapshot as getPendingInvitationsSnapshot,
-} from '@/src/lib/pendingInvitations';
-import type { PendingInvitation } from '@/src/lib/pendingInvitations';
-import { resolveInviterLabel, truncatePubkey } from '@/src/lib/pubkeyDisplay';
+import { resolveInviterLabel } from '@/src/lib/pubkeyDisplay';
 import { BADGE_ACCENT } from '@/src/lib/badgeAccent';
 import LeaveGroupButton from '@/src/components/groups/LeaveGroupButton';
 import GroupChat from '@/src/components/groups/GroupChat';
 // Voice/video calls are gated behind the CALLS_ENABLED feature toggle.
 import { GroupCallToolbar } from '@/src/components/calls/CallToolbar';
 import { CALLS_ENABLED } from '@/src/config/features';
-import { ChatStoreProvider, useChatStore } from '@/src/context/ChatStoreContext';
+import { ChatStoreProvider } from '@/src/context/ChatStoreContext';
 import { createPrivateKeySigner } from '@/src/lib/marmot/signerAdapter';
 import { PollStoreProvider } from '@/src/context/PollStoreContext';
 import PollPanel from '@/src/components/groups/PollPanel';
 import CreatePollModal from '@/src/components/groups/CreatePollModal';
 import { markAsRead, markInviteExpiriesRead } from '@/src/lib/unreadStore';
 import { setActiveView, clearActiveView } from '@/src/lib/activeViewStore';
-import { deleteMemberProfile } from '@/src/lib/marmot/groupStorage';
-import { clearPendingDirectInvite } from '@/src/lib/marmot/pendingDirectInviteStorage';
 import type { Group, MemberProfile } from '@/src/types';
-
-/* ---------- Pending-invitations store (SSR-safe stub) ---------- */
-
-function getPendingInvitationsServerSnapshot(): ReadonlyArray<PendingInvitation> {
-  return [];
-}
 
 /* ---------- Detail view (shown when ?id=xxx is present) ---------- */
 
-type MarmotGroupType = import('@internet-privacy/marmot-ts').MarmotGroup;
+type MarmotGroupType = import('@941design/marmot').MarmotGroup;
 
 /**
  * Pure decision logic for the `manageLinks=1` deep-link (epic:
@@ -256,17 +243,10 @@ export function classifyRemovalResult(result: CancelPendingInvitationResult): Re
   return 'error';
 }
 
-/** Captures sendMessage from ChatStore into a ref so GroupDetailView can use it. */
-function ChatSendMessageCapture({ sendMessageRef }: { sendMessageRef: React.MutableRefObject<((c: string) => Promise<void>) | null> }) {
-  const { sendMessage } = useChatStore();
-  sendMessageRef.current = sendMessage;
-  return null;
-}
-
 function GroupDetailView({ id }: { id: string }) {
   const copy = useCopy();
   const router = useRouter();
-  const { groups, ready, getMemberProfiles, getGroup: getMarmotGroup, profileVersion, chatVersion, groupDataVersion, pollVersion, reactionsVersion, cancelPendingInvitation, requestProfilesIfStale, grantAdmin, renameGroup, getPendingRemovals, getPendingDirectInvites, getLiveMemberPubkeys, pendingRequests, loadPendingRequestsForGroup, approveJoinRequest, denyJoinRequest } = useMarmot();
+  const { groups, ready, waitingForLease, sendGroupNotice, removeMember, getMemberProfiles, getGroup: getMarmotGroup, profileVersion, chatVersion, groupDataVersion, pollVersion, reactionsVersion, cancelPendingInvitation, requestProfilesIfStale, grantAdmin, renameGroup, getPendingDirectInvites, pendingRequests, loadPendingRequestsForGroup, approveJoinRequest, denyJoinRequest } = useMarmot();
   const { pubkeyHex, privateKeyHex } = useNostrIdentity();
   const signer = useMemo(
     () => (privateKeyHex ? createPrivateKeySigner(privateKeyHex) : null),
@@ -284,7 +264,7 @@ function GroupDetailView({ id }: { id: string }) {
   const [confirmedPubkeys, setConfirmedPubkeys] = useState<Set<string>>(new Set());
   // AC-LABEL-1: pending-direct-invite marker Set, loaded exactly once per
   // member-list load (alongside confirmedPubkeys below) — never per-row.
-  const [pendingInviteMarkers, setPendingInviteMarkers] = useState<Set<string>>(new Set());
+  const [pendingInviteMarkers, setPendingInviteMarkers] = useState<Map<string, string>>(new Map());
   const [mlsGroup, setMlsGroup] = useState<MarmotGroupType | null>(null);
   // Join-request row UI state (formerly owned by the standalone
   // PendingRequestsSection): which request is mid-approve, and per-request
@@ -292,112 +272,47 @@ function GroupDetailView({ id }: { id: string }) {
   // updates live as requests arrive/are approved/denied.
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
   const [requestErrors, setRequestErrors] = useState<Record<string, string>>({});
-  // Ref to capture sendMessage from inside ChatStoreProvider without prop drilling
-  const sendAnnouncementRef = useRef<((content: string) => Promise<void>) | null>(null);
   // Guards requestProfilesIfStale so it fires only once per group entry (on mount /
   // group-ID change), not on every profileVersion / groupDataVersion tick.
   const requestedOnEntryForRef = useRef<string | null>(null);
 
-  // AC-REMOVE-1: both onCancelInvite and onRemoveMember call the SAME
-  // performGroupMemberRemoval helper (which itself calls the same
-  // cancelPendingInvitation MLS-remove wrapper) — they differ only in which
-  // toast copy keys render the 'success'/'error' outcomes.
-  const onCancelInvite = useCallback(async (pubkey: string) => {
-    if (!group) return;
-    const result = await performGroupMemberRemoval({
-      groupId: group.id,
-      pubkey,
-      sendAnnouncement: sendAnnouncementRef.current ?? undefined,
-      cancelPendingInvitation,
-      getLiveMemberPubkeys,
-      deleteMemberProfile,
-      clearPendingDirectInvite,
-    });
-    switch (classifyRemovalResult(result)) {
-      case 'raceNotice':
-        toast({
-          title: copy.groups.cancelInviteRaceNotice,
-          status: 'info',
-          duration: 4000,
-          isClosable: true,
-        });
-        break;
-      case 'announcementWarning':
-        toast({
-          title: copy.groups.cancelInviteAnnouncementWarning,
-          status: 'warning',
-          duration: 5000,
-          isClosable: true,
-        });
-        break;
-      case 'success':
-        toast({
-          title: copy.groups.cancelInviteSuccess,
-          status: 'success',
-          duration: 3000,
-          isClosable: true,
-        });
-        break;
-      case 'error':
-        toast({
-          title: copy.groups.cancelInviteError,
-          status: 'error',
-          duration: 4000,
-          isClosable: true,
-        });
-        break;
+  const announceMemberRemoval = useCallback(async (groupId: string, pubkey: string) => {
+    if (!pubkeyHex) return false;
+    try {
+      await sendGroupNotice(groupId, JSON.stringify({
+        type: 'invite_cancelled', pubkey: pubkey.toLowerCase(), by: pubkeyHex,
+      }));
+      return true;
+    } catch {
+      return false;
     }
-  }, [group, cancelPendingInvitation, getLiveMemberPubkeys, toast, copy.groups]);
+  }, [pubkeyHex, sendGroupNotice]);
 
-  // AC-REMOVE-1: Remove Member reuses the identical shared removal helper —
-  // same underlying MLS commit, only the success/error toast copy differs
-  // (S6's removeMember* keys vs onCancelInvite's cancelInvite* keys).
+  const onCancelInvite = useCallback(async (pubkey: string) => {
+    const ref = pendingInviteMarkers.get(pubkey.toLowerCase());
+    if (!group || !ref) return;
+    const result = await cancelPendingInvitation(group.id, pubkey, ref);
+    const announced = result.ok && result.changed !== false ? await announceMemberRemoval(group.id, pubkey) : true;
+    toast({
+      title: !result.ok ? copy.groups.cancelInviteError : result.changed === false
+        ? copy.groups.cancelInviteRaceNotice : announced ? copy.groups.cancelInviteSuccess : copy.groups.cancelInviteAnnouncementWarning,
+      status: !result.ok ? 'error' : result.changed === false ? 'info' : announced ? 'success' : 'warning',
+      duration: 4000,
+      isClosable: true,
+    });
+  }, [group, pendingInviteMarkers, cancelPendingInvitation, announceMemberRemoval, toast, copy.groups]);
+
   const onRemoveMember = useCallback(async (pubkey: string) => {
     if (!group) return;
-    const result = await performGroupMemberRemoval({
-      groupId: group.id,
-      pubkey,
-      sendAnnouncement: sendAnnouncementRef.current ?? undefined,
-      cancelPendingInvitation,
-      getLiveMemberPubkeys,
-      deleteMemberProfile,
-      clearPendingDirectInvite,
+    const result = await removeMember(group.id, pubkey);
+    const announced = result.ok ? await announceMemberRemoval(group.id, pubkey) : true;
+    toast({
+      title: !result.ok ? copy.groups.removeMemberError : announced ? copy.groups.removeMemberSuccess : copy.groups.cancelInviteAnnouncementWarning,
+      status: !result.ok ? 'error' : announced ? 'success' : 'warning',
+      duration: 4000,
+      isClosable: true,
     });
-    switch (classifyRemovalResult(result)) {
-      case 'raceNotice':
-        toast({
-          title: copy.groups.cancelInviteRaceNotice,
-          status: 'info',
-          duration: 4000,
-          isClosable: true,
-        });
-        break;
-      case 'announcementWarning':
-        toast({
-          title: copy.groups.cancelInviteAnnouncementWarning,
-          status: 'warning',
-          duration: 5000,
-          isClosable: true,
-        });
-        break;
-      case 'success':
-        toast({
-          title: copy.groups.removeMemberSuccess,
-          status: 'success',
-          duration: 3000,
-          isClosable: true,
-        });
-        break;
-      case 'error':
-        toast({
-          title: copy.groups.removeMemberError,
-          status: 'error',
-          duration: 4000,
-          isClosable: true,
-        });
-        break;
-    }
-  }, [group, cancelPendingInvitation, getLiveMemberPubkeys, toast, copy.groups]);
+  }, [group, removeMember, announceMemberRemoval, toast, copy.groups]);
 
   // Join-request approve/deny — the merged inline affordance that replaced the
   // standalone admission section. MarmotContext owns the request list and
@@ -414,14 +329,14 @@ function GroupDetailView({ id }: { id: string }) {
       // admitter is attributed from the protocol MLS sender on render, never
       // from this payload (DD-2) — the payload carries only the admitted
       // member's pubkey.
-      void sendAnnouncementRef.current?.(
-        JSON.stringify({ type: 'member_admitted', pubkey: request.pubkeyHex }),
-      );
+      void sendGroupNotice(request.groupId, JSON.stringify({
+        type: 'member_admitted', pubkey: request.pubkeyHex,
+      })).catch(console.warn);
     } else {
       setRequestErrors((prev) => ({ ...prev, [request.eventId]: result.error ?? 'unknown' }));
     }
     setApprovingRequestId(null);
-  }, [approveJoinRequest]);
+  }, [approveJoinRequest, sendGroupNotice]);
 
   const handleDenyRequest = useCallback(async (request: import('@/src/lib/marmot/joinRequestStorage').PendingJoinRequest) => {
     await denyJoinRequest(request);
@@ -488,11 +403,9 @@ function GroupDetailView({ id }: { id: string }) {
       if (result.ok) {
         setEditingName(false);
         if (result.changed) {
-          // Fire-and-forget in-chat notice (optimistically appended for the
-          // actor by sendMessage; remote members render it on receipt).
-          void sendAnnouncementRef.current?.(
-            JSON.stringify({ type: 'group_renamed', name: trimmed }),
-          );
+          void sendGroupNotice(group.id, JSON.stringify({
+            type: 'group_renamed', name: trimmed,
+          })).catch(console.warn);
         }
         toast({
           title: copy.groups.renameGroupSuccess,
@@ -518,7 +431,7 @@ function GroupDetailView({ id }: { id: string }) {
     } finally {
       setRenaming(false);
     }
-  }, [group, nameDraft, renameGroup, toast, copy.groups]);
+  }, [group, nameDraft, renameGroup, sendGroupNotice, toast, copy.groups]);
 
   useEffect(() => {
     if (!ready) return;
@@ -536,8 +449,8 @@ function GroupDetailView({ id }: { id: string }) {
       void loadPendingRequestsForGroup(id);
       // AC-LABEL-1: load the pending-direct-invite marker Set exactly ONCE per
       // member-list load, alongside (not per-row inside) the profile fetch below.
-      void getPendingDirectInvites(id).then(setPendingInviteMarkers).catch(() => {
-        setPendingInviteMarkers(new Set());
+      void getPendingDirectInvites(id, found.memberPubkeys).then(setPendingInviteMarkers).catch(() => {
+        setPendingInviteMarkers(new Map());
       });
       void getMemberProfiles(id).then((profiles) => {
         const map: Record<string, MemberProfile> = {};
@@ -584,6 +497,8 @@ function GroupDetailView({ id }: { id: string }) {
         setConfirmedPubkeys(confirmed);
       }).catch(() => {});
     } else {
+      setGroup(null);
+      setMlsGroup(null);
       setNotFound(true);
     }
   }, [ready, groups, id, getMemberProfiles, getPendingDirectInvites, loadPendingRequestsForGroup, pubkeyHex, ownProfile, profileVersion, groupDataVersion, requestProfilesIfStale]);
@@ -665,6 +580,10 @@ function GroupDetailView({ id }: { id: string }) {
     );
   }
 
+  if (waitingForLease) {
+    return <Alert status="info" data-testid="groups-lease-held"><AlertIcon />{copy.groups.activeInAnotherTab}</Alert>;
+  }
+
   if (notFound && !group) {
     return (
       <Box data-testid="group-detail-not-found">
@@ -685,18 +604,19 @@ function GroupDetailView({ id }: { id: string }) {
 
   if (!group) return null;
 
+  if (group.disbanded) {
+    return <Alert status="info" data-testid="group-disbanded"><AlertIcon />{copy.groups.groupDisbanded(group.name)}</Alert>;
+  }
+
   const memberCount = group.memberPubkeys.length;
   // adminPubkeys is the single source of truth for both isAdmin and all child components.
-  const adminPubkeys = mlsGroup?.groupData?.adminPubkeys ?? [];
+  const adminPubkeys = [...mlsGroup?.activeAdmins() ?? []];
   const isAdmin = !!(
     pubkeyHex &&
     adminPubkeys.some(
       (pk: string) => pk.toLowerCase() === pubkeyHex.toLowerCase(),
     )
   );
-  // Pending removals: synchronous read; refreshes on each render (groupDataVersion drives re-renders via the effect above).
-  const pendingRemovalPubkeys = getPendingRemovals(group.id);
-
   return (
     <>
       <Head>
@@ -822,17 +742,17 @@ function GroupDetailView({ id }: { id: string }) {
             </Heading>
             {/* AC-GATE-3: onCancelInvite/onRemoveMember are admin-only actions */}
             <MemberList
+              key={`${pubkeyHex}:${group.id}`}
               memberPubkeys={group.memberPubkeys}
               ownPubkeyHex={pubkeyHex}
               memberProfiles={profileMap}
               confirmedPubkeys={confirmedPubkeys}
-              pendingInviteMarkers={pendingInviteMarkers}
+              pendingInviteMarkers={new Set(pendingInviteMarkers.keys())}
               onCancelInvite={isAdmin ? onCancelInvite : undefined}
               onRemoveMember={isAdmin ? onRemoveMember : undefined}
               adminPubkeys={adminPubkeys}
               isCurrentUserAdmin={isAdmin}
               onMakeAdmin={isAdmin ? handleMakeAdmin : undefined}
-              pendingRemovalPubkeys={pendingRemovalPubkeys}
               pendingRequests={isAdmin ? (pendingRequests[group.id] ?? []) : undefined}
               onApproveRequest={isAdmin ? handleApproveRequest : undefined}
               onDenyRequest={isAdmin ? handleDenyRequest : undefined}
@@ -876,7 +796,6 @@ function GroupDetailView({ id }: { id: string }) {
               reactionsVersion={reactionsVersion}
               isCurrentUserAdmin={isAdmin}
             >
-              <ChatSendMessageCapture sendMessageRef={sendAnnouncementRef} />
               <PollStoreProvider
                 groupId={group.id}
                 group={mlsGroup}
@@ -902,7 +821,7 @@ function GroupDetailView({ id }: { id: string }) {
         isOpen={inviteDisclosure.isOpen}
         onClose={inviteDisclosure.onClose}
         groupId={group.id}
-        sendAnnouncement={(content: string) => sendAnnouncementRef.current?.(content) ?? Promise.resolve()}
+        sendAnnouncement={(content) => sendGroupNotice(group.id, content)}
         // An empty set means the member-profile load has not completed (it always
         // contains the viewer once loaded): degrade to the plain "already in
         // group" label rather than labelling every member "invitation pending".
@@ -910,10 +829,12 @@ function GroupDetailView({ id }: { id: string }) {
       />
 
       <GenerateInviteLinkModal
-        isOpen={inviteLinkDisclosure.isOpen}
+        isOpen={inviteLinkDisclosure.isOpen && !!group.accountPubkey &&
+          groups.some((current) => current.id === group.id && current.accountPubkey === group.accountPubkey)}
         onClose={inviteLinkDisclosure.onClose}
         groupId={group.id}
         groupName={group.name}
+        ownerPubkey={group.accountPubkey}
       />
 
       <ManageInviteLinksModal
@@ -927,71 +848,24 @@ function GroupDetailView({ id }: { id: string }) {
 
 /* ---------- Invitation preview (read-only, pre-join) ---------- */
 
-/**
- * Read-only preview of a pending invitation, reached via `/groups?invite=<id>`
- * (query param only — no dynamic path segment, per the static-export routing
- * rule). Shows the pre-join-decoded group name, description, "Invited by <X>"
- * attribution, and the group admin(s), plus Accept/Decline (epic:
- * inline-invitation-cards, S3). Group data is decoded locally from the stored
- * Welcome via `getInvitationGroupData` (S1) — no relay call; attribution reads
- * only local contacts. A member roster is NOT recoverable pre-join, so only
- * admins are shown.
- *
- * AC-PREVIEW-3: a stale/unknown invite id (already accepted/declined, or never
- * existed) does not crash — once client state has hydrated, it falls back to
- * the groups list. The `hydrated` gate avoids a redirect during the pre-
- * hydration render window where the store snapshot is still the SSR empty
- * array.
- */
+/** Read-only, sponsor-attributed preview for a pending invitation. */
 function InvitationPreviewView({ id }: { id: string }) {
   const router = useRouter();
   const copy = useCopy();
-  const { getInvitationGroupData, acceptPendingInvitation, declinePendingInvitation } = useMarmot();
-  const { pubkeyHex, hydrated } = useNostrIdentity();
-  const invitations = useSyncExternalStore(
-    subscribePendingInvitations,
-    getPendingInvitationsSnapshot,
-    getPendingInvitationsServerSnapshot,
-  );
-  const invitation = invitations.find((inv) => inv.id === id);
-
-  const [groupData, setGroupData] = useState<{ name: string; description: string; adminPubkeys: string[] } | null>(null);
+  const { ready, pendingInvitations, acceptPendingInvitation, declinePendingInvitation } = useMarmot();
+  const { pubkeyHex } = useNostrIdentity();
+  const invitation = pendingInvitations.find((inv) => inv.id === id);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
-  // AC-PREVIEW-3: stale/unknown (or just accepted/declined) invite id → back to
-  // the list. Gated on `hydrated` so we don't redirect during the pre-hydration
-  // window (store snapshot is the SSR [] until the client settles). Accept and
-  // Decline also remove the invitation from the store, so this same effect
-  // performs the post-action navigation back to the list.
   useEffect(() => {
-    if (hydrated && !invitation) {
-      void router.replace('/groups');
-    }
-  }, [hydrated, invitation, router]);
-
-  const welcomeJson = invitation?.welcomeEventJson;
-  useEffect(() => {
-    if (!welcomeJson) return;
-    let cancelled = false;
-    getInvitationGroupData(welcomeJson)
-      .then((data) => {
-        if (!cancelled) setGroupData(data);
-      })
-      .catch(() => {
-        if (!cancelled) setGroupData(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [welcomeJson, getInvitationGroupData]);
+    if (ready && !invitation) void router.replace('/groups');
+  }, [ready, invitation, router]);
 
   if (!invitation) return null;
 
-  const displayName = groupData?.name ? groupData.name : copy.groups.pendingInvitations.unknownGroupFallback;
-  const description = groupData?.description?.trim();
-  const admins = groupData?.adminPubkeys ?? [];
-  const inviterLabel = resolveInviterLabel(invitation.inviterPubkeyHex, pubkeyHex);
+  const displayName = invitation.displayName ?? copy.groups.pendingInvitations.unknownGroupFallback;
+  const inviterLabel = resolveInviterLabel(invitation.sponsorAccount, pubkeyHex);
 
   async function handleAccept() {
     setAccepting(true);
@@ -1032,27 +906,6 @@ function InvitationPreviewView({ id }: { id: string }) {
           <Text fontSize="sm" color="textMuted" data-testid="invitation-preview-invited-by">
             {copy.groups.pendingInvitations.invitedBy(inviterLabel)}
           </Text>
-
-          {description && (
-            <Text fontSize="sm" data-testid="invitation-preview-description">
-              {description}
-            </Text>
-          )}
-
-          {admins.length > 0 && (
-            <Box data-testid="invitation-preview-admins">
-              <Text fontSize="xs" fontWeight="semibold" color="textMuted" mb={1}>
-                {copy.groups.pendingInvitations.adminLabel}
-              </Text>
-              <VStack align="stretch" spacing={0}>
-                {admins.map((admin) => (
-                  <Text key={admin} fontSize="xs" color="textMuted" noOfLines={1}>
-                    {resolveInviterLabel(admin, pubkeyHex) || truncatePubkey(admin)}
-                  </Text>
-                ))}
-              </VStack>
-            </Box>
-          )}
 
           {error && (
             <Alert status="error" borderRadius="md" py={1} px={3}>
@@ -1101,14 +954,9 @@ export default function GroupsPage() {
   const joinName = router.query.name as string | undefined;
   const manageLinksParam = router.query.manageLinks as string | undefined;
   const copy = useCopy();
-  const { groups, ready, unsupported } = useMarmot();
+  const { groups, ready, unsupported, unsupportedNip44, waitingForLease, pendingInvitations: invitations } = useMarmot();
   const { backedUp, isFreshIdentity, hydrated } = useNostrIdentity();
   const { records: outboundRecords, loaded: outboundLoaded } = useOutboundJoinRequests();
-  const invitations = useSyncExternalStore(
-    subscribePendingInvitations,
-    getPendingInvitationsSnapshot,
-    getPendingInvitationsServerSnapshot,
-  );
   const createDisclosure = useDisclosure();
 
   // AC-DEEPLINK-3: `?id=<id>&manageLinks=1` targeting a groupId absent from
@@ -1233,13 +1081,19 @@ export default function GroupsPage() {
             <Box>
               <Text fontWeight="semibold">{copy.groups.httpsRequired}</Text>
               <AlertDescription>
-                <Text>{copy.groups.httpsRequiredBody}</Text>
+                <Text>{unsupportedNip44 ? copy.groups.unsupportedNip44 : copy.groups.httpsRequiredBody}</Text>
               </AlertDescription>
             </Box>
           </Alert>
         )}
 
-        {!ready && !unsupported && (
+        {waitingForLease && (
+          <Alert status="info" data-testid="groups-lease-held">
+            <AlertIcon />{copy.groups.activeInAnotherTab}
+          </Alert>
+        )}
+
+        {!ready && !unsupported && !waitingForLease && (
           <Box py={8} textAlign="center" color="textMuted">
             <Text>{copy.groups.loading}</Text>
           </Box>
@@ -1270,7 +1124,7 @@ export default function GroupsPage() {
           </Alert>
         )}
 
-        {ready && (groups.length > 0 || outboundRecords.length > 0 || (!unsupported && invitations.length > 0)) && (
+        {(ready || waitingForLease) && (groups.length > 0 || outboundRecords.length > 0 || invitations.length > 0) && (
           <VStack spacing={3} align="stretch" data-testid="groups-list">
             {!unsupported && invitations.length > 0 && (
               <Box data-testid="pending-invitations-section">
@@ -1291,7 +1145,7 @@ export default function GroupsPage() {
               <GroupCard key={group.id} group={group} />
             ))}
             {outboundRecords.map((record) => (
-              <OutboundJoinRequestCard key={record.nonce} record={record} />
+              <OutboundJoinRequestCard key={`${record.accountPubkey ?? 'legacy'}:${record.nonce}`} record={record} />
             ))}
           </VStack>
         )}

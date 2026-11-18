@@ -27,18 +27,9 @@
  *      jitter alone only spreads WHEN a schedule next becomes due, not how a
  *      big batch of already-due schedules is drained in one tick.
  *   2. **Dedicated inbound subscription (AC-WATCH-2).** Opens its OWN
- *      `ndk.subscribe({kinds:[GIFT_WRAP_KIND],'#p':[ownPubkeyHex]})` — a
- *      fourth kind-1059 consumer alongside `welcomeSubscription.ts`,
- *      `DirectMessageNotificationsWatcher`, and `IncomingCallWatcher`'s call
- *      signaling sub, per `exploration.json`'s `DISPATCH_SEAM_DECISION`. Every
- *      inbound wrap is strictly unwrapped via
- *      `directMessages.ts#unwrapAndOpen` ONLY — never
- *      `welcomeSubscription.ts#unwrapGiftWrap` — and routed by inner kind
- *      (`decideDispatch`) to `receive.ts`'s `handleProfileRequest` /
- *      `handleProfileAnnounce`. Cannot filter the subscription by author:
- *      gift-wrap outer `pubkey` is an ephemeral per-wrap key (project
- *      learning `kind-445-events-have-ephemeral-authors`), so `'#p'` is the
- *      only filter term, exactly like the three pre-existing consumers.
+ *      kind-1059 subscription for the account. `unwrapAndOpen` checks sender
+ *      binding before routing profile requests and announcements by inner kind.
+ *      The subscription filters by recipient because wrap authors are ephemeral.
  *
  * ## D4 reset-on-activity (spec.md §3.2, Resolved Decisions)
  *
@@ -476,19 +467,13 @@ export default function ProfileHealWatcher() {
         const ndk = await connectNdk(ownPrivateKeyHex);
         if (cancelled) return;
 
-        // AC-WATCH-2: a NEW, dedicated kind-1059 subscription — never touches
-        // welcomeSubscription.ts or the other two consumers' subscriptions.
-        // '#p' only: gift-wrap outer authors are ephemeral per-wrap keys, so
-        // filtering by author is impossible here (project learning
-        // kind-445-events-have-ephemeral-authors), exactly like the other
-        // three kind-1059 consumers.
+        // Filter by recipient. Gift-wrap authors are ephemeral keys.
         const sub = ndk.subscribe({ kinds: [GIFT_WRAP_KIND], '#p': [ownPubkeyHex] });
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const handler = async (event: any) => {
           try {
-            // AC-PROF-5/AC-WATCH-2: strict unwrap ONLY — never
-            // welcomeSubscription.ts#unwrapGiftWrap.
+            // Verify the rumor sender against the authenticated seal.
             const rumor = await unwrapAndOpen(
               { ...event, created_at: event.created_at ?? Math.floor(Date.now() / 1000) },
               ownPrivateKeyHex,

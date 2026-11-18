@@ -30,20 +30,28 @@ vi.mock('nostr-tools/pure', () => ({
   verifyEvent: vi.fn((_event: unknown) => true),
 }));
 
-// ─── @internet-privacy/marmot-ts mock ────────────────────────────────────────
 let mockRumor: ReturnType<typeof makeProfileRumor> | null = null;
-vi.mock('@internet-privacy/marmot-ts', () => ({
-  deserializeApplicationData: vi.fn((_data: Uint8Array) => mockRumor),
-}));
 
 // ─── Dynamic imports (after vi.mock) ─────────────────────────────────────────
-const { createProfileHandler } = await import('@/src/lib/marmot/handlers/profileHandler');
-const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
+const { createProfileGroupHandler } = await import('@/src/lib/marmot/handlers/profileHandler');
 const { PROFILE_RUMOR_KIND } = await import('@/src/lib/marmot/profileSync');
 // AC-XCUT-5: the REAL producer, wired into deps.mergeMemberProfile for the
 // merge-order property test below — not mocked, since the property under
 // test IS the real last-writer-wins merge behavior.
 const { mergeMemberProfile: realMergeMemberProfile, loadMemberProfiles } = await import('@/src/lib/marmot/groupStorage');
+
+// Compatibility call shape is confined to the fixture; the real sink handler owns all effects.
+function createProfileHandler(deps: any) {
+  const jobs: Array<() => Promise<void>> = [];
+  const handler = createProfileGroupHandler({ ...deps, enqueue: (job: () => Promise<void>) => jobs.push(job) });
+  expect(handler).not.toHaveProperty('handle');
+  return {
+    async handle(rumor: any, ctx: any, sender?: { pubkey: string }) {
+      await handler.dispatch({ groupId: ctx.groupId, eventId: rumor.id, rumor, sender: sender?.pubkey ?? rumor.pubkey }, ctx);
+      while (jobs.length) await jobs.shift()!();
+    },
+  };
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -136,13 +144,13 @@ function makeCtx() {
 
 // AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
 function makeSender(pubkey: string): { pubkey: string; authenticity: 'claimed' | 'mls' } {
-  return { pubkey, authenticity: 'claimed' };
+  return { pubkey, authenticity: 'mls' };
 }
 
 function makeDeps(mergeResult = true) {
   return {
     mergeMemberProfile: vi.fn(async () => mergeResult),
-    clearPendingDirectInvite: vi.fn(async () => {}),
+    noteForwardedInviteProfile: vi.fn(async () => {}),
     notifyProfileObserved: vi.fn(),
     recordRequestAnswered: vi.fn(async () => {}),
     writeContactEntry: vi.fn(),
@@ -158,7 +166,7 @@ function makeDeps(mergeResult = true) {
 /**
  * Marker-aware deps for the accept-producer (S3) test group below: a real
  * Map-backed pending-marker store shared between consumePendingDirectInviteMarker
- * (the atomic own-join get+clear) and clearPendingDirectInvite (the
+ * (the atomic own-join get+clear) and noteForwardedInviteProfile (the
  * pre-existing relay-on-behalf clear), so the at-most-once guarantee
  * (AC-PROD-5) is exercised through actual state transitions the SUT drives
  * itself — not a mock whose boolean return is hardcoded per call.
@@ -184,7 +192,7 @@ function makeMarkerAwareDeps(mergeResult = true) {
       }
       return existed;
     }),
-    clearPendingDirectInvite: vi.fn(async (groupId: string, pubkey: string) => {
+    noteForwardedInviteProfile: vi.fn(async (groupId: string, pubkey: string) => {
       pendingMarkers.delete(key(groupId, pubkey));
     }),
     sendAnnouncement: vi.fn(async () => {}),
@@ -302,24 +310,6 @@ describe('profileHandler', () => {
     expect(contactPubkey).toBe(SELF_PUBKEY);
   });
 
-  it('duplicate-id: dispatcher LRU prevents second mergeMemberProfile call', async () => {
-    const deps = makeDeps(true);
-    const handler = createProfileHandler(deps);
-    const dispatcher = createDispatcher([handler]);
-    const group = makeFakeGroup();
-    const ctx = makeCtx();
-
-    dispatcher.subscribe(group as any, ctx);
-
-    const rumor = makeProfileRumor({ id: 'dup-profile-id-1' });
-    mockRumor = rumor;
-
-    await group.emit();
-    await group.emit();
-
-    // LRU dedup: second emission of same id is skipped
-    expect(deps.mergeMemberProfile).toHaveBeenCalledOnce();
-  });
 
   it('notifyProfileObserved NOT called for legacy profile (no signedEvent)', async () => {
     const deps = makeDeps(true);
@@ -418,7 +408,7 @@ describe('profileHandler', () => {
     expect(deps.mergeMemberProfile).toHaveBeenCalledTimes(2);
   });
 
-  // ─── AC-MARKER-5/6: clearPendingDirectInvite wiring ─────────────────────────
+  // ─── AC-MARKER-5/6: noteForwardedInviteProfile wiring ─────────────────────────
 
   it('AC-MARKER-5: own-signed profile (merged=true) clears the pending-direct-invite marker', async () => {
     const deps = makeDeps(true);
@@ -428,8 +418,8 @@ describe('profileHandler', () => {
 
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledOnce();
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledOnce();
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
   });
 
   it('AC-MARKER-5: own-signed profile that LOSES the LWW merge (merged=false) still clears the marker', async () => {
@@ -443,8 +433,8 @@ describe('profileHandler', () => {
     // Crux of AC-MARKER-5: must NOT regress to `if (merged) clear()` — arrival
     // of the invitee's own signed profile is proof of liveness regardless of
     // whether the LWW merge won.
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledOnce();
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledOnce();
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
   });
 
   it('AC-MARKER-6: rumor-only payload (no signedEvent) never clears any marker, even though rumor.pubkey looks marked', async () => {
@@ -456,7 +446,7 @@ describe('profileHandler', () => {
 
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
-    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalled();
+    expect(deps.noteForwardedInviteProfile).not.toHaveBeenCalled();
   });
 
   it('AC-MARKER-6: relay-on-behalf clears the AUTHOR pubkey, never the relayer pubkey', async () => {
@@ -468,15 +458,15 @@ describe('profileHandler', () => {
 
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledOnce();
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
-    expect(deps.clearPendingDirectInvite).not.toHaveBeenCalledWith(GROUP_ID, PEER_PUBKEY);
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledOnce();
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+    expect(deps.noteForwardedInviteProfile).not.toHaveBeenCalledWith(GROUP_ID, PEER_PUBKEY);
   });
 
-  it('clearPendingDirectInvite failure is best-effort and does not abort the rest of handle()', async () => {
+  it('noteForwardedInviteProfile failure is best-effort and does not abort the rest of handle()', async () => {
     const deps = {
       ...makeDeps(true),
-      clearPendingDirectInvite: vi.fn(async () => {
+      noteForwardedInviteProfile: vi.fn(async () => {
         throw new Error('idb quota');
       }),
     };
@@ -639,7 +629,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
     expect(deps.sendAnnouncement).not.toHaveBeenCalled();
     // The pre-existing marker-clear mechanism is unchanged: a relay still
     // clears the marker (DD-9), it just must not be mistaken for a join.
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
   });
 
   it('AC-PROD-5: duplicate/reconnect redelivery of B\'s own profile posts accepted exactly once, not zero and not two', async () => {
@@ -663,7 +653,7 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
 
   it('S3 gate-remediation (severity-4, at-most-once TOCTOU): two DISTINCT-id own-join profile rumors for the same B, dispatched CONCURRENTLY (both interleaved before either resolves), post accepted EXACTLY ONCE', async () => {
     // Reproduces the finding: a naive hasPendingDirectInvite()-then-
-    // clearPendingDirectInvite() pair lets two interleaved own-join deliveries
+    // noteForwardedInviteProfile() pair lets two interleaved own-join deliveries
     // both observe the marker present before either clears it. This test
     // exercises the REAL Map-backed marker fixture (makeMarkerAwareDeps) and
     // fires both handle() calls WITHOUT awaiting between them, so they
@@ -787,8 +777,8 @@ describe('accept-producer (AC-PROD-3/4/5, DD-9)', () => {
 
     expect(deps.sendAnnouncement).not.toHaveBeenCalled();
     // Relay-on-behalf marker-clear is unaffected: still clears via
-    // clearPendingDirectInvite, just never mistaken for a join.
-    expect(deps.clearPendingDirectInvite).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
+    // noteForwardedInviteProfile, just never mistaken for a join.
+    expect(deps.noteForwardedInviteProfile).toHaveBeenCalledWith(GROUP_ID, AUTHOR_PUBKEY);
   });
 
   it('round-trip: buildAcceptedAnnouncementContent output parses back through the real parseStructured guard to the exact InviteLifecycleContent shape', async () => {

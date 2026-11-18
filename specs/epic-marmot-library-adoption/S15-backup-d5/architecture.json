@@ -1,0 +1,50 @@
+{
+  "module_name": "backup",
+  "purpose": "Publish and recover settings and the local profile via self-encrypted relay backup. Ignore retired group sections and use the configured relay set.",
+  "public_api": [
+    {
+      "name": "collectBackupPayload",
+      "signature": "() => Promise<BackupPayload>",
+      "description": "Only version, timestamp, settings and own profile."
+    },
+    {
+      "name": "restoreFromBackup",
+      "signature": "(payload: BackupPayload) => Promise<void>",
+      "description": "Apply settings and own profile and preserve other local data."
+    },
+    {
+      "name": "getBackupRelays",
+      "signature": "() => string[]",
+      "description": "Read current configured relays, with the existing defaults."
+    }
+  ],
+  "private_files": [],
+  "owned_data": [
+    "Kind 30078 d=few payload and backup restore guard"
+  ],
+  "dependencies_allowed": [
+    "localStorage settings and own userProfile",
+    "configured relay resolver",
+    "NDK relay transport",
+    "account signer NIP-44 self-encryption"
+  ],
+  "dependencies_forbidden": [
+    "group stores",
+    "kind 30051 relay discovery"
+  ],
+  "external_ports": [
+    "account signer",
+    "NDK fetch and publish"
+  ],
+  "events_emitted": [
+    "kind 30078 with NIP-44 ciphertext"
+  ],
+  "events_consumed": [
+    "kind 30078 authored by the current account"
+  ],
+  "test_targets": [
+    "app/tests/unit/backup/relayBackup.test.ts",
+    "app/tests/unit/backup/coldStartRetry.test.ts",
+    "app/tests/unit/backup/publishGuardRealPublish.test.ts"
+  ]
+}

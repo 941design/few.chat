@@ -19,11 +19,11 @@
  * The row-shape filter (and `entry.groupId` check) stays as a second line.
  *
  * Rules:
- *   - Only get/set/del/delMany/keys/entries/createStore and the UseStore
- *     callback (range reads) are used. idb-keyval
- *     `update()` is banned repo-wide (it is not transaction-bound and may never
- *     settle). Atomicity is not needed from the store: the backend serialises
- *     every operation per group and the account lease keeps one writer.
+ *   - The backend serialises operations per group and the account lease keeps
+ *     one writer. Withdrawal marks still need a single transaction so a
+ *     restart cannot see only part of the batch. The UseStore callback keeps
+ *     the reads and writes in that transaction. idb-keyval `update()` is
+ *     banned repo-wide.
  *   - The store is created lazily so importing this module (SSR / static
  *     export / node tests) never touches `indexedDB`.
  *   - `seq` is a per-group counter that only ever grows: it is assigned at the
@@ -74,6 +74,8 @@ export interface HistoryStore {
   getRow(groupId: string, eventId: string): Promise<HistoryRow | undefined>;
   /** Writes (or rewrites) the row under its `(groupId, eventId)` key. */
   putRow(row: HistoryRow): Promise<void>;
+  /** Atomically marks the existing rows and returns their IDs, including previously marked rows. */
+  markWithdrawing(groupId: string, eventIds: readonly string[], cancelled: () => boolean): Promise<string[]>;
   /** Reserves the next `seq` of a group (1, 2, 3, ...). */
   nextSeq(groupId: string): Promise<number>;
   deleteRow(groupId: string, eventId: string): Promise<void>;
@@ -160,6 +162,41 @@ export function createIdbHistoryStore(dbName: string): HistoryStore {
 
     async putRow(row) {
       await set(rowKey(row.entry.groupId, row.entry.eventId), row, handle());
+    },
+
+    async markWithdrawing(groupId, eventIds, cancelled) {
+      if (eventIds.length === 0 || cancelled()) return [];
+      return handle()('readwrite', (os) => {
+        if (cancelled()) return Promise.resolve([]);
+        return new Promise<string[]>((resolve, reject) => {
+          const tx = os.transaction;
+          const matched: string[] = [];
+          let writeError: unknown;
+          tx.oncomplete = () => resolve(matched);
+          tx.onabort = () => reject(writeError ?? tx.error ?? new DOMException('Withdrawal mark batch aborted', 'AbortError'));
+          for (const eventId of eventIds) {
+            const key = rowKey(groupId, eventId);
+            const request = os.get(key);
+            // Queue the write while the request event has the transaction active.
+            request.onsuccess = () => {
+              if (cancelled()) {
+                tx.abort();
+                return;
+              }
+              const row: unknown = request.result;
+              if (!isRow(row)) return;
+              matched.push(eventId);
+              if (row.withdrawing) return;
+              try {
+                os.put({ ...row, withdrawing: true }, key);
+              } catch (error) {
+                writeError = error;
+                tx.abort();
+              }
+            };
+          }
+        });
+      });
     },
 
     async nextSeq(groupId) {

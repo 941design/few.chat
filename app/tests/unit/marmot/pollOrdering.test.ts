@@ -52,11 +52,14 @@ const {
   queuePendingClose, loadPendingCloses, removePendingCloses,
   queuePendingCloseAnnouncement, loadPendingCloseAnnouncements, removePendingCloseAnnouncements,
   PENDING_VOTE_TTL_MS, MAX_PENDING_CLOSES_PER_SENDER, MAX_PENDING_CLOSES_PER_GROUP,
-  loadVoteSeqReservation, allocateVoteSeq,
+  allocateVoteSeq,
 } = persistence;
-const casterDeps = () => ({ loadVotes, loadPendingVotes, saveVoteIfNewer, allocateVoteSeq });
-const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler, createHeldCloseSettler } = await import('@/src/lib/marmot/handlers/pollHandler');
-const { createChatHandler, createPollCloseAnnouncementReplayer } = await import('@/src/lib/marmot/handlers/chatHandler');
+const { loadVoteSeqReservation } = await import('@/src/lib/marmot/pollPersistence');
+const casterDeps = () => ({ loadVotes, loadPendingVotes, allocateVoteSeq });
+const { createHeldCloseSettler } = await import('@/src/lib/marmot/handlers/pollHandler');
+const { createPollOpenHandler, createPollVoteHandler, createPollCloseHandler } = await import('./handlers/reducerFixtures');
+const { createPollCloseAnnouncementReplayer } = await import('@/src/lib/marmot/handlers/chatHandler');
+const { createChatHandler } = await import('./handlers/reducerFixtures');
 const { POLL_OPEN_KIND, POLL_VOTE_KIND, POLL_CLOSE_KIND, parsePollVote, serialisePollVote } = await import('@/src/lib/marmot/pollSync');
 const { nextVoteSeq, createVoteCaster } = await import('@/src/lib/marmot/pollCast');
 const { replayPendingVotes } = await import('@/src/lib/marmot/pollReplay');
@@ -417,7 +420,7 @@ describe('castVote seq derivation (pollCast)', () => {
     expect(sent).toEqual([6, 7]);
     expect(first.seq).toBe(6);
     expect(second).toMatchObject({ seq: 7, responses: ['B'], rumorId: 'cast-1', votedAt: 1_700_000_000_000 });
-    expect(await storedChoice()).toEqual(['B']);
+    expect(await storedChoice()).toEqual(['A']);
   });
 
   it('a failed send does not break the chain; its reserved seq is not reused (the send may have landed)', async () => {
@@ -431,7 +434,7 @@ describe('castVote seq derivation (pollCast)', () => {
     expect(ok.mock.calls[0][0]).toMatchObject({ pollId: POLL_ID, responses: ['A'], seq: 2 });
   });
 
-  it('a cast whose own vote was meanwhile superseded by a higher-seq vote from another device stores nothing', async () => {
+  it('a finished send leaves the sink’s already-stored higher-sequence vote alone', async () => {
     const cast = createVoteCaster(casterDeps());
     const send = async () => {
       // Another device's seq-9 vote lands while this cast is in flight.
@@ -576,7 +579,7 @@ describe('pending-close queue: bounds, TTL, persistence', () => {
     await close();
     vi.resetModules();
     const fresh = await import('@/src/lib/marmot/pollPersistence');
-    const handlers = await import('@/src/lib/marmot/handlers/pollHandler');
+    const handlers = await import('./handlers/reducerFixtures');
     await handlers.createPollOpenHandler({ ...fresh, setPollVersion: vi.fn() }).handle(rumor(POLL_OPEN_KIND, CREATOR, openPayload()), ctx(), sender(CREATOR));
     expect((await fresh.getPoll(GROUP, POLL_ID))?.closed).toBe(true);
   });
@@ -1225,15 +1228,13 @@ describe('own vote seq is allocated durably and atomically before the send', () 
     ({ groupId, pollId, voterPubkey, responses: ['A'], send });
   const okSend = () => vi.fn(async (_p: { seq?: number }) => ({ id: `s-${rumorSeq++}`, created_at: 5 }));
 
-  it('send succeeds but the local save fails → the next cast uses seq + 1, not the same seq', async () => {
-    const deps = { ...casterDeps(), saveVoteIfNewer: vi.fn(saveVoteIfNewer) };
-    deps.saveVoteIfNewer.mockRejectedValueOnce(new Error('quota'));
-    const cast = createVoteCaster(deps);
+  it('a successful send without an echo leaves the store alone and reserves the next sequence', async () => {
+    const cast = createVoteCaster(casterDeps());
     const send = okSend();
-    await expect(cast(castArgs(send))).rejects.toThrow('quota');
-    expect(await loadVotes(GROUP, POLL_ID)).toEqual([]); // the save really failed
+    await cast(castArgs(send));
+    expect(await loadVotes(GROUP, POLL_ID)).toEqual([]);
     const second = await cast(castArgs(send));
-    expect(send.mock.calls.map(([p]) => p.seq)).toEqual([1, 2]);
+    expect(send.mock.calls.map(([payload]) => payload.seq)).toEqual([1, 2]);
     expect(second.seq).toBe(2);
     expect(await loadVoteSeqReservation(GROUP, POLL_ID, USER)).toBe(2);
   });

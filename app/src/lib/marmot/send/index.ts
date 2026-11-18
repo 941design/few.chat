@@ -7,10 +7,7 @@ export {
   createGroupRumorSender,
   isSignalRumor,
   type GroupRumorSender,
-  type GroupRumorSenderOptions,
-  type PreparedGroupRumor,
   type SendableGroup,
-  type SendGroupRumorResult,
 } from './sendGroupRumor';
 export {
   createOwnRowTracker,
@@ -18,15 +15,11 @@ export {
   type OwnRowStatus,
   type OwnRowStatusPort,
   type OwnRowTracker,
-  type OwnRowTrackerOptions,
-  type RegisterOptions,
 } from './ownRowTracker';
 export {
   createGroupOpQueue,
   GroupOpError,
   type CommitOpGroup,
-  type GroupOpErrorCode,
   type GroupOpOptions,
   type GroupOpQueue,
-  type GroupOpQueueOptions,
 } from './groupOpQueue';

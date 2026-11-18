@@ -1,0 +1,29 @@
+{
+  "story_id": "S24",
+  "status": "done",
+  "modules_touched": [
+    "e2e-helpers"
+  ],
+  "files_created": [],
+  "files_modified": [
+    "app/tests/e2e/helpers/clear-state.ts",
+    "app/playwright.config.ts",
+    "app/scripts/run-e2e.mjs",
+    "scripts/blossom-mock.mjs"
+  ],
+  "remediation_rounds": 0,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "static": "Compared the file list and retained assertions with pre-marmot-library-adoption. All retained titles and assertions were preserved. The test runner serves the local Blossom mock through a certificate-pinned HTTPS proxy.",
+    "browser": "The integrated relay run passed abandon (3/3) and ever-known (6/6). A clean-relay Chromium run passed all seven poll-after-leave checks, along with off-screen join requests, multi-tab transfer and removal/re-invite (23/23 total). A separate run passed the active group join-request regression and notification-domain checks (10 passed, one baseline skip)."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "Independent Codex reviewer Beauvoir compared the test files directly with the pre-run tag. All 83 ordinary retained files are byte-for-byte identical. groups-admin retains all executable assertions, and the sole removed baseline spec is groups-blackout-guard.",
+    "adversarial": "Beauvoir checked the lease-bound dev hooks and active-view predicate. Its acceptance condition was the recorded execution of the seven retained poll-after-leave checks, which all passed in the focused run. Blocked database deletion handling is existing cleanup behavior and was recorded as a harness limitation."
+  }
+}

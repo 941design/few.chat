@@ -3,8 +3,8 @@
  * direct-contact-profile-exchange, story 04, the security core).
  *
  * Two dispatch arms, `handleProfileRequest` and `handleProfileAnnounce`, each
- * reached EXCLUSIVELY via `directMessages.ts#unwrapAndOpen` — never
- * `welcomeSubscription.ts#unwrapGiftWrap` (AC-PROF-5, spec.md §4.2). This
+ * receive a rumor verified with `directMessages.ts#unwrapAndOpen`
+ * (AC-PROF-5, spec.md §4.2). This
  * module does not itself call `unwrapAndOpen`: it takes the already
  * strict-unwrapped, authenticated rumor plus a `senderHex` the caller (story
  * 05's watcher) derives from that same authenticated `rumor.pubkey`. Every

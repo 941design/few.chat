@@ -45,7 +45,7 @@ import {
 } from './pollStoreCore';
 
 /** The group-level state a fold starts from (the poll itself and its holds are reset by the fold). */
-export interface PollFoldBase {
+interface PollFoldBase {
   /** All stored polls of the group (the folded poll is replaced in place, the others stay). */
   polls: readonly Poll[];
   /** The group's whole held-vote queue (other polls' entries stay and count against the caps). */
@@ -54,7 +54,7 @@ export interface PollFoldBase {
   pendingCloses: readonly PendingPollClose[];
 }
 
-export interface PollFoldResult {
+interface PollFoldResult {
   polls: Poll[];
   /** The poll's vote rows. */
   votes: PollVote[];

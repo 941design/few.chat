@@ -1,16 +1,8 @@
 /**
  * Client-side invite-link expiry sweep (epic: invite-link-lifecycle, S4).
  *
- * Scans every locally-stored invite link — all groups, with no "created by
- * this user" filter (architecture.md's Implementation Constraints: invite
- * link state is already confined to the creating device by construction,
- * so there is nothing to filter by). For each link that is expired
- * (`isExpired(link, now)`) and not yet `expiryNotified`, it:
- *
- *   1. Persists `expiryNotified: true` via `markInviteLinkExpiryNotified`
- *      (the IDB write) — BEFORE
- *   2. Bumping the in-memory `inviteExpiries` badge slice via
- *      `incrementInviteExpiry(link.groupId)`.
+ * Scans eligible invite links, persisting the notification stamp before
+ * updating the in-memory badge. Account schedulers use the committed owner scope.
  *
  * That ordering is load-bearing (AC-INV-4, Design Decision 8): an
  * interruption between the two steps leaves the link "stamped but not
@@ -42,12 +34,13 @@
  */
 
 import { loadAllInviteLinks, isExpired, markInviteLinkExpiryNotified, markInviteLinkExpiryAcknowledged, migrateInviteLinks } from './inviteLinkStorage';
-import { incrementInviteExpiry, initInviteExpiries } from '@/src/lib/unreadStore';
+import { incrementInviteExpiry, initInviteExpiries, captureInviteExpiryScope } from '@/src/lib/unreadStore';
+import type { InviteLink } from './inviteLinkStorage';
 import { isActiveView } from '@/src/lib/activeViewStore';
 
 let sweepInFlight: Promise<void> | null = null;
 
-async function runSweep(now: number): Promise<void> {
+async function runSweep(now: number, belongsToSession: (groupId: string) => boolean, allowed: (link: InviteLink) => boolean): Promise<void> {
   let links: Awaited<ReturnType<typeof loadAllInviteLinks>>;
   try {
     links = await loadAllInviteLinks();
@@ -57,24 +50,24 @@ async function runSweep(now: number): Promise<void> {
   }
 
   for (const link of links) {
-    if (link.expiryNotified || !isExpired(link, now)) continue;
+    if (!belongsToSession(link.groupId) || !allowed(link) || link.expiryNotified || !isExpired(link, now)) continue;
     try {
       // IDB stamp BEFORE the in-memory bump (AC-INV-4) — see module doc comment.
       // Only bump the badge if the stamp actually persisted: the link may have
       // been deleted/cleared between loadAllInviteLinks() above and this write,
       // in which case markInviteLinkExpiryNotified no-ops and returns false —
       // bumping then would leave a phantom unread expiry for a link that is gone.
-      const stamped = await markInviteLinkExpiryNotified(link.nonce);
-      if (stamped) {
+      const stamped = await markInviteLinkExpiryNotified(link.nonce, (fresh) => belongsToSession(fresh.groupId) && allowed(fresh));
+      if (stamped && belongsToSession(link.groupId) && allowed(link)) {
         // notification-domain-invariants (INV-2): if this link's group has its
         // detail open, the expiry surfaces in that view (manage-links) — so it
         // must not ring the bell. Acknowledge it (in addition to the notified
         // stamp above) so initInviteExpiries' reload derivation stays clear.
         // Any other view rings the bell as before (INV-1).
         if (isActiveView('group', link.groupId)) {
-          await markInviteLinkExpiryAcknowledged(link.nonce);
+          await markInviteLinkExpiryAcknowledged(link.nonce, (fresh) => belongsToSession(fresh.groupId) && allowed(fresh));
         } else {
-          incrementInviteExpiry(link.groupId);
+          incrementInviteExpiry(link.groupId, link.ownerPubkey);
         }
       }
     } catch (err) {
@@ -93,9 +86,9 @@ async function runSweep(now: number): Promise<void> {
  * latch and stamp-before-bump ordering guarantees that make repeated or
  * concurrent calls notify each link at most once.
  */
-export function runInviteExpirySweep(now: number = Date.now()): Promise<void> {
+export function runInviteExpirySweep(now: number = Date.now(), belongsToSession: (groupId: string) => boolean = () => true, allowed: (link: InviteLink) => boolean = () => true): Promise<void> {
   if (sweepInFlight) return sweepInFlight;
-  const run = runSweep(now).finally(() => {
+  const run = runSweep(now, belongsToSession, allowed).finally(() => {
     sweepInFlight = null;
   });
   sweepInFlight = run;
@@ -179,25 +172,21 @@ export async function runInviteExpiryCycle(
 export const INVITE_EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 
 /** Injectable collaborators for `startInviteExpirySweep` (defaults to the real ones). */
-export interface InviteExpirySweepScheduleDeps {
+interface InviteExpirySweepScheduleDeps {
   now: () => number;
   setInterval: (callback: () => void, ms: number) => ReturnType<typeof setInterval>;
   clearInterval: (handle: ReturnType<typeof setInterval>) => void;
-  run: (now: number) => void;
+  run: (now: number) => void | Promise<void>;
+  belongsToSession: (groupId: string) => boolean;
 }
 
 /**
  * Start the periodic expiry-notification cycle: run one cycle immediately, then
  * once every {@link INVITE_EXPIRY_SWEEP_INTERVAL_MS}. Returns a stop function
- * that cancels the interval.
+ * that cancels the interval and drains active cycles.
  *
- * Rehomed out of `NotificationBell` when the bell was deleted (epic:
- * obsolete-notification-bell, INV-B / TRAP 1). The bell mounted twice
- * (desktop + mobile), so the sweep ran on a double mount; `runInviteExpirySweep`
- * latches concurrent callers onto one in-flight promise and stamps
- * before bumping, so the cycle is idempotent and double-mount-safe. Its new
- * host (`DirectMessageNotificationsWatcher`) mounts exactly once, which is
- * strictly simpler; the safety guarantees hold either way.
+ * The held account session owns this scheduler and awaits its stop before
+ * releasing the lease or wiping account data.
  *
  * Collaborators are injectable so the schedule (fire-once-then-every-60s, and
  * stop-cancels-further-runs) is unit-testable with a fake clock/scheduler — this
@@ -206,15 +195,38 @@ export interface InviteExpirySweepScheduleDeps {
  */
 export function startInviteExpirySweep(
   deps: Partial<InviteExpirySweepScheduleDeps> = {},
-): () => void {
+): () => Promise<void> {
   const now = deps.now ?? Date.now;
   const setIntervalFn =
     deps.setInterval ?? ((cb: () => void, ms: number) => setInterval(cb, ms));
   const clearIntervalFn =
     deps.clearInterval ?? ((handle: ReturnType<typeof setInterval>) => clearInterval(handle));
-  const run = deps.run ?? ((n: number) => { void runInviteExpiryCycle(n); });
-
-  run(now());
-  const handle = setIntervalFn(() => run(now()), INVITE_EXPIRY_SWEEP_INTERVAL_MS);
-  return () => clearIntervalFn(handle);
+  const belongsToSession = deps.belongsToSession;
+  const run = deps.run ?? (belongsToSession
+    ? (at: number) => {
+      const scope = captureInviteExpiryScope();
+      if (!scope) return Promise.resolve();
+      return runInviteExpiryCycle(at, {
+        migrate: (now) => migrateInviteLinks(now, belongsToSession, scope.accepts),
+        sweep: (now) => runInviteExpirySweep(now, belongsToSession, scope.accepts),
+        derive: initInviteExpiries,
+      });
+    }
+    : runInviteExpiryCycle);
+  const running = new Set<Promise<void>>();
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    let job: Promise<void>;
+    try { job = Promise.resolve(run(now())); } catch (error) { job = Promise.reject(error); }
+    running.add(job);
+    void job.then(() => running.delete(job), () => running.delete(job));
+  };
+  tick();
+  const handle = setIntervalFn(tick, INVITE_EXPIRY_SWEEP_INTERVAL_MS);
+  return async () => {
+    stopped = true;
+    clearIntervalFn(handle);
+    await Promise.allSettled([...running]);
+  };
 }

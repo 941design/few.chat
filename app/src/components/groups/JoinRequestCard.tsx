@@ -16,7 +16,6 @@ import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { useMarmot } from '@/src/context/MarmotContext';
 import { useProfile } from '@/src/context/ProfileContext';
 import { npubToPubkeyHex } from '@/src/lib/nostrKeys';
-import { sendJoinRequest } from '@/src/lib/marmot/joinRequestSender';
 import { hasShareableName } from '@/src/lib/shareCard';
 import WelcomeInvite from '@/src/components/WelcomeInvite';
 
@@ -54,8 +53,8 @@ export function isWelcomeJoinRequestDisabled(draftName: string): boolean {
 
 export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinRequestCardProps) {
   const copy = useCopy();
-  const { pubkeyHex, privateKeyHex, hydrated, isFreshIdentity } = useNostrIdentity();
-  const { groups } = useMarmot();
+  const { pubkeyHex, hydrated, isFreshIdentity } = useNostrIdentity();
+  const { groups, sendJoinRequest, ready } = useMarmot();
   const { profile, saveProfile } = useProfile();
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -89,7 +88,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
     );
   }
 
-  if (!pubkeyHex || !privateKeyHex) {
+  if (!pubkeyHex || !ready) {
     // Identity not ready — the standard identity setup should run first
     // (handled by NostrIdentityProvider auto-generating on first mount)
     return (
@@ -129,7 +128,7 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
   }
 
   async function handleSendRequest() {
-    if (!pubkeyHex || !privateKeyHex || !adminPubkeyHex) return;
+    if (!pubkeyHex || !ready || !adminPubkeyHex) return;
 
     if (isFreshIdentity) {
       // Welcome branch (Finding A fix): the visible name field is the sole
@@ -152,11 +151,9 @@ export default function JoinRequestCard({ nonce, adminNpub, groupName }: JoinReq
 
     try {
       await sendJoinRequest({
-        requesterPubkeyHex: pubkeyHex,
         adminPubkeyHex,
         nonce,
         groupName,
-        requesterPrivateKeyHex: privateKeyHex,
         requesterName: nameDraft,
       });
       setSent(true);

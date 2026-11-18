@@ -1,0 +1,33 @@
+{
+  "status": "done",
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "story_id": "S16",
+  "modules_touched": [
+    "client"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/client/inboxRelayList.ts",
+    "app/src/lib/marmot/client/relaySettingsRebuild.ts"
+  ],
+  "files_modified": [
+    "app/src/lib/marmot/client/createClient.ts",
+    "app/src/context/MarmotContext.tsx",
+    "app/pages/settings.tsx",
+    "app/tests/unit/marmot/client/bootstrap.harness.test.ts"
+  ],
+  "remediation_rounds": 5,
+  "verification_evidence": {
+    "harness": "Focused harnesses verified B-only inbox delivery after publishing a new tagged list, verified foreign-list delivery on C with one configured relay timing out, and null previous account. The incomplete lookup preserves the existing list.",
+    "review": "Remediated remembered discovery sources, foreign relay delivery, actual signer binding, interrupted relay saves and waiting-tab handoff. Earlier independent findings are recorded, with final re-review still due.",
+    "latest": "AC-REL-1/2 receive and publish policy verified by the independent structural reviewer. All 20 bootstrap harness tests passed, including B-only delivery, partial first-boot foreign C, cold A-to-B discovery and rotation rejection cases."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol verified AC-REL-1/2 in the final first/cold boot harness, including actual foreign C delivery.",
+    "adversarial": "GPT-6 Astra final recheck found the previously reported receive/rebuild defects closed."
+  }
+}

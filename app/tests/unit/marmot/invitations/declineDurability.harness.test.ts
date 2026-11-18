@@ -199,7 +199,7 @@ describe('AC-DECL-1 (a, d): Bob declines, Alice removes him after synced and ann
     // ... bound to the leaf the invite added (the real library's leaf signature key)
     const bobLeaf = group.leaves(bob.pubkey);
     expect(bobLeaf).toHaveLength(1);
-    expect(await getPendingDirectInviteMarker(group.id, bob.pubkey)).toEqual({
+    expect(await getPendingDirectInviteMarker(group.id, bob.pubkey)).toMatchObject({
       inviteeRef: res.outcome.inviteeRef,
       pubkey: bob.pubkey,
       declined: false,

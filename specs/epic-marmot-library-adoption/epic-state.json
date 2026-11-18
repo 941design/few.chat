@@ -1,9 +1,9 @@
 {
   "epic_name": "marmot-library-adoption",
-  "status": "paused",
-  "phase": "IMPLEMENTING",
+  "status": "in_progress",
+  "phase": "IN_PROGRESS",
   "created_at": "2026-11-17T08:07:10Z",
-  "updated_at": "2026-11-17T22:44:05Z",
+  "updated_at": "2026-11-18T17:51:01.584778+00:00",
   "pre_existing_dirty_files": [
     ".clauded.yaml",
     "package.json.copy",
@@ -20,9 +20,23 @@
     "S8",
     "S9",
     "S10",
-    "S11",
     "S12",
-    "S13"
+    "S13",
+    "S14",
+    "S15",
+    "S16",
+    "S17",
+    "S18",
+    "S20",
+    "S21",
+    "S22",
+    "S23",
+    "S24",
+    "S25",
+    "S26",
+    "S27",
+    "S28",
+    "S29"
   ],
   "escalated_stories": [],
   "phase_history": [
@@ -35,6 +49,11 @@
       "phase": "IMPLEMENTING",
       "timestamp": "2026-11-17T08:20:07Z",
       "trigger": "planning_complete"
+    },
+    {
+      "phase": "IN_PROGRESS",
+      "timestamp": "2026-11-17T22:52:28Z",
+      "trigger": "owner_resumed"
     }
   ],
   "plugin_sha": "unknown",
@@ -49,6 +68,44 @@
       "gate_id": "spec_adversary_review",
       "outcome": "fired_remediated"
     },
+    {
+      "gate_id": "e2e",
+      "outcome": "fired_pass",
+      "detail": "Final make build and canonical make test exited zero. Static Chromium round trip passed. Vitest 7363 passed and 1 skipped. Chromium 72 non-relay passed and 353 relay passed with 19 baseline skips. No INVALID browser run."
+    }
+  ],
+  "ownership_ledger_path": "ownership-ledger.json",
+  "reviewer_agent_id": "a832d00a9d559719b",
+  "blocked_history": {
+    "resolved": "2026-11-17 after machine restart; post-crash tsc clean, unit 6672 pass",
+    "since": "2026-11-17",
+    "reason": "host shell EIO: every Bash call (lead and subagents) fails opening its task-output file; serena MCP fallback unreachable (connect timeout). File Read/Write still work.",
+    "resume_point": "S1: Opus review clean; Fable cross-review findings #1-#4 fixed in working tree (unit 6672 pass, tsc clean, reported before fault). Pending: (1) make test-e2e-groups on a wiped relay to verify the scoped smoke spec runs green after the other groups-* specs and to record pre-existing bucket failures; (2) Fable re-review of the 4 fixes; (3) S1 verification examiners; (4) mark S1 complete; then S2.",
+    "deferred_s1_findings": [
+      "engines.node>=22 in app/package.json (optional)",
+      "Makefile/CLAUDE.md e2e counts drift (+3 smoke tests until S27) -> S29"
+    ]
+  },
+  "deferred_human_review_runtime": [
+    "Library issue for @941design/nostr-events maintainers: the simple-pool transport de-duplicates by event id BEFORE signature verification, so a relay sending a forged event that reuses a genuine event id first gets the forgery rejected AND the genuine event dropped as a duplicate (message-suppression by a hostile relay). Found by app/tests/unit/marmot/client/transport.forgery.harness.test.ts. Not fixable in-app without a custom verifier (AC-TRANS-1 forbids one).",
+    "S3 accepted residual: if the account is torn down (sign-out/signer change) while a withdrawn message dispatch is still running past its 10 s bound, its late retract is dropped and the withdrawn message stays in the chat store. Requires a fork-withdraw + >10 s handler + teardown in the same window.",
+    "S5 decider (recompute-on-retract): after a fork rewind, edits/deletes/reactions/poll results are rebuilt from retained group history \u2014 a withdrawn delete or edit makes earlier content visible again, admin-gated deletes are re-judged against the CURRENT admin list, and the original text of an edited/deleted message stays on the device (in the history store and the slot base snapshot) until the group is left.",
+    "S5 accepted residual: votes are keyed by poll id, so if a poll open is withdrawn while ANOTHER member open for the same poll id remains (requires deliberate id reuse), earlier votes count toward the surviving poll. Live dispatch behaves the same.",
+    "S7: the library media codec drops http/loopback/private-host Blossom locators, so group images now require an https Blossom server. Default taken: keep the library rule; the e2e Blossom mock (and local dev) must be served over https (S24, via NEXT_PUBLIC_BLOSSOM_BASE_URL / NEXT_PUBLIC_BLOSSOM_TRUSTED_HOSTS). Local `make dev` image sending against an http Blossom will fail loudly.",
+    "AC-SIGN-3 amended (S7 review): NIP-46 requested permissions now also include sign_event:24242 (Blossom upload auth for group images) and 25050\u201325055 (call signaling; previously missing). Existing bunker sessions recorded with the old set will be discarded once and must reconnect (AC-SIGN-4).",
+    "S8 product call: inviting a pubkey that already holds a leaf in the group returns already-member (no second leaf), so adding a SECOND DEVICE of the same account via invite is refused, although the library permits same-account device adds (its ADR-003). Few has no multi-device flow today; confirm this is intended.",
+    "S9 decider: invitation caps now retain TRUSTED sponsors first (own account or ever-known peer incl. contacts) and expire STRANGER invitations after 14 days (AC-CAP-1/D14 amended). Confirm the 14-day figure; under a sustained stranger flood a legitimate stranger invitation can still be silently lost (recovery: add as contact and re-invite); confirm a sponsor can re-invite after a silent decline (not verified in the library).",
+    "S9 residual (privacy, needs your call): a SILENT decline (blocked or over-cap sponsor) sends no rumor or wrap, but the library then rotates the consumed key package, publicly superseding the kind-30443 event the sponsor used \u2014 the sponsor can observe that its Welcome was processed and rejected (a per-decline receipt oracle). Options: accept, or ask the library for a silent decline that defers/skips rotation.",
+    "S12: auto-accept now requires the sponsor-claimed group name to be known and match the join request (else the invitation stays a manual card); pending join requests are capped at 50 per group with a 30-day TTL \u2014 the TTL also applies to the CURRENT app list (requests older than 30 days are pruned when the list loads). Confirm both."
+  ],
+  "pause_requested": {
+    "after": "S13",
+    "requested_at": "2026-11-17T21:49:21Z",
+    "note": "owner asked to pause after S13; resume with S14",
+    "reached_at": "2026-11-17T22:44:05Z"
+  },
+  "resume_point": "The canonical production build, static Chromium proof and make test passed. S29 is accepted. Resume S11 and S19 after deciding how to reconcile the pinned SDK limits and conflicting acceptance clauses. The acceptance ledger records the remaining implementation and proof gaps by criterion.",
+  "legacy_gate_runs": [
     {
       "gate_id": "s1_relay_bucket_baseline",
       "outcome": "passed",
@@ -67,35 +124,870 @@
       "outcome": "fired_remediated"
     }
   ],
-  "ownership_ledger_path": "ownership-ledger.json",
-  "reviewer_agent_id": "a832d00a9d559719b",
-  "blocked_history": {
-    "resolved": "2026-11-17 after machine restart; post-crash tsc clean, unit 6672 pass",
-    "since": "2026-11-17",
-    "reason": "host shell EIO: every Bash call (lead and subagents) fails opening its task-output file; serena MCP fallback unreachable (connect timeout). File Read/Write still work.",
-    "resume_point": "S1: Opus review clean; Fable cross-review findings #1-#4 fixed in working tree (unit 6672 pass, tsc clean, reported before fault). Pending: (1) make test-e2e-groups on a wiped relay to verify the scoped smoke spec runs green after the other groups-* specs and to record pre-existing bucket failures; (2) Fable re-review of the 4 fixes; (3) S1 verification examiners; (4) mark S1 complete; then S2.",
-    "deferred_s1_findings": [
-      "engines.node>=22 in app/package.json (optional)",
-      "Makefile/CLAUDE.md e2e counts drift (+3 smoke tests until S27) -> S29"
-    ]
-  },
-  "deferred_human_review_runtime": [
-    "Library issue for @941design/nostr-events maintainers: the simple-pool transport de-duplicates by event id BEFORE signature verification, so a relay sending a forged event that reuses a genuine event id first gets the forgery rejected AND the genuine event dropped as a duplicate (message-suppression by a hostile relay). Found by app/tests/unit/marmot/client/transport.forgery.harness.test.ts. Not fixable in-app without a custom verifier (AC-TRANS-1 forbids one).",
-    "S3 accepted residual: if the account is torn down (sign-out/signer change) while a withdrawn message dispatch is still running past its 10 s bound, its late retract is dropped and the withdrawn message stays in the chat store. Requires a fork-withdraw + >10 s handler + teardown in the same window.",
-    "S5 decider (recompute-on-retract): after a fork rewind, edits/deletes/reactions/poll results are rebuilt from retained group history — a withdrawn delete or edit makes earlier content visible again, admin-gated deletes are re-judged against the CURRENT admin list, and the original text of an edited/deleted message stays on the device (in the history store and the slot base snapshot) until the group is left.",
-    "S5 accepted residual: votes are keyed by poll id, so if a poll open is withdrawn while ANOTHER member open for the same poll id remains (requires deliberate id reuse), earlier votes count toward the surviving poll. Live dispatch behaves the same.",
-    "S7: the library media codec drops http/loopback/private-host Blossom locators, so group images now require an https Blossom server. Default taken: keep the library rule; the e2e Blossom mock (and local dev) must be served over https (S24, via NEXT_PUBLIC_BLOSSOM_BASE_URL / NEXT_PUBLIC_BLOSSOM_TRUSTED_HOSTS). Local `make dev` image sending against an http Blossom will fail loudly.",
-    "AC-SIGN-3 amended (S7 review): NIP-46 requested permissions now also include sign_event:24242 (Blossom upload auth for group images) and 25050–25055 (call signaling; previously missing). Existing bunker sessions recorded with the old set will be discarded once and must reconnect (AC-SIGN-4).",
-    "S8 product call: inviting a pubkey that already holds a leaf in the group returns already-member (no second leaf), so adding a SECOND DEVICE of the same account via invite is refused, although the library permits same-account device adds (its ADR-003). Few has no multi-device flow today; confirm this is intended.",
-    "S9 decider: invitation caps now retain TRUSTED sponsors first (own account or ever-known peer incl. contacts) and expire STRANGER invitations after 14 days (AC-CAP-1/D14 amended). Confirm the 14-day figure; under a sustained stranger flood a legitimate stranger invitation can still be silently lost (recovery: add as contact and re-invite); confirm a sponsor can re-invite after a silent decline (not verified in the library).",
-    "S9 residual (privacy, needs your call): a SILENT decline (blocked or over-cap sponsor) sends no rumor or wrap, but the library then rotates the consumed key package, publicly superseding the kind-30443 event the sponsor used — the sponsor can observe that its Welcome was processed and rejected (a per-decline receipt oracle). Options: accept, or ask the library for a silent decline that defers/skips rotation.",
-    "S12: auto-accept now requires the sponsor-claimed group name to be known and match the join request (else the invitation stays a manual card); pending join requests are capped at 50 per group with a 30-day TTL — the TTL also applies to the CURRENT app list (requests older than 30 days are pruned when the list loads). Confirm both."
-  ],
-  "pause_requested": {
-    "after": "S13",
-    "requested_at": "2026-11-17T21:49:21Z",
-    "note": "owner asked to pause after S13; resume with S14",
-    "reached_at": "2026-11-17T22:44:05Z"
-  },
-  "resume_point": "S14 (admin ops). Next action: spawn the S14 integration-architect; Opus reviewer agent continued across stories; Fable cross-review fresh per story."
+  "ac_closure": [
+    {
+      "ac_id": "AC-GATE-5",
+      "status": "met",
+      "evidence": "Final production-source scan returned no old engine, dispatcher, transport, inbox, store or standalone member-operation identifiers. App dependencies use the pinned Marmot client and its public MLS export."
+    },
+    {
+      "ac_id": "AC-GATE-6",
+      "status": "met",
+      "evidence": "The production build after the final context and consent fixes exited zero using NEXT_PUBLIC_RELAYS=ws://localhost:7777 make build. Chromium created a group, invited and accepted a second account and exchanged one encrypted message each way using app/out. No development globals were present.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DECL-1",
+      "status": "unmet",
+      "evidence": "The public library emits a decline once after a durable transition and provides no read API for replay of that transition after interruption. Its account-level removal cannot enforce admission-specific identity atomically with the commit. Focused tests cover stored-marker replay, stale orphans and wrong-leaf refusal."
+    },
+    {
+      "ac_id": "AC-OBS-4",
+      "status": "unmet",
+      "evidence": "Seeded properties pass ordinary and concurrent persisted-marker replays. AC-DECL-1 explicitly permits a resend with the same ID after publish-before-clear interruption. Receiver deduplication makes the announcement visible once. Acceptance of the earlier literal wording remains open."
+    },
+    {
+      "ac_id": "AC-GATE-3",
+      "status": "met",
+      "evidence": "The final production make build and canonical make test commands exited zero. Vitest passed 7,363 tests with one skip. Chromium passed all 72 non-relay tests, and 353 relay tests passed with 19 baseline skips. Neither E2E bucket was invalid.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-TEST-1",
+      "status": "met",
+      "evidence": "All baseline E2E files except the designated blackout guard remain. The temporary smoke spec is absent. Independent review confirmed that groups-admin retains all executable assertions."
+    },
+    {
+      "ac_id": "AC-TEST-4",
+      "status": "met",
+      "evidence": "All 83 ordinary kept specs are byte-for-byte identical to the baseline and groups-admin retains the same titles and executable assertions."
+    },
+    {
+      "ac_id": "AC-LEAVE-6",
+      "status": "met",
+      "evidence": "Chromium passed all 3 abandon, all 6 ever-known, and all 7 poll-after-leave tests against strfry.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BKP-3",
+      "status": "met",
+      "evidence": "Seed phrase, seed recovery and backup restore outcome checks prove that a real post-join backup restores the settings and profile, leaves no groups and allows a fresh invitation.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-TEST-2",
+      "status": "met",
+      "evidence": "Tag comparison found all eleven designated rewritten specs present and changed, each with a test that asserts its named behavior."
+    },
+    {
+      "ac_id": "AC-CTX-5",
+      "status": "met",
+      "evidence": "The focused Chromium preview test commits and confirms a private description in the real group, then asserts private text and metadata are absent before joining.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DEP-1",
+      "status": "met",
+      "evidence": "The package manifest pins all three 941design packages to 0.2.0-alpha.0 and nostr-tools to 2.23.3."
+    },
+    {
+      "ac_id": "AC-GATE-4",
+      "status": "met",
+      "evidence": "The pre-run tag resolves to 65a08054cf7375279eb30ecb056a338b0b4f3dc2. The working tree is retained through remediation."
+    },
+    {
+      "ac_id": "AC-DOC-3",
+      "status": "met",
+      "evidence": "Current Playwright discovery records 72 non-relay tests and 372 relay tests, matching CLAUDE.md and Makefile."
+    },
+    {
+      "ac_id": "AC-OWN-3",
+      "status": "met",
+      "evidence": "The browser holds the real own echo while the sender leaves the group view, then requires confirmed for its exact rumor ID, a single retained row and bubble, and unchanged unread. A peer message increases unread while the group is closed.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-LEAVE-5",
+      "status": "met",
+      "evidence": "Browser tests poll the real library group list for absence before reload or new invite, then check the leaver\u2019s missing group, the remaining roster and successful return.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MEM-6",
+      "status": "met",
+      "evidence": "Both rewritten re-invite suites accept a fresh Welcome after the former group is absent. Removal also verifies sponsor confirmation and messages both ways.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-TEST-3",
+      "status": "met",
+      "evidence": "Chromium cuts after durable SDK accept before application overlay persistence and recovers one group with no pending invite. With live history held, the sponsor and chat/profile reload paths dispatch one retained row through the startup sweep.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MT-5",
+      "status": "met",
+      "evidence": "Two pages in one browser context share a real lease. The waiting page lists the group, takes over without navigation when the original page closes, and sends a message that the sink dispatches.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-5",
+      "status": "met",
+      "evidence": "The real-library history harness holds the append after the application handler returns and observes the append settle before the guarded send and the second job. Fake timers confirm same-group overlap, unrelated progression, rejected callbacks and disposal. Production profile and inbox flows pass browser checks.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DEP-2",
+      "status": "met",
+      "evidence": "Manifest and client/importBoundary.test.ts confirm no old direct dependency or React/context dependency under the Marmot library tree."
+    },
+    {
+      "ac_id": "AC-BOUND-1",
+      "status": "met",
+      "evidence": "Manifest and client/importBoundary.test.ts confirm no old direct dependency or React/context dependency under the Marmot library tree."
+    },
+    {
+      "ac_id": "AC-DEP-3",
+      "status": "met",
+      "evidence": "depsResolve.test.ts checks the four SWC include paths, the minifier setting, and installed package subpath imports.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DEP-4",
+      "status": "met",
+      "evidence": "depsResolve.test.ts checks the four SWC include paths, the minifier setting, and installed package subpath imports.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-1",
+      "status": "met",
+      "evidence": "signerAdapter.test.ts, signerAdapter.shape.test.ts and bootstrap.sequence.test.ts cover the three signer budgets, translations, unsupported NIP-44 and secure-context gating before construction.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-2",
+      "status": "met",
+      "evidence": "signerAdapter.test.ts, signerAdapter.shape.test.ts and bootstrap.sequence.test.ts cover the three signer budgets, translations, unsupported NIP-44 and secure-context gating before construction.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-5",
+      "status": "met",
+      "evidence": "signerAdapter.test.ts, signerAdapter.shape.test.ts and bootstrap.sequence.test.ts cover the three signer budgets, translations, unsupported NIP-44 and secure-context gating before construction.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-3",
+      "status": "met",
+      "evidence": "nip46Perms.test.ts checks the exact kind-derived permission union and old, missing and current saved records. NostrIdentityContext uses the tested save/load path and Settings exposes reconnect.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-4",
+      "status": "met",
+      "evidence": "nip46Perms.test.ts checks the exact kind-derived permission union and old, missing and current saved records. NostrIdentityContext uses the tested save/load path and Settings exposes reconnect.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-4b",
+      "status": "met",
+      "evidence": "nip46Perms.test.ts checks the exact kind-derived permission union and old, missing and current saved records. NostrIdentityContext uses the tested save/load path and Settings exposes reconnect.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SIGN-2b",
+      "status": "met",
+      "evidence": "Bootstrap returns unsupported for missing NIP-44, MarmotContext exposes the same condition and the retained Groups route renders the corresponding translation."
+    },
+    {
+      "ac_id": "AC-TRANS-1",
+      "status": "met",
+      "evidence": "client/transport.test.ts and bootstrap.harness.test.ts exercise the owned pool, publish and subscription calls and disposal order. importBoundary.test.ts enforces the NDK import boundary.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-1",
+      "status": "met",
+      "evidence": "bootstrap.sequence.test.ts records startup and sweep boundaries, dispose then close, event forwarding and exact timing options. bootstrap.harness.test.ts verifies account-scoped storage.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-3",
+      "status": "met",
+      "evidence": "bootstrap.sequence.test.ts records startup and sweep boundaries, dispose then close, event forwarding and exact timing options. bootstrap.harness.test.ts verifies account-scoped storage.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-4",
+      "status": "met",
+      "evidence": "bootstrap.sequence.test.ts records startup and sweep boundaries, dispose then close, event forwarding and exact timing options. bootstrap.harness.test.ts verifies account-scoped storage.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-6",
+      "status": "met",
+      "evidence": "bootstrap.sequence.test.ts records startup and sweep boundaries, dispose then close, event forwarding and exact timing options. bootstrap.harness.test.ts verifies account-scoped storage.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-2",
+      "status": "met",
+      "evidence": "bootstrap.harness.test.ts verifies the first local KeyPackage, one kind-30443 and zero kind-443 events, including restart without a duplicate.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-7",
+      "status": "met",
+      "evidence": "client/importSafety.test.ts passes under Node without window. The production static export built and ran an encrypted round trip.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BOOT-3b",
+      "status": "unmet",
+      "evidence": "client/lease.test.ts covers aborted bootstrap and disposal of an account resolving late. The provider is keyed to signer and identity. The specified composed sign-out and signer-mode replacement test is still missing."
+    },
+    {
+      "ac_id": "AC-HIST-1",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-2",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-3",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-4",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-5",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-6",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-7",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-8",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-IDEM-1",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-IDEM-2",
+      "status": "met",
+      "evidence": "historyBackend.test.ts and historyStore.realIdb.test.ts check durable-before-dispatch, authenticated sender, replay, bounded failures and independent sequence counters. historyWithdrawRecompute.test.ts and withdrawIncremental.test.ts cover marks, receipt clocks, startup sweep and group-only purge. The structural history test checks the update() ban.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-9",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts, groupRumorDispatch.test.ts, examinerFindings.test.ts and handlersRumorPubkeyBoundary.test.ts cover supported and unknown kinds, store effects, current roster and admin gates, notification-only routing and MLS sender attribution.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-10",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts, groupRumorDispatch.test.ts, examinerFindings.test.ts and handlersRumorPubkeyBoundary.test.ts cover supported and unknown kinds, store effects, current roster and admin gates, notification-only routing and MLS sender attribution.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-11",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts, groupRumorDispatch.test.ts, examinerFindings.test.ts and handlersRumorPubkeyBoundary.test.ts cover supported and unknown kinds, store effects, current roster and admin gates, notification-only routing and MLS sender attribution.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-HIST-12",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts, groupRumorDispatch.test.ts, examinerFindings.test.ts and handlersRumorPubkeyBoundary.test.ts cover supported and unknown kinds, store effects, current roster and admin gates, notification-only routing and MLS sender attribution.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-FORGE-1",
+      "status": "met",
+      "evidence": "forgery.harness.test.ts observes forged-sender exclusion with a genuine control. In groups-rumor-reload-atomic.spec.ts, Bob sends through the composer and Alice\u2019s single recovered message displays Bob. The unchanged groups-identity cases passed in the integrated relay run.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-FORGE-2",
+      "status": "met",
+      "evidence": "forgery.harness.test.ts observes forged-sender exclusion with a genuine control. In groups-rumor-reload-atomic.spec.ts, Bob sends through the composer and Alice\u2019s single recovered message displays Bob. The unchanged groups-identity cases passed in the integrated relay run.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-OWN-1",
+      "status": "met",
+      "evidence": "ownEcho.integration.test.ts supplies both echo arrival orders with one row, confirmed status and unchanged unread. The real library send harness verifies the same canonical ID on both devices.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-OWN-2",
+      "status": "met",
+      "evidence": "ownEcho.integration.test.ts supplies both echo arrival orders with one row, confirmed status and unchanged unread. The real library send harness verifies the same canonical ID on both devices.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-1",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts verifies retraction and recomputed unread, plus preserved prior effects. ownRowTracker.test.ts, ownSendHardening.test.ts and ownEcho.integration.test.ts cover failure triggers, stale attempt fencing, retry identity and confirmed status.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-2",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts verifies retraction and recomputed unread, plus preserved prior effects. ownRowTracker.test.ts, ownSendHardening.test.ts and ownEcho.integration.test.ts cover failure triggers, stale attempt fencing, retry identity and confirmed status.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-3",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts verifies retraction and recomputed unread, plus preserved prior effects. ownRowTracker.test.ts, ownSendHardening.test.ts and ownEcho.integration.test.ts cover failure triggers, stale attempt fencing, retry identity and confirmed status.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-6",
+      "status": "met",
+      "evidence": "domainHandlers.test.ts verifies retraction and recomputed unread, plus preserved prior effects. ownRowTracker.test.ts, ownSendHardening.test.ts and ownEcho.integration.test.ts cover failure triggers, stale attempt fencing, retry identity and confirmed status.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-4",
+      "status": "met",
+      "evidence": "The real IDB unknown-only withdrawal test verifies that neither the history store nor unrelated pending app rows change, and a later append is still applied.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-5",
+      "status": "met",
+      "evidence": "historyBackend.test.ts covers unseen withdrawal and later append. The three-peer historyWithdraw.harness.test.ts exercises real branch rewind and listener undo. carrierSenderBinding.test.ts and pollRecompute.test.ts cover surviving carrier attribution.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-8",
+      "status": "met",
+      "evidence": "historyBackend.test.ts covers unseen withdrawal and later append. The three-peer historyWithdraw.harness.test.ts exercises real branch rewind and listener undo. carrierSenderBinding.test.ts and pollRecompute.test.ts cover surviving carrier attribution.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WDR-7",
+      "status": "unmet",
+      "evidence": "Slot, reaction and poll oracle suites exercise branch recomputation and duplicate carriers. Independent review found that shared pending edit and reaction buffer caps still allow cross-message eviction, and the slot oracle excludes prior replacement IDs with pending entries. Exact stored-state equality for those sequences remains open."
+    },
+    {
+      "ac_id": "AC-WDR-9",
+      "status": "unmet",
+      "evidence": "Atomic IDB marker tests exercise rollback of an interrupted multi-row mark and full recorded batch replay. Independent review confirmed that timed-out retracts cannot apply a stale fold and that reaction replay uses the persisted receipt clock. Exact convergence remains open for AC-WDR-7's shared-buffer cases."
+    },
+    {
+      "ac_id": "AC-SEND-1",
+      "status": "met",
+      "evidence": "sendGroupRumor.test.ts and send.harness.test.ts verify canonical ID, application send and staged-proposal delivery. groupOpQueue.test.ts and groupOpQueue.bounded.test.ts cover serial operation, sync gates, abort and retry.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SEND-2",
+      "status": "met",
+      "evidence": "sendGroupRumor.test.ts and send.harness.test.ts verify canonical ID, application send and staged-proposal delivery. groupOpQueue.test.ts and groupOpQueue.bounded.test.ts cover serial operation, sync gates, abort and retry.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SEND-5",
+      "status": "met",
+      "evidence": "sendGroupRumor.test.ts and send.harness.test.ts verify canonical ID, application send and staged-proposal delivery. groupOpQueue.test.ts and groupOpQueue.bounded.test.ts cover serial operation, sync gates, abort and retry.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-SEND-3",
+      "status": "unmet",
+      "evidence": "Production call sites use the shared sender and browser checks exercise the real user flows. The specified fake-group producer-by-producer matrix is incomplete."
+    },
+    {
+      "ac_id": "AC-SEND-4",
+      "status": "met",
+      "evidence": "Final production source scan found no sendRumorSafe or fork application sender. Own sends use the shared sender and retained sink."
+    },
+    {
+      "ac_id": "AC-MEDIA-1",
+      "status": "met",
+      "evidence": "media.harness.test.ts verifies ciphertext upload, the library imeta format and byte-equal decryption.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MEDIA-2",
+      "status": "met",
+      "evidence": "The real-library harness proves cache reuse without a second decrypt or download. The retained Chromium image suite passed all nine cases with the existing attachment flag enabled for a one-off run, including the exact reopen case. Source and default flag were restored before delivery verification.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-KP-1",
+      "status": "met",
+      "evidence": "keyPackageLookup.test.ts and invite.harness.test.ts cover ranking, fallback, the advertised/configured relay union, limit six, ties and one selected candidate.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-KP-2",
+      "status": "met",
+      "evidence": "keyPackageLookup.test.ts and invite.harness.test.ts cover ranking, fallback, the advertised/configured relay union, limit six, ties and one selected candidate.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-KP-3",
+      "status": "met",
+      "evidence": "keyPackageLookup.test.ts and invite.harness.test.ts cover ranking, fallback, the advertised/configured relay union, limit six, ties and one selected candidate.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-INV-1",
+      "status": "met",
+      "evidence": "invite.harness.test.ts and the retained lifecycle and Welcome browser checks verify the real encrypted invitation and acceptance flow. Both named browser suites have passing retained receipts.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-INV-2",
+      "status": "met",
+      "evidence": "pendingView.test.ts, pendingDeny.harness.test.ts and caps.test.ts exercise pull-only pending state, native decline, silent blocked or capped declines and trusted-sponsor priority. The previously recorded public KeyPackage rotation observation remains in the deferred decisions.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-INV-3",
+      "status": "met",
+      "evidence": "pendingView.test.ts, pendingDeny.harness.test.ts and caps.test.ts exercise pull-only pending state, native decline, silent blocked or capped declines and trusted-sponsor priority. The previously recorded public KeyPackage rotation observation remains in the deferred decisions.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-INV-4",
+      "status": "met",
+      "evidence": "pendingView.test.ts, pendingDeny.harness.test.ts and caps.test.ts exercise pull-only pending state, native decline, silent blocked or capped declines and trusted-sponsor priority. The previously recorded public KeyPackage rotation observation remains in the deferred decisions.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BLK-1",
+      "status": "met",
+      "evidence": "pendingView.test.ts, pendingDeny.harness.test.ts and caps.test.ts exercise pull-only pending state, native decline, silent blocked or capped declines and trusted-sponsor priority. The previously recorded public KeyPackage rotation observation remains in the deferred decisions.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-CAP-1",
+      "status": "met",
+      "evidence": "pendingView.test.ts, pendingDeny.harness.test.ts and caps.test.ts exercise pull-only pending state, native decline, silent blocked or capped declines and trusted-sponsor priority. The previously recorded public KeyPackage rotation observation remains in the deferred decisions.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-INV-5",
+      "status": "met",
+      "evidence": "The retained Chromium idle-invitation test passed. As a real invitation arrived without reload, the Groups badge incremented and the card appeared.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-CTX-1",
+      "status": "met",
+      "evidence": "inviteContext.test.ts, inviteContextCard.test.ts, inviteContext.harness.test.ts and the focused preview cases check the exact outbound shape, sponsor validation, untrusted-text rendering, both arrival orders and generic fallback.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-CTX-2",
+      "status": "met",
+      "evidence": "inviteContext.test.ts, inviteContextCard.test.ts, inviteContext.harness.test.ts and the focused preview cases check the exact outbound shape, sponsor validation, untrusted-text rendering, both arrival orders and generic fallback.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-CTX-3",
+      "status": "unmet",
+      "evidence": "IDB and store tests cover exact caps, idle expiry, durable stale-replay suppression, disposition cleanup and older snapshots. The lease-bound implementation preserves S10's accepted trust-ranked total eviction, oldest first within each class. The criterion calls for oldest first across all held contexts."
+    },
+    {
+      "ac_id": "AC-CTX-4",
+      "status": "met",
+      "evidence": "Invite-context handler, real inbox harness, IDB and store tests cover rumor-ID deduplication, bounded ID-only eviction tombstones across reload, restart-safe failed-save deferral and a committed retry before inbox acknowledgment. The handler touches only app persistence. All 163 focused context checks passed.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-AUTO-1",
+      "status": "unmet",
+      "evidence": "The join harness and all 27 focused Chromium checks pass. The owner-scoped transaction binds one consent to one Welcome and releases a newly acquired binding after a known veto while the lease remains held. A transient consume transaction failure is retried. Lease loss during acquisition or interruption between library commit and application cleanup can still strand the consent until expiry. The pinned client cannot reliably distinguish an interrupted attempt from an unstarted one on restart."
+    },
+    {
+      "ac_id": "AC-AUTO-2",
+      "status": "met",
+      "evidence": "Source scans show a single auto-accept path and retired KeyPackage-offer and custom decline machinery absent."
+    },
+    {
+      "ac_id": "AC-INBOX-2",
+      "status": "met",
+      "evidence": "Source scans show a single auto-accept path and retired KeyPackage-offer and custom decline machinery absent."
+    },
+    {
+      "ac_id": "AC-JOIN-1",
+      "status": "met",
+      "evidence": "joinRequests.harness.test.ts, joinRequestApproval.test.ts, joinRequestInboxHandler.test.ts, joinRequestSender.inbox.test.ts and the retained invite-link flows cover gift-wrapped send, approval, already-member handling, failure and nonce, mute and dedup gates.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-JOIN-2",
+      "status": "met",
+      "evidence": "joinRequests.harness.test.ts, joinRequestApproval.test.ts, joinRequestInboxHandler.test.ts, joinRequestSender.inbox.test.ts and the retained invite-link flows cover gift-wrapped send, approval, already-member handling, failure and nonce, mute and dedup gates.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-JOIN-3",
+      "status": "met",
+      "evidence": "joinRequests.harness.test.ts, joinRequestApproval.test.ts, joinRequestInboxHandler.test.ts, joinRequestSender.inbox.test.ts and the retained invite-link flows cover gift-wrapped send, approval, already-member handling, failure and nonce, mute and dedup gates.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-JOIN-4",
+      "status": "met",
+      "evidence": "joinRequests.harness.test.ts, joinRequestApproval.test.ts, joinRequestInboxHandler.test.ts, joinRequestSender.inbox.test.ts and the retained invite-link flows cover gift-wrapped send, approval, already-member handling, failure and nonce, mute and dedup gates.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-JOIN-5",
+      "status": "met",
+      "evidence": "joinRequests.harness.test.ts, joinRequestApproval.test.ts, joinRequestInboxHandler.test.ts, joinRequestSender.inbox.test.ts and the retained invite-link flows cover gift-wrapped send, approval, already-member handling, failure and nonce, mute and dedup gates.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-INBOX-1",
+      "status": "met",
+      "evidence": "directMessageNotifications.test.ts drives the actual NDK listener with every reserved library kind, join requests, context and a pairing acknowledgement. Integrated retained DM pairing cases also passed. welcomeSubscription is absent.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DECL-2",
+      "status": "met",
+      "evidence": "declineDurability.test.ts, declineDurability.store.test.ts and the real harness cover unknown references, account-scoped storage and ignoring legacy bare markers.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DEL-2",
+      "status": "met",
+      "evidence": "declineDurability.test.ts, declineDurability.store.test.ts and the real harness cover unknown references, account-scoped storage and ignoring legacy bare markers.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-LEAVE-1",
+      "status": "met",
+      "evidence": "leaveEligibility.test.ts, leaveGroup.test.ts and leave.harness.test.ts cover eligibility and unreadable roster, leave intent, last-admin block, deadline, failure restoration and real membership removal.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-LEAVE-2",
+      "status": "met",
+      "evidence": "leaveEligibility.test.ts, leaveGroup.test.ts and leave.harness.test.ts cover eligibility and unreadable roster, leave intent, last-admin block, deadline, failure restoration and real membership removal.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-LEAVE-3",
+      "status": "met",
+      "evidence": "leaveEligibility.test.ts, leaveGroup.test.ts and leave.harness.test.ts cover eligibility and unreadable roster, leave intent, last-admin block, deadline, failure restoration and real membership removal.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-LEAVE-4",
+      "status": "met",
+      "evidence": "The production scan found no retired pending-leave or pending-removal machinery. Existing leave uses the library API and the app purger."
+    },
+    {
+      "ac_id": "AC-MEM-1",
+      "status": "met",
+      "evidence": "adminOps.test.ts, groupNotifications.test.ts, leave.harness.test.ts and purgeLocalGroup.realStores.test.ts cover admin gating, remote removal, cancellation, roster updates and startup purge. The named retained admin, rename, remove and cancellation checks passed in Chromium.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MEM-2",
+      "status": "met",
+      "evidence": "adminOps.test.ts, groupNotifications.test.ts, leave.harness.test.ts and purgeLocalGroup.realStores.test.ts cover admin gating, remote removal, cancellation, roster updates and startup purge. The named retained admin, rename, remove and cancellation checks passed in Chromium.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MEM-3",
+      "status": "met",
+      "evidence": "adminOps.test.ts, groupNotifications.test.ts, leave.harness.test.ts and purgeLocalGroup.realStores.test.ts cover admin gating, remote removal, cancellation, roster updates and startup purge. The named retained admin, rename, remove and cancellation checks passed in Chromium.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MEM-4",
+      "status": "met",
+      "evidence": "adminOps.test.ts, groupNotifications.test.ts, leave.harness.test.ts and purgeLocalGroup.realStores.test.ts cover admin gating, remote removal, cancellation, roster updates and startup purge. The named retained admin, rename, remove and cancellation checks passed in Chromium.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MEM-5",
+      "status": "unmet",
+      "evidence": "The disband notification and startup marker update the UI. The pinned public GroupNotification union lacks a fence notification. Current intent-failure wiring updates message status only."
+    },
+    {
+      "ac_id": "AC-MT-1",
+      "status": "unmet",
+      "evidence": "lease.test.ts and the real two-page browser test verify waiting, overlay visibility and same-document takeover. The specified composed two-provider fake-lock test does not yet assert every sweep and group write through handoff."
+    },
+    {
+      "ac_id": "AC-MT-2",
+      "status": "unmet",
+      "evidence": "lease.test.ts and the real two-page browser test verify waiting, overlay visibility and same-document takeover. The specified composed two-provider fake-lock test does not yet assert every sweep and group write through handoff."
+    },
+    {
+      "ac_id": "AC-MT-3",
+      "status": "met",
+      "evidence": "dmMembership.test.ts verifies the overlay and live sender gate. Four retained cross-tab DM block tests passed with independent known-peer and blocked-peer signals.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-MT-4",
+      "status": "met",
+      "evidence": "dmMembership.test.ts verifies the overlay and live sender gate. Four retained cross-tab DM block tests passed with independent known-peer and blocked-peer signals.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BKP-1",
+      "status": "met",
+      "evidence": "relayBackup.test.ts exercises settings/profile serialization, legacy recovery without group writes and actual NIP-44 decryption. The seed and backup browser suites verify the empty recovered group list and fresh rejoin.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BKP-2",
+      "status": "met",
+      "evidence": "relayBackup.test.ts exercises settings/profile serialization, legacy recovery without group writes and actual NIP-44 decryption. The seed and backup browser suites verify the empty recovered group list and fresh rejoin.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BKP-4",
+      "status": "met",
+      "evidence": "relayBackup.test.ts exercises settings/profile serialization, legacy recovery without group writes and actual NIP-44 decryption. The seed and backup browser suites verify the empty recovered group list and fresh rejoin.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-BKP-5",
+      "status": "met",
+      "evidence": "relayBackup.test.ts exercises settings/profile serialization, legacy recovery without group writes and actual NIP-44 decryption. The seed and backup browser suites verify the empty recovered group list and fresh rejoin.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-REL-1",
+      "status": "met",
+      "evidence": "inboxRelayList.test.ts records absent, app and foreign lists with exact relays. bootstrap.harness.test.ts verifies disposal, key-package rotation and distinct old/new inbox transports. relayBackup.test.ts and source inspection verify configured backup relays and no old relay-list publish.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-REL-2",
+      "status": "met",
+      "evidence": "inboxRelayList.test.ts records absent, app and foreign lists with exact relays. bootstrap.harness.test.ts verifies disposal, key-package rotation and distinct old/new inbox transports. relayBackup.test.ts and source inspection verify configured backup relays and no old relay-list publish.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-REL-3",
+      "status": "met",
+      "evidence": "inboxRelayList.test.ts records absent, app and foreign lists with exact relays. bootstrap.harness.test.ts verifies disposal, key-package rotation and distinct old/new inbox transports. relayBackup.test.ts and source inspection verify configured backup relays and no old relay-list publish.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-KIND-1",
+      "status": "met",
+      "evidence": "kinds.test.ts verifies exact registry values and successful import. Mocked imports reject duplicate app, retired and library-reserved collisions. Source and test scans prohibit the reserved implementation literals outside the registry test.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-KIND-2",
+      "status": "met",
+      "evidence": "kinds.test.ts verifies exact registry values and successful import. Mocked imports reject duplicate app, retired and library-reserved collisions. Source and test scans prohibit the reserved implementation literals outside the registry test.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-KIND-3",
+      "status": "met",
+      "evidence": "kinds.test.ts verifies exact registry values and successful import. Mocked imports reject duplicate app, retired and library-reserved collisions. Source and test scans prohibit the reserved implementation literals outside the registry test.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WIPE-1",
+      "status": "unmet",
+      "evidence": "The lifecycle test proves the wipe and restart order. The real IDB case also asserts cleared join requests, outbound consent and invite links. In the multi-account case, orphaned legacy rows have no owner metadata and remain ambiguous to clear."
+    },
+    {
+      "ac_id": "AC-WIPE-2",
+      "status": "met",
+      "evidence": "groupWipeReconcile.test.ts, lease.test.ts and the static stale-overlay fixture verify removing only absent overlays and one wipe per page load.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-WIPE-3",
+      "status": "met",
+      "evidence": "groupWipeReconcile.test.ts, lease.test.ts and the static stale-overlay fixture verify removing only absent overlays and one wipe per page load.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-PRIV-1",
+      "status": "met",
+      "evidence": "privacy.harness.test.ts and inviteContext.harness.test.ts record real publications and confirm addressed profile and context delivery. The seeded privacy harness checks control kinds and decrypts the actual owner-encrypted backup.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-PRIV-2",
+      "status": "met",
+      "evidence": "privacy.harness.test.ts and inviteContext.harness.test.ts record real publications and confirm addressed profile and context delivery. The seeded privacy harness checks control kinds and decrypts the actual owner-encrypted backup.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-CTXT-1",
+      "status": "unmet",
+      "evidence": "Removed legacy fields have no consumers. whenReady is required by multi-tab acceptance, but has no current production caller. Several actual consumer routes live under app/pages, outside the literal app/src wording."
+    },
+    {
+      "ac_id": "AC-CTXT-2",
+      "status": "met",
+      "evidence": "MarmotContext stays below 1,000 lines and constructs no Marmot client. Its direct import is type-only."
+    },
+    {
+      "ac_id": "AC-CTXT-3",
+      "status": "met",
+      "evidence": "DM membership, contact and cross-tab cases cover the retained distinct counters and active sender filter. The integrated member, stranger and retroactive-purge checks passed.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-CTXT-4",
+      "status": "met",
+      "evidence": "DM membership, contact and cross-tab cases cover the retained distinct counters and active sender filter. The integrated member, stranger and retroactive-purge checks passed.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-DEL-1",
+      "status": "met",
+      "evidence": "Final source and test scans cover forbidden fork and direct MLS imports, retired files, store keys, backends and deleted test hooks. The production export built successfully."
+    },
+    {
+      "ac_id": "AC-DEL-3",
+      "status": "met",
+      "evidence": "Final source and test scans cover forbidden fork and direct MLS imports, retired files, store keys, backends and deleted test hooks. The production export built successfully."
+    },
+    {
+      "ac_id": "AC-DEL-4",
+      "status": "met",
+      "evidence": "Final source and test scans cover forbidden fork and direct MLS imports, retired files, store keys, backends and deleted test hooks. The production export built successfully."
+    },
+    {
+      "ac_id": "AC-DEL-5",
+      "status": "met",
+      "evidence": "Final source and test scans cover forbidden fork and direct MLS imports, retired files, store keys, backends and deleted test hooks. The production export built successfully."
+    },
+    {
+      "ac_id": "AC-DEL-6",
+      "status": "met",
+      "evidence": "Final source and test scans cover forbidden fork and direct MLS imports, retired files, store keys, backends and deleted test hooks. The production export built successfully."
+    },
+    {
+      "ac_id": "AC-DEL-7",
+      "status": "met",
+      "evidence": "Marmot test TypeScript compilation, the symbol export guard and Vitest collection pass on the scoped revision."
+    },
+    {
+      "ac_id": "AC-TEST-6",
+      "status": "met",
+      "evidence": "Marmot test TypeScript compilation, the symbol export guard and Vitest collection pass on the scoped revision."
+    },
+    {
+      "ac_id": "AC-TEST-5",
+      "status": "met",
+      "evidence": "The run report lists every deleted behavioral unit file against the pre-adoption tag and records the corresponding decision or replacement coverage."
+    },
+    {
+      "ac_id": "AC-TEST-7",
+      "status": "met",
+      "evidence": "The original S1 result records a successful production build and three clean relay smoke runs covering append retry, fork withdrawal and own echo. The temporary spec is now absent.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-GATE-1",
+      "status": "met",
+      "evidence": "The original S1 result records a successful production build and three clean relay smoke runs covering append retry, fork withdrawal and own echo. The temporary spec is now absent.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-GATE-2",
+      "status": "met",
+      "evidence": "The run report distinguishes the cutover checkpoint subsets from delivery verification and records their observed failures and repairs."
+    },
+    {
+      "ac_id": "AC-MUT-1",
+      "status": "met",
+      "evidence": "The focused scratch Stryker run covered all seven modules at concurrency one and recorded 734 killed, two timed out, 237 survivors and 102 uncovered. The run report records the survivors and uncovered mutants."
+    },
+    {
+      "ac_id": "AC-DOC-1",
+      "status": "met",
+      "evidence": "S28 review checked the five behavior documents and index. ADR-013 and the predecessor headers record the library and retained history, authenticated sender and own-change-lost policy. The run report lists behavior outside the current index."
+    },
+    {
+      "ac_id": "AC-DOC-2",
+      "status": "met",
+      "evidence": "S28 review checked the five behavior documents and index. ADR-013 and the predecessor headers record the library and retained history, authenticated sender and own-change-lost policy. The run report lists behavior outside the current index."
+    },
+    {
+      "ac_id": "AC-DOC-4",
+      "status": "met",
+      "evidence": "S28 review checked the five behavior documents and index. ADR-013 and the predecessor headers record the library and retained history, authenticated sender and own-change-lost policy. The run report lists behavior outside the current index."
+    },
+    {
+      "ac_id": "AC-OBS-1",
+      "status": "met",
+      "evidence": "The seeded history, own-row and invitation-flow properties exercise append, echo and restart interleavings, context ordering and caps, and at-most-once auto-accept. Complementary stores and harnesses cover the exact data paths.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-OBS-2",
+      "status": "met",
+      "evidence": "The seeded history, own-row and invitation-flow properties exercise append, echo and restart interleavings, context ordering and caps, and at-most-once auto-accept. Complementary stores and harnesses cover the exact data paths.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-OBS-3",
+      "status": "met",
+      "evidence": "The seeded history, own-row and invitation-flow properties exercise append, echo and restart interleavings, context ordering and caps, and at-most-once auto-accept. Complementary stores and harnesses cover the exact data paths.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-OBS-5",
+      "status": "unmet",
+      "evidence": "The seeded lifecycle property now loses the lease during real membership create and listed-group reconciliation as well as between transitions. Lease, wipe and teardown tests cover the three clauses. Sign-out, signer change and relay save still share a simulated restart path."
+    },
+    {
+      "ac_id": "AC-OBS-6",
+      "status": "met",
+      "evidence": "The real-client privacy and sender-binding properties passed 200 seeded runs each, including authenticated genuine sender controls, forged traffic, and encrypted-only private content.",
+      "closure_basis": "evidence"
+    },
+    {
+      "ac_id": "AC-OBS-7",
+      "status": "met",
+      "evidence": "The real-client privacy and sender-binding properties passed 200 seeded runs each, including authenticated genuine sender controls, forged traffic, and encrypted-only private content.",
+      "closure_basis": "evidence"
+    }
+  ]
 }

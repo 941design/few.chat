@@ -9,7 +9,7 @@ import 'fake-indexeddb/auto';
 import { createStore, keys } from 'idb-keyval';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { HistoryEntry } from '@941design/marmot';
-import { clearAllGroupHistory, createHistoryBackend, createIdbHistoryStore, historyDbName, type GroupHistoryHandlers, type GroupRumorInput } from '@/src/lib/marmot/history';
+import { clearAllGroupHistory, createHistoryBackend, createIdbHistoryStore, historyDbName, type GroupHistoryHandlers, type GroupRumorInput, type HistoryRow } from '@/src/lib/marmot/history';
 
 let n = 0;
 const freshDb = () => `few-group-history-test-${++n}`;
@@ -108,6 +108,65 @@ describe('real IndexedDB', () => {
     const row = await createIdbHistoryStore(dbName).getRow('ab', 'e1');
     expect(row).toMatchObject({ dispatched: true });
     expect(row!.seq).toBeGreaterThan(1); // seq is never reused after a withdraw
+  });
+
+  it('rolls back an interrupted mark batch and accepts the full outbox replay after restart', async () => {
+    const dbName = freshDb();
+    const groupId = 'ab';
+    const ids = ['e2', 'e1', 'e0']; // e0 was never appended
+    const rec = recorder();
+    const first = createHistoryBackend({ handlers: rec.handlers, store: createIdbHistoryStore(dbName) });
+    const entries = ['e1', 'e2', 'e3'].map((id) => entry(groupId, id));
+    for (const item of entries) await first.append(item);
+
+    const put = IDBObjectStore.prototype.put;
+    let marks = 0;
+    const fault = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: HistoryRow, key?: IDBValidKey) {
+      const request = put.call(this, value, key);
+      if (value.withdrawing && ++marks === 2) {
+        request.addEventListener('success', () => this.transaction.abort());
+      }
+      return request;
+    });
+    try {
+      await expect(first.withdraw(groupId, ids)).rejects.toBeDefined();
+      expect(marks).toBe(2);
+    } finally {
+      fault.mockRestore();
+      await first.dispose();
+    }
+
+    const restarted = createHistoryBackend({ handlers: rec.handlers, store: createIdbHistoryStore(dbName) });
+    await restarted.sweep();
+    expect(await restarted.list(groupId)).toEqual(entries);
+    expect(rec.retracted).toEqual([]);
+
+    await restarted.withdraw(groupId, ids);
+    expect(await restarted.list(groupId)).toEqual([entries[2]]);
+    expect(rec.retracted.map((row) => row.eventId)).toEqual(['e1', 'e2']);
+    expect(rec.dispatched).toHaveLength(3);
+  });
+
+  it('an unknown-only withdrawal does not recover unrelated rows on first touch', async () => {
+    const dbName = freshDb();
+    const store = createIdbHistoryStore(dbName);
+    const undispatched = { entry: entry('ab', 'e1'), seq: await store.nextSeq('ab'), dispatched: false };
+    const marked = { entry: entry('ab', 'e2'), seq: await store.nextSeq('ab'), dispatched: true, withdrawing: true };
+    await store.putRow(undispatched);
+    await store.putRow(marked);
+    const rec = recorder();
+    const backend = createHistoryBackend({ handlers: rec.handlers, store });
+
+    await backend.withdraw('ab', ['e0']);
+    expect(await store.listRows('ab')).toEqual([undispatched, marked]);
+    expect(rec.dispatched).toEqual([]);
+    expect(rec.retracted).toEqual([]);
+
+    await backend.sweep();
+    expect(rec.retracted.map((r) => r.eventId)).toEqual(['e2']);
+    expect(rec.dispatched.map((r) => r.eventId)).toEqual(['e1']);
+    await backend.append(entry('ab', 'e0'));
+    expect(rec.dispatched.map((r) => r.eventId)).toEqual(['e1', 'e0']);
   });
 
   it('corrupt and counter values are never listed or swept; clearAll empties the store', async () => {

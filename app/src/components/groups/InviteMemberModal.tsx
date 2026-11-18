@@ -22,10 +22,6 @@ import { useMarmot } from '@/src/context/MarmotContext';
 import { useNostrIdentity } from '@/src/context/NostrIdentityContext';
 import { listContacts, selectableContactsForGroup } from '@/src/lib/contacts';
 import { pubkeyToNpub, truncateNpub } from '@/src/lib/nostrKeys';
-import {
-  markPendingDirectInvite,
-  clearPendingDirectInvite,
-} from '@/src/lib/marmot/pendingDirectInviteStorage';
 import ProfileSummary from '@/src/components/ProfileSummary';
 
 type InviteMemberModalProps = {
@@ -66,30 +62,21 @@ export function resolveInviteTarget(pubkeyHex: string): ResolveInviteTargetResul
   return { ok: true, npub: pubkeyToNpub(pubkeyHex) };
 }
 
-/**
- * The exported async orchestration core of `handleInvite`, minus React state
- * (this repo's hooks-via-pure-function-extraction convention). Calls
- * resolveInviteTarget(pubkeyHex) first; on failure, returns that failure
- * WITHOUT ever invoking inviteByNpub. On success, calls the caller-supplied
- * inviteByNpub(groupId, npub) UNCHANGED and returns its result verbatim.
- * inviteByNpub itself (app/src/context/MarmotContext.tsx) is never modified
- * by this story — it stays npub/pubkey-only (architecture.md: "inviteByNpub
- * stays npub/pubkey-only").
- */
+/** Resolves the selected contact and posts the invitation announcement after a successful invite. */
 export async function submitInvite(
   pubkeyHex: string,
   groupId: string,
   inviteByNpub: (groupId: string, npub: string) => Promise<{ ok: boolean; error?: string }>,
+  sendAnnouncement?: (content: string) => Promise<void>,
 ): Promise<{ ok: boolean; error?: string }> {
   const resolved = resolveInviteTarget(pubkeyHex);
   if (!resolved.ok) return resolved;
-  return inviteByNpub(groupId, resolved.npub);
+  const result = await inviteByNpub(groupId, resolved.npub);
+  if (result.ok) {
+    sendAnnouncement?.(buildInvitedAnnouncementContent(pubkeyHex)).catch(() => {});
+  }
+  return result;
 }
-
-export type PendingInviteMarkerDeps = {
-  markPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void>;
-  clearPendingDirectInvite: (groupId: string, pubkey: string) => Promise<void>;
-};
 
 /**
  * Pure invite_lifecycle payload builder (S2, epic: group-invite-lifecycle,
@@ -105,75 +92,6 @@ export function buildInvitedAnnouncementContent(inviteeHex: string): string {
     event: 'invited',
     pubkey: inviteeHex.toLowerCase(),
   });
-}
-
-/**
- * Wraps submitInvite with pending-direct-invite marker bookkeeping (epic:
- * invite-rescind-and-member-removal S7). Ordering guarantee (AC-MARKER-1):
- * the marker write is fully awaited BEFORE submitInvite/inviteByNpub ever
- * runs, so the marker exists at the exact moment inviteByNpub could be
- * invoked — not merely "eventually" after this function returns. The marker
- * is written under canonical LOWERCASE hex (`pubkeyHex.toLowerCase()`) since
- * that is the same identity the profile-handler clears via
- * `signedEvent.pubkey` and getPendingDirectInvites returns as a Set<string>;
- * a casing mismatch would orphan the marker forever.
- *
- * Both the write (AC-MARKER-2) and the failure-path clear (AC-MARKER-3) are
- * best-effort: a thrown/rejected marker op is caught, logged via
- * console.warn, and never blocks or rethrows — a marker-storage hiccup must
- * never prevent an invite from being sent or turn a real invite-failure
- * result into a different error. The marker is cleared only when
- * `result.ok` is false (whether that failure came from submitInvite's own
- * resolveInviteTarget rejection or a genuine inviteByNpub failure); a
- * successful invite deliberately keeps its marker so the UI can keep
- * offering "Cancel Invite".
- *
- * submitInvite and inviteByNpub itself stay completely unmodified by this
- * wrapper (architecture.md: "inviteByNpub stays npub/pubkey-only... marker
- * write is scoped to the two direct-invite UI call sites... so
- * approveJoinRequestImpl... never writes the marker") — approveJoinRequestImpl
- * calls inviteByNpub directly via a different call path and must never pick
- * up a marker write, which is exactly why this bookkeeping lives in a wrapper
- * here rather than inside submitInvite or inviteByNpub.
- *
- * S2 (epic: group-invite-lifecycle, DD-8, AC-PROD-1) extends this wrapper
- * with an optional `sendAnnouncement` dependency: once submitInvite resolves
- * with `ok: true` (the MLS Add succeeded), the invite_lifecycle 'invited'
- * announcement is fired fire-and-forget — never awaited, and any rejection
- * is swallowed so a relay/publish hiccup can never surface as a thrown error
- * or flip this function's own successful result. This is deliberately the
- * ONLY call site that fires it — inviteByNpub and approveJoinRequestImpl
- * remain untouched, so the join-request/invite-link approval flow keeps
- * emitting only its own separate member_admitted announcement.
- */
-export async function submitInviteWithMarker(
-  pubkeyHex: string,
-  groupId: string,
-  inviteByNpub: (groupId: string, npub: string) => Promise<{ ok: boolean; error?: string }>,
-  markerDeps: PendingInviteMarkerDeps,
-  sendAnnouncement?: (content: string) => Promise<void>,
-): Promise<{ ok: boolean; error?: string }> {
-  const canonicalPubkey = pubkeyHex.toLowerCase();
-
-  try {
-    await markerDeps.markPendingDirectInvite(groupId, canonicalPubkey);
-  } catch (err) {
-    console.warn('[InviteMemberModal] pending-invite marker write failed (non-blocking):', err);
-  }
-
-  const result = await submitInvite(pubkeyHex, groupId, inviteByNpub);
-
-  if (result.ok) {
-    sendAnnouncement?.(buildInvitedAnnouncementContent(canonicalPubkey)).catch(() => {});
-  } else {
-    try {
-      await markerDeps.clearPendingDirectInvite(groupId, canonicalPubkey);
-    } catch (err) {
-      console.warn('[InviteMemberModal] pending-invite marker clear failed (non-blocking):', err);
-    }
-  }
-
-  return result;
 }
 
 /**
@@ -293,16 +211,7 @@ export default function InviteMemberModal({ isOpen, onClose, groupId, sendAnnoun
     setSuccess(false);
 
     try {
-      const result = await submitInviteWithMarker(
-        selectedPubkeyHex,
-        groupId,
-        inviteByNpub,
-        {
-          markPendingDirectInvite,
-          clearPendingDirectInvite,
-        },
-        sendAnnouncement,
-      );
+      const result = await submitInvite(selectedPubkeyHex, groupId, inviteByNpub, sendAnnouncement);
       if (result.ok) {
         setSuccess(true);
         setSelectedPubkeyHex('');

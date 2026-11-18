@@ -9,7 +9,7 @@
 
 import type { Poll, PollVote, PendingPollVote } from './pollPersistence';
 
-export interface PollReplayDeps {
+interface PollReplayDeps {
   loadPendingVotes: (groupId: string, pollId: string) => Promise<PendingPollVote[]>;
   removePendingVotes: (groupId: string, applied: PendingPollVote[]) => Promise<void>;
   saveVoteIfNewer: (vote: PollVote, opts?: { requirePoll?: boolean }) => Promise<boolean>;

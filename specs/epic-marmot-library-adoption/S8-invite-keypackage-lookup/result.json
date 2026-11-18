@@ -1,7 +1,7 @@
 {
   "story_id": "S8",
   "status": "done",
-  "final_outcome": "completed",
+  "final_outcome": "accepted_with_caveats",
   "completed_at": "2026-11-17T19:00:00Z",
   "files_created": [
     "app/src/lib/marmot/invitations/index.ts",
@@ -19,10 +19,7 @@
     "specs/epic-marmot-library-adoption/S8-invite-keypackage-lookup/verification.json"
   ],
   "adjacent_fixes": [],
-  "tests_added": {
-    "unit": "keyPackageLookup.test.ts (43): candidate order; lookup filter ({kinds:[30443], authors, limit:6}) and union over 10050 + 10002 write + defaults (a 10002 'read' relay is not queried); none-found vs timed-out; discovery failure/timeout falls back to defaults; a failed key-package request is thrown unchanged; abort forwarded; hostile input (foreign author/kind/bad sig/bad id dropped); relay URL policy (wss://192.168.1.1, ws://localhost:3000, wss://printer.local and other local/private/IP hosts rejected by default, allowLocalAdvertised lifts it, app defaults such as ws://umbrel.local:4848 kept); candidate cap of 6 and no signature verification for junk (verify spy); already-member pre-check (member with no discoverable key package: no lookup request); timeoutMs bound; inviter over the real GroupOpQueue: one event per call, per-candidate reason allowlist (reason-less 'group has no relays', no-invitees, duplicate, foreign eventId thrown unchanged), already-member (checked inside the queued op after synced()), abort normalised to GroupOpError 'aborted'.",
-    "harness": "invite.harness.test.ts (5): AC-INV-1 round trip; no key package -> error value; AC-KP-2 two-relay case (advertised local relay via allowLocalAdvertised); AC-KP-1 real invalid-options fall-through; no double add: Bob accepted and minted a new key package, inviting him again yields {error:'already-member'}, group.invite is not called again, one leaf of Bob (on the pre-fix code the library rejects the second commit as terminal 'Commit cannot contain an Add proposal for someone already in the group')."
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 7634,
     "final": 7682
@@ -73,5 +70,10 @@
     "commits_made": [],
     "absorbed_from": [],
     "lead_clarifications": []
-  }
+  },
+  "legacy_tests_added": {
+    "unit": "keyPackageLookup.test.ts (43): candidate order; lookup filter ({kinds:[30443], authors, limit:6}) and union over 10050 + 10002 write + defaults (a 10002 'read' relay is not queried); none-found vs timed-out; discovery failure/timeout falls back to defaults; a failed key-package request is thrown unchanged; abort forwarded; hostile input (foreign author/kind/bad sig/bad id dropped); relay URL policy (wss://192.168.1.1, ws://localhost:3000, wss://printer.local and other local/private/IP hosts rejected by default, allowLocalAdvertised lifts it, app defaults such as ws://umbrel.local:4848 kept); candidate cap of 6 and no signature verification for junk (verify spy); already-member pre-check (member with no discoverable key package: no lookup request); timeoutMs bound; inviter over the real GroupOpQueue: one event per call, per-candidate reason allowlist (reason-less 'group has no relays', no-invitees, duplicate, foreign eventId thrown unchanged), already-member (checked inside the queued op after synced()), abort normalised to GroupOpError 'aborted'.",
+    "harness": "invite.harness.test.ts (5): AC-INV-1 round trip; no key package -> error value; AC-KP-2 two-relay case (advertised local relay via allowLocalAdvertised); AC-KP-1 real invalid-options fall-through; no double add: Bob accepted and minted a new key package, inviting him again yields {error:'already-member'}, group.invite is not called again, one leaf of Bob (on the pre-fix code the library rejects the second commit as terminal 'Commit cannot contain an Add proposal for someone already in the group')."
+  },
+  "legacy_final_outcome": "completed"
 }

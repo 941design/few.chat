@@ -41,7 +41,7 @@ export default function OutboundJoinRequestCard({ record }: OutboundJoinRequestC
   async function handleCancel() {
     setCancelling(true);
     try {
-      await cancelOutboundJoinRequest(record.nonce);
+      await cancelOutboundJoinRequest(record.nonce, record.accountPubkey);
     } finally {
       // On success the reactive store's emitter drops this record and the card
       // unmounts (AC-REACT-2), so this setState is a harmless no-op (React 19

@@ -28,8 +28,8 @@ export interface PendingJoinRequest {
    */
   nickname?: string;
   /**
-   * Identifier of the request and its storage key: the join-request RUMOR id (the inbox handler's `rumor.id`); the legacy
-   * welcomeSubscription path stores the gift-wrap event id instead. Also what approval/dismiss address the request by.
+   * The join-request rumor ID is its storage key and identifies the request
+   * during approval or dismissal.
    */
   eventId: string;
 }

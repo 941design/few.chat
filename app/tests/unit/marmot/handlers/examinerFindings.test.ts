@@ -312,6 +312,6 @@ describe('(7) own-withdraw acts only on a stored row of the same sender (AC-WDR-
     app.spies.onOwnWithdrawn.mockClear();
     await app.sink.withdraw(app.groupId, ev('es'));
     expect(app.spies.onOwnWithdrawn).toHaveBeenCalledTimes(1);
-    expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, 'm2');
+    expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, 'm2', ev('es')[0]);
   });
 });

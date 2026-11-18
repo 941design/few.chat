@@ -135,7 +135,7 @@ describe('postAccountChanged / subscribeAccountChanged', () => {
     subscribeAccountChanged(account);
     subscribeStoreChanged(store);
     const peer = otherTab();
-    peer.postMessage({ type: 'store-changed', store: 'chat' });
+    peer.postMessage({ type: 'store-changed', store: 'chat', id: 'dm:peer' });
     expect(account).not.toHaveBeenCalled();
     expect(store).toHaveBeenCalledTimes(1);
     peer.postMessage({ type: 'account-changed' });

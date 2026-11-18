@@ -16,10 +16,6 @@ export type CrossTabReceiverActions = {
   bumpBlockedPeers: () => void;
   bumpKnownPeers: () => void;
   bumpContacts: () => void;
-  reloadGroups: () => void;
-  bumpGroupData: () => void;
-  bumpChat: () => void;
-  bumpPolls: () => void;
   /** Re-read one reaction thread (id = its namespace key) into the cache. */
   refreshReactions: (key: string) => void;
 };
@@ -35,15 +31,7 @@ export function applyStoreChanged(message: StoreChangedMessage, actions: CrossTa
     case 'contacts':
       actions.bumpContacts();
       return;
-    case 'groups':
-      actions.reloadGroups();
-      actions.bumpGroupData();
-      return;
     case 'chat':
-      actions.bumpChat();
-      return;
-    case 'polls':
-      actions.bumpPolls();
       return;
     case 'reactions':
       // Unscoped reaction notices are never posted; without a thread there is

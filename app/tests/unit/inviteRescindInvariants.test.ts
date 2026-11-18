@@ -40,7 +40,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
-  markPendingDirectInvite,
+  recordPendingDirectInvite,
   clearPendingDirectInvite,
   loadPendingDirectInviteMarkers,
 } from '@/src/lib/marmot/pendingDirectInviteStorage';
@@ -146,7 +146,7 @@ describe('AC-INV-1 — marker-implies-pending-or-gone', () => {
     for (const ordering of INV1_ORDERINGS) {
       await clearAllGroupData();
       await mergeMemberProfile(GROUP_ID, profileFixture(PUBKEY));
-      await markPendingDirectInvite(GROUP_ID, PUBKEY);
+      await recordPendingDirectInvite(GROUP_ID, PUBKEY, 'invite-ref');
 
       let profileArrived = false;
       let removed = false;
@@ -234,7 +234,7 @@ describe('AC-INV-2 — purge-and-clear-both-run, commit-independent', () => {
       it(`${outcome.name} x marker-${markerPresent ? 'present' : 'absent'}: both the profile purge and the marker clear run against REAL IDB state`, async () => {
         await mergeMemberProfile(GROUP_ID, profileFixture(PUBKEY));
         if (markerPresent) {
-          await markPendingDirectInvite(GROUP_ID, PUBKEY);
+          await recordPendingDirectInvite(GROUP_ID, PUBKEY, 'invite-ref');
         }
 
         const deleteSpy = vi.fn(deleteMemberProfile); // spy WRAPPING the real fn — call-count AND real IDB effect both checked
@@ -276,7 +276,7 @@ describe('AC-INV-2 — purge-and-clear-both-run, commit-independent', () => {
     it(`still-member (genuine failure) x marker-${markerPresent ? 'present' : 'absent'}: NEITHER the purge NOR the marker clear run`, async () => {
       await mergeMemberProfile(GROUP_ID, profileFixture(PUBKEY));
       if (markerPresent) {
-        await markPendingDirectInvite(GROUP_ID, PUBKEY);
+        await recordPendingDirectInvite(GROUP_ID, PUBKEY, 'invite-ref');
       }
 
       const deleteSpy = vi.fn(deleteMemberProfile);
@@ -305,7 +305,7 @@ describe('AC-INV-2 — purge-and-clear-both-run, commit-independent', () => {
 
   it('a genuinely concurrent two-admin race (both computing stillMember=false and invoking cleanup concurrently) still leaves both real stores correctly purged/cleared', async () => {
     await mergeMemberProfile(GROUP_ID, profileFixture(PUBKEY));
-    await markPendingDirectInvite(GROUP_ID, PUBKEY);
+    await recordPendingDirectInvite(GROUP_ID, PUBKEY, 'invite-ref');
 
     const runOnce = () =>
       runPostRemovalCleanup({
@@ -426,7 +426,7 @@ describe('AC-INV-4 — orphan-marker safety (isPending && marker conjunction mas
 
     // The marker is now genuinely orphaned (clear failed, marker persists in
     // real storage — not modeled, driven for real):
-    await markPendingDirectInvite(GROUP_ID, PUBKEY); // simulate the marker that the failed clear left behind
+    await recordPendingDirectInvite(GROUP_ID, PUBKEY, 'invite-ref'); // simulate the marker that the failed clear left behind
     const stillOrphaned = (await loadPendingDirectInviteMarkers(GROUP_ID)).has(PUBKEY);
     expect(stillOrphaned).toBe(true);
 

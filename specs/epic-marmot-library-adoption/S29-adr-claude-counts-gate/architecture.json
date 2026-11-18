@@ -1,0 +1,22 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "New ADR superseding ADR-012's fork mechanism (keeps handler rule, reaffirms ADR-003 app-level, records own-change-lost) with ADR-012/ADR-003 header references; CLAUDE.md e2e counts match playwright --list; run-report lists uncovered topic changes; end gate make build + make test with e2e not INVALID.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "docs/adr/ADR-013-*.md (new)",
+    "docs/adr/ADR-012-*.md",
+    "docs/adr/ADR-003-*.md",
+    "CLAUDE.md",
+    "run report",
+    "production-bundle runtime proof against app/out (AC-GATE-6)"
+  ]
+}

@@ -122,6 +122,7 @@ vi.mock('@/src/lib/contacts', () => ({
   // admission at Step 9 now uses `rememberPendingContact` instead (epic:
   // pending-contact-confirmation, S1).
   rememberContact: () => {},
+  isPendingConfirmation: (hex: string) => !!contactsState[hex.toLowerCase()]?.pendingConfirmationSince,
   // Epic: pending-contact-confirmation, S1 — the pending-admission
   // primitive that REPLACES `rememberContact` at handlePairingAck's Step 9.
   // Mirrors contacts.ts#rememberPendingContact's real
@@ -152,6 +153,10 @@ vi.mock('@/src/lib/contacts', () => ({
 }));
 
 import * as directMessagesModule from '@/src/lib/directMessages';
+import { subscribeDirectMessageNotifications } from '@/src/lib/directMessageNotifications';
+import * as unreadStore from '@/src/lib/unreadStore';
+import { subscribeStoreChanged } from '@/src/lib/crossTab';
+import { applyStoreChanged } from '@/src/lib/crossTabReceiver';
 const { sealAndWrap, unwrapAndOpen, CHAT_MESSAGE_KIND } = directMessagesModule;
 
 import { NDKEvent } from '@nostr-dev-kit/ndk';
@@ -408,6 +413,75 @@ describe('sendPairingAck (AC-ACK-1, AC-PRIV-1)', () => {
 // ── AC-ADMIT-1/2/3 + AC-SEC-1/2 — handlePairingAck core ─────────────────
 
 describe('handlePairingAck', () => {
+  it('AC-INBOX-1: the production NDK receiver admits an ack and keeps DM notifications separate', async () => {
+    const issuer = makeIdentity();
+    const scanner = makeIdentity();
+    const minted = await getOrMintActiveNonce();
+    const card = await buildIdentityCard(scanner, 'Bob');
+    const ack = await buildGiftWrap({
+      senderIdentity: scanner, recipientPubHex: issuer.pubHex,
+      kind: PAIRING_ACK_KIND, content: ackContent(minted.nonce, card),
+    });
+    const invalidAck = await buildGiftWrap({
+      senderIdentity: scanner, recipientPubHex: issuer.pubHex,
+      kind: PAIRING_ACK_KIND, content: ackContent('ff'.repeat(16), card),
+    });
+    const handlers = new Map<number, (event: unknown) => Promise<void>>();
+    const stops = [vi.fn(), vi.fn()];
+    let subscriptionIndex = 0;
+    const ndk = {
+      subscribe: (filter: { kinds: number[]; '#p': string[] }) => {
+        expect(filter['#p']).toEqual([issuer.pubHex]);
+        const stop = stops[subscriptionIndex++];
+        return { on: (_name: string, handler: (event: unknown) => Promise<void>) => handlers.set(filter.kinds[0], handler), stop };
+      },
+    };
+    const pendingBell = vi.spyOn(unreadStore, 'incrementPendingContact');
+    const dmBell = vi.spyOn(unreadStore, 'incrementDirectMessage');
+    const contactChanged = vi.fn();
+    const refreshKnownPeers = vi.fn();
+    const unsubscribeChanges = subscribeStoreChanged((message) => applyStoreChanged(message, {
+      bumpKnownPeers: refreshKnownPeers, bumpBlockedPeers: vi.fn(), bumpContacts: vi.fn(), refreshReactions: vi.fn(),
+    }));
+    let allowDm = false;
+    const stop = subscribeDirectMessageNotifications({
+      ndk: ndk as never, ownPubkeyHex: issuer.pubHex, privateKeyHex: issuer.privHex,
+      isAllowedSender: () => allowDm, onContactChanged: contactChanged,
+    });
+    const receive = handlers.get(1059)!;
+    expect(receive).toBeDefined();
+    await receive(invalidAck);
+    expect(knownPeersState.size).toBe(0);
+    expect(pendingBell).not.toHaveBeenCalled();
+    expect(refreshKnownPeers).not.toHaveBeenCalled();
+    await receive(ack);
+    expect(callOrder).toEqual(['knownPeers', 'contact']);
+    expect(knownPeersState.has(scanner.pubHex)).toBe(true);
+    expect(contactsState[scanner.pubHex].pendingConfirmationSince).toBeTruthy();
+    expect(pendingBell).toHaveBeenCalledExactlyOnceWith(scanner.pubHex);
+    expect(dmBell).not.toHaveBeenCalled();
+    expect(contactChanged).toHaveBeenCalledTimes(1);
+    expect(refreshKnownPeers).toHaveBeenCalledTimes(1);
+
+    await receive(ack);
+    expect(rememberPendingContactCalls).toEqual([scanner.pubHex]);
+    expect(pendingBell).toHaveBeenCalledTimes(1);
+    expect(dmBell).not.toHaveBeenCalled();
+
+    const dmSender = makeIdentity();
+    const dm = await buildGiftWrap({
+      senderIdentity: dmSender, recipientPubHex: issuer.pubHex,
+      kind: CHAT_MESSAGE_KIND, content: 'hello',
+    });
+    allowDm = true;
+    await receive(dm);
+    expect(dmBell).toHaveBeenCalledExactlyOnceWith(dmSender.pubHex);
+
+    stop();
+    unsubscribeChanges();
+    expect(stops.every((fn) => fn.mock.calls.length === 1)).toBe(true);
+  });
+
   it('AC-ADMIT-1/AC-ADMIT-2: admissible nonce + valid card → admits, calling rememberKnownPeers strictly BEFORE rememberPendingContact (ADR-005)', async () => {
     const issuer = makeIdentity();
     const scanner = makeIdentity();

@@ -1,0 +1,10 @@
+{
+  "consumer_sha": "5311488",
+  "tests": {
+    "command": "VITEST_MAX_WORKERS=6 make test-unit during cutover",
+    "passed": 8138,
+    "failed": 128,
+    "skipped": 1
+  },
+  "note": "Before the removal sweep. Legacy source and tests still present. Cutover failures include stale protocol and cross-tab expectations."
+}

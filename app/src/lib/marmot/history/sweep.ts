@@ -23,7 +23,7 @@
  */
 import type { HistoryStore } from './historyStore';
 
-export interface SweepDeps {
+interface SweepDeps {
   store: HistoryStore;
   /** True once this backend instance has run (or started) the first-touch recovery of the group. */
   isTouched: (groupId: string) => boolean;

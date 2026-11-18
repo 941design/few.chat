@@ -1,0 +1,36 @@
+{
+  "status": "done",
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "story_id": "S17",
+  "modules_touched": [
+    "client"
+  ],
+  "files_created": [
+    "app/src/lib/marmot/client/lease.ts",
+    "app/src/lib/marmot/client/wipe.ts",
+    "app/src/lib/marmot/client/reconcile.ts",
+    "app/src/lib/marmot/groupSessionWipeCheckpoint.ts",
+    "app/src/lib/marmot/groupSessionStores.ts"
+  ],
+  "files_modified": [
+    "app/src/context/MarmotContext.tsx",
+    "app/src/lib/marmot/groupSessionMembership.ts",
+    "app/src/lib/marmot/groupSessionProfile.ts",
+    "app/src/components/DirectMessageNotificationsWatcher.tsx"
+  ],
+  "remediation_rounds": 5,
+  "verification_evidence": {
+    "unit": "Lease tests verify disposal before wipe, restart on the exact incompatible read failure, and no restart when closure or wipe fails. Other focused tests cover durable application and incompatible-store checkpoints and fenced in-flight writes.",
+    "review": "Remediated lease wait/wipe refusal, remaining join-request persistence, early abandoned handles and account-scoped overlay selection. Earlier independent findings are recorded. Final browser and review still due.",
+    "latest": "Account-scoped overlay keys, guarded wipe handoffs, owner-bound expiry, and ownership-aware purge are integrated. Focused latest unit bundle passed 108 tests across eight suites before the final wiring additions. Subsequent nine wipe-race tests, shared-group purge and owner-scope tests validate the new guards in isolation."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol verified the lease lifecycle and once-per-page wipe. The final storage fixes address the owner/signer handoff, shared data, expiry and startup findings.",
+    "adversarial": "GPT-6 Astra independently rechecked the prior defects as closed. A real static browser test verified startup removed the seeded pre-adoption overlay without changing the live group. A real Web Locks browser test verified takeover with a confirmed sink row."
+  }
+}

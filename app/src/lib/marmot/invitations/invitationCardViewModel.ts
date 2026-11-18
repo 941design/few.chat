@@ -24,9 +24,9 @@ export interface InvitationCardViewModel {
 }
 
 /** The invitation fields the view model reads (a `PendingInvitation` slice). */
-export type CardInvitation = InvitationRef & { readonly id: string };
+type CardInvitation = InvitationRef & { readonly id: string };
 
-export interface CardViewModelInput {
+interface CardViewModelInput {
   invitation: CardInvitation;
   /** Held contexts (`InviteContextStore.snapshot()`). */
   contexts: readonly InviteContextRecord[];

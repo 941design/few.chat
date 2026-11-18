@@ -1,7 +1,7 @@
 {
   "story_id": "S7",
   "status": "done",
-  "final_outcome": "completed",
+  "final_outcome": "accepted_with_caveats",
   "completed_at": "2026-11-17T18:30:00Z",
   "files_created": [
     "app/tests/unit/media/groupMediaFixtures.ts",
@@ -27,12 +27,7 @@
     "app/src/lib/calls/callSignaling.ts"
   ],
   "adjacent_fixes": [],
-  "tests_added": {
-    "unit": "groupImeta (22: buildGroupImetaTag incl. http/loopback/cache-only/legacy/blurhash rejection, extractGroupAttachmentsByRole, fingerprint), groupBlossom (8: allowlist gate, hash-verified bytes, locator fallthrough, not-found), groupImageService (31: construction validation, encrypt options, ciphertext-only upload, one kind-9 rumor via the S6 sender, failure paths, hostile input)",
-    "reload": "groupImageService.reload (5: real mediaPersistence over fake-indexeddb, fresh service + group handle serves from cache with zero decrypt/download, forged nonce falls through, clearGroupMedia forces a decrypt)",
-    "harness": "media.harness (3: real Alice/Bob MLS clients, real group.encryptMedia/decryptMedia, real S6 sender, real blossomClient put/get over a fake Blossom via stubbed fetch: round trip bytes equal, uploaded blob != plaintext and sha256 = locator, imeta has no plaintext; tampered Blossom bytes rejected; reload serves from cache)",
-    "remediation": "groupBlossom (+10: bounded get: Content-Length rejected unread, streamed over-limit aborted early, stalled body times out, redirect:'error'; 3-locator cap, limit passed, over-limit bytes never returned), groupImageService (+22: thumb vs full cap, hung download times out and frees the slot, svg refused on receive miss/hit and on send, allowlist, derivation from imeta incl. mis-paired ref and async rejection, in-flight messageId, up-front size checks, canonical cache type, origin binding, epoch re-encrypt / epoch-advanced), media.harness (+2: forged nonce rejected by the real decryptMedia with nothing cached; real commit between upload and send), nip46Perms (+1 guard, exact set updated). Verified each fix with a scratch-copy mutation (16 mutants, all killed)."
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 7519,
     "final": 7588
@@ -98,5 +93,12 @@
     "commits_made": [],
     "absorbed_from": [],
     "lead_clarifications": []
-  }
+  },
+  "legacy_tests_added": {
+    "unit": "groupImeta (22: buildGroupImetaTag incl. http/loopback/cache-only/legacy/blurhash rejection, extractGroupAttachmentsByRole, fingerprint), groupBlossom (8: allowlist gate, hash-verified bytes, locator fallthrough, not-found), groupImageService (31: construction validation, encrypt options, ciphertext-only upload, one kind-9 rumor via the S6 sender, failure paths, hostile input)",
+    "reload": "groupImageService.reload (5: real mediaPersistence over fake-indexeddb, fresh service + group handle serves from cache with zero decrypt/download, forged nonce falls through, clearGroupMedia forces a decrypt)",
+    "harness": "media.harness (3: real Alice/Bob MLS clients, real group.encryptMedia/decryptMedia, real S6 sender, real blossomClient put/get over a fake Blossom via stubbed fetch: round trip bytes equal, uploaded blob != plaintext and sha256 = locator, imeta has no plaintext; tampered Blossom bytes rejected; reload serves from cache)",
+    "remediation": "groupBlossom (+10: bounded get: Content-Length rejected unread, streamed over-limit aborted early, stalled body times out, redirect:'error'; 3-locator cap, limit passed, over-limit bytes never returned), groupImageService (+22: thumb vs full cap, hung download times out and frees the slot, svg refused on receive miss/hit and on send, allowlist, derivation from imeta incl. mis-paired ref and async rejection, in-flight messageId, up-front size checks, canonical cache type, origin binding, epoch re-encrypt / epoch-advanced), media.harness (+2: forged nonce rejected by the real decryptMedia with nothing cached; real commit between upload and send), nip46Perms (+1 guard, exact set updated). Verified each fix with a scratch-copy mutation (16 mutants, all killed)."
+  },
+  "legacy_final_outcome": "completed"
 }

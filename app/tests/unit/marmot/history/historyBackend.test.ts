@@ -300,7 +300,7 @@ describe('AC-HIST-5: withdraw deletes rows and retracts once per withdrawn row',
     await sink.withdraw(G1, ['e1', 'never-seen']);
 
     expect(fx.retractCalls).toEqual([
-      { groupId: G1, eventId: 'e1', rumor: e1.rumor, sender: ALICE, receivedAt: expect.any(Number), remaining: expect.any(Function), batch: [expect.objectContaining({ eventId: 'e1' })] },
+      { groupId: G1, eventId: 'e1', rumor: e1.rumor, sender: ALICE, receivedAt: expect.any(Number), remaining: expect.any(Function), cancelled: expect.any(Function), batch: [expect.objectContaining({ eventId: 'e1' })] },
     ]);
     expect(row(G1, 'e1')).toBeUndefined();
     expect(row(G1, 'e2')).toBeDefined();

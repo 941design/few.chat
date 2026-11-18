@@ -289,7 +289,7 @@ export function resolveFreshOriginalFromStorage(
 export function shouldIngestDmFromSender(
   senderPubkeyHex: string,
   isSelf: boolean,
-  groups: ReadonlyArray<import('@/src/types').Group>,
+  groups: ReadonlyArray<Pick<import('@/src/types').Group, 'memberPubkeys'>>,
   knownPeers: ReadonlySet<string>,
   blockedPeers: ReadonlySet<string>,
   ownPubkeyHex: string,
@@ -332,11 +332,7 @@ export default function ContactChat({
   // drives ChatBox's paste/drop guards — and allowMessageActions); keep them
   // as separate explicit checks so every path stays individually auditable.
   const isFeedback = source === 'feedback';
-  const { groups, ready: marmotReady, whenReady, knownPeersRevision, blockedPeersRevision } = useMarmot();
-  // Ref for groups so subscription handlers always see the latest whitelist
-  // without the effect needing to re-subscribe on every membership change.
-  const groupsRef = useRef(groups);
-  useEffect(() => { groupsRef.current = groups; }, [groups]);
+  const { groups, getDmGroups, whenDmGroupsReady, knownPeersRevision, blockedPeersRevision } = useMarmot();
   // Ref for ever-known peers — refreshed whenever groups change (which is also
   // when knownPeers may have been updated by MarmotContext's maintenance effect)
   // OR when knownPeersRevision bumps (an out-of-band write, e.g. manual
@@ -350,13 +346,6 @@ export default function ContactChat({
   // knownPeersRevision] since a block/unblock is its own independent event.
   const blockedPeersRef = useRef(loadBlockedPeers());
   useEffect(() => { blockedPeersRef.current = loadBlockedPeers(); }, [blockedPeersRevision]);
-  // Track MarmotContext readiness so the historical fetch can wait for the
-  // group whitelist to be fully loaded before running the walled-garden gate.
-  // Without this, a fast relay (< 100 ms) resolves the historical fetch before
-  // MarmotContext.init() calls setGroups(), causing groupsRef.current === [] and
-  // dropping all historical events from allowed senders.
-  const marmotReadyRef = useRef(marmotReady);
-  useEffect(() => { marmotReadyRef.current = marmotReady; }, [marmotReady]);
   const threadId = useMemo(() => directConversationId(peerPubkeyHex), [peerPubkeyHex]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -685,23 +674,12 @@ export default function ContactChat({
           fetchEventsWithTimeout(ndk, { kinds: [GIFT_WRAP_KIND], '#p': [pubkeyHex], limit: 500 }),
         ]);
 
-        // AC-SEC-6 race guard: wait for MarmotContext to finish loading groups
-        // before running the walled-garden gate on ALL historical events (both kind-4
-        // and kind-1059). On a fast relay (localhost strfry) the historical fetch
-        // resolves in < 100 ms, well before MarmotContext.init() calls setGroups().
-        // Without this wait, groupsRef.current is [] when we call isAllowedDmSender,
-        // which drops every historical event from an allowed sender (false-positive
-        // walled-garden drop).
-        // Await MarmotContext readiness via its whenReady() promise, with a
-        // 5-second ceiling so the chat still renders on slow networks / degraded
-        // state rather than hanging indefinitely. Replaces a 50 ms setInterval poll.
-        if (!marmotReadyRef.current) {
-          const MAX_WAIT_MS = 5_000;
-          await Promise.race([
-            whenReady(),
-            new Promise<void>((resolve) => setTimeout(resolve, MAX_WAIT_MS)),
-          ]);
-        }
+        // Historical admission needs the same roster snapshot as live traffic.
+        await Promise.race([
+          whenDmGroupsReady(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+        ]);
+        const historicalGroups = getDmGroups();
 
         // Perf hoist (gate-remediation finding 2): a single fresh
         // loadBlockedPeers() snapshot for the WHOLE historical batch below
@@ -725,7 +703,7 @@ export default function ContactChat({
         ): Promise<ChatMessage | null> => {
           const senderPeer = evt.pubkey.toLowerCase();
           const isSelf = senderPeer === pubkeyHex.toLowerCase();
-          if (!shouldIngestDmFromSender(senderPeer, isSelf, groupsRef.current, knownPeersRef.current, blockedPeersRef.current, pubkeyHex, historicalBlockedPeersSnapshot)) {
+          if (!shouldIngestDmFromSender(senderPeer, isSelf, historicalGroups, knownPeersRef.current, blockedPeersRef.current, pubkeyHex, historicalBlockedPeersSnapshot)) {
             dmLogger.info('dm:walled-garden-drop', { pubkey: senderPeer.slice(0, 8), kind: 4 });
             return null;
           }
@@ -794,7 +772,7 @@ export default function ContactChat({
           // historicalBlockedPeersSnapshot (perf hoist, see its declaration
           // above): this loop is part of the same historical batch pass.
           const senderPeer = rumor.pubkey.toLowerCase();
-          if (!shouldIngestDmFromSender(senderPeer, false, groupsRef.current, knownPeersRef.current, blockedPeersRef.current, pubkeyHex, historicalBlockedPeersSnapshot)) {
+          if (!shouldIngestDmFromSender(senderPeer, false, historicalGroups, knownPeersRef.current, blockedPeersRef.current, pubkeyHex, historicalBlockedPeersSnapshot)) {
             dmLogger.info('dm:walled-garden-drop', { pubkey: senderPeer.slice(0, 8), kind: rumor.kind });
             continue;
           }
@@ -885,7 +863,7 @@ export default function ContactChat({
           // returns false for own pubkey by design, but own messages are legitimate.
           const senderPeer = evt.pubkey.toLowerCase();
           const isSelf = senderPeer === pubkeyHex.toLowerCase();
-          if (!shouldIngestDmFromSender(senderPeer, isSelf, groupsRef.current, knownPeersRef.current, blockedPeersRef.current, pubkeyHex)) {
+          if (!shouldIngestDmFromSender(senderPeer, isSelf, getDmGroups(), knownPeersRef.current, blockedPeersRef.current, pubkeyHex)) {
             dmLogger.info('dm:walled-garden-drop', { pubkey: senderPeer.slice(0, 8), kind: 4 });
             return;
           }
@@ -926,7 +904,7 @@ export default function ContactChat({
               // AC-SEC-6/7: walled-garden gate — runs after thread isolation, before
               // any write path (appendMessage, upsertMessages, applyInboundRumor).
               const rumorSender = rumor.pubkey.toLowerCase();
-              if (!shouldIngestDmFromSender(rumorSender, false, groupsRef.current, knownPeersRef.current, blockedPeersRef.current, pubkeyHex)) {
+              if (!shouldIngestDmFromSender(rumorSender, false, getDmGroups(), knownPeersRef.current, blockedPeersRef.current, pubkeyHex)) {
                 dmLogger.info('dm:walled-garden-drop', { pubkey: rumorSender.slice(0, 8), kind: rumor.kind });
                 return;
               }
@@ -1014,7 +992,7 @@ export default function ContactChat({
       outgoingSub?.stop?.();
       giftWrapSub?.stop?.();
     };
-  }, [applyInboundDeleteEditSignal, dmThread, ingestEvent, peerPubkeyHex, privateKeyHex, pubkeyHex, resolveFreshOriginal, threadId, upsertMessages]);
+  }, [applyInboundDeleteEditSignal, dmThread, getDmGroups, ingestEvent, peerPubkeyHex, privateKeyHex, pubkeyHex, resolveFreshOriginal, threadId, upsertMessages, whenDmGroupsReady]);
 
   // Mark the thread read whenever it is open and new messages land — the user
   // is actively viewing this chat, so any incoming DM is "seen" by definition.
@@ -1118,7 +1096,8 @@ export default function ContactChat({
   }, [peerPubkeyHex, privateKeyHex, pubkeyHex, signer, threadId, upsertMessages]);
 
   const decryptMedia = useCallback((attachment: ChatMediaAttachment) => {
-    return decryptDirectMedia(attachment as any, privateKeyHex, peerPubkeyHex);
+    if ('imeta' in attachment) return Promise.reject(new TypeError('Expected a direct image attachment'));
+    return decryptDirectMedia(attachment, privateKeyHex, peerPubkeyHex);
   }, [peerPubkeyHex, privateKeyHex]);
 
   /**

@@ -1,4 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
+import { createHash, X509Certificate } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { request } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, createConnection } from "node:net";
 import { createReloadDetector } from "./e2eReloadDetector.mjs";
 
@@ -45,6 +51,46 @@ function waitForPort(port, host = "localhost", timeoutMs = 60_000) {
   });
 }
 
+// Use a routable HTTPS locator in the media codec. Chromium resolves this
+// test-only host to the loopback proxy and trusts only this run's certificate.
+const blossomHost = "blossom.e2e.few.chat";
+let blossomOrigin;
+let blossomCertPin;
+let blossomProxy;
+async function startBlossomProxy() {
+  const certDir = mkdtempSync(join(tmpdir(), "few-blossom-"));
+  const keyPath = join(certDir, "key.pem");
+  const certPath = join(certDir, "cert.pem");
+  try {
+    execFileSync("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+      "-subj", `/CN=${blossomHost}`, "-keyout", keyPath, "-out", certPath,
+    ], { stdio: "ignore" });
+    const cert = readFileSync(certPath);
+    blossomCertPin = createHash("sha256")
+      .update(new X509Certificate(cert).publicKey.export({ type: "spki", format: "der" }))
+      .digest("base64");
+    blossomProxy = createHttpsServer({ key: readFileSync(keyPath), cert }, (incoming, outgoing) => {
+      const upstream = request({
+        hostname: "127.0.0.1", port: BLOSSOM_MOCK_PORT, method: incoming.method,
+        path: incoming.url, headers: { ...incoming.headers, "x-forwarded-proto": "https" },
+      }, (response) => {
+        outgoing.writeHead(response.statusCode ?? 502, response.headers);
+        response.pipe(outgoing);
+      });
+      upstream.on("error", () => { outgoing.writeHead(502).end(); });
+      incoming.pipe(upstream);
+    });
+    await new Promise((resolve, reject) => {
+      blossomProxy.once("error", reject);
+      blossomProxy.listen(0, "127.0.0.1", resolve);
+    });
+    blossomOrigin = `https://${blossomHost}:${blossomProxy.address().port}`;
+  } finally {
+    rmSync(certDir, { recursive: true, force: true });
+  }
+}
+
 // Groups mode: wait for strfry relay and blossom-mock
 if (isGroups) {
   console.log(`[e2e] Waiting for strfry relay on port ${RELAY_PORT}`);
@@ -53,6 +99,7 @@ if (isGroups) {
   console.log(`[e2e] Waiting for blossom-mock on port ${BLOSSOM_MOCK_PORT}`);
   await waitForPort(BLOSSOM_MOCK_PORT);
   console.log("[e2e] Blossom mock ready");
+  await startBlossomProxy();
 }
 
 const port = await getFreePort();
@@ -61,7 +108,8 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const serverEnv = { ...process.env };
 if (isGroups) {
   serverEnv.NEXT_PUBLIC_RELAYS = `ws://localhost:${RELAY_PORT}`;
-  serverEnv.NEXT_PUBLIC_BLOSSOM_BASE_URL = `http://localhost:${BLOSSOM_MOCK_PORT}`;
+  serverEnv.NEXT_PUBLIC_BLOSSOM_BASE_URL = blossomOrigin;
+  serverEnv.NEXT_PUBLIC_BLOSSOM_TRUSTED_HOSTS = new URL(blossomOrigin).host;
   // USER_B (deterministic test keypair) is the maintainer in the e2e test suite
   // so dm-feedback-channel.spec.ts can control the maintainer's private key.
   // Derived from USER_B.privateKeyHex = 'cbecda1c7d37d4c0aa5466243bb4a0018c31bf06d74fa7338290dd3068db4fed'
@@ -78,6 +126,7 @@ devServer.stdout.on("data", (c) => { process.stdout.write(c); reloadDetector.fee
 devServer.stderr.on("data", (c) => { process.stderr.write(c); reloadDetector.feed(c); });
 
 function stopServer() {
+  blossomProxy?.close();
   if (devServer.exitCode === null) {
     try {
       // Kill entire process group (detached) to ensure next dev is stopped
@@ -138,6 +187,8 @@ try {
       ...process.env,
       BASE_URL: baseUrl,
       E2E_GROUPS: process.env.E2E_GROUPS || "",
+      E2E_BLOSSOM_HOST: blossomOrigin ? blossomHost : "",
+      E2E_BLOSSOM_CERT_PIN: blossomCertPin ?? "",
       BLOSSOM_BASE_URL: isGroups ? `http://localhost:${BLOSSOM_MOCK_PORT}` : "",
     },
   });

@@ -18,6 +18,7 @@ import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { USER_A, USER_B, computeTestKeypairs } from './helpers/auth-helpers';
 import { clearAppState } from './helpers/clear-state';
 import { suppressErrorOverlay, dismissErrorOverlay } from './helpers/dismiss-error-overlay';
+import { waitForLibraryGroupAbsent } from './helpers/session-cutover';
 import {
   createGroupAndInvite,
   inviteContactViaPicker,
@@ -65,6 +66,7 @@ test.describe.serial('Re-invite after leave', () => {
   let bobCtx: BrowserContext;
   let alicePage: Page;
   let bobPage: Page;
+  let groupId: string;
 
   test.beforeAll(async ({ browser }) => {
     await computeTestKeypairs();
@@ -80,6 +82,8 @@ test.describe.serial('Re-invite after leave', () => {
   test('Alice invites Bob; Bob joins', async () => {
     await createGroupAndInvite(alicePage, USER_B.npub, bobPage, GROUP_NAME);
     await expect(joinedCards(bobPage, GROUP_NAME)).toHaveCount(1);
+    groupId = (await joinedCards(bobPage, GROUP_NAME).getAttribute('data-testid'))!.replace('group-card-', '');
+    expect(groupId).toBeTruthy();
   });
 
   test('Bob leaves; Alice sees him removed', async () => {
@@ -105,7 +109,9 @@ test.describe.serial('Re-invite after leave', () => {
     ).toBeVisible({ timeout: 30_000 });
     await expect(joinedCards(bobPage, GROUP_NAME)).toHaveCount(0, { timeout: 30_000 });
 
-    // Alice's client auto-removes Bob on his kind-13 leave intent.
+    await waitForLibraryGroupAbsent(bobPage, groupId);
+
+    // Alice's client removes Bob on his kind-13 leave intent.
     await expect(alicePage.getByTestId(`member-item-${USER_B.pubkeyHex.slice(0, 8)}`)).toHaveCount(0, {
       timeout: 90_000,
     });
@@ -115,6 +121,9 @@ test.describe.serial('Re-invite after leave', () => {
     await inviteContactViaPicker(alicePage, USER_B.npub);
     await expect(alicePage.getByTestId('invite-success')).toBeVisible({ timeout: 90_000 });
     await dismissErrorOverlay(alicePage);
+    const member = USER_B.pubkeyHex.slice(0, 8);
+    await alicePage.keyboard.press('Escape');
+    await expect(alicePage.getByTestId(`member-item-${member}`)).toBeVisible();
 
     await bobPage.goto('/groups/');
     await expect(bobPage.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 90_000 });
@@ -130,5 +139,7 @@ test.describe.serial('Re-invite after leave', () => {
     await expect(bobPage.getByTestId(`member-item-${USER_A.pubkeyHex.slice(0, 8)}`)).toBeVisible({
       timeout: 30_000,
     });
+    await expect(alicePage.getByTestId(`member-item-${member}`)).toBeVisible();
+    await expect(alicePage.getByTestId(`member-pending-${member}`)).toHaveCount(0);
   });
 });

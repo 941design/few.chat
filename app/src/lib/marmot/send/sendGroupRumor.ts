@@ -52,13 +52,13 @@ export interface SendableGroup {
 }
 
 /** What `sendGroupRumor` resolves with: the canonical rumor id and whatever `group.send` resolved with. */
-export interface SendGroupRumorResult {
+interface SendGroupRumorResult {
   id: string;
   result: unknown;
 }
 
 /** A built, tracked, not yet sent rumor. */
-export interface PreparedGroupRumor {
+interface PreparedGroupRumor {
   /** `getEventHash(rumor)`: the id of the optimistic row. */
   readonly id: string;
   readonly rumor: Rumor;
@@ -66,7 +66,7 @@ export interface PreparedGroupRumor {
   send: () => Promise<SendGroupRumorResult>;
 }
 
-export interface GroupRumorSenderOptions {
+interface GroupRumorSenderOptions {
   /** Lowercase hex pubkey of the OWN account: the rumor's `pubkey`. */
   ownPubkey: string;
   tracker: OwnRowTracker;
@@ -76,9 +76,9 @@ export interface GroupRumorSenderOptions {
 
 export interface GroupRumorSender {
   /** Builds the canonical rumor and registers the optimistic row with the tracker. Does not send. */
-  prepare: (group: SendableGroup, kind: number, content: string, tags: string[][]) => PreparedGroupRumor;
+  prepare: (group: SendableGroup, kind: number, content: string, tags: string[][], options?: { createdAt?: number }) => PreparedGroupRumor;
   /** `prepare` + `send` (seam `SendGroupRumor`). */
-  sendGroupRumor: (group: SendableGroup, kind: number, content: string, tags: string[][]) => Promise<SendGroupRumorResult>;
+  sendGroupRumor: (group: SendableGroup, kind: number, content: string, tags: string[][], options?: { createdAt?: number }) => Promise<SendGroupRumorResult>;
   /**
    * Retry of a `failed` row: re-sends the IDENTICAL stored rumor (same id) through `group.send` and returns
    * the row to `sending`. Rejects (without sending) for a row that is not `failed`. Never rebuilds the rumor.
@@ -206,15 +206,18 @@ export function createGroupRumorSender(options: GroupRumorSenderOptions): GroupR
     if (!group || typeof group.id !== 'string' || typeof group.send !== 'function') throw new TypeError('sendGroupRumor: group must have id and send');
   };
 
-  const prepare: GroupRumorSender['prepare'] = (group, kind, content, tags) => {
+  const prepare: GroupRumorSender['prepare'] = (group, kind, content, tags, options) => {
     assertGroup(group);
-    let createdAt = nowSeconds();
+    let createdAt = options?.createdAt ?? nowSeconds();
     let rumor = buildGroupRumor(ownPubkey, kind, content, tags, createdAt);
     // Same content in the same second is the same id: a second send would collapse into the first row.
     // Bump created_at until the id is not tracked (a distinct message must have a distinct id). RESIDUAL: this
     // guards TRACKED rows only; a row the tracker already pruned / forgotten (or one of an earlier session) is
     // not seen, so the same content sent again in the same second as such a row can still collide with it.
-    while (tracker.statusOf(group.id, rumor.id) !== undefined) rumor = buildGroupRumor(ownPubkey, kind, content, tags, ++createdAt);
+    while (tracker.statusOf(group.id, rumor.id) !== undefined) {
+      if (options?.createdAt !== undefined) throw new Error('sendGroupRumor: rumor with fixed timestamp is already tracked');
+      rumor = buildGroupRumor(ownPubkey, kind, content, tags, ++createdAt);
+    }
     tracker.register(group.id, rumor.id, { rumor, signal: isSignalRumor(rumor) });
     let started: Promise<SendGroupRumorResult> | undefined;
     return {
@@ -229,7 +232,7 @@ export function createGroupRumorSender(options: GroupRumorSenderOptions): GroupR
 
   return {
     prepare,
-    sendGroupRumor: (group, kind, content, tags) => prepare(group, kind, content, tags).send(),
+    sendGroupRumor: (group, kind, content, tags, options) => prepare(group, kind, content, tags, options).send(),
     retry: async (group, rumorId) => {
       assertGroup(group);
       const rumor = tracker.retry(group.id, rumorId);

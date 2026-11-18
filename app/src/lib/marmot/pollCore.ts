@@ -106,8 +106,7 @@ async function storeClosed(closed: Poll, deps: PollHandlerDeps): Promise<Poll> {
  * and again at every later vote, duplicate open and close of the poll, so a
  * step interrupted after the open's savePoll is retried by a LATER message of
  * the poll within the session, and at the latest by the held poll-state sweep
- * at the next subscription (createHeldPollStateSweeper; the failed rumor
- * itself also stays journaled and is re-handled then — applicationRumorDispatcher).
+ * on the next session. Undispatched rumors are also recovered by the history sink.
  *
  * The stored poll is the truth; queue cleanup is best-effort.
  * - A held close is applied only if the poll is still open and the close's
@@ -204,7 +203,7 @@ async function recoverStoredPoll(existing: Poll, ctx: DispatcherContext, deps: P
   if (replayed > 0 || closed) deps.setPollVersion((v) => v + 1);
 }
 
-export interface HeldPollSweepDeps extends PollHandlerDeps {
+interface HeldPollSweepDeps extends PollHandlerDeps {
   /** pollPersistence.listHeldPollIds: polls of the group with anything held. */
   listHeldPollIds: (groupId: string) => Promise<string[]>;
 }

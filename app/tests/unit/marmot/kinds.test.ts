@@ -38,16 +38,17 @@ describe('AC-KIND-2 registry contents', () => {
     expect(RESERVED_KINDS.length).toBeGreaterThan(0);
   });
 
-  it('has no 4460/4461/4462 literals anywhere under app/src', () => {
+  it('keeps reserved kind literals out of app sources and other tests', () => {
     const hits: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
         const p = join(dir, name);
         if (statSync(p).isDirectory()) walk(p);
-        else if (/\.(ts|tsx)$/.test(name) && /\b446[012]\b/.test(readFileSync(p, 'utf8'))) hits.push(p);
+        else if (p !== __filename && /\.(ts|tsx)$/.test(name) && /\b446[012]\b/.test(readFileSync(p, 'utf8'))) hits.push(p);
       }
     };
     walk(join(__dirname, '../../../src'));
+    walk(join(__dirname, '../../../tests'));
     expect(hits).toEqual([]);
   });
 });
@@ -64,6 +65,7 @@ describe('AC-KIND-3 invite-context kind', () => {
 describe('AC-KIND-1 collision check', () => {
   afterEach(() => {
     vi.doUnmock('@941design/marmot');
+    vi.doUnmock('@/src/lib/marmot/kindRegistryInputs');
     vi.resetModules();
   });
 
@@ -90,6 +92,18 @@ describe('AC-KIND-1 collision check', () => {
     vi.resetModules();
     vi.doMock('@941design/marmot', () => ({ RUMOR_KINDS: { WELCOME: 444, X: 21064 } }));
     await expect(import('@/src/lib/marmot/kinds')).rejects.toThrow(/21064/);
+  });
+
+  it.each([
+    { collision: 'duplicate app kind', kinds: [0, 5, 5], message: /duplicate.*\b5\b/ },
+    { collision: 'retired kind', kinds: [0, 13], message: /\b13\b.*retired/ },
+  ])('throws at import for a $collision', async ({ kinds, message }) => {
+    vi.resetModules();
+    vi.doMock('@/src/lib/marmot/kindRegistryInputs', async (importOriginal) => ({
+      ...await importOriginal<typeof import('@/src/lib/marmot/kindRegistryInputs')>(),
+      APP_RUMOR_KINDS: kinds,
+    }));
+    await expect(import('@/src/lib/marmot/kinds')).rejects.toThrow(message);
   });
 
   it('throws at import when the library reserves an app RUMOR kind (rumor list is wired)', async () => {

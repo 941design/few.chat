@@ -14,7 +14,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   markerKey,
-  markPendingDirectInvite,
+  recordPendingDirectInvite,
   clearPendingDirectInvite,
   loadPendingDirectInviteMarkers,
   clearPendingDirectInvitesForGroup,
@@ -49,7 +49,7 @@ describe('pendingDirectInviteStorage — key shape', () => {
 
   it('mark/load/clear are case-insensitive on the pubkey end-to-end', async () => {
     // Write under upper-case, read/clear under lower-case: they must agree.
-    await markPendingDirectInvite(GROUP_A, ALICE.toUpperCase());
+    await recordPendingDirectInvite(GROUP_A, ALICE.toUpperCase(), 'invite-ref');
     expect(await loadPendingDirectInviteMarkers(GROUP_A)).toEqual(new Set([ALICE]));
 
     await clearPendingDirectInvite(GROUP_A, ALICE); // lowercase clear
@@ -61,20 +61,20 @@ describe('pendingDirectInviteStorage — mark then load (AC-MARKER-10 baseline)'
   it('mark then load returns the pubkey for that group', async () => {
     expect(await loadPendingDirectInviteMarkers(GROUP_A)).toEqual(new Set());
 
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
 
     const markers = await loadPendingDirectInviteMarkers(GROUP_A);
     expect(markers).toEqual(new Set([ALICE]));
   });
 
   it('loadPendingDirectInviteMarkers returns a real Set<string>, not an array', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
     const markers = await loadPendingDirectInviteMarkers(GROUP_A);
     expect(markers).toBeInstanceOf(Set);
   });
 
   it('persistence survives a fresh load call in a new async invocation (AC-MARKER-10)', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
 
     // Simulate "member list reloaded" — a brand-new async call, not a
     // retained in-memory reference from the write above. If the store had a
@@ -90,8 +90,8 @@ describe('pendingDirectInviteStorage — mark then load (AC-MARKER-10 baseline)'
 
 describe('pendingDirectInviteStorage — per-key clear', () => {
   it('clears only the targeted key, leaving a sibling pubkey marker in the same group intact', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
-    await markPendingDirectInvite(GROUP_A, BOB);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_A, BOB, 'invite-ref');
 
     await clearPendingDirectInvite(GROUP_A, ALICE);
 
@@ -102,7 +102,7 @@ describe('pendingDirectInviteStorage — per-key clear', () => {
   it('is idempotent — clearing an absent or already-cleared key does not throw (VQ-S1-010)', async () => {
     await expect(clearPendingDirectInvite(GROUP_A, ALICE)).resolves.toBeUndefined();
 
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
     await clearPendingDirectInvite(GROUP_A, ALICE);
 
     // second clear on the now-cleared key
@@ -113,9 +113,9 @@ describe('pendingDirectInviteStorage — per-key clear', () => {
 
 describe('pendingDirectInviteStorage — per-group clear (AC-MARKER-9 leave-fan-out half)', () => {
   it('removes every marker for one group across multiple pubkeys, leaving another group intact', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
-    await markPendingDirectInvite(GROUP_A, BOB);
-    await markPendingDirectInvite(GROUP_B, CAROL);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_A, BOB, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_B, CAROL, 'invite-ref');
 
     await clearPendingDirectInvitesForGroup(GROUP_A);
 
@@ -124,8 +124,8 @@ describe('pendingDirectInviteStorage — per-group clear (AC-MARKER-9 leave-fan-
   });
 
   it('never touches a different group even when pubkeys collide across groups', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
-    await markPendingDirectInvite(GROUP_B, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_B, ALICE, 'invite-ref');
 
     await clearPendingDirectInvitesForGroup(GROUP_A);
 
@@ -140,8 +140,8 @@ describe('pendingDirectInviteStorage — per-group clear (AC-MARKER-9 leave-fan-
     // here rather than silently cross-clearing the S2/S3 fan-out seams.
     const gShort = 'g';
     const gLong = 'g2';
-    await markPendingDirectInvite(gShort, ALICE);
-    await markPendingDirectInvite(gLong, BOB);
+    await recordPendingDirectInvite(gShort, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(gLong, BOB, 'invite-ref');
 
     await clearPendingDirectInvitesForGroup(gShort);
 
@@ -152,7 +152,7 @@ describe('pendingDirectInviteStorage — per-group clear (AC-MARKER-9 leave-fan-
 
 describe('pendingDirectInviteStorage — consumePendingDirectInviteMarker (epic: group-invite-lifecycle S3 gate-remediation, severity-4)', () => {
   it('reports true and removes the marker when one existed', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
 
     await expect(consumePendingDirectInviteMarker(GROUP_A, ALICE)).resolves.toBe(true);
     expect(await loadPendingDirectInviteMarkers(GROUP_A)).toEqual(new Set());
@@ -163,8 +163,8 @@ describe('pendingDirectInviteStorage — consumePendingDirectInviteMarker (epic:
   });
 
   it('leaves a sibling pubkey marker in the same group untouched', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
-    await markPendingDirectInvite(GROUP_A, BOB);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_A, BOB, 'invite-ref');
 
     await consumePendingDirectInviteMarker(GROUP_A, ALICE);
 
@@ -172,13 +172,13 @@ describe('pendingDirectInviteStorage — consumePendingDirectInviteMarker (epic:
   });
 
   it('is case-insensitive on the pubkey end (mirrors mark/clear casing invariant)', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE.toUpperCase());
+    await recordPendingDirectInvite(GROUP_A, ALICE.toUpperCase(), 'invite-ref');
 
     await expect(consumePendingDirectInviteMarker(GROUP_A, ALICE)).resolves.toBe(true);
   });
 
   it('two concurrent consume calls for the SAME key resolve to exactly one true (TOCTOU-safety, against the real fake-indexeddb fixture)', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
 
     // No await between the two calls — both are in flight together, exactly
     // the interleaved-dispatch scenario the severity-4 finding described.
@@ -192,7 +192,7 @@ describe('pendingDirectInviteStorage — consumePendingDirectInviteMarker (epic:
   });
 
   it('concurrent consume calls for DIFFERENT keys do not block each other — each still reports its own existence correctly', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
     // BOB has no marker in GROUP_A.
 
     const [aliceResult, bobResult] = await Promise.all([
@@ -207,8 +207,8 @@ describe('pendingDirectInviteStorage — consumePendingDirectInviteMarker (epic:
 
 describe('pendingDirectInviteStorage — full clear (AC-MARKER-9 account-reset half)', () => {
   it('clearAllPendingDirectInvites removes every marker across every group', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
-    await markPendingDirectInvite(GROUP_B, CAROL);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_B, CAROL, 'invite-ref');
 
     await clearAllPendingDirectInvites();
 
@@ -217,8 +217,8 @@ describe('pendingDirectInviteStorage — full clear (AC-MARKER-9 account-reset h
   });
 
   it('is a distinct zero-arg export from the per-group clear (VQ-S1-007) — a group-scoped clear alone never wipes other groups', async () => {
-    await markPendingDirectInvite(GROUP_A, ALICE);
-    await markPendingDirectInvite(GROUP_B, CAROL);
+    await recordPendingDirectInvite(GROUP_A, ALICE, 'invite-ref');
+    await recordPendingDirectInvite(GROUP_B, CAROL, 'invite-ref');
 
     await clearPendingDirectInvitesForGroup(GROUP_A);
 

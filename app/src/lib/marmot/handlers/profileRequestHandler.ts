@@ -14,18 +14,18 @@
 
 import { PROFILE_REQUEST_KIND, parseProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
 import type { ProfileRequestPayload } from '@/src/lib/marmot/profileRequestSync';
-import type { ApplicationRumor, AuthenticatedSender, DispatcherContext, RumorHandler } from '@/src/lib/marmot/handlers/types';
+import type { ApplicationRumor, AuthenticatedSender, DispatcherContext } from '@/src/lib/marmot/handlers/types';
 import { assertPorts, toHandlerArgs, type GroupKindHandler } from '@/src/lib/marmot/handlers/groupRumorDispatch';
 import { createGroupGates, type GroupOf } from '@/src/lib/marmot/handlers/groupGates';
 import type { GroupRumorInput } from '@/src/lib/marmot/history';
 
-export interface ProfileRequestHandlerDeps {
+interface ProfileRequestHandlerDeps {
   /** AC-032: record every observed request regardless of target. */
   recordRequestEmitted: (groupId: string, targetPubkey: string, timestamp: number) => Promise<void>;
   /**
    * AC-030: self-target reply — called when request.targetPubkey === ctx.selfPubkeyHex.
    * MarmotContext provides this as a closure that signs our current profile and
-   * calls sendRumorSafe on the mlsGroup.
+   * sends through the leased group sender.
    */
   sendSelfProfile: (groupId: string) => Promise<void>;
   /**
@@ -39,53 +39,12 @@ export interface ProfileRequestHandlerDeps {
   }) => Promise<void>;
 }
 
-/**
- * Every step here is best-effort and never throws (remediation round 1): a
- * profile request is retried by its sender (profileRequestRunner's sweep keeps
- * re-asking until an answer lands — AC-SEND-10), so a failure is not worth
- * keeping the rumor journaled. A replay would also only answer a stale
- * request or skew the observed-request timestamp.
- */
-async function handle(rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender, deps: ProfileRequestHandlerDeps): Promise<void> {
-  const reqPayload = parseProfileRequestPayload(rumor.content);
-  if (!reqPayload) return;
-
-  // AC-032: record every observed request for deduplication across the group.
-  try {
-    await deps.recordRequestEmitted(ctx.groupId, reqPayload.targetPubkey, Date.now());
-  } catch (err) {
-    console.warn('[dispatcher.profileRequest] recording the observed request failed:', err);
-  }
-
-  try {
-    if (reqPayload.targetPubkey === ctx.selfPubkeyHex) {
-      // AC-030: we are the target — reply immediately with our current profile.
-      await deps.sendSelfProfile(ctx.groupId);
-    } else {
-      // AC-031: not our target — delegate to relay handler (AC-033/034).
-      await deps.handleIncomingProfileRequest({
-        groupId: ctx.groupId,
-        payload: reqPayload,
-      });
-    }
-  } catch (err) {
-    console.warn('[dispatcher.profileRequest] answering the request failed; the requester retries:', err);
-  }
-}
-
-export function createProfileRequestHandler(deps: ProfileRequestHandlerDeps): RumorHandler {
-  return {
-    kind: PROFILE_REQUEST_KIND,
-    handle: (rumor: ApplicationRumor, ctx: DispatcherContext, sender: AuthenticatedSender) => handle(rumor, ctx, sender, deps),
-  };
-}
-
 /** Deps of the history-sink path: the legacy ports plus the live group handle and the client FIFO. */
-export interface ProfileRequestGroupHandlerDeps extends ProfileRequestHandlerDeps {
+interface ProfileRequestGroupHandlerDeps extends ProfileRequestHandlerDeps {
   /** The live group handle (`client.groups.get`); the roster gate reads `group.members()` from it. */
   groupOf: GroupOf;
   /** The owned client FIFO (`ClientJobQueue['enqueue']`): the reply (a group write) is queued on it. */
-  enqueue: (job: () => Promise<void>) => void;
+  enqueue: (job: () => Promise<void>, groupId: string) => void;
 }
 
 const PROFILE_REQUEST_GROUP_PORTS = ['recordRequestEmitted', 'sendSelfProfile', 'handleIncomingProfileRequest', 'groupOf', 'enqueue'] as const;
@@ -113,11 +72,11 @@ const sameKey = (a: string, b: string): boolean => a.toLowerCase() === b.toLower
  * timestamp and queued a reply, and effects already emitted (follow-up sends)
  * are never undone (AC-WDR-6).
  */
-export function createProfileRequestGroupHandler(deps: ProfileRequestGroupHandlerDeps): GroupKindHandler & RumorHandler {
+export function createProfileRequestGroupHandler(deps: ProfileRequestGroupHandlerDeps): GroupKindHandler {
   assertPorts('createProfileRequestGroupHandler', deps, PROFILE_REQUEST_GROUP_PORTS);
   const gates = createGroupGates(deps.groupOf);
   return {
-    ...createProfileRequestHandler(deps),
+    kind: PROFILE_REQUEST_KIND,
     async dispatch(input: GroupRumorInput, env) {
       const { ctx, sender } = toHandlerArgs(input, env);
       const reqPayload = parseProfileRequestPayload((input.rumor as ApplicationRumor).content);
@@ -141,7 +100,7 @@ export function createProfileRequestGroupHandler(deps: ProfileRequestGroupHandle
         } catch (err) {
           console.warn('[dispatcher.profileRequest] answering the request failed; the requester retries:', err);
         }
-      });
+      }, ctx.groupId);
     },
     async retract() {
       // See the doc comment: nothing stored to undo.

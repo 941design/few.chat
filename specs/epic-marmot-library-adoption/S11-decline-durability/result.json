@@ -1,8 +1,6 @@
 {
   "story_id": "S11",
-  "status": "done",
-  "final_outcome": "completed",
-  "completed_at": "2026-11-17T21:45:00Z",
+  "status": "in_progress",
   "files_created": [
     "app/src/lib/marmot/invitations/declineDurability.ts",
     "app/tests/unit/marmot/invitations/declineDurability.store.test.ts",
@@ -19,12 +17,7 @@
     "specs/epic-marmot-library-adoption/architecture.md"
   ],
   "adjacent_fixes": [],
-  "tests_added": {
-    "unit": "declineDurability.store.test.ts (10: record shape, legacy/junk ignored without throwing, mark-declined by ref scoped to group, key-order-independent selection, idempotence, no resurrection after clear, declined listing) and declineDurability.test.ts (28: port validation, AC-DECL-1 a/b/c/d, AC-DECL-2, AC-DEL-2, invite-time recording, announce/clear failure paths, dispose) over the real idb-keyval store (fake-indexeddb), real GroupOpQueue and real client job queue; only the group is a hand-rolled fake.",
-    "harness": "declineDurability.harness.test.ts (3): real Alice/Bob clients over FakeRelay + createMemoryStorage; Bob declines -> Alice removes him after synced() and announces once (library confirms Bob is gone); offline/reload variant (queued job dropped, Alice restarted over the same storage and idb, startup retry removes Bob, announces once, second retry is a no-op); unknown inviteeRef ignored.",
-    "remediation": "declineDurability.test.ts now 54 tests (+26: leaf binding incl. re-added account / second leaf / removeLeaf / ambiguous leaf, invite-time leaf derivation, marker re-read and compare-and-clear incl. replaced / cleared / replaced-during-removeMember, phased marker incl. dead process mid-removeMember, announce failure retried without second Remove, at-least-once duplicate with the same dedup id, fake-timer backoff bound / success / group-missing / dispose, orphan adopt / TTL / bound, legacy writer serialisation, same pubkey in two groups). Harness assertions updated (real library leafKey, dedup id, orphan report). In-place mutants (backup + cmp restore), all killed: account-level removal, no re-read in op (killed only after adding the replaced-marker-owes-announcement test: setPhase CAS masked it for the removal path), unconditional clear, no removing phase, no backoff, no orphan, legacy writer unserialised, no leafKey at invite, announce-pending ignored, announce failure clears, removeMember with other leaves.",
-    "remediation_2": "declineDurability.test.ts / .store.test.ts +26 tests: stale-orphan adoption (invitedAt), terminal removal errors (6 terminal shapes, 4 retryable, no backoff), marker max age (expired, boundary, injectable clock), required onRecordedDeclined, invalid/unknown phase (PHASES membership, ignored + reported). All new tests verified failing against the previous sources (backup + cmp restore)."
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 7908,
     "final": 8001
@@ -85,5 +78,20 @@
   "retrospective": {
     "skipped": true,
     "reason": "clean_run"
+  },
+  "legacy_tests_added": {
+    "unit": "declineDurability.store.test.ts (10: record shape, legacy/junk ignored without throwing, mark-declined by ref scoped to group, key-order-independent selection, idempotence, no resurrection after clear, declined listing) and declineDurability.test.ts (28: port validation, AC-DECL-1 a/b/c/d, AC-DECL-2, AC-DEL-2, invite-time recording, announce/clear failure paths, dispose) over the real idb-keyval store (fake-indexeddb), real GroupOpQueue and real client job queue; only the group is a hand-rolled fake.",
+    "harness": "declineDurability.harness.test.ts (3): real Alice/Bob clients over FakeRelay + createMemoryStorage; Bob declines -> Alice removes him after synced() and announces once (library confirms Bob is gone); offline/reload variant (queued job dropped, Alice restarted over the same storage and idb, startup retry removes Bob, announces once, second retry is a no-op); unknown inviteeRef ignored.",
+    "remediation": "declineDurability.test.ts now 54 tests (+26: leaf binding incl. re-added account / second leaf / removeLeaf / ambiguous leaf, invite-time leaf derivation, marker re-read and compare-and-clear incl. replaced / cleared / replaced-during-removeMember, phased marker incl. dead process mid-removeMember, announce failure retried without second Remove, at-least-once duplicate with the same dedup id, fake-timer backoff bound / success / group-missing / dispose, orphan adopt / TTL / bound, legacy writer serialisation, same pubkey in two groups). Harness assertions updated (real library leafKey, dedup id, orphan report). In-place mutants (backup + cmp restore), all killed: account-level removal, no re-read in op (killed only after adding the replaced-marker-owes-announcement test: setPhase CAS masked it for the removal path), unconditional clear, no removing phase, no backoff, no orphan, legacy writer unserialised, no leafKey at invite, announce-pending ignored, announce failure clears, removeMember with other leaves.",
+    "remediation_2": "declineDurability.test.ts / .store.test.ts +26 tests: stale-orphan adoption (invitedAt), terminal removal errors (6 terminal shapes, 4 retryable, no backoff), marker max age (expired, boundary, injectable clock), required onRecordedDeclined, invalid/unknown phase (PHASES membership, ignored + reported). All new tests verified failing against the previous sources (backup + cmp restore)."
+  },
+  "legacy_final_outcome": "completed",
+  "prior_acceptance": {
+    "final_outcome": "accepted_with_caveats",
+    "completed_at": "2026-11-17T21:45:00Z"
+  },
+  "verification_evidence": {
+    "app": "109 focused tests passed for marker persistence, pre-removal persistence failure, restart, notice archive on re-invite, and library-backed decline flows. The new marker and leaf survive old notice replay.",
+    "open": "Pinned Marmot only emits one callback after its durable transition and has no read-only recovery query. Its account-level removal cannot atomically match an admission. AC-DECL-1 stays open."
   }
 }

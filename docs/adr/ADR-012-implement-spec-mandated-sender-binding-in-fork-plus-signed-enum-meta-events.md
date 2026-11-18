@@ -7,7 +7,7 @@
 application-rumor handlers), specs/group-message-author-authentication-spec-request.md,
 project-wide (all MLS group application messages)
 **Supersedes**: ADR-006
-**Superseded by**: none
+**Superseded by**: [ADR-013](ADR-013-consume-marmot-client-and-retained-history.md) for the fork mechanism. The authenticated group sender rule is retained.
 
 ## Context
 

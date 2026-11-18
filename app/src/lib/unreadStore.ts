@@ -628,6 +628,39 @@ export function clearPendingContact(peerPubkeyHex: string) {
  * Counters only — the invite-link records are never touched.
  */
 let inviteExpiryGroupScope: ReadonlySet<string> | null = null;
+// undefined preserves the pre-session API; null explicitly blocks account work.
+let inviteExpiryOwner: string | null | undefined;
+let inviteExpiryScopeVersion = 0;
+
+/** Commit the held account's overlay, or reset with null at account cutover. */
+export function scopeInviteExpiriesToOwner(owner: string | null, groupIds: readonly string[]): void {
+  const nextOwner = owner || null;
+  const nextGroups = new Set(groupIds);
+  if (inviteExpiryOwner === nextOwner && inviteExpiryGroupScope?.size === nextGroups.size &&
+      [...nextGroups].every((id) => inviteExpiryGroupScope?.has(id))) return;
+  inviteExpiryOwner = nextOwner;
+  inviteExpiryGroupScope = nextGroups;
+  inviteExpiryScopeVersion++;
+  state = { ...state, inviteExpiries: {} };
+  emit();
+}
+
+/** A snapshot invalidated by any subsequent owner or overlay update. */
+export function captureInviteExpiryScope() {
+  const owner = inviteExpiryOwner;
+  const version = inviteExpiryScopeVersion;
+  if (!owner) return null;
+  return {
+    accepts: (link: { groupId: string; ownerPubkey?: string }) =>
+      version === inviteExpiryScopeVersion && inviteExpiryOwner === owner &&
+      inInviteExpiryScope(link.groupId) && link.ownerPubkey === owner,
+  };
+}
+
+function linkInInviteExpiryScope(link: { groupId: string; ownerPubkey?: string }): boolean {
+  return inInviteExpiryScope(link.groupId) && (inviteExpiryOwner === undefined ||
+    (inviteExpiryOwner !== null && link.ownerPubkey === inviteExpiryOwner));
+}
 
 function inInviteExpiryScope(groupId: string): boolean {
   return inviteExpiryGroupScope === null || inviteExpiryGroupScope.has(groupId);
@@ -643,6 +676,7 @@ function inInviteExpiryScope(groupId: string): boolean {
  */
 export function scopeInviteExpiriesToGroups(groupIds: readonly string[]): void {
   inviteExpiryGroupScope = new Set(groupIds);
+  inviteExpiryScopeVersion++;
   const absent = Object.keys(state.inviteExpiries).filter((id) => !inInviteExpiryScope(id));
   if (absent.length === 0) return;
   const next = { ...state.inviteExpiries };
@@ -660,6 +694,7 @@ export function scopeInviteExpiriesToGroups(groupIds: readonly string[]): void {
  * that a reload between "stamp notified" and "user opens bell" could lose.
  */
 export async function initInviteExpiries(now: number = Date.now()): Promise<void> {
+  const version = inviteExpiryScopeVersion;
   const { loadAllInviteLinks, isExpired } = await import('@/src/lib/marmot/inviteLinkStorage');
   let links: Awaited<ReturnType<typeof loadAllInviteLinks>>;
   try {
@@ -668,9 +703,10 @@ export async function initInviteExpiries(now: number = Date.now()): Promise<void
     // Non-fatal — invite-link store may not exist yet (fresh install).
     return;
   }
+  if (version !== inviteExpiryScopeVersion) return;
   const next: Record<string, number> = {};
   for (const link of links) {
-    if (link.expiryNotified && !link.expiryAcknowledged && isExpired(link, now) && inInviteExpiryScope(link.groupId)) {
+    if (link.expiryNotified && !link.expiryAcknowledged && isExpired(link, now) && linkInInviteExpiryScope(link)) {
       next[link.groupId] = (next[link.groupId] ?? 0) + 1;
     }
   }
@@ -686,8 +722,8 @@ export async function initInviteExpiries(now: number = Date.now()): Promise<void
  * layered on top of the persisted-flag derivation `initInviteExpiries`
  * performs, not a replacement for it.
  */
-export function incrementInviteExpiry(groupId: string) {
-  if (!inInviteExpiryScope(groupId)) return;
+export function incrementInviteExpiry(groupId: string, ownerPubkey?: string) {
+  if (!linkInInviteExpiryScope({ groupId, ownerPubkey })) return;
   const next = { ...state.inviteExpiries };
   next[groupId] = (next[groupId] ?? 0) + 1;
   state = { ...state, inviteExpiries: next };
@@ -703,6 +739,9 @@ export function incrementInviteExpiry(groupId: string) {
  * would be undone the next time the app reloads and recomputes the slice.
  */
 export async function markInviteExpiriesRead(groupId: string): Promise<void> {
+  const version = inviteExpiryScopeVersion;
+  const allowed = (link: { groupId: string; ownerPubkey?: string }) =>
+    version === inviteExpiryScopeVersion && linkInInviteExpiryScope(link);
   const { loadInviteLinks, isExpired, markInviteLinkExpiryAcknowledged } = await import(
     '@/src/lib/marmot/inviteLinkStorage'
   );
@@ -714,11 +753,11 @@ export async function markInviteExpiriesRead(groupId: string): Promise<void> {
   }
   const now = Date.now();
   const toAck = links.filter(
-    (link) => link.expiryNotified && !link.expiryAcknowledged && isExpired(link, now),
+    (link) => allowed(link) && link.expiryNotified && !link.expiryAcknowledged && isExpired(link, now),
   );
-  await Promise.all(toAck.map((link) => markInviteLinkExpiryAcknowledged(link.nonce)));
+  await Promise.all(toAck.map((link) => markInviteLinkExpiryAcknowledged(link.nonce, allowed)));
 
-  if (state.inviteExpiries[groupId]) {
+  if (version === inviteExpiryScopeVersion && state.inviteExpiries[groupId]) {
     const next = { ...state.inviteExpiries };
     delete next[groupId];
     state = { ...state, inviteExpiries: next };

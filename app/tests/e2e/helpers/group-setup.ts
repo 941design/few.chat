@@ -89,6 +89,7 @@ export async function seedContact(page: Page, npub: string): Promise<void> {
  * `invite-error` assertion in the KeyPackage-less error case).
  */
 export async function inviteContactViaPicker(inviterPage: Page, inviteeNpub: string): Promise<void> {
+  await expect(inviterPage.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
   const groupDetailUrl = inviterPage.url();
   const inviteeHex = npubToHex(inviteeNpub);
 
@@ -231,11 +232,8 @@ export async function createGroup(
 /**
  * Alice creates a named group, invites Bob by npub, and waits for Bob to join.
  *
- * Bob navigates to /groups/ BEFORE Alice's flow so that stale gift wraps from
- * previous test runs arrive and are processed (their eventIds get marked as seen
- * by the production fix in welcomeSubscription). We then clear only the pending
- * invitations queue (not the seen-set), so when Alice's fresh invite arrives it
- * is the sole entry in the queue.
+ * Bob starts his library inbox before Alice sends the invitation. The accept
+ * helper matches the invitation by group name.
  *
  * @param alicePage    Page logged in as Alice
  * @param inviteeNpub  Bob's npub (bech32 public key)
@@ -248,58 +246,21 @@ export async function createGroupAndInvite(
   bobPage: Page,
   groupName: string,
 ): Promise<void> {
-  // Step 1: Bob navigates to /groups/ early so the welcome subscription is live.
-  // Stale relay gift wraps arrive and are processed here; their eventIds are
-  // recorded in the seen-set by the production fix.
   await bobPage.goto('/groups/');
   await expect(
     bobPage.getByTestId('groups-empty-state').or(bobPage.getByTestId('groups-list')),
   ).toBeVisible({ timeout: 30_000 });
 
-  // Step 2: Wait for stale relay events to arrive and be marked as seen.
-  await bobPage.waitForTimeout(10_000);
-
-  // Step 3: Clear only the pending invitations queue — NOT the seen-set.
-  // Stale eventIds remain marked so they cannot re-appear as new invitations.
-  await bobPage.evaluate(() => {
-    localStorage.removeItem('lp_pendingInvitations_v1');
-  });
-
-  // Step 4+5: Alice navigates to the groups page and creates the group
-  // (createGroup gates on MarmotContext readiness first).
   await alicePage.goto('/groups/');
   await createGroup(alicePage, groupName);
-  // Give the group state time to stabilise before inviting.
-  await alicePage.waitForTimeout(3_000);
-
-  // Step 6: Open the group detail and invite Bob — seeded as a contact via
-  // the production add-contact path, then invited through the picker
-  // (epic: invite-group-member-from-contacts, S3).
   await alicePage.locator('[data-testid^="group-card-"]', { hasText: groupName }).click();
   await expect(alicePage.getByTestId('group-detail-page')).toBeVisible({ timeout: 30_000 });
-
   await inviteContactViaPicker(alicePage, inviteeNpub);
-
-  // Step 7: Wait for invite-success before timing relay delivery.
   await expect(alicePage.getByTestId('invite-success')).toBeVisible({ timeout: 60_000 });
   await dismissErrorOverlay(alicePage);
 
-  // Step 8: Give the relay a few seconds to deliver Alice's fresh gift wrap to
-  // Bob's already-running subscription. The eventId is NOT in the seen-set so
-  // it will be enqueued as the only pending invitation.
-  await bobPage.waitForTimeout(5_000);
-
-  // Step 9: Bob is already on /groups/ — wait for the pending invitations section.
-  // Under pull-only invitations (Walled Garden v2), Bob must explicitly Accept
-  // the pending invitation before the group appears in his list.
-  await expect(bobPage.getByTestId('pending-invitations-section')).toBeVisible({ timeout: 30_000 });
-
-  // Step 10: Accept Alice's invitation for THIS group and wait for the real
-  // joined group-card (not the pending card, which already shows the name).
   await acceptInvitationAndWaitJoined(bobPage, groupName);
 
-  // Decode inviteeNpub to hex so the IDB poll can compare memberPubkeys
-  // (IDB stores hex pubkeys, not bech32).
   const inviteeHex = inviteeNpub.startsWith('npub')
     ? (nip19.decode(inviteeNpub).data as string)
     : inviteeNpub;

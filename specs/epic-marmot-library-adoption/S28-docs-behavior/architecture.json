@@ -1,0 +1,24 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Update docs/behavior/groups.md (single tab per account, leave, withdrawal), backup-and-recovery.md (groups not restored), profiles-and-identity.md, notifications-and-unread.md, contacts-and-direct-messages.md (inbox split) and the README index.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [
+    "New topic documents"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "docs/behavior/groups.md",
+    "docs/behavior/backup-and-recovery.md",
+    "docs/behavior/profiles-and-identity.md",
+    "docs/behavior/notifications-and-unread.md",
+    "docs/behavior/contacts-and-direct-messages.md",
+    "docs/behavior/README.md"
+  ]
+}

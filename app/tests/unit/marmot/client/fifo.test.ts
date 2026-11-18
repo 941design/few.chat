@@ -43,6 +43,33 @@ describe('createJobQueue', () => {
     expect(log).toEqual(['start1', 'end1', 'start2']);
   });
 
+  it('holds one group’s jobs across overlapping callbacks while unrelated jobs run', async () => {
+    const q = createJobQueue();
+    const log: string[] = [];
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const slow = q.runInCallback('group-a', () => new Promise<void>((resolve) => { finish = resolve; }));
+    q.enqueue(async () => { log.push('first'); }, 'group-a');
+    const failed = q.runInCallback('group-a', () => new Promise<void>((_, reject) => { fail = reject; }));
+    const reported = expect(failed).rejects.toThrow('sink failed');
+    q.enqueue(async () => { log.push('second'); }, 'group-a');
+    q.enqueue(async () => { log.push('other-group'); }, 'group-b');
+    q.enqueue(async () => { log.push('unrelated'); });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(log).toEqual(['other-group', 'unrelated']);
+
+    finish();
+    await slow;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(log).toEqual(['other-group', 'unrelated']);
+
+    fail(new Error('sink failed'));
+    await reported;
+    await vi.advanceTimersByTimeAsync(10);
+    await q.idle();
+    expect(log).toEqual(['other-group', 'unrelated', 'first', 'second']);
+  });
+
   it('runs many jobs strictly one at a time in enqueue order, even when later jobs are faster', async () => {
     const q = createJobQueue();
     const log: string[] = [];
@@ -98,8 +125,13 @@ describe('createJobQueue', () => {
     await idle;
     expect(ran).toEqual([1, 2]);
 
+    let release!: () => void;
+    const held = q.runInCallback('group', () => new Promise<void>((resolve) => { release = resolve; }));
+    q.enqueue(async () => { ran.push(5); }, 'group');
     q.enqueue(async () => { ran.push(3); });
     q.dispose();
+    release();
+    await held;
     await vi.advanceTimersByTimeAsync(50);
     expect(ran).toEqual([1, 2]);
     q.enqueue(async () => { ran.push(4); });

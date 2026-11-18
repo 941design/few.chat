@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
- * createProfileGroupHandler builds ONE one-shot gate (the one `createProfileHandler` owns for the legacy path it
- * spreads); the sink path's own gate is the per-group bounded one. An extra, unused construction is dead state.
+ * createProfileGroupHandler uses only its bounded per-group sink gate; no legacy gate is constructed.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,11 +19,11 @@ vi.mock('@/src/lib/marmot/envelopeVerifier', async (importOriginal) => {
 import { createProfileGroupHandler } from '@/src/lib/marmot/handlers/profileHandler';
 
 describe('createProfileGroupHandler', () => {
-  it('constructs exactly one one-shot gate (no unused second one)', () => {
+  it('does not construct the legacy one-shot gate', () => {
     const noop = vi.fn();
     createProfileGroupHandler({
       mergeMemberProfile: vi.fn(async () => undefined),
-      clearPendingDirectInvite: vi.fn(async () => undefined),
+      noteForwardedInviteProfile: vi.fn(async () => undefined),
       notifyProfileObserved: noop,
       recordRequestAnswered: vi.fn(async () => undefined),
       writeContactEntry: noop,
@@ -33,6 +32,6 @@ describe('createProfileGroupHandler', () => {
       sendAnnouncement: vi.fn(async () => undefined),
       enqueue: noop,
     } as never);
-    expect(constructed.count).toBe(1);
+    expect(constructed.count).toBe(0);
   });
 });

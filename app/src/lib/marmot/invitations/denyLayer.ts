@@ -18,7 +18,7 @@ export interface DenyLayer {
   isBlocked: (pubkey: string) => boolean;
 }
 
-export interface DenyLayerDeps {
+interface DenyLayerDeps {
   /** The current block set, lowercase hex pubkeys (production: `loadBlockedPeers` from `lib/blockedPeers.ts`). */
   loadBlockedPeers: () => ReadonlySet<string>;
 }

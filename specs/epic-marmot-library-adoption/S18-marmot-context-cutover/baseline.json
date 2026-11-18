@@ -1,0 +1,12 @@
+{
+  "consumer_sha": "5311488",
+  "observed": {
+    "MarmotContext.tsx": 3113,
+    "protocol_runtime": "legacy client with development smoke hook"
+  },
+  "typecheck": {
+    "command": "tsc -p tsconfig.tests-marmot.json --noEmit",
+    "outcome": "passed before context source edits"
+  },
+  "note": "Historical relay baseline is preserved from S1. Re-running browser E2E is planned after the cutover."
+}

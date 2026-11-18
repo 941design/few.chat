@@ -1,14 +1,6 @@
 /**
- * ChatStoreContext — manages chat messages and reactions for the active group.
- *
- * Provides optimistic send and persists messages to IndexedDB via chatPersistence.
- * Inbound MLS application rumors (chat, reactions, edits) are NOT subscribed here:
- * the single applicationRumorDispatcher wired in MarmotContext routes them.
- *
- * Story-06 additions:
- * - sendReaction(emoji, targetMessage, isRemoval?): optimistic write + MLS send + rollback (D7)
- * - reactionsByMessageId: Map<string, ReactionAggregate[]> derived from subscribeReactions
- * - Kind-7 rumors are ingested by the dispatcher; this context only aggregates them
+ * Manages chat messages and reactions for the active group. Incoming rumors
+ * are applied by the group history handlers.
  */
 
 import React, {
@@ -51,60 +43,10 @@ import {
   clampRev,
 } from '@/src/lib/messageEdits/rumor';
 
-type MarmotGroupType = import('@internet-privacy/marmot-ts').MarmotGroup;
-
-/**
- * WORKAROUND: ts-mls forbids application messages when unappliedProposals
- * is non-empty. This catches the error, commits pending proposals, and
- * retries. Requires the sender to be an admin (commit() has an admin check).
- *
- * Root cause: admin promotion during invite can silently fail, leaving
- * members unable to commit. The real fix is to guarantee admin promotion
- * succeeds (retry / block invite until confirmed).
- */
-const MAX_RETRIES = 3;
-async function sendRumorSafe(
-  group: MarmotGroupType,
-  rumor: Parameters<MarmotGroupType['sendApplicationRumor']>[0],
-): Promise<void> {
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await group.sendApplicationRumor(rumor);
-      return;
-    } catch (err) {
-      const isUnapplied = err instanceof Error && err.message.includes('unapplied proposals');
-      if (!isUnapplied || attempt === MAX_RETRIES) throw err;
-      console.warn(`[sendRumorSafe] unapplied proposals (attempt ${attempt + 1}/${MAX_RETRIES + 1}), committing…`);
-      await group.commit();
-    }
-  }
-}
-
-/**
- * Build a kind-9 chat rumor with a precomputed canonical id so the optimistic
- * row stored locally uses the same id the receiver will store. Mirrors
- * marmot-ts's internal `sendChatMessage` rumor shape, but exposes the id to
- * the caller. (Without this alignment, sender-side IDB and receiver-side IDB
- * end up with different ids for the same logical message — see
- * AC-AR-21 dispatch-isolation peer test.)
- */
-async function buildChatRumor(
-  pubkey: string,
-  content: string,
-  tags: string[][] = [],
-): Promise<{ id: string; kind: number; pubkey: string; created_at: number; content: string; tags: string[][] }> {
-  const { getEventHash } = await import('applesauce-core/helpers/event');
-  const rumor = {
-    id: '',
-    kind: CHAT_MESSAGE_KIND,
-    pubkey,
-    created_at: Math.floor(Date.now() / 1000),
-    content,
-    tags,
-  };
-  rumor.id = getEventHash(rumor);
-  return rumor;
-}
+import type { MarmotGroup as MarmotGroupType } from '@941design/marmot';
+import type { GroupRumorSender } from '@/src/lib/marmot/send';
+import { useMarmot } from './MarmotContext';
+import { registerPendingOwnSend, pendingOwnSendsFor, ownRowStatusesFor, subscribeOwnRowStatus } from '@/src/lib/pendingOwnSends';
 
 /**
  * The author of an own optimistic group delete/edit: the local account itself. A group-thread signal needs an explicit
@@ -175,7 +117,8 @@ export function rollbackOptimisticEditView(view: ChatMessage[], messageId: strin
  * calling it (flagged on S4, unmirrored on S5's original landing).
  */
 export interface GroupSendDeps {
-  group: Pick<MarmotGroupType, 'sendApplicationRumor'>;
+  group: MarmotGroupType;
+  sender: GroupRumorSender;
   groupId: string;
   privateKeyHex: string;
   pubkey: string;
@@ -196,7 +139,7 @@ export interface GroupSendDeps {
 
 /**
  * S5: group delete — the group half of the MessageActionHandlers seam.
- * Mirrors sendMessage/sendReaction's optimistic-view + sendRumorSafe (MLS
+ * Mirrors sendMessage/sendReaction's optimistic-view + group sender (MLS
  * application rumor — group.sendApplicationRumor; ChatStoreContext.tsx has
  * zero NDK/relay imports, so a relay-facing kind-5 is structurally
  * impossible from this path, AC-DEL-4) + rollback pattern. Built via S2's
@@ -239,7 +182,7 @@ export interface GroupSendDeps {
  * announcement family.
  */
 export async function performGroupDeleteMessage(messageId: string, deps: GroupSendDeps): Promise<void> {
-  const { group, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
+  const { group, sender, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
   const snapshot = getSnapshot();
   // An image still uploading has a temporary id no peer ever sees.
   if (!snapshot || snapshot.uploading) return;
@@ -261,14 +204,12 @@ export async function performGroupDeleteMessage(messageId: string, deps: GroupSe
     const rev = clampRev(Math.floor(Date.now() / 1000), lastKnownRev);
     const rumor = buildDeleteRumor(snapshot.id, [], CHAT_MESSAGE_KIND, rev, privateKeyHex);
 
-    await sendRumorSafe(
-      group as MarmotGroupType,
-      rumor as Parameters<MarmotGroupType['sendApplicationRumor']>[0],
-    );
+    const prepared = sender.prepare(group, rumor.kind, rumor.content, rumor.tags, { createdAt: rumor.created_at });
+    await prepared.send();
 
     const thread: MessageEditsThreadKey = { kind: 'group', groupId };
     try {
-      await applyDeleteEditSignal(thread, rumor, ownSender(pubkey));
+      await applyDeleteEditSignal(thread, prepared.rumor, ownSender(pubkey));
     } catch (err) {
       console.warn('[chat-store] delete durable apply failed (published ok):', err);
     }
@@ -315,7 +256,7 @@ export async function performGroupEditMessage(
   newContent: string,
   deps: GroupSendDeps,
 ): Promise<void> {
-  const { group, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
+  const { group, sender, groupId, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, getSnapshot, setMessages } = deps;
   const snapshot = getSnapshot();
   // An image still uploading has a temporary id no peer ever sees.
   if (!snapshot || snapshot.uploading) return;
@@ -341,14 +282,12 @@ export async function performGroupEditMessage(
     // AC-EDIT-8: replacement MUST publish before the companion. A failure
     // here throws — no durable write has happened yet, so rollback below is
     // a pure view revert.
-    await sendRumorSafe(
-      group as MarmotGroupType,
-      replacement as Parameters<MarmotGroupType['sendApplicationRumor']>[0],
-    );
+    const prepared = sender.prepare(group, replacement.kind, replacement.content, replacement.tags, { createdAt: replacement.created_at });
+    await prepared.send();
 
     const thread: MessageEditsThreadKey = { kind: 'group', groupId };
     try {
-      await applyDeleteEditSignal(thread, replacement, ownSender(pubkey));
+      await applyDeleteEditSignal(thread, prepared.rumor, ownSender(pubkey));
     } catch (err) {
       console.warn('[chat-store] edit durable apply failed (published ok):', err);
     }
@@ -358,10 +297,7 @@ export async function performGroupEditMessage(
     // NOT roll back the edit that already succeeded above.
     try {
       const companion = buildEditMarkedCompanionKind5(snapshot.id, [], CHAT_MESSAGE_KIND, rev, privateKeyHex);
-      await sendRumorSafe(
-        group as MarmotGroupType,
-        companion as Parameters<MarmotGroupType['sendApplicationRumor']>[0],
-      );
+      await sender.sendGroupRumor(group, companion.kind, companion.content, companion.tags, { createdAt: companion.created_at });
     } catch (err) {
       console.warn('[chat-store] edit companion publish failed:', err);
     }
@@ -392,6 +328,8 @@ export async function performGroupEditMessage(
 
 interface ChatStoreContextValue {
   messages: ChatMessage[];
+  rowStatuses: Map<string, 'sending' | 'failed' | 'confirmed'>;
+  retryMessage: (id: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   sendImageMessage: (file: File, caption: string) => Promise<void>;
   /** Story-06: send a kind-7 group reaction (add or remove). AC-34. */
@@ -413,6 +351,8 @@ const NOOP_ASYNC_MSG = async () => {};
 
 const ChatStoreContext = createContext<ChatStoreContextValue>({
   messages: [],
+  rowStatuses: new Map(),
+  retryMessage: NOOP_ASYNC_MSG,
   sendMessage: NOOP_ASYNC_MSG,
   sendImageMessage: NOOP_ASYNC_MSG,
   sendReaction: NOOP_ASYNC_MSG,
@@ -450,13 +390,25 @@ export function ChatStoreProvider({
   group,
   pubkey,
   privateKeyHex,
-  signer,
   chatVersion,
   reactionsVersion,
   isCurrentUserAdmin,
   children,
 }: ChatStoreProviderProps) {
+  const { groupSender, groupImages } = useMarmot();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [rowStatuses, setRowStatuses] = useState<Map<string, 'sending' | 'failed' | 'confirmed'>>(new Map());
+  useEffect(() => {
+    if (!groupId) { setRowStatuses(new Map()); return; }
+    const refresh = () => setRowStatuses(new Map(ownRowStatusesFor(pubkey, groupId).map(({ id, status }) => [id, status])));
+    const unsubscribe = subscribeOwnRowStatus(pubkey, groupId, refresh);
+    refresh();
+    return unsubscribe;
+  }, [groupId, pubkey]);
+  const retryMessage = useCallback(async (id: string) => {
+    if (!group || !groupSender) throw new Error('Group sender unavailable');
+    await groupSender.retry(group, id);
+  }, [group, groupSender]);
   const [loading, setLoading] = useState(false);
   // Story-06: aggregated reactions per message id. Updated by the subscribeReactions listener.
   const [reactionsByMessageId, setReactionsByMessageId] = useState<Map<string, ReactionAggregate[]>>(new Map());
@@ -511,10 +463,8 @@ export function ChatStoreProvider({
   }, [groupId, pubkey, reactionsVersion]);
 
   // ─── Message load ─────────────────────────────────────────────────────────
-  // Inbound message ingestion is now handled exclusively by the unified
-  // applicationRumorDispatcher wired in MarmotContext (Story 02). This effect
-  // only loads the initial message set from IDB; chatVersion bumps trigger
-  // re-reads via the effect below.
+  // Load the initial messages from IndexedDB. The history sink dispatches
+  // incoming messages and bumps chatVersion to trigger the reload below.
   useEffect(() => {
     if (!groupId || !group) {
       setMessages([]);
@@ -523,7 +473,7 @@ export function ChatStoreProvider({
     }
 
     let active = true;
-    setMessages([]);
+    setMessages(pendingOwnSendsFor(pubkey, groupId).flatMap(entry => entry.message ? [entry.message] : []));
     setLoading(true);
 
     loadMessages(groupId)
@@ -581,7 +531,7 @@ export function ChatStoreProvider({
     return () => {
       active = false;
     };
-  }, [groupId, group]);
+  }, [groupId, group, pubkey]);
 
   // Re-read from IDB when MarmotContext persists a new chat message, or when
   // the S5 kind-5 handler / chatHandler's edit-marked-kind-9 branch reuses
@@ -602,14 +552,16 @@ export function ChatStoreProvider({
 
   const sendMessage = useCallback(
     async (content: string) => {
-      if (!groupId || !group || !content.trim()) return;
+      if (!content.trim()) return;
+      if (!groupId || !group || !groupSender) throw new Error('Group sender unavailable');
 
       // Build the rumor with its canonical id BEFORE the optimistic write so
       // the local row uses the same id peers will store on receive (the
       // chatHandler keys by rumor.id). Otherwise sender and receiver carry
       // different ids for the same message and reactions / bubble lookups
       // diverge across pages — see AC-AR-21.
-      const rumor = await buildChatRumor(pubkey, content);
+      const prepared = groupSender.prepare(group, CHAT_MESSAGE_KIND, content, []);
+      const rumor = prepared.rumor;
       const optimistic: ChatMessage = {
         id: rumor.id,
         content,
@@ -618,10 +570,11 @@ export function ChatStoreProvider({
         createdAt: rumor.created_at * 1000,
       };
 
+      registerPendingOwnSend(pubkey, optimistic);
       setMessages((prev) => [...prev, optimistic]);
 
       try {
-        await sendRumorSafe(group, rumor as Parameters<MarmotGroupType['sendApplicationRumor']>[0]);
+        await prepared.send();
         // S5 gate-remediation (finding 4): resolve-after-append calling
         // convention (messageEdits/api.ts module doc comment) — a same-
         // account other-device delete/edit for this SAME rumor id arriving
@@ -634,16 +587,16 @@ export function ChatStoreProvider({
             console.error('[chat-store] Failed to persist sent message:', err);
           });
       } catch (err) {
-        setMessages((prev) => prev.filter((m) => m.id !== rumor.id));
-        throw err;
+        // The tracker retains the failed row for an explicit, stable-id retry.
+        return;
       }
     },
-    [groupId, group, pubkey],
+    [groupId, group, groupSender, pubkey],
   );
 
   const sendImageMessage = useCallback(
     async (file: File, caption: string) => {
-      if (!groupId || !group || !signer) return;
+      if (!groupId || !group || !groupImages) throw new Error('Group image service unavailable');
 
       // Optimistic display uses a placeholder id only until publish completes;
       // once useImageSend returns the canonical rumor.id we re-key the local
@@ -664,39 +617,41 @@ export function ChatStoreProvider({
       setMessages((prev) => [...prev, optimistic]);
 
       const { sendImageMessage: doSend } = await import('@/src/hooks/useImageSend');
+      let finalMsg: ChatMessage | undefined;
       try {
-        const { fullAttachment, thumbAttachment, rumorId, createdAt } = await doSend(file, caption, {
-          groupId,
-          group: group as any,
-          pubkey,
-          signer,
+        await doSend(file, caption, {
+          group,
+          groupImages,
           onProgress: () => {},
+          onPrepared: ({ full, thumb, rumorId, createdAt }) => {
+            finalMsg = {
+              ...optimistic,
+              uploading: undefined,
+              id: rumorId,
+              createdAt: createdAt * 1000,
+              attachments: {
+                full, thumb,
+              },
+              localMediaRefs: [],
+            };
+            registerPendingOwnSend(pubkey, finalMsg);
+            const row = finalMsg;
+            setMessages(prev => [...prev.filter(m => m.id !== tempId && m.id !== row.id), row]);
+          },
         });
-
-        const finalMsg: ChatMessage = {
-          ...optimistic,
-          uploading: undefined,
-          id: rumorId,
-          createdAt: createdAt * 1000,
-          attachments: { full: fullAttachment, thumb: thumbAttachment },
-          localMediaRefs: [fullAttachment.sha256, thumbAttachment.sha256],
-        };
-        // S5 gate-remediation (finding 4): resolve-after-append calling
-        // convention — see sendMessage's identical comment above.
-        appendMessage(groupId, finalMsg)
-          .then(() => resolvePendingSignalsForSlot({ kind: 'group', groupId }, finalMsg.id, pubkey).catch(() => {}))
-          .catch((err) => {
-            console.error('[chat-store] Failed to persist image message:', err);
-          });
-        setMessages((prev) =>
-          prev.map((m) => (m.id === tempId ? finalMsg : m)),
-        );
+        if (finalMsg) {
+          const row = finalMsg;
+          appendMessage(groupId, row)
+            .then(() => resolvePendingSignalsForSlot({ kind: 'group', groupId }, row.id, pubkey).catch(() => {}))
+            .catch(err => console.error('[chat-store] Failed to persist image message:', err));
+        }
       } catch (err) {
-        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        if (finalMsg) return; // The tracker retains this exact rumor for retry.
+        setMessages(prev => prev.filter(m => m.id !== tempId));
         throw err;
       }
     },
-    [groupId, group, pubkey, signer],
+    [groupId, group, groupImages, pubkey],
   );
 
   /**
@@ -713,18 +668,17 @@ export function ChatStoreProvider({
    *    - add path → a row keyed on rumor.id is inserted (or the triple's
    *      tombstone is revived).
    * 2. (Prepare failure) Throws before anything is sent; nothing to roll back.
-   * 3. Send via sendRumorSafe (group.sendApplicationRumor with retry) (AC-36).
+   * 3. Send through the group rumor sender (AC-36).
    * 4. On failure: branch on isRemoval for the rollback (D7, AC-37, AC-59):
    *    - remove path → re-insert a fresh removed:false row (restores badge).
    *    - add path → rollbackOptimistic removes the in-flight insert by rumor.id.
    *
-   * Inbound reactions from peers are handled by reactionHandler.ts via the unified
-   * applicationRumorDispatcher wired in MarmotContext (Story 02). The dispatcher's
-   * LRU deduplication ensures the optimistic row is not double-applied.
+   * The history sink routes inbound reactions through reactionHandler.ts.
+   * The echoed rumor carries the optimistic row's identifier.
    */
   const sendReaction = useCallback(
     async (emoji: string, targetMessage: ChatMessage, isRemoval?: boolean) => {
-      if (!groupId || !group || !privateKeyHex) return;
+      if (!groupId || !group || !groupSender || !privateKeyHex) return;
       if (targetMessage.uploading) return; // temporary id, see canReactToMessage
 
       const thread = { kind: 'group' as const, groupId };
@@ -734,26 +688,30 @@ export function ChatStoreProvider({
       // step, floors its stamp at our own latest state for this triple and
       // persists the optimistic add row / tombstone with that same stamp, so
       // same-second remove/re-add converge on every receiver.
+      let prepared: ReturnType<GroupRumorSender['prepare']> | undefined;
       const { rumor } = await prepareOwnReaction(thread, {
         messageId: targetMessage.id,
         reactorPubkey: pubkey,
         emoji,
         isRemoval: !!isRemoval,
-        build: (notBeforeSec) =>
-          buildReactionRumor({
+        build: (notBeforeSec) => {
+          const draft = buildReactionRumor({
             emoji,
             targetMessageId: targetMessage.id,
-            targetMessageKind: CHAT_MESSAGE_KIND, // kind 9 for group messages
-            targetAuthorPubkey: undefined, // groups omit p tag (spec §3.3)
+            targetMessageKind: CHAT_MESSAGE_KIND,
+            targetAuthorPubkey: undefined,
             selfPrivKeyHex: privateKeyHex,
             isRemoval,
             notBeforeSec,
-          }),
+          });
+          prepared = groupSender.prepare(group, draft.kind, draft.content, draft.tags, { createdAt: draft.created_at });
+          return prepared.rumor;
+        },
       });
 
       try {
         // AC-36: send via MLS (kind-445 on wire — no plaintext kind-7 published, AC-61)
-        await sendRumorSafe(group, rumor as any);
+        await prepared!.send();
       } catch (err) {
         // D7, AC-37, AC-59: rollback optimistic state on failure.
         // remove path → re-insert a fresh non-removed row so the badge returns.
@@ -788,7 +746,7 @@ export function ChatStoreProvider({
         });
       }
     },
-    [groupId, group, pubkey, privateKeyHex],
+    [groupId, group, groupSender, pubkey, privateKeyHex],
   );
 
   /**
@@ -816,9 +774,10 @@ export function ChatStoreProvider({
    */
   const handleDeleteMessage = useCallback(
     async (messageId: string): Promise<void> => {
-      if (!groupId || !group || !privateKeyHex) return;
+      if (!groupId || !group || !groupSender || !privateKeyHex) return;
       await performGroupDeleteMessage(messageId, {
         group,
+        sender: groupSender,
         groupId,
         privateKeyHex,
         pubkey,
@@ -828,7 +787,7 @@ export function ChatStoreProvider({
         isCurrentUserAdmin,
       });
     },
-    [groupId, group, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, isCurrentUserAdmin],
+    [groupId, group, groupSender, privateKeyHex, pubkey, resolveAuthoritativeGroupRev, isCurrentUserAdmin],
   );
 
   /**
@@ -838,9 +797,10 @@ export function ChatStoreProvider({
    */
   const handleEditMessage = useCallback(
     async (messageId: string, newContent: string): Promise<void> => {
-      if (!groupId || !group || !privateKeyHex) return;
+      if (!groupId || !group || !groupSender || !privateKeyHex) return;
       await performGroupEditMessage(messageId, newContent, {
         group,
+        sender: groupSender,
         groupId,
         privateKeyHex,
         pubkey,
@@ -849,7 +809,7 @@ export function ChatStoreProvider({
         setMessages,
       });
     },
-    [groupId, group, privateKeyHex, pubkey, resolveAuthoritativeGroupRev],
+    [groupId, group, groupSender, privateKeyHex, pubkey, resolveAuthoritativeGroupRev],
   );
 
   // S5: __fewGroupMessageEdits dev bridge, mirroring DM's __fewDmMessageEdits
@@ -881,6 +841,8 @@ export function ChatStoreProvider({
     <ChatStoreContext.Provider
       value={{
         messages,
+        rowStatuses,
+        retryMessage,
         sendMessage,
         sendImageMessage,
         sendReaction,

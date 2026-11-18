@@ -20,14 +20,22 @@ vi.mock('idb-keyval', () => ({
   delMany: vi.fn(async (ks: string[]) => { ks.forEach((k) => idbStore.delete(k)); }),
 }));
 
-// ─── @internet-privacy/marmot-ts mock ────────────────────────────────────────
-vi.mock('@internet-privacy/marmot-ts', () => ({
-  deserializeApplicationData: vi.fn((_data: Uint8Array) => null),
-}));
 
 // ─── Dynamic imports (after vi.mock) ─────────────────────────────────────────
-const { createReactionHandler, REACTION_RUMOR_KIND } = await import('@/src/lib/marmot/handlers/reactionHandler');
-const { createDispatcher } = await import('@/src/lib/marmot/applicationRumorDispatcher');
+const { createReactionGroupHandler, REACTION_RUMOR_KIND } = await import('@/src/lib/marmot/handlers/reactionHandler');
+
+// Compatibility call shape is confined to the fixture; the real sink handler owns all effects.
+function createReactionHandler(deps: any) {
+  const jobs: Array<() => Promise<void>> = [];
+  const handler = createReactionGroupHandler({ ...deps, recomputeMessageReactions: async () => false, holdReaction: deps.holdReaction, releaseHeldReactions: async () => false });
+  expect(handler).not.toHaveProperty('handle');
+  return {
+    async handle(rumor: any, ctx: any, sender?: { pubkey: string }) {
+      await handler.dispatch({ groupId: ctx.groupId, eventId: rumor.id, rumor, sender: sender?.pubkey ?? rumor.pubkey }, ctx);
+      while (jobs.length) await jobs.shift()!();
+    },
+  };
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -64,13 +72,14 @@ function makeCtx() {
 
 // AuthenticatedSender fixture (epic: group-message-author-auth-app-layer S2).
 function makeSender(pubkey: string = PEER_PUBKEY): { pubkey: string; authenticity: 'claimed' | 'mls' } {
-  return { pubkey, authenticity: 'claimed' };
+  return { pubkey, authenticity: 'mls' };
 }
 
 type Deps = {
   loadMessages: ReturnType<typeof vi.fn>;
   applyInboundRumor: ReturnType<typeof vi.fn>;
   setReactionsVersion: ReturnType<typeof vi.fn>;
+  holdReaction: ReturnType<typeof vi.fn>;
 };
 
 function makeDeps(targetExists = true): Deps {
@@ -81,6 +90,7 @@ function makeDeps(targetExists = true): Deps {
     loadMessages: vi.fn(async () => ({ messages, refetchIds: [] as string[] })),
     applyInboundRumor: vi.fn(async () => ({ applied: true })),
     setReactionsVersion: vi.fn(),
+    holdReaction: vi.fn(async () => {}),
   };
 }
 
@@ -167,6 +177,8 @@ describe('reactionHandler', () => {
     await handler.handle(rumor, ctx, makeSender(rumor.pubkey));
 
     expect(deps.applyInboundRumor).not.toHaveBeenCalled();
+    // Sink behavior retains unknown-target reactions for later release.
+    expect(deps.holdReaction).toHaveBeenCalledWith({ kind: 'group', groupId: GROUP_ID }, rumor, makeSender(rumor.pubkey));
     expect(deps.setReactionsVersion).not.toHaveBeenCalled();
   });
 
@@ -194,33 +206,6 @@ describe('reactionHandler', () => {
     expect(deps.setReactionsVersion).not.toHaveBeenCalled();
   });
 
-  it('AC-AR-11 duplicate-id via dispatcher LRU: second dispatch with same id — applyInboundRumor called only once', async () => {
-    // Wire through the real dispatcher to test LRU dedup at dispatcher level.
-    const { deserializeApplicationData } = await import('@internet-privacy/marmot-ts');
-    const deps = makeDeps(true);
-    const handler = createReactionHandler(deps);
-
-    const rumor = makeReactionRumor({ id: 'dup-reaction-id' });
-    let mockReturn: typeof rumor | null = null;
-    vi.mocked(deserializeApplicationData).mockImplementation(() => mockReturn as any);
-
-    const dispatcher = createDispatcher([handler]);
-    const group = makeFakeGroup();
-    const ctx = makeCtx();
-    dispatcher.subscribe(group, ctx);
-
-    // First dispatch
-    mockReturn = rumor;
-    await group.emitAsync({ message: new Uint8Array(), senderPubkey: rumor.pubkey, senderLeafIndex: 0 });
-    await flushPromises();
-
-    // Second dispatch with same id — dispatcher LRU should block it
-    mockReturn = rumor;
-    await group.emitAsync({ message: new Uint8Array(), senderPubkey: rumor.pubkey, senderLeafIndex: 0 });
-    await flushPromises();
-
-    expect(deps.applyInboundRumor).toHaveBeenCalledOnce(); // only once, not twice
-  });
 
   it('AC-AR-10 duplicate-id called directly: handler is idempotent — reaction store dedup handles it', async () => {
     // When called directly twice (without dispatcher), handler calls applyInboundRumor twice.
@@ -289,7 +274,7 @@ describe('reactionHandler storage failures', () => {
     expect(deps.setReactionsVersion).not.toHaveBeenCalled();
   });
 
-  it('an unknown target and a missing e-tag complete (acked, not retried) without touching the store', async () => {
+  it('an unknown target is held and a missing e-tag completes without touching the store', async () => {
     const unknown = makeDeps(false);
     const rumor = makeReactionRumor();
     await expect(createReactionHandler(unknown).handle(rumor, makeCtx(), makeSender(rumor.pubkey))).resolves.toBeUndefined();

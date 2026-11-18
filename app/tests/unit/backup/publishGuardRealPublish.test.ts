@@ -1,16 +1,12 @@
-/**
- * The pre-publish guard against the REAL publishBackup (bug:
- * backup-empty-snapshot-publish-after-wipe). Relay discovery inside
- * publishBackup can take seconds; a wipe or identity replace landing while it
- * is pending must still stop the network publish, and leave the dirty mark
- * for the identity that owns it.
- */
+/** Exercise the backup publish guard while signing is pending. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const KEY = 'few-backup-dirty';
 const netPublish = vi.fn();
 const fetchEvents = vi.fn();
 const connectNdk = vi.fn();
+const sign = vi.fn();
+const signed = (d: Record<string, unknown>) => ({ ...d, id: 'i', pubkey: 'p', sig: 's' });
 
 vi.mock('@nostr-dev-kit/ndk', () => ({
   NDKEvent: class {
@@ -25,7 +21,7 @@ vi.mock('@/src/lib/ndkClient', () => ({
 vi.mock('@/src/lib/marmot/signerAdapter', () => ({
   createPrivateKeySigner: () => ({
     nip44: { encrypt: async (_p: string, t: string) => `enc:${t}` },
-    signEvent: async (d: Record<string, unknown>) => ({ ...d, id: 'i', pubkey: 'p', sig: 's' }),
+    signEvent: (d: Record<string, unknown>) => sign(d),
   }),
 }));
 vi.mock('@/src/context/NostrIdentityContext', () => ({ useNostrIdentity: () => ({}) }));
@@ -44,7 +40,7 @@ type Backup = typeof import('@/src/context/BackupContext');
 type Suspension = typeof import('@/src/lib/backup/suspension');
 
 let store: Map<string, string>;
-let releaseDiscovery: () => void;
+let releaseSigning: () => void;
 
 async function load(): Promise<{ backup: Backup; suspension: Suspension }> {
   vi.resetModules();
@@ -65,28 +61,25 @@ beforeEach(() => {
   });
   netPublish.mockReset().mockResolvedValue(undefined);
   connectNdk.mockReset().mockResolvedValue({ ndk: true });
-  // Relay discovery stays pending until the test releases it.
-  fetchEvents.mockReset().mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        releaseDiscovery = () => resolve({ events: new Set(), timedOut: false });
-      }),
-  );
+  fetchEvents.mockReset();
+  sign.mockReset().mockImplementation((draft) => new Promise((resolve) => {
+    releaseSigning = () => resolve(signed(draft));
+  }));
 });
 
-/** Starts an attempt and returns once it is waiting on relay discovery. */
+/** Starts an attempt and returns once it is waiting on signing. */
 async function startAttempt(backup: Backup, pubkey: string): Promise<{ done: Promise<boolean> }> {
   const attempt = backup.publishScheduledBackup('aa', pubkey);
-  await vi.waitFor(() => expect(fetchEvents).toHaveBeenCalled());
+  await vi.waitFor(() => expect(sign).toHaveBeenCalled());
   return { done: attempt };
 }
 
-describe('an attempt whose relay discovery is still pending', () => {
+describe('an attempt whose signing is still pending', () => {
   it('publishes when nothing changed meanwhile (control)', async () => {
     const { backup } = await load();
     backup.activateBackupScheduler({ markDirty: vi.fn(), dispose: vi.fn() } as never, 'bb');
     const { done: attempt } = await startAttempt(backup, 'bb');
-    releaseDiscovery();
+    releaseSigning();
     expect(await attempt).toBe(true);
     expect(netPublish).toHaveBeenCalledTimes(1);
     expect(store.has(KEY)).toBe(false);
@@ -97,7 +90,7 @@ describe('an attempt whose relay discovery is still pending', () => {
     backup.activateBackupScheduler({ markDirty: vi.fn(), dispose: vi.fn() } as never, 'bb');
     const { done: attempt } = await startAttempt(backup, 'bb');
     suspension.suspendBackups();
-    releaseDiscovery();
+    releaseSigning();
     expect(await attempt).toBe(true);
     expect(netPublish).not.toHaveBeenCalled();
     expect(store.get(KEY)).toBe('debounced:tok');
@@ -109,14 +102,14 @@ describe('an attempt whose relay discovery is still pending', () => {
     const { done: attempt } = await startAttempt(backup, 'old');
     suspension.bindBackupIdentity(null);
     backup.activateBackupScheduler({ markDirty: vi.fn(), dispose: vi.fn() } as never, 'new');
-    releaseDiscovery();
+    releaseSigning();
     expect(await attempt).toBe(true);
     expect(netPublish).not.toHaveBeenCalled();
     expect(store.get(KEY)).toBe('debounced:tok');
   });
 });
 
-describe('a stale attempt before relay discovery', () => {
+describe('a stale attempt before signing', () => {
   it('never connects the shared client under the old key after an identity replace', async () => {
     const { backup, suspension } = await load();
     backup.activateBackupScheduler({ markDirty: vi.fn(), dispose: vi.fn() } as never, 'old');
@@ -149,11 +142,11 @@ describe('replacing the identity (NostrIdentityContext.replaceIdentity seam)', (
     backup.activateBackupScheduler({ markDirty: vi.fn(), dispose: vi.fn() } as never, 'old');
     const { done: attempt } = await startAttempt(backup, 'old');
     suspension.bindBackupIdentity(null); // what replaceIdentity does before saving
-    releaseDiscovery();
+    releaseSigning();
     expect(await attempt).toBe(true);
     expect(netPublish).not.toHaveBeenCalled();
 
-    fetchEvents.mockReset().mockResolvedValue({ events: new Set(), timedOut: false });
+    sign.mockImplementation(async (draft) => signed(draft));
     backup.activateBackupScheduler({ markDirty: vi.fn(), dispose: vi.fn() } as never, 'new');
     expect(await backup.publishScheduledBackup('newkey', 'new')).toBe(true);
     expect(netPublish).toHaveBeenCalledTimes(1);

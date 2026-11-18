@@ -28,7 +28,7 @@ import type { MarmotGroup } from '@941design/marmot';
 import type { LocalGroupPurger } from '../membership/purgeLocalGroup';
 import type { PendingInvitationsApi, PendingInvitationView } from './pendingView';
 
-export class InvitationActionError extends Error {
+class InvitationActionError extends Error {
   readonly code = 'unknown-invitation' as const;
   constructor(readonly invitationId: string) {
     super(`invitation ${invitationId} is not pending`);
@@ -36,7 +36,7 @@ export class InvitationActionError extends Error {
   }
 }
 
-export interface InvitationActionsDeps {
+interface InvitationActionsDeps {
   invitations: PendingInvitationsApi & { accept: (id: string) => Promise<MarmotGroup> };
   view: Pick<PendingInvitationView, 'refresh' | 'isVisible'>;
   /** The local purger's per-group lock (`LocalGroupPurger.withGroupLock`): an accept never overlaps a purge of its group. REQUIRED. */
@@ -46,8 +46,10 @@ export interface InvitationActionsDeps {
   onError?: (error: unknown) => void;
 }
 
+export type VerifyInvitationAccept = () => boolean | Promise<boolean>;
+
 export interface InvitationActions {
-  accept: (id: string) => Promise<MarmotGroup>;
+  accept: (id: string, verify?: VerifyInvitationAccept) => Promise<MarmotGroup>;
   decline: (id: string) => Promise<void>;
 }
 
@@ -75,12 +77,18 @@ export function createInvitationActions(deps: InvitationActionsDeps): Invitation
   };
 
   return {
-    accept: async (id) => {
+    accept: async (id, verify) => {
       const shown = await view.refresh();
       if (!view.isVisible(id)) throw new InvitationActionError(id);
       const groupId = Array.isArray(shown) ? shown.find((i) => i.id === id)?.groupId : undefined;
       const join = async () => {
+        if (!view.isVisible(id)) throw new InvitationActionError(id);
+        if (verify && !(await verify())) throw new InvitationActionError(id);
         const joined = await invitations.accept(id);
+        if (process.env.NODE_ENV === 'development') {
+          const { afterInvitationAccept } = await import('../../testHooks/marmotSession');
+          await afterInvitationAccept(joined.id);
+        }
         attachGroup(joined);
         return joined;
       };

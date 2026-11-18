@@ -1,0 +1,22 @@
+{
+  "module_name": "MarmotContext",
+  "purpose": "Remove localStorage lp_processedGiftWraps/lp_keyPackageSlot_v1/lp_pendingInvitations_v1 and creators of few-groups-state/few-keypackages/few-rumor-journal/few-pending-removals/few-left-groups; unused-export script over app/src/lib/marmot/**; confirm no feature flag/adapter coexistence layer; remove dead pairing-digest/discoverable code.",
+  "public_api": [],
+  "private_files": [],
+  "owned_data": [],
+  "dependencies_allowed": [
+    "Existing source and fixtures in the story scope"
+  ],
+  "dependencies_forbidden": [
+    "Legacy store cleanup code for existing devices (explicitly not shipped)"
+  ],
+  "external_ports": [],
+  "events_emitted": [],
+  "events_consumed": [],
+  "test_targets": [
+    "app/src/** (key/store references)",
+    "scripts/unused-exports check (added to gate)",
+    "app/src/context/MarmotContext.tsx (dead state)",
+    "app/src/lib/pendingInvitations.ts (delete) \u2014 first move GLOBAL_CAP (256) / PER_INVITER_CAP (8) into app/src/lib/marmot/invitations/caps.ts and repoint caps.test.ts"
+  ]
+}

@@ -93,7 +93,7 @@ export async function serialiseProfileUpdate(
  * departed member's late or forwarded profile on roster grounds would
  * degrade their name in history to a raw key (spec.md Solution §6).
  */
-export const PROFILE_KIND_SPEC: ForwardedKindSpec = {
+const PROFILE_KIND_SPEC: ForwardedKindSpec = {
   innerKind: PROFILE_RUMOR_KIND,
   binding: { groupScoped: false },
 };

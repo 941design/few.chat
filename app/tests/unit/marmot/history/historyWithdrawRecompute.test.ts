@@ -268,7 +268,7 @@ describe('crash replay: a marked row is finished before anything is re-dispatche
     expect(row('w')).toBeUndefined();
   });
 
-  it('a recovery retract failure leaves the row marked, does not abort recovery of later rows, and the next withdraw finishes it', async () => {
+  it('a recovery retract failure leaves the row marked, does not abort recovery of later rows, and a retry finishes it', async () => {
     const fx = fixture();
     seed('w1', 1, { withdrawing: true });
     db().set(rowKey('undisp'), { entry: entry('undisp'), seq: 2, dispatched: false, receivedAt: 1 });
@@ -283,7 +283,7 @@ describe('crash replay: a marked row is finished before anything is re-dispatche
     expect(row('w1')?.withdrawing).toBe(true);
     expect(row('undisp')?.dispatched).toBe(true);
     fail = false;
-    await sink.withdraw(G, [hex('nope')]);
+    await sink.withdraw(G, [hex('w1')]);
     expect(row('w1')).toBeUndefined();
   });
 

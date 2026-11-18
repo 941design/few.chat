@@ -1,0 +1,8 @@
+{
+  "consumer_sha": "5311488",
+  "tests": {
+    "command": "make ensure-deps && cd app && npx vitest run tests/unit/marmot/client/bootstrap.sequence.test.ts --maxWorkers=1",
+    "tests_passed": 58
+  },
+  "note": "Bootstrap tests passed before introducing lifecycle or wipe modules. S17 implementation did not exist."
+}

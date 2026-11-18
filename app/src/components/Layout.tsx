@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Box,
   Flex,
@@ -33,13 +33,10 @@ import { IncomingCallWatcher } from '@/src/components/calls/IncomingCallWatcher'
 import { IncomingCallModal } from '@/src/components/calls/IncomingCallModal';
 import { CallScreen } from '@/src/components/calls/CallScreen';
 import { rememberContactsFromGroups } from '@/src/lib/contacts';
-import { subscribe as subscribePendingInvitations, getSnapshot as getPendingInvitationsSnapshot } from '@/src/lib/pendingInvitations';
 import { useUnreadCounts } from '@/src/lib/unreadStore';
 import { contactsDomainTotal, groupsDomainTotal } from '@/src/lib/notificationCounts';
 
-function getPendingInvitationsServerSnapshot() {
-  return [] as ReturnType<typeof getPendingInvitationsSnapshot>;
-}
+
 
 /**
  * The imprint footer shows on every page EXCEPT the two open-chat pages: the
@@ -68,7 +65,7 @@ export default function Layout({ children }: LayoutProps) {
   const router = useRouter();
   const { profile } = useProfile();
   const { pubkeyHex, backedUp } = useNostrIdentity();
-  const { groups, ready } = useMarmot();
+  const { groups, ready, pendingInvitations } = useMarmot();
   const copy = useCopy();
   const { isOpen, onToggle } = useDisclosure();
   const { navStyle, surfaceStyle, bannerDecorStyle, contentPanelStyle } = useThemeStyles();
@@ -91,11 +88,6 @@ export default function Layout({ children }: LayoutProps) {
   const dynamicBanner = useDynamicBanner(activeThemeDefinition, bannerSize);
   const activeBanner = dynamicBanner ?? bannerDecorStyle;
   // AC-INVITE-8: reactive pending invitation count for Groups nav badge
-  const pendingInvitations = useSyncExternalStore(
-    subscribePendingInvitations,
-    getPendingInvitationsSnapshot,
-    getPendingInvitationsServerSnapshot,
-  );
   const pendingInvitationCount = pendingInvitations.length;
 
   // Domain notification totals for the nav pills that replaced the notification

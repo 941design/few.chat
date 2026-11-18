@@ -21,10 +21,7 @@
     "app/tests/unit/marmot/history/historyBackend.test.ts",
     "app/tests/unit/marmot/history/historyStore.realIdb.test.ts"
   ],
-  "tests_added": {
-    "unit": "groupRumorDispatch.test.ts (69: AC-HIST-10 bumps from handler completion + notification router, sender binding, idempotency/redelivery/failure retry, missing-target tolerance, kind gate, own echo, AC-WDR-6 retract, AC-WDR-1 carriers incl. the atomic duplicate-vs-retract interleaving, withdrawn poll_close dropped from the hold queue, sink-vs-legacy resolvePendingSignalsForSlot failure policy, 38 parameterised required-port construction checks)",
-    "harness": "forgery.harness.test.ts (2: AC-FORGE-1 two real clients Alice/Mallory over FakeRelay + createMemoryStorage; AC-FORGE-2 sender attribution)"
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 6834,
     "final": 6905
@@ -58,5 +55,9 @@
   },
   "modules_touched": [
     "handlers"
-  ]
+  ],
+  "legacy_tests_added": {
+    "unit": "groupRumorDispatch.test.ts (69: AC-HIST-10 bumps from handler completion + notification router, sender binding, idempotency/redelivery/failure retry, missing-target tolerance, kind gate, own echo, AC-WDR-6 retract, AC-WDR-1 carriers incl. the atomic duplicate-vs-retract interleaving, withdrawn poll_close dropped from the hold queue, sink-vs-legacy resolvePendingSignalsForSlot failure policy, 38 parameterised required-port construction checks)",
+    "harness": "forgery.harness.test.ts (2: AC-FORGE-1 two real clients Alice/Mallory over FakeRelay + createMemoryStorage; AC-FORGE-2 sender attribution)"
+  }
 }

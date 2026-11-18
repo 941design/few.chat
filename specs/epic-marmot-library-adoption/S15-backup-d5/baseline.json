@@ -1,0 +1,13 @@
+{
+  "consumer_sha": "5311488",
+  "tests": {
+    "command": "make ensure-deps && cd app && npx vitest run tests/unit/backup --maxWorkers=2",
+    "files_passed": 8,
+    "tests_passed": 204,
+    "failed": 0
+  },
+  "typecheck": {
+    "command": "npx tsc -p tsconfig.tests-marmot.json --noEmit",
+    "outcome": "passed with S14 changes and untouched backup source"
+  }
+}

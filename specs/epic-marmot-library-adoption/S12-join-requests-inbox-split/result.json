@@ -1,7 +1,7 @@
 {
   "story_id": "S12",
   "status": "done",
-  "final_outcome": "completed",
+  "final_outcome": "accepted_with_caveats",
   "completed_at": "2026-11-17T22:10:00Z",
   "files_created": [
     "app/src/lib/marmot/joinRequestApproval.ts",
@@ -36,13 +36,15 @@
     "specs/epic-marmot-library-adoption/S12-join-requests-inbox-split/verification.json"
   ],
   "adjacent_fixes": [
-    "joinRequestSender.test.ts: waitForSockets raced the mock sockets' setTimeout(0) connect (see decisions); now polls until every socket has sent."
+    {
+      "what": "joinRequestSender.test.ts: waitForSockets raced the mock sockets' setTimeout(0) connect (see decisions); now polls until every socket has sent.",
+      "why": "Stabilize the existing sender test affected by the inbox sender change.",
+      "files": [
+        "app/tests/unit/marmot/joinRequestSender.test.ts"
+      ]
+    }
   ],
-  "tests_added": {
-    "unit": "joinRequestInboxHandler.test.ts (34: requester only from rumor.pubkey incl. spoofed content fields, lowercase, replay/duplicate by rumor id, replay after consume, name cap, nonce/mute/expiry/legacy-expiry/member drops, malformed content/kind/sender/id, deny layer first with no lookup and no seen mark, block read per arrival, storage failure rethrown, bell failure swallowed, port validation); joinRequestSender.inbox.test.ts (19: one sendInboxRumor of the canonical rumor, privacy, record only when delivered, retryable/failed/rejected = JoinRequestSendError with fake-timer proof of zero timers and one send, message hygiene, port validation); joinRequestApproval.test.ts (18: AC-JOIN-2 one-event invite via the REAL inviter over a fake group, newest candidate, no usable key package / throw / group missing keep the request, consume failure non-fatal, AC-JOIN-3 already-member incl. a leaf appearing after synced() with no group.invite and no lookup, enqueue-only calling frame, queue-unavailable, in-flight sharing, port validation); autoAccept.test.ts (24: REAL pending view + REAL invitation actions over a fake library list: match accepts once outside the listener frame and consumes the record, no second accept even with a lagging list and an unconsumed record, other-admin/no-record/known-different-name stay pending, name normalisation, one record per invitation, blocked sponsor never accepted, failed accept keeps the record and may retry, only pending triggers, collapsing, scheduleRefresh last, evaluate() after a late context, throwing store, port validation); joinRequestStorage.seen.test.ts (6, real fake-indexeddb: membership, idempotence, 512 cap evicting the oldest BY STORED TIME with out-of-key-order seeding, tie never evicts the just-written id, account clear, production-port wiring of the handler over the real idb stores incl. replay after delete); directMessages.dmPlaneDispatch.test.ts (13: skip set equals registries, silent skip of 444/4460-4462/21059/21064 over real NIP-59 wraps with every logger level observed, pairing-ack routed with the wrap, throw propagation, chat rumor returned, foreign key / non-wrap unwrap-failed); joinRequestInbox.scan.test.ts (structural: AC-AUTO-2 no keyPackages.offer/expectWelcome, AC-INBOX-2 no 21063 except kinds.ts RETIRED_KINDS and a self-expiring legacy exemption, no React/context in the join modules, inbox sender has no raw WebSocket, handler has no client reference, no update()); importBoundary.test.ts now asserts NO file under src/lib/marmot imports react (LEGACY_REACT_IMPORTERS deleted).",
-    "harness": "joinRequests.harness.test.ts (4): REAL Alice/Bob/Carol clients over FakeRelay + createMemoryStorage with the app's bootstrap, handler registered as inboxHandlers.joinRequest: request is exactly one extra kind-1059 wrap, no kind 0/21059 at top level, no cleartext name or nonce on the relay; approval invites with exactly one key-package event on Alice's job queue; Bob is auto-joined with one accept and the outbound record consumed; an unrelated sponsor's invitation stays pending with zero accepts; already-member approval makes no commit; blocked requester leaves nothing and rings nothing; library-replayed identical rumor makes no second entry.",
-    "fail_first": "In-place mutants (backup + cmp restore, scratch driver), all killed: deny layer removed, seen check removed, mute check removed, storage failure swallowed instead of rethrown, accepted-id memory removed, name narrowing removed, scheduleRefresh removed, any disposition triggers, already-member treated as an error, in-flight sharing removed, retryable treated as delivered, joinRequest missing from the DM skip set, seen eviction ignoring stored time."
-  },
+  "tests_added": {},
   "test_counts": {
     "baseline": 8002,
     "final": 8152
@@ -108,5 +110,14 @@
     "commits_made": [],
     "absorbed_from": [],
     "lead_clarifications": []
-  }
+  },
+  "legacy_tests_added": {
+    "unit": "joinRequestInboxHandler.test.ts (34: requester only from rumor.pubkey incl. spoofed content fields, lowercase, replay/duplicate by rumor id, replay after consume, name cap, nonce/mute/expiry/legacy-expiry/member drops, malformed content/kind/sender/id, deny layer first with no lookup and no seen mark, block read per arrival, storage failure rethrown, bell failure swallowed, port validation); joinRequestSender.inbox.test.ts (19: one sendInboxRumor of the canonical rumor, privacy, record only when delivered, retryable/failed/rejected = JoinRequestSendError with fake-timer proof of zero timers and one send, message hygiene, port validation); joinRequestApproval.test.ts (18: AC-JOIN-2 one-event invite via the REAL inviter over a fake group, newest candidate, no usable key package / throw / group missing keep the request, consume failure non-fatal, AC-JOIN-3 already-member incl. a leaf appearing after synced() with no group.invite and no lookup, enqueue-only calling frame, queue-unavailable, in-flight sharing, port validation); autoAccept.test.ts (24: REAL pending view + REAL invitation actions over a fake library list: match accepts once outside the listener frame and consumes the record, no second accept even with a lagging list and an unconsumed record, other-admin/no-record/known-different-name stay pending, name normalisation, one record per invitation, blocked sponsor never accepted, failed accept keeps the record and may retry, only pending triggers, collapsing, scheduleRefresh last, evaluate() after a late context, throwing store, port validation); joinRequestStorage.seen.test.ts (6, real fake-indexeddb: membership, idempotence, 512 cap evicting the oldest BY STORED TIME with out-of-key-order seeding, tie never evicts the just-written id, account clear, production-port wiring of the handler over the real idb stores incl. replay after delete); directMessages.dmPlaneDispatch.test.ts (13: skip set equals registries, silent skip of 444/4460-4462/21059/21064 over real NIP-59 wraps with every logger level observed, pairing-ack routed with the wrap, throw propagation, chat rumor returned, foreign key / non-wrap unwrap-failed); joinRequestInbox.scan.test.ts (structural: AC-AUTO-2 no keyPackages.offer/expectWelcome, AC-INBOX-2 no 21063 except kinds.ts RETIRED_KINDS and a self-expiring legacy exemption, no React/context in the join modules, inbox sender has no raw WebSocket, handler has no client reference, no update()); importBoundary.test.ts now asserts NO file under src/lib/marmot imports react (LEGACY_REACT_IMPORTERS deleted).",
+    "harness": "joinRequests.harness.test.ts (4): REAL Alice/Bob/Carol clients over FakeRelay + createMemoryStorage with the app's bootstrap, handler registered as inboxHandlers.joinRequest: request is exactly one extra kind-1059 wrap, no kind 0/21059 at top level, no cleartext name or nonce on the relay; approval invites with exactly one key-package event on Alice's job queue; Bob is auto-joined with one accept and the outbound record consumed; an unrelated sponsor's invitation stays pending with zero accepts; already-member approval makes no commit; blocked requester leaves nothing and rings nothing; library-replayed identical rumor makes no second entry.",
+    "fail_first": "In-place mutants (backup + cmp restore, scratch driver), all killed: deny layer removed, seen check removed, mute check removed, storage failure swallowed instead of rethrown, accepted-id memory removed, name narrowing removed, scheduleRefresh removed, any disposition triggers, already-member treated as an error, in-flight sharing removed, retryable treated as delivered, joinRequest missing from the DM skip set, seen eviction ignoring stored time."
+  },
+  "legacy_final_outcome": "completed",
+  "legacy_adjacent_fixes": [
+    "joinRequestSender.test.ts: waitForSockets raced the mock sockets' setTimeout(0) connect (see decisions); now polls until every socket has sent."
+  ]
 }

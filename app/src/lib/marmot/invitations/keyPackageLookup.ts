@@ -41,12 +41,12 @@ export { normaliseAdvertisedRelayUrl, normaliseRelayUrl };
 
 /** Addressable key-package kind published by the library client. */
 export const KEY_PACKAGE_KIND = 30443;
-export const INBOX_RELAY_LIST_KIND = 10050;
-export const NIP65_RELAY_LIST_KIND = 10002;
+const INBOX_RELAY_LIST_KIND = 10050;
+const NIP65_RELAY_LIST_KIND = 10002;
 /** Per list (10050 and 10002 write set): how many invitee-advertised relays are used. */
 export const MAX_ADVERTISED_RELAYS = 3;
 /** Deadline of each of the two requests (relay discovery, key packages). */
-export const KEY_PACKAGE_LOOKUP_TIMEOUT_MS = 8_000;
+const KEY_PACKAGE_LOOKUP_TIMEOUT_MS = 8_000;
 
 /** Candidates kept (newest first) and the `limit` of the key-package filter: a hostile relay cannot make the invite walk an unbounded list. */
 export const MAX_KEY_PACKAGE_CANDIDATES = 6;
@@ -54,7 +54,7 @@ export const MAX_KEY_PACKAGE_CANDIDATES = 6;
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const HEX64 = /^[0-9a-f]{64}$/;
 
-export type KeyPackageLookupResult =
+type KeyPackageLookupResult =
   /** `candidates` are verified kind-30443 events of the invitee, in invite order, at most `MAX_KEY_PACKAGE_CANDIDATES` (never empty). */
   | { ok: true; candidates: NostrEvent[]; relays: string[] }
   /** No usable event: `reason` tells EOSE-with-nothing ('none-found') from the deadline ('timed-out'). */
@@ -64,7 +64,7 @@ export interface KeyPackageLookup {
   lookup: (pubkey: string, opts?: { signal?: AbortSignal }) => Promise<KeyPackageLookupResult>;
 }
 
-export interface KeyPackageLookupDeps {
+interface KeyPackageLookupDeps {
   /** Only `requestWithDeadline` is used. */
   transport: Pick<TransportContract, 'requestWithDeadline'>;
   /** The app's configured relays (the library defaults), used as given; at least one valid ws/wss URL. */

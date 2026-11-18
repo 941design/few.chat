@@ -185,7 +185,7 @@ export function buildRealApp(options: RealAppOptions = {}) {
         if (hooks.failMerge) throw new Error('profile store down');
         return mergeMemberProfile(g, p);
       }),
-      clearPendingDirectInvite: track('clearPendingDirectInvite', async () => undefined),
+      noteForwardedInviteProfile: track('noteForwardedInviteProfile', async () => undefined),
       notifyProfileObserved: track('notifyProfileObserved', spies.notifyProfileObserved),
       recordRequestAnswered: track('recordRequestAnswered', spies.recordRequestAnswered),
       writeContactEntry: track('writeContactEntry', spies.writeContactEntry),

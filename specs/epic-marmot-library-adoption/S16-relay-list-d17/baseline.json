@@ -1,0 +1,9 @@
+{
+  "consumer_sha": "5311488",
+  "tests": {
+    "command": "make ensure-deps && cd app && npx vitest run tests/unit/marmot/client/bootstrap.sequence.test.ts --maxWorkers=1",
+    "files_passed": 1,
+    "tests_passed": 58
+  },
+  "note": "Only backup and membership were changed since the base commit. The new relay rebuild module did not exist."
+}

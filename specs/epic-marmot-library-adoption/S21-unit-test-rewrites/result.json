@@ -1,0 +1,29 @@
+{
+  "story_id": "S21",
+  "status": "done",
+  "modules_touched": [
+    "unit-rewrites"
+  ],
+  "files_created": [],
+  "files_modified": [
+    "app/tests/unit/marmot/handlers/groupSessionHistory.test.ts",
+    "specs/epic-marmot-library-adoption/run-report.md"
+  ],
+  "remediation_rounds": 0,
+  "mocks": [],
+  "retrospective": {
+    "skipped": true,
+    "reason": "routine"
+  },
+  "verification_evidence": {
+    "unit": "The cutover exposed 128 obsolete assertions. Focused rewrites passed, including 133 tests after correcting six late collection and fixture failures. Per-file deletion decisions are listed in the run report.",
+    "mutation": "Stryker finished on all seven modules at concurrency 1, 734 killed, 2 timed out, 237 survived and 102 lacked coverage. Each survivor and no-coverage mutant is recorded in the run report. app/reports unchanged.",
+    "final_unit_gate": "The final make test invocation passed Marmot typecheck, the unused-export check and all 347 Vitest files (7318 tests passed, one skipped). The E2E stage started afterward.",
+    "full_unit": "Final make test passed the Marmot TypeScript check, export check, and all 346 unit files. Vitest reported 7,322 passed and one skipped."
+  },
+  "final_outcome": "accepted",
+  "independent_review": {
+    "structural": "GPT-6.2 Sol verified the preserved title and unit-file inventory, scoped test evidence, and report rationale.",
+    "adversarial": "GPT-6 Astra rechecked all 48 retired test files against the report and accepted the seven-module survivor inventory."
+  }
+}

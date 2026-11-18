@@ -282,7 +282,7 @@ describe('AC-WDR-2: own content', () => {
     const app = make();
     await app.sink.append(app.entry({ eventId: 'm1', account: SELF, content: 'mine' }));
     await app.sink.withdraw(app.groupId, ev('m1'));
-    expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, 'rumor-m1');
+    expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, 'rumor-m1', ev('m1')[0]);
     expect((await app.messages()).map((m) => m.id)).toEqual(['rumor-m1']);
     expect(app.jobs).toEqual([]); // no follow-up send queued
     expect(app.spies.sendAnnouncement).not.toHaveBeenCalled();
@@ -367,7 +367,7 @@ describe('follow-up client writes are enqueued on the FIFO, never awaited in the
     expect(app.calls[app.calls.length - 1]).toBe('enqueue'); // the last action of the handler call
     expect(app.spies.sendAnnouncement).not.toHaveBeenCalled(); // never awaited inside the handler
     await app.runJobs();
-    expect(app.spies.sendAnnouncement).toHaveBeenCalledWith(acceptedContent);
+    expect(app.spies.sendAnnouncement).toHaveBeenCalledWith(acceptedContent, app.groupId);
   });
 
   it('a redelivery of the same signed profile under another event id queues no second announcement', async () => {
@@ -409,7 +409,7 @@ describe('follow-up client writes are enqueued on the FIFO, never awaited in the
     expect(app.calls[app.calls.length - 1]).toBe('enqueue'); // still the handler's very last action
     await app.runJobs();
     expect(app.spies.sendAnnouncement).toHaveBeenCalledTimes(1);
-    expect(app.spies.sendAnnouncement).toHaveBeenCalledWith(acceptedContent);
+    expect(app.spies.sendAnnouncement).toHaveBeenCalledWith(acceptedContent, app.groupId);
     // a further redelivery finds no marker: silent
     await app.sink.append(app.entry({ eventId: 'e2', kind: 0, account: bobKey, content: signedProfile() }));
     expect(app.jobs).toEqual([]);
@@ -465,7 +465,7 @@ describe('purge after leave: a late retract removes an own row instead of parkin
   it('control: a plain withdraw of the same hung own message leaves the row for the failed/retry hand-back', async () => {
     const app = make({ settleTimeoutMs: 40 });
     await hungOwnMessageThenLeave(app, false);
-    await vi.waitFor(() => expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, 'rumor-m1'), { timeout: 2000 });
+    await vi.waitFor(() => expect(app.spies.onOwnWithdrawn).toHaveBeenCalledWith(app.groupId, 'rumor-m1', ev('m1')[0]), { timeout: 2000 });
     expect((await app.messages()).map((m) => m.id)).toEqual(['rumor-m1']);
   });
 });
@@ -473,7 +473,7 @@ describe('purge after leave: a late retract removes an own row instead of parkin
 describe('required ports are enforced at construction (no silent degrade)', () => {
   const fn = () => vi.fn(async () => undefined);
   const profileDeps = () => ({
-    mergeMemberProfile: vi.fn(async () => true), clearPendingDirectInvite: fn(), notifyProfileObserved: vi.fn(), recordRequestAnswered: fn(),
+    mergeMemberProfile: vi.fn(async () => true), noteForwardedInviteProfile: fn(), notifyProfileObserved: vi.fn(), recordRequestAnswered: fn(),
     writeContactEntry: vi.fn(), setProfileVersion: vi.fn(), consumePendingDirectInviteMarker: vi.fn(async () => false), sendAnnouncement: fn(), enqueue: vi.fn(),
   });
   const requestDeps = () => ({ recordRequestEmitted: fn(), sendSelfProfile: fn(), handleIncomingProfileRequest: fn(), groupOf: fn(), enqueue: vi.fn() });
@@ -498,7 +498,7 @@ describe('profile sink gate keyed per group; accepted announcement unlosable', (
     JSON.stringify(finalizeEvent({ kind: 0, created_at: 1_700_000_000 + n, tags: [], content: JSON.stringify({ nickname: `N${n}`, avatar: null, updatedAt: '2026-01-01T00:00:00.000Z' }) }, sk));
   const mk = (over: Record<string, unknown> = {}) => {
     const deps = {
-      mergeMemberProfile: vi.fn(async () => true), clearPendingDirectInvite: vi.fn(async () => undefined), notifyProfileObserved: vi.fn(),
+      mergeMemberProfile: vi.fn(async () => true), noteForwardedInviteProfile: vi.fn(async () => undefined), notifyProfileObserved: vi.fn(),
       recordRequestAnswered: vi.fn(async () => undefined), writeContactEntry: vi.fn(), setProfileVersion: vi.fn(),
       consumePendingDirectInviteMarker: vi.fn(async () => false), sendAnnouncement: vi.fn(async () => undefined), enqueue: vi.fn(),
       ...over,

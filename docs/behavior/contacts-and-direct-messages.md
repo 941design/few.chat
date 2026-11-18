@@ -196,6 +196,16 @@ un-wrapped message format) from allowed senders. Those are not gift-wrapped, so 
 inbound path the sender, recipient, and content are not hidden from relays; outbound
 messages always use the encrypted, wrapped format.
 
+The private group inbox carries Welcomes, invitation responses, join requests, and
+sponsor context. These are processed as group activity and never appear as DM chat or
+count as DM unread. Contact pairing acknowledgements stay on the DM side. The two
+channels can both use encrypted gift wraps.
+
+When another tab is active for groups, you can still send and receive DMs. This tab
+uses saved group memberships and ever-known peers to decide who can reach you. Contact,
+DM, and blocking updates continue to sync across tabs in the same browser.
+[Groups](groups.md#one-active-tab-per-account)
+
 ---
 
 ## 8. Who may message whom — the walled garden
@@ -350,9 +360,11 @@ shipped implementation, and the automated test suite:
 - `specs/epic-contact-group-context/` — shared-group context.
 - `specs/epic-dm-walled-garden/` and `specs/epic-walled-garden-v2/` — DM reachability, ever-
   known peers, and stranger purge.
-- `docs/adr/ADR-002` (mutual-contact graph and pull-only invitations), `ADR-005` (ever-known
+- `docs/adr/ADR-002-mutual-contact-graph-and-pull-only-invitations.md` (mutual-contact graph and pull-only invitations), `ADR-005` (ever-known
   trust extended to added contacts), `ADR-008` (block as a deny layer AND-ed at every peer
   channel), and `ADR-009` (owner confirmation before admitting a scanned pairing).
+- `specs/epic-marmot-library-adoption/acceptance-criteria.md` — AC-INBOX, AC-MT
+  and AC-CTX cover the inbox split, waiting tabs, and sponsor context.
 - Implementation under `app/src/lib/contacts.ts`, `processContactInput.ts`, `knownPeers.ts`,
   `walledGarden.ts`, `blockedPeers.ts`, `blockContactAction.ts`, `pairing/`,
   `directMessages.ts`, `directMessageNotifications.ts`, `marmot/chatPersistence.ts`, and the

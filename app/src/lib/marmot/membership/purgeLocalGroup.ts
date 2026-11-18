@@ -59,7 +59,8 @@ export interface AbandonableGroup {
   members?: () => readonly string[];
 }
 
-export type PurgeStepName =
+type PurgeStepName =
+  | 'other-owner'
   | 'forget-tracker'
   | 'get-group'
   | 'abandon'
@@ -82,7 +83,7 @@ export type PurgeStepName =
   | 'overlay'
   | 'on-purged';
 
-export interface PurgeStepFailure {
+interface PurgeStepFailure {
   step: PurgeStepName;
   error: unknown;
 }
@@ -102,9 +103,9 @@ export class PurgeError extends Error {
   }
 }
 
-export interface PurgeOptions {
+interface PurgeOptions {
   /**
-   * The roster legitimately holds the own account (sole-member abandon): the pre-purge re-join guard is skipped.
+   * A solo abandon requires the reloaded roster to hold only the own account.
    * Every other caller leaves a group untouched whose readable roster holds the own account.
    */
   ownAccountIsMember?: boolean;
@@ -133,6 +134,8 @@ export interface PurgeLocalGroupDeps {
   ownPubkey: string;
   /** `client.groups.get`: `undefined` = the library does not hold the group; a rejection fails the purge. */
   getGroup: (groupId: string) => Promise<AbandonableGroup | undefined>;
+  /** Protect group-id keyed app data while another account has an overlay. Failures retain the retry overlay. */
+  hasOtherOwner?: (groupId: string) => Promise<boolean>;
   /** The app history sink (`AppHistoryBackend.purge`). */
   history: { purge: (groupId: string) => Promise<void> };
   /** The own-send tracker (`OwnRowTracker.forgetGroup`). */
@@ -157,6 +160,8 @@ export interface PurgeLocalGroupDeps {
   clearInviteExpiries: (groupId: string) => void | Promise<void>;
   /** `pendingDirectInviteStorage.clearPendingDirectInvitesForGroup` (the per-group clear, never the account-wide one). */
   clearPendingDirectInvites: (groupId: string) => Promise<void>;
+  /** Clears the current sponsor's invite state when the shared group stores are retained. */
+  clearSponsorDirectInvites?: (groupId: string) => Promise<void>;
   /** The held invite contexts of the group (`InviteContextStore.discard({ groupId })`). */
   clearInviteContexts: (groupId: string) => Promise<void>;
   /** Removes the group's overlay row (`groupStorage.deleteGroup`). Runs last. */
@@ -172,7 +177,7 @@ export interface PurgeLocalGroupDeps {
   onError?: (groupId: string, failure: PurgeStepFailure) => void;
 }
 
-// `markUnloadable` is the only optional port.
+// The ownership check and markUnloadable are optional ports.
 const REQUIRED_PORTS = [
   'getGroup',
   'history',
@@ -196,7 +201,7 @@ const REQUIRED_PORTS = [
 ] as const;
 
 /** TypeError naming the first missing function port (and the missing members of the two object ports). */
-export function assertFunctionPorts(factory: string, deps: object, names: readonly string[]): void {
+function assertFunctionPorts(factory: string, deps: object, names: readonly string[]): void {
   for (const name of names) {
     const port = (deps as Record<string, unknown>)[name];
     if (port === undefined || port === null) throw new TypeError(`${factory}: port '${name}' is required`);
@@ -318,7 +323,14 @@ export function createLocalGroupPurger(deps: PurgeLocalGroupDeps): LocalGroupPur
         unloadable = true;
       } else {
         group = loaded.group;
-        if (group !== undefined && options.ownAccountIsMember !== true && holdsAccount(group, own)) return;
+        if (group !== undefined) {
+          if (options.ownAccountIsMember) {
+            const members = group.members?.();
+            if (members?.length !== 1 || members[0].toLowerCase() !== own) {
+              throw new PurgeError(groupId, [{ step: 'abandon', error: new Error('Group is no longer a solo group') }]);
+            }
+          } else if (holdsAccount(group, own)) return;
+        }
       }
 
       await attempt('forget-tracker', () => deps.tracker.forgetGroup(groupId));
@@ -345,8 +357,15 @@ export function createLocalGroupPurger(deps: PurgeLocalGroupDeps): LocalGroupPur
         }
       }
 
-      const results = [
-        sinkPurged,
+      // Owner-scoped history and contexts still need cleanup, but group-id keyed stores
+      // belong to every account with an overlay. A failed lookup must fail closed.
+      let otherOwner = false;
+      const ownershipChecked = await attempt('other-owner', async () => {
+        otherOwner = await deps.hasOtherOwner?.(groupId) ?? false;
+      });
+      const results = [sinkPurged, ownershipChecked];
+      const { clearSponsorDirectInvites } = deps;
+      if (ownershipChecked && !otherOwner) results.push(
         await attempt('messages', () => deps.clearMessages(groupId)),
         await attempt('message-edits', () => deps.clearMessageEdits(groupId)),
         await attempt('reactions', () => deps.clearReactions(groupId)),
@@ -360,8 +379,11 @@ export function createLocalGroupPurger(deps: PurgeLocalGroupDeps): LocalGroupPur
         await attempt('invite-links', () => deps.clearInviteLinks(groupId)),
         await attempt('invite-expiries', () => deps.clearInviteExpiries(groupId)),
         await attempt('direct-invite-markers', () => deps.clearPendingDirectInvites(groupId)),
-        await attempt('invite-contexts', () => deps.clearInviteContexts(groupId)),
-      ];
+      );
+      else if (clearSponsorDirectInvites) {
+        results.push(await attempt('direct-invite-markers', () => clearSponsorDirectInvites(groupId)));
+      }
+      results.push(await attempt('invite-contexts', () => deps.clearInviteContexts(groupId)));
       // An unloadable group keeps its overlay row (the retry key) and is marked so the UI can offer a retry.
       if (unloadable && deps.markUnloadable) await attempt('mark-unloadable', () => deps.markUnloadable!(groupId));
       // The overlay row is the retry key: it goes only when everything before it went.

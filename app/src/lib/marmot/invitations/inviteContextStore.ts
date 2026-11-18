@@ -20,9 +20,9 @@
  *     current (after the pending view's first load); the arrival path (`add`) therefore only ever uses the
  *     positive evidence of `getPending()` and never deletes a matched context because it is absent.
  *
- * A context that was discarded (accept / decline / invitation left) leaves a TOMBSTONE of its rumor id (at most
- * `TOMBSTONE_CAP` (256), each for `CONTEXT_TTL_MS`): a redelivery of that rumor is `duplicate`, so a deleted context
- * does not come back. Tombstones are in memory only.
+ * Replaced, discarded, expired and evicted contexts leave ID-only tombstones (at most `TOMBSTONE_CAP` (256), each for
+ * `CONTEXT_TTL_MS` after removal). These are saved alongside the records so redelivery cannot restore a retired
+ * name within that window, even after a restart.
  *
  * Persistence is a whole-snapshot port (`load` / `save`; the IndexedDB adapter is `lib/marmot/inviteContextIdbPort.ts`, kept out of this pure module), written after every change and serialised, so a reload
  * restores exactly what was held (insertion order is the persisted `seq`, independent of the storage's key order).
@@ -35,6 +35,8 @@ export const HELD_PER_SENDER_CAP = 8;
 export const HELD_TOTAL_CAP = 64;
 export const CONTEXT_TTL_MS = 7 * 86_400_000;
 export const TOMBSTONE_CAP = 256;
+const SAVE_RETRY_INITIAL_MS = 1_000;
+const SAVE_RETRY_MAX_MS = 60_000;
 
 export interface InviteContextRecord {
   /** The rumor id: redelivery dedupe. */
@@ -60,13 +62,23 @@ export interface InvitationRef {
 }
 
 export interface InviteContextStorePort {
-  /** The persisted snapshot, or `undefined` when none. */
-  load: () => Promise<readonly InviteContextRecord[] | undefined>;
-  /** Replaces the persisted snapshot. */
-  save: (records: readonly InviteContextRecord[]) => Promise<void>;
+  /** Legacy snapshots contain only the records array. */
+  load: () => Promise<readonly InviteContextRecord[] | InviteContextDiskSnapshot | undefined>;
+  /** Replaces both parts of the snapshot atomically. */
+  save: (records: readonly InviteContextRecord[], tombstones?: readonly InviteContextTombstone[]) => Promise<void>;
 }
 
-export interface InviteContextStoreDeps {
+interface InviteContextDiskSnapshot {
+  records: readonly InviteContextRecord[];
+  tombstones: readonly InviteContextTombstone[];
+}
+
+interface InviteContextTombstone {
+  rumorId: string;
+  removedAt: number;
+}
+
+interface InviteContextStoreDeps {
   port: InviteContextStorePort;
   /** Clock, ms. */
   now: () => number;
@@ -77,17 +89,20 @@ export interface InviteContextStoreDeps {
    * (`isTrustedSponsor`). Ranks held contexts at eviction (strangers first). Default: nobody is trusted.
    */
   isTrustedSponsor?: (sender: string) => boolean;
+  /** Schedule a one-shot expiry callback outside the inbox frame and return its cancellation function. */
+  scheduleExpiry?: (delayMs: number, expire: () => Promise<void>) => () => void;
   /** A failed persist (default `console.error`). */
   onError?: (error: unknown) => void;
 }
 
-export type AddResult = 'stored' | 'replaced' | 'duplicate' | 'dropped';
+type AddResult = 'stored' | 'replaced' | 'duplicate' | 'dropped';
+type PersistenceMode = 'soft' | 'timer' | 'inbox';
 
 export interface InviteContextStore {
   /** Loads the persisted snapshot (idempotent once it succeeded; a failed load is retried by the next call). */
   load: () => Promise<void>;
-  /** Stores a validated context. `dropped` = not retained (sender not a sponsor of a pending invitation of the group, or evicted at once). */
-  add: (input: { rumorId: string; sender: string; groupId: string; name: string }) => Promise<AddResult>;
+  /** Inbox delivery requires persistence before acknowledgment, including on retries of dirty duplicates. */
+  add: (input: { rumorId: string; sender: string; groupId: string; name: string }, options?: { requirePersistence: boolean }) => Promise<AddResult>;
   /** Full rule set against a CURRENT pending list (expiry, sponsor mismatch, invitation left). */
   reconcile: (pending: readonly InvitationRef[]) => Promise<void>;
   /** Deletes every context of the invitation's group (accept / decline). */
@@ -96,6 +111,8 @@ export interface InviteContextStore {
   snapshot: () => InviteContextRecord[];
   /** Fires after every change of `snapshot()`. */
   subscribe: (cb: () => void) => () => void;
+  /** Cancels automatic expiry for a session that is being disposed. */
+  stopExpiry: () => void;
 }
 
 function requireFn(value: unknown, name: string): void {
@@ -126,12 +143,18 @@ export function createInviteContextStore(deps: InviteContextStoreDeps): InviteCo
   /** True once a load succeeded; until then nothing is persisted (never overwrite stored data with a blank snapshot). */
   let loadOk = false;
   let loading: Promise<void> | undefined;
-  /** rumor id -> time the context was discarded (insertion order = age). */
+  /** Rumor id to removal time (insertion order = age). */
   const tombstones = new Map<string, number>();
+  let dirty = false;
+  let retryAt: number | undefined;
+  let retryDelay = SAVE_RETRY_INITIAL_MS;
   let chain: Promise<unknown> = Promise.resolve();
   const listeners = new Set<() => void>();
+  let cancelExpiry: (() => void) | undefined;
+  let expiryStopped = false;
 
-  const live = (r: InviteContextRecord) => now() - r.receivedAt <= CONTEXT_TTL_MS;
+  const withinTtl = (at: number) => now() - at <= CONTEXT_TTL_MS;
+  const live = (r: InviteContextRecord) => withinTtl(r.receivedAt);
 
   const notify = () => {
     for (const l of [...listeners]) {
@@ -146,14 +169,14 @@ export function createInviteContextStore(deps: InviteContextStoreDeps): InviteCo
   /** Applies the retention rules to `records` in place. `full` also deletes matched contexts whose invitation is absent. */
   function enforce(pending: readonly InvitationRef[], full: boolean) {
     const kept: InviteContextRecord[] = [];
+    const retired: string[] = [];
     for (const r of records) {
-      if (!live(r)) continue;
       const forGroup = pending.filter((inv) => inv.groupId === r.groupId);
       if (forGroup.length > 0) {
-        if (!forGroup.some((inv) => isSponsor(inv, r.sender))) continue; // sponsor mismatch
-        kept.push({ ...r, matched: true });
+        if (forGroup.some((inv) => isSponsor(inv, r.sender))) kept.push({ ...r, matched: true });
+        else retired.push(r.rumorId);
       } else if (r.matched && full) {
-        continue; // its invitation left pending()
+        retired.push(r.rumorId);
       } else {
         kept.push(r);
       }
@@ -174,83 +197,150 @@ export function createInviteContextStore(deps: InviteContextStoreDeps): InviteCo
     const remaining = held.filter((r) => !evict.has(r));
     const evictionOrder = [...remaining.filter((r) => !trustOf(r.sender)), ...remaining.filter((r) => trustOf(r.sender))];
     for (const r of evictionOrder.slice(0, Math.max(0, remaining.length - HELD_TOTAL_CAP))) evict.add(r);
+    for (const r of evict) retired.push(r.rumorId);
+    tombstone(retired);
     records = kept.filter((r) => !evict.has(r)).sort((a, b) => a.seq - b.seq);
   }
 
   const same = (a: readonly InviteContextRecord[], b: readonly InviteContextRecord[]) =>
     a.length === b.length && a.every((r, i) => r === b[i] || (r.rumorId === b[i].rumorId && r.matched === b[i].matched && r.seq === b[i].seq));
 
-  /** One load attempt. `true` = the persisted snapshot (or its absence) was read; `false` = the port failed. */
-  async function loadOnce(): Promise<boolean> {
-    let stored: readonly InviteContextRecord[] | undefined;
+  async function loadOnce(): Promise<void> {
+    let stored: Awaited<ReturnType<InviteContextStorePort['load']>>;
     try {
       stored = await port.load();
     } catch (e) {
       onError(e);
-      return false;
+      throw e;
     }
-    const valid = (stored ?? []).filter(
+    const disk = stored && 'records' in stored ? stored : { records: stored ?? [], tombstones: [] };
+    const retired = disk.tombstones.filter((r) => r && typeof r.rumorId === 'string' && Number.isFinite(r.removedAt));
+    const inMemoryTombstones = tombstones.size > 0;
+    const combined = [...retired.map(({ rumorId, removedAt }) => [rumorId, removedAt] as const), ...tombstones]
+      .sort((a, b) => a[1] - b[1]);
+    tombstones.clear();
+    for (const [id, at] of combined) {
+      if (!withinTtl(at)) continue;
+      tombstones.delete(id);
+      tombstones.set(id, at);
+    }
+    pruneTombstones();
+
+    const valid = disk.records.filter(
       (r) => r && typeof r.rumorId === 'string' && typeof r.groupId === 'string' && typeof r.sender === 'string' && typeof r.name === 'string' && Number.isFinite(r.receivedAt) && Number.isFinite(r.seq),
     );
     const fromStorage = valid.map((r) => ({ ...r, name: sanitizeContextName(r.name), matched: r.matched === true })).sort((a, b) => a.seq - b.seq);
-    // Contexts accepted in memory while the load was failing are kept, after the stored ones (newest), under fresh seqs.
-    const inMemory = records.filter((m) => !fromStorage.some((r) => r.rumorId === m.rumorId));
+    // Keep changes made during a load failure, while honoring IDs already retired on disk.
+    const inMemory = records.filter((m) => !tombstones.has(m.rumorId) && !fromStorage.some((r) => r.rumorId === m.rumorId));
     nextSeq = fromStorage.reduce((m, r) => Math.max(m, r.seq), 0) + 1;
-    records = [...fromStorage, ...inMemory.map((r) => ({ ...r, seq: nextSeq++ }))];
-    loadOk = true;
+    const candidates = [...fromStorage, ...inMemory.map((r) => ({ ...r, seq: nextSeq++ }))];
+    const merged = retireExpired(candidates.filter((r) => !tombstones.has(r.rumorId)));
+    const byKey = new Map<string, InviteContextRecord>();
+    for (const r of merged) {
+      if (tombstones.has(r.rumorId)) continue;
+      const key = JSON.stringify([r.groupId, r.sender]);
+      const previous = byKey.get(key);
+      if (previous && previous.rumorId !== r.rumorId) tombstone([previous.rumorId]);
+      byKey.set(key, r);
+    }
     const before = records;
-    enforce([], false); // expiry and caps only (no pending evidence yet)
-    if (!same(before, records) || inMemory.length > 0) void persist();
-    if (records.length > 0) notify();
-    return true;
+    records = [...byKey.values()];
+    loadOk = true;
+    enforce([], false); // caps only (no pending evidence yet)
+    await persist(valid.length !== disk.records.length || !same(valid, records) || disk.tombstones.length !== tombstones.size || inMemoryTombstones);
+    if (!same(before, records)) notify();
+    armExpiry();
   }
 
   const ensureLoaded = (): Promise<void> => {
+    if (loading) return loading;
     if (loadOk) return Promise.resolve();
-    if (!loading) {
-      const attempt: Promise<void> = loadOnce().then((ok) => {
-        if (!ok && loading === attempt) loading = undefined; // the next call retries
-      });
-      loading = attempt;
-    }
+    loading = loadOnce().finally(() => {
+      loading = undefined;
+    });
     return loading;
   };
 
-  async function persist() {
+  async function persist(changed: boolean, mode: PersistenceMode = 'soft') {
     if (!loadOk) return; // never overwrite the stored snapshot with data that was not merged with it
+    dirty ||= changed;
+    if (!dirty || (mode !== 'inbox' && retryAt !== undefined && now() < retryAt && (mode === 'timer' || !changed))) return;
     try {
-      await port.save(records.map((r) => ({ ...r })));
+      await port.save(records.map((r) => ({ ...r })), [...tombstones].map(([rumorId, removedAt]) => ({ rumorId, removedAt })));
+      dirty = false;
+      retryAt = undefined;
+      retryDelay = SAVE_RETRY_INITIAL_MS;
     } catch (e) {
+      retryAt = now() + retryDelay;
+      retryDelay = Math.min(retryDelay * 2, SAVE_RETRY_MAX_MS);
+      if (mode === 'inbox') throw e;
       onError(e);
     }
   }
 
-  const tombstone = (rumorIds: Iterable<string>) => {
+  function pruneTombstones() {
+    const before = tombstones.size;
+    for (const [id, at] of tombstones) if (!withinTtl(at)) tombstones.delete(id);
+    while (tombstones.size > TOMBSTONE_CAP) tombstones.delete(tombstones.keys().next().value as string);
+    return tombstones.size !== before;
+  }
+
+  const tombstone = (rumorIds: readonly string[]) => {
+    if (rumorIds.length === 0) return;
+    dirty = true;
     const t = now();
     for (const id of rumorIds) {
       tombstones.delete(id);
       tombstones.set(id, t);
     }
-    while (tombstones.size > TOMBSTONE_CAP) tombstones.delete(tombstones.keys().next().value as string);
-  };
-  const tombstoned = (rumorId: string): boolean => {
-    const at = tombstones.get(rumorId);
-    if (at === undefined) return false;
-    if (now() - at > CONTEXT_TTL_MS) {
-      tombstones.delete(rumorId);
-      return false;
-    }
-    return true;
+    pruneTombstones();
   };
 
-  /** Serialised mutation: waits for the load, runs `fn`, persists and notifies when `fn` changed the set. */
-  function mutate<T>(fn: () => { changed: boolean; value: T }): Promise<T> {
+  function retireExpired(candidates: readonly InviteContextRecord[]): InviteContextRecord[] {
+    const cutoff = now() - CONTEXT_TTL_MS;
+    const expiredIds: string[] = [];
+    const remaining = candidates.filter((r) => {
+      if (r.receivedAt >= cutoff) return true;
+      expiredIds.push(r.rumorId);
+      return false;
+    });
+    if (expiredIds.length > 0) tombstone(expiredIds);
+    return remaining;
+  }
+
+  function armExpiry() {
+    cancelExpiry?.();
+    cancelExpiry = undefined;
+    if (expiryStopped || !deps.scheduleExpiry) return;
+    let oldest = Infinity;
+    for (const r of records) oldest = Math.min(oldest, r.receivedAt);
+    for (const at of tombstones.values()) oldest = Math.min(oldest, at);
+    const deadline = Math.min(oldest + CONTEXT_TTL_MS + 1, retryAt ?? Infinity);
+    if (deadline === Infinity) return;
+    cancelExpiry = deps.scheduleExpiry(Math.max(0, deadline - now()), async () => {
+      await mutate(() => undefined, 'timer', () => !expiryStopped);
+    });
+  }
+
+  /** Expiry and inbox/disposition mutations share the same persistence order. */
+  function mutate<T>(fn: () => T, mode?: 'soft' | 'inbox'): Promise<T>;
+  function mutate(fn: () => void, mode: 'timer', active: () => boolean): Promise<void>;
+  function mutate<T>(fn: () => T, mode: PersistenceMode = 'soft', active?: () => boolean): Promise<T | undefined> {
     const next = chain.then(async () => {
-      await ensureLoaded();
-      const { changed, value } = fn();
-      if (changed) {
-        await persist();
-        notify();
+      if (active && !active()) return;
+      const loaded = ensureLoaded();
+      await (mode === 'inbox' ? loaded : loaded.catch(() => undefined));
+      if (active && !active()) return;
+      const before = records;
+      const expiredIds = pruneTombstones();
+      records = retireExpired(records);
+      const value = fn();
+      const changed = !same(before, records);
+      try {
+        await persist(changed || expiredIds, mode);
+      } finally {
+        if (changed) notify();
+        armExpiry();
       }
       return value;
     });
@@ -259,42 +349,35 @@ export function createInviteContextStore(deps: InviteContextStoreDeps): InviteCo
   }
 
   return {
-    load: () => ensureLoaded(),
-    add: (input) =>
+    load: () => ensureLoaded().catch(() => undefined),
+    add: (input, options) =>
       mutate<AddResult>(() => {
-        if (tombstoned(input.rumorId)) return { changed: false, value: 'duplicate' }; // discarded earlier: a redelivery stays gone
+        if (tombstones.has(input.rumorId) || records.some((r) => r.rumorId === input.rumorId)) return 'duplicate';
         const name = sanitizeContextName(input.name);
-        if (name.length === 0) return { changed: false, value: 'dropped' };
-        const before = records;
+        if (name.length === 0) return 'dropped';
         const existing = records.find((r) => r.groupId === input.groupId && r.sender === input.sender);
-        if (existing && existing.rumorId === input.rumorId) return { changed: false, value: 'duplicate' };
-        if (records.some((r) => r.rumorId === input.rumorId)) return { changed: false, value: 'duplicate' };
-        const record: InviteContextRecord = { rumorId: input.rumorId, groupId: input.groupId, sender: input.sender, name, receivedAt: now(), seq: nextSeq++, matched: false };
+        const record: InviteContextRecord = { rumorId: input.rumorId, groupId: input.groupId, sender: input.sender, name, receivedAt: now(), seq: nextSeq++, matched: existing?.matched ?? false };
         records = [...records.filter((r) => r !== existing), record];
         enforce(getPending(), false);
+        if (existing) tombstone([existing.rumorId]);
         const retained = records.some((r) => r.rumorId === input.rumorId);
-        const value: AddResult = !retained ? 'dropped' : existing ? 'replaced' : 'stored';
-        return { changed: !same(before, records), value };
-      }),
-    reconcile: (pending) =>
-      mutate<void>(() => {
-        const before = records;
-        enforce(pending, true);
-        // A matched context that left with its invitation is "discarded" too: its redelivery must stay gone.
-        tombstone(before.filter((r) => r.matched && !records.some((k) => k.rumorId === r.rumorId) && live(r)).map((r) => r.rumorId));
-        return { changed: !same(before, records), value: undefined };
-      }),
+        return !retained ? 'dropped' : existing ? 'replaced' : 'stored';
+      }, options?.requirePersistence ? 'inbox' : 'soft'),
+    reconcile: (pending) => mutate(() => enforce(pending, true)),
     discard: (invitation) =>
       mutate<void>(() => {
-        const before = records;
         tombstone(records.filter((r) => r.groupId === invitation.groupId).map((r) => r.rumorId));
         records = records.filter((r) => r.groupId !== invitation.groupId);
-        return { changed: records.length !== before.length, value: undefined };
       }),
     snapshot: () => records.filter(live).map((r) => ({ ...r })),
     subscribe: (cb) => {
       listeners.add(cb);
       return () => void listeners.delete(cb);
+    },
+    stopExpiry: () => {
+      expiryStopped = true;
+      cancelExpiry?.();
+      cancelExpiry = undefined;
     },
   };
 }
@@ -304,7 +387,7 @@ export function createInviteContextStore(deps: InviteContextStoreDeps): InviteCo
 // ---------------------------------------------------------------------------
 
 /** The slice of `PendingInvitationView` the wiring uses. */
-export interface PendingListSource {
+interface PendingListSource {
   pending: () => readonly (InvitationRef & { id: string })[];
   onChange: (cb: () => void) => () => void;
 }
@@ -333,7 +416,7 @@ export function bindInviteContextToPendingView(
  * contexts of that invitation's group are discarded at once (the pending-list reconcile would also catch it; this
  * makes the deletion independent of refresh timing). A failed action deletes nothing.
  */
-export function withInviteContextCleanup<A extends { accept: (id: string) => Promise<unknown>; decline: (id: string) => Promise<void> }>(
+export function withInviteContextCleanup<A extends { accept: (id: string, verify?: () => boolean | Promise<boolean>) => Promise<unknown>; decline: (id: string) => Promise<void> }>(
   deps: { actions: A; view: Pick<PendingListSource, 'pending'>; store: Pick<InviteContextStore, 'discard'> },
 ): A {
   if (typeof deps?.actions?.accept !== 'function' || typeof deps.actions.decline !== 'function') throw new TypeError('withInviteContextCleanup: required dependency "actions" is missing');
@@ -343,9 +426,9 @@ export function withInviteContextCleanup<A extends { accept: (id: string) => Pro
   const groupOf = (id: string) => view.pending().find((i) => i.id === id)?.groupId;
   return {
     ...actions,
-    accept: async (id: string) => {
+    accept: async (id, verify) => {
       const groupId = groupOf(id);
-      const result = await actions.accept(id);
+      const result = await actions.accept(id, verify);
       if (groupId !== undefined) await store.discard({ groupId });
       return result;
     },

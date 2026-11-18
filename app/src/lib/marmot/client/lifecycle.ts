@@ -13,10 +13,11 @@ import type { MarmotClient } from '@941design/marmot';
 import type { WritableStores } from '@941design/marmot/storage';
 import type { JobQueue } from './fifo';
 
-export interface TeardownParts {
+interface TeardownParts {
   client: Pick<MarmotClient, 'dispose'>;
   stores: Pick<WritableStores, 'close'>;
   closePool: () => void;
+  beforeStoresClose?: () => void | Promise<void>;
   queue: Pick<JobQueue, 'dispose'>;
   /** The app history sink; structural port (client/ does not import history/). */
   history: { dispose: () => void | Promise<void> };
@@ -46,6 +47,7 @@ export function createTeardown(parts: TeardownParts): () => Promise<void> {
       }
       await attempt(() => parts.history.dispose());
       await attempt(() => parts.client.dispose());
+      await attempt(() => parts.beforeStoresClose?.());
       await attempt(() => parts.stores.close());
       await attempt(() => parts.closePool());
       if (failed) throw firstError;

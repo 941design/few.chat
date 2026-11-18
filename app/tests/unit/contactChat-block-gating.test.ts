@@ -137,12 +137,10 @@ describe('ContactChat.tsx — block-set wiring (source assertions)', () => {
   });
 
   it('the main init subscription effect dependency array does NOT include blockedPeersRevision or blockedPeersRef (no resubscribe on block change)', () => {
-    // The init effect's own closing dependency array line (unchanged from pre-S4)
-    // — asserting this exact literal proves blockedPeersRevision/blockedPeersRef
-    // were NOT appended to it.
-    expect(SOURCE).toMatch(
-      /\},\s*\[applyInboundDeleteEditSignal,\s*dmThread,\s*ingestEvent,\s*peerPubkeyHex,\s*privateKeyHex,\s*pubkeyHex,\s*resolveFreshOriginal,\s*threadId,\s*upsertMessages\]\);/,
-    );
+    const dependencies = SOURCE.match(/\},\s*\[applyInboundDeleteEditSignal,([^\]]*)\]\);/)?.[1];
+    expect(dependencies).toContain('getDmGroups');
+    expect(dependencies).toContain('whenDmGroupsReady');
+    expect(dependencies).not.toMatch(/blockedPeersRevision|blockedPeersRef/);
   });
 });
 

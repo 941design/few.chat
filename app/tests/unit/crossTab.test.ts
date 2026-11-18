@@ -67,22 +67,23 @@ beforeEach(() => installFake());
 afterEach(() => setCrossTabChannelFactory());
 
 describe('parseStoreChanged', () => {
-  it.each(CROSS_TAB_STORES.map((s) => [s]))('accepts store %s', (store) => {
-    expect(parseStoreChanged({ type: 'store-changed', store })).toEqual({ type: 'store-changed', store });
+  it.each(CROSS_TAB_STORES.map((s) => [s, s === 'chat' ? 'dm:abc' : s === 'reactions' ? 'few:reactions:dm:abc' : undefined]))('accepts store %s', (store, id) => {
+    const message = id ? { type: 'store-changed', store, id } : { type: 'store-changed', store };
+    expect(parseStoreChanged(message)).toEqual(message);
   });
 
   it('keeps a string id', () => {
-    expect(parseStoreChanged({ type: 'store-changed', store: 'chat', id: 'g1' })).toEqual({
+    expect(parseStoreChanged({ type: 'store-changed', store: 'chat', id: 'dm:g1' })).toEqual({
       type: 'store-changed',
       store: 'chat',
-      id: 'g1',
+      id: 'dm:g1',
     });
   });
 
   it('drops a non-string id but keeps the message', () => {
-    expect(parseStoreChanged({ type: 'store-changed', store: 'chat', id: 7 })).toEqual({
+    expect(parseStoreChanged({ type: 'store-changed', store: 'blocked', id: 7 })).toEqual({
       type: 'store-changed',
-      store: 'chat',
+      store: 'blocked',
     });
   });
 
@@ -110,9 +111,9 @@ describe('postStoreChanged', () => {
   });
 
   it('carries the id when given and omits the key otherwise', () => {
-    postStoreChanged('chat', 'g1');
-    postStoreChanged('groups');
-    expect(channels[0].posted[0]).toEqual({ type: 'store-changed', store: 'chat', id: 'g1' });
+    postStoreChanged('chat', 'dm:g1');
+    postStoreChanged('blocked');
+    expect(channels[0].posted[0]).toEqual({ type: 'store-changed', store: 'chat', id: 'dm:g1' });
     expect(Object.keys(channels[0].posted[1] as object)).toEqual(['type', 'store']);
   });
 
@@ -142,7 +143,7 @@ describe('postStoreChanged', () => {
   it('is a silent no-op without a channel (SSR / Node shim)', () => {
     setCrossTabChannelFactory(() => null);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(() => postStoreChanged('groups', 'g')).not.toThrow();
+    expect(() => postStoreChanged('blocked', 'g')).not.toThrow();
     expect(() => subscribeStoreChanged(() => {})()).not.toThrow();
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -151,7 +152,7 @@ describe('postStoreChanged', () => {
   it('default factory is a no-op in Node (no window)', () => {
     setCrossTabChannelFactory();
     expect(typeof window).toBe('undefined');
-    expect(() => postStoreChanged('groups')).not.toThrow();
+    expect(() => postStoreChanged('blocked')).not.toThrow();
     const unsubscribe = subscribeStoreChanged(() => {});
     expect(() => unsubscribe()).not.toThrow();
   });
@@ -224,8 +225,8 @@ describe('subscribeStoreChanged', () => {
     const b = vi.fn();
     const ua = subscribeStoreChanged(a);
     const ub = subscribeStoreChanged(b);
-    channels[0].deliver({ type: 'store-changed', store: 'groups', id: 'g' });
-    expect(a).toHaveBeenCalledWith({ type: 'store-changed', store: 'groups', id: 'g' });
+    channels[0].deliver({ type: 'store-changed', store: 'chat', id: 'dm:g' });
+    expect(a).toHaveBeenCalledWith({ type: 'store-changed', store: 'chat', id: 'dm:g' });
     expect(b).toHaveBeenCalledTimes(1);
     ua();
     ub();
@@ -248,7 +249,7 @@ describe('subscribeStoreChanged', () => {
     const good = vi.fn();
     const u1 = subscribeStoreChanged(bad);
     const u2 = subscribeStoreChanged(good);
-    expect(() => channels[0].deliver({ type: 'store-changed', store: 'chat' })).not.toThrow();
+    expect(() => channels[0].deliver({ type: 'store-changed', store: 'chat', id: 'dm:g' })).not.toThrow();
     expect(good).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalled();
     u1();
@@ -264,7 +265,7 @@ describe('subscribeStoreChanged', () => {
     const ch = channels[0];
     ua();
     expect(ch.closed).toBe(false);
-    ch.deliver({ type: 'store-changed', store: 'chat' });
+    ch.deliver({ type: 'store-changed', store: 'chat', id: 'dm:g' });
     expect(a).not.toHaveBeenCalled();
     expect(b).toHaveBeenCalledTimes(1);
     ub();
@@ -278,9 +279,9 @@ describe('subscribeStoreChanged', () => {
     const u = subscribeStoreChanged(l);
     expect(channels).toHaveLength(2);
     expect(channels[1].closed).toBe(false);
-    channels[1].deliver({ type: 'store-changed', store: 'polls' });
+    channels[1].deliver({ type: 'store-changed', store: 'blocked' });
     expect(l).toHaveBeenCalledTimes(1);
-    postStoreChanged('polls');
+    postStoreChanged('blocked');
     expect(channels[1].posted).toHaveLength(1);
     u();
   });
@@ -319,10 +320,6 @@ describe('applyStoreChanged', () => {
       bumpBlockedPeers: vi.fn(),
       bumpKnownPeers: vi.fn(),
       bumpContacts: vi.fn(),
-      reloadGroups: vi.fn(),
-      bumpGroupData: vi.fn(),
-      bumpChat: vi.fn(),
-      bumpPolls: vi.fn(),
       refreshReactions: vi.fn(),
     };
   }
@@ -331,9 +328,7 @@ describe('applyStoreChanged', () => {
     blocked: ['bumpBlockedPeers'],
     known: ['bumpKnownPeers'],
     contacts: ['bumpContacts'],
-    groups: ['reloadGroups', 'bumpGroupData'],
-    chat: ['bumpChat'],
-    polls: ['bumpPolls'],
+    chat: [],
     reactions: ['refreshReactions'],
   };
 
@@ -349,8 +344,8 @@ describe('applyStoreChanged', () => {
 
   it('reactions refreshes exactly the announced thread key', () => {
     const a = actions();
-    applyStoreChanged({ type: 'store-changed', store: 'reactions', id: 'few:reactions:group:g1' }, a);
-    expect(a.refreshReactions).toHaveBeenCalledWith('few:reactions:group:g1');
+    applyStoreChanged({ type: 'store-changed', store: 'reactions', id: 'few:reactions:dm:g1' }, a);
+    expect(a.refreshReactions).toHaveBeenCalledWith('few:reactions:dm:g1');
   });
 
   it('an unscoped reactions notice refreshes nothing (no blanket cache drop)', () => {
@@ -359,13 +354,6 @@ describe('applyStoreChanged', () => {
     for (const fn of Object.values(a)) expect(fn).not.toHaveBeenCalled();
   });
 });
-
-// MarmotContext's receiver wiring cannot be rendered here (no jsdom), so its
-// action → state-setter table is pinned by a source scan (skipped under
-// Stryker, whose instrumented copy breaks text matches — contacts.test.ts
-// precedent).
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const itSourceScan = REPO_ROOT.includes('.stryker-tmp') ? it.skip : it;
 
 describe('isLatestReload', () => {
   it.each([
@@ -378,44 +366,9 @@ describe('isLatestReload', () => {
   });
 });
 
-describe('MarmotContext receiver wiring', () => {
-  itSourceScan('reloadGroups numbers each reload and drops a superseded result before setGroups', () => {
-    const src = fs.readFileSync(path.join(REPO_ROOT, 'src/context/MarmotContext.tsx'), 'utf-8');
-    // reloadGroups wraps loadAndSetGroups (which also returns the list).
-    expect(src).toMatch(/const reloadGroups = useCallback\(async \(\): Promise<void> => \{\s*await loadAndSetGroups\(\);/);
-    const start = src.indexOf('const loadAndSetGroups = useCallback(');
-    const body = src.slice(start, src.indexOf('}, []);', start));
-    const seq = body.indexOf('++reloadGroupsSeqRef.current');
-    const load = body.indexOf('await loadAllGroups()');
-    const guard = body.indexOf('if (!isLatestReload(seq, reloadGroupsSeqRef.current)) return loaded;');
-    const apply = body.indexOf('setGroups(loaded)');
-    expect(seq).toBeGreaterThan(-1);
-    expect(load).toBeGreaterThan(seq);
-    expect(guard).toBeGreaterThan(load);
-    expect(apply).toBeGreaterThan(guard);
-  });
 
-  itSourceScan('subscribes once and maps each action to its existing counter / reload', () => {
-    const src = fs.readFileSync(path.join(REPO_ROOT, 'src/context/MarmotContext.tsx'), 'utf-8');
-    expect(src.match(/subscribeStoreChanged\(/g)).toHaveLength(1);
-    // The effect returns the unsubscribe (arrow body is the subscribe call).
-    expect(src).toMatch(/useEffect\(\s*\(\)\s*=>\s*subscribeStoreChanged\(/);
-    const start = src.indexOf('applyStoreChanged(message, {');
-    expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, src.indexOf('[reloadGroups]', start));
-    for (const [action, target] of [
-      ['bumpBlockedPeers', 'setBlockedPeersRevision'],
-      ['bumpKnownPeers', 'setKnownPeersRevision'],
-      ['bumpContacts', 'setContactsRevision'],
-      ['reloadGroups', 'reloadGroups()'],
-      ['bumpGroupData', 'setGroupDataVersion'],
-      ['bumpChat', 'setChatVersion'],
-      ['bumpPolls', 'setPollVersion'],
-      ['refreshReactions', 'refreshReactionsFromStorage(key)'],
-    ]) {
-      const at = body.indexOf(`${action}: `);
-      expect(at, action).toBeGreaterThan(-1);
-      expect(body.slice(at).split('\n').slice(0, 2).join('\n'), action).toContain(target);
-    }
+describe('D4 group isolation', () => {
+  it.each([{ type: 'store-changed', store: 'groups' }, { type: 'store-changed', store: 'polls' }, { type: 'store-changed', store: 'chat', id: 'g1' }, { type: 'store-changed', store: 'reactions', id: 'few:reactions:group:g1' }])('rejects group notice %o', message => {
+    expect(parseStoreChanged(message)).toBeNull();
   });
 });

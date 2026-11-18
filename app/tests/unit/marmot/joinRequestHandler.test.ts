@@ -6,35 +6,34 @@ import type { PendingJoinRequest } from '@/src/lib/marmot/joinRequestStorage';
 const inviteLinkStore = new Map<string, InviteLink>();
 const joinRequestStore = new Map<string, PendingJoinRequest>();
 
-// isExpired is imported for real (not mocked) so these tests exercise the
-// production predicate (S1's fallback-covered `expiresAt ?? createdAt +
-// DAY_MS` logic) rather than a hand-rolled stand-in — see
-// feedback_test_mocking_blind_spots.md on shadow-init tests hiding real bugs.
-vi.mock('@/src/lib/marmot/inviteLinkStorage', async () => {
-  const actual = await vi.importActual<typeof import('@/src/lib/marmot/inviteLinkStorage')>(
-    '@/src/lib/marmot/inviteLinkStorage'
-  );
-  return {
-    ...actual,
-    getInviteLink: vi.fn(async (nonce: string) => inviteLinkStore.get(nonce) ?? undefined),
-  };
-});
-
-vi.mock('@/src/lib/marmot/joinRequestStorage', () => ({
-  savePendingJoinRequest: vi.fn(async (req: PendingJoinRequest) => {
-    // Dedup check (same as real implementation)
-    const all = [...joinRequestStore.values()];
-    if (all.some((r) => r.pubkeyHex === req.pubkeyHex && r.groupId === req.groupId)) return;
-    joinRequestStore.set(req.eventId, req);
-  }),
-  loadPendingJoinRequests: vi.fn(async (groupId: string) => {
-    return [...joinRequestStore.values()].filter((r) => r.groupId === groupId);
-  }),
-}));
-
-const { handleJoinRequest, parseJoinRequestContent, JOIN_REQUEST_KIND } = await import(
+const { createJoinRequestInboxHandler, parseJoinRequestContent, JOIN_REQUEST_KIND } = await import(
   '@/src/lib/marmot/joinRequestHandler'
 );
+
+const requester = 'a1'.repeat(32);
+
+async function deliverJoinRequest(
+  rumor: { pubkey: string; content: string },
+  eventId: string,
+  memberPubkeys: (groupId: string) => string[],
+): Promise<PendingJoinRequest | null> {
+  let accepted: PendingJoinRequest | null = null;
+  const receive = createJoinRequestInboxHandler({
+    denyLayer: { isBlocked: () => false },
+    inviteLinks: { get: async (nonce) => inviteLinkStore.get(nonce) },
+    memberPubkeys,
+    requests: {
+      loadAll: async () => [...joinRequestStore.values()],
+      save: async (request) => { joinRequestStore.set(request.eventId, request); },
+      remove: async (id) => { joinRequestStore.delete(id); },
+    },
+    seen: { has: async () => false, add: async () => {} },
+    now: Date.now,
+    onReceived: (request) => { accepted = request; },
+  });
+  await receive({ ...rumor, id: eventId, kind: JOIN_REQUEST_KIND, created_at: 0, tags: [] }, {} as never);
+  return accepted;
+}
 
 // `expiresAt` defaults to one day past whatever `now` is active at call time
 // (real wall-clock for every pre-existing, non-expiry-focused test in this
@@ -59,7 +58,7 @@ function makeInviteLink(overrides: Partial<InviteLink> = {}): InviteLink {
 
 function makeRumor(overrides: Partial<{ pubkey: string; content: string }> = {}) {
   return {
-    pubkey: 'requester-pk',
+    pubkey: requester,
     content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group' }),
     ...overrides,
   };
@@ -186,16 +185,16 @@ describe('joinRequestHandler', () => {
     });
   });
 
-  describe('handleJoinRequest', () => {
+  describe('deliverJoinRequest', () => {
     const noMembers = () => [] as string[];
 
     it('persists a valid join request and returns it', async () => {
       inviteLinkStore.set('valid-nonce', makeInviteLink());
 
-      const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+      const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
 
       expect(result).not.toBeNull();
-      expect(result!.pubkeyHex).toBe('requester-pk');
+      expect(result!.pubkeyHex).toBe(requester);
       expect(result!.groupId).toBe('group-1');
       expect(result!.nonce).toBe('valid-nonce');
       expect(result!.eventId).toBe('evt-1');
@@ -203,8 +202,8 @@ describe('joinRequestHandler', () => {
     });
 
     it('discards when content is not a valid join request', async () => {
-      const result = await handleJoinRequest(
-        { pubkey: 'pk', content: 'not-json' },
+      const result = await deliverJoinRequest(
+        { pubkey: requester, content: 'not-json' },
         'evt-1',
         noMembers,
       );
@@ -213,14 +212,14 @@ describe('joinRequestHandler', () => {
 
     it('discards when nonce is not found in invite link storage', async () => {
       // Do not add nonce to store
-      const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+      const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
       expect(result).toBeNull();
     });
 
     it('discards when invite link is muted', async () => {
       inviteLinkStore.set('valid-nonce', makeInviteLink({ muted: true }));
 
-      const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+      const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
       expect(result).toBeNull();
     });
 
@@ -228,7 +227,7 @@ describe('joinRequestHandler', () => {
     // Fake timers control Date.now() (the handler's gate calls
     // isExpired(inviteLink, Date.now()) directly, per spec.md's Technical
     // Approach — Date.now() is not an injectable parameter of
-    // handleJoinRequest itself), keeping these tests wall-clock-independent
+    // deliverJoinRequest itself), keeping these tests wall-clock-independent
     // per architecture.md's "unit-testable without wall-clock" constraint.
 
     describe('expiry enforcement', () => {
@@ -249,7 +248,7 @@ describe('joinRequestHandler', () => {
           makeInviteLink({ muted: false, createdAt: NOW - 86_400_000 - 1, expiresAt: NOW - 1 }),
         );
 
-        const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+        const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
 
         expect(result).toBeNull();
         expect(joinRequestStore.has('evt-1')).toBe(false);
@@ -261,7 +260,7 @@ describe('joinRequestHandler', () => {
           makeInviteLink({ muted: false, createdAt: NOW - 1000, expiresAt: NOW + 1 }),
         );
 
-        const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+        const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
 
         expect(result).not.toBeNull();
         expect(joinRequestStore.has('evt-1')).toBe(true);
@@ -276,7 +275,7 @@ describe('joinRequestHandler', () => {
         delete (legacyLink as { expiresAt?: number }).expiresAt;
         inviteLinkStore.set('valid-nonce', legacyLink);
 
-        const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+        const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
 
         expect(result).toBeNull();
       });
@@ -287,7 +286,7 @@ describe('joinRequestHandler', () => {
           makeInviteLink({ muted: false, createdAt: NOW - 1000, expiresAt: NOW }),
         );
 
-        const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+        const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
 
         expect(result).toBeNull();
       });
@@ -296,9 +295,9 @@ describe('joinRequestHandler', () => {
     it('discards when requester is already a group member', async () => {
       inviteLinkStore.set('valid-nonce', makeInviteLink());
       const memberCheck = (groupId: string) =>
-        groupId === 'group-1' ? ['requester-pk', 'other-pk'] : [];
+        groupId === 'group-1' ? [requester, 'other-pk'] : [];
 
-      const result = await handleJoinRequest(makeRumor(), 'evt-1', memberCheck);
+      const result = await deliverJoinRequest(makeRumor(), 'evt-1', memberCheck);
       expect(result).toBeNull();
     });
 
@@ -306,11 +305,11 @@ describe('joinRequestHandler', () => {
       inviteLinkStore.set('valid-nonce', makeInviteLink());
 
       // First request succeeds
-      const first = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+      const first = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
       expect(first).not.toBeNull();
 
       // Second request from same pubkey for same group is discarded
-      const second = await handleJoinRequest(makeRumor(), 'evt-2', noMembers);
+      const second = await deliverJoinRequest(makeRumor(), 'evt-2', noMembers);
       expect(second).toBeNull();
     });
 
@@ -325,8 +324,8 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'nonce-g2', name: 'G2' }),
       });
 
-      const first = await handleJoinRequest(rumor1, 'evt-1', noMembers);
-      const second = await handleJoinRequest(rumor2, 'evt-2', noMembers);
+      const first = await deliverJoinRequest(rumor1, 'evt-1', noMembers);
+      const second = await deliverJoinRequest(rumor2, 'evt-2', noMembers);
 
       expect(first).not.toBeNull();
       expect(second).not.toBeNull();
@@ -335,7 +334,7 @@ describe('joinRequestHandler', () => {
     it('resolves groupId from the invite link record, not from the rumor', async () => {
       inviteLinkStore.set('valid-nonce', makeInviteLink({ groupId: 'actual-group-id' }));
 
-      const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+      const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
       expect(result!.groupId).toBe('actual-group-id');
     });
 
@@ -347,14 +346,14 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group', requesterName: 'Alice' }),
       });
 
-      const result = await handleJoinRequest(rumor, 'evt-1', noMembers);
+      const result = await deliverJoinRequest(rumor, 'evt-1', noMembers);
       expect(result!.nickname).toBe('Alice');
     });
 
     it('leaves PendingJoinRequest.nickname undefined when requesterName is absent (older client)', async () => {
       inviteLinkStore.set('valid-nonce', makeInviteLink());
 
-      const result = await handleJoinRequest(makeRumor(), 'evt-1', noMembers);
+      const result = await deliverJoinRequest(makeRumor(), 'evt-1', noMembers);
       expect(result!.nickname).toBeUndefined();
     });
 
@@ -364,12 +363,12 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group', requesterName: '   ' }),
       });
 
-      const result = await handleJoinRequest(rumor, 'evt-1', noMembers);
+      const result = await deliverJoinRequest(rumor, 'evt-1', noMembers);
       expect(result!.nickname).toBeUndefined();
     });
 
     // ── S2/SEC: receive-side 32-UTF-8-byte cap (AC-SEC-1, AC-NAME-3) ────────
-    // The cap must be enforced by handleJoinRequest itself, independent of any
+    // The cap must be enforced by deliverJoinRequest itself, independent of any
     // send-side cap — these fixtures simulate a hostile sender that bypassed
     // saveProfile's cap entirely by hand-crafting oversized rumor content.
 
@@ -380,7 +379,7 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group', requesterName: hostileName }),
       });
 
-      const result = await handleJoinRequest(rumor, 'evt-1', noMembers);
+      const result = await deliverJoinRequest(rumor, 'evt-1', noMembers);
       expect(result!.nickname).toBe('A'.repeat(32));
       expect(new TextEncoder().encode(result!.nickname!).length).toBe(32);
     });
@@ -392,7 +391,7 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group', requesterName: emojiName }),
       });
 
-      const result = await handleJoinRequest(rumor, 'evt-1', noMembers);
+      const result = await deliverJoinRequest(rumor, 'evt-1', noMembers);
       // 32 bytes / 4 bytes-per-emoji = exactly 8 whole emoji, never a split surrogate pair.
       expect(result!.nickname).toBe('\u{1F600}'.repeat(8));
       expect(new TextEncoder().encode(result!.nickname!).length).toBe(32);
@@ -404,13 +403,13 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group', requesterName: 'Bob' }),
       });
 
-      const result = await handleJoinRequest(rumor, 'evt-1', noMembers);
+      const result = await deliverJoinRequest(rumor, 'evt-1', noMembers);
       expect(result!.nickname).toBe('Bob');
     });
 
     // ── SEC: nickname stored as literal text, never markup (AC-SEC-2) ───────
     // No jsdom/render capability in this repo (see exploration.json); the
-    // guarantee this test can prove is that handleJoinRequest stores the
+    // guarantee this test can prove is that deliverJoinRequest stores the
     // string verbatim (no sanitization/stripping), which combined with the
     // member list's inline join-request rows (MemberList.tsx) never using
     // dangerouslySetInnerHTML (verified by source inspection, not rewritten) is
@@ -423,25 +422,31 @@ describe('joinRequestHandler', () => {
         content: JSON.stringify({ type: 'join_request', nonce: 'valid-nonce', name: 'Test Group', requesterName: hostileMarkup }),
       });
 
-      const result = await handleJoinRequest(rumor, 'evt-1', noMembers);
+      const result = await deliverJoinRequest(rumor, 'evt-1', noMembers);
       expect(result!.nickname).toBe(hostileMarkup);
     });
 
     // ── Round-trip: sender's rumor content -> handler's PendingJoinRequest ──
 
-    it('round-trips a nickname from buildJoinRequestRumor through parseJoinRequestContent/handleJoinRequest', async () => {
-      const { buildJoinRequestRumor } = await import('@/src/lib/marmot/joinRequestSender');
+    it('round-trips a nickname from buildJoinRequestRumor through parseJoinRequestContent/deliverJoinRequest', async () => {
+      const { createJoinRequestSender } = await import('@/src/lib/marmot/joinRequestSender');
       inviteLinkStore.set('rt-nonce', makeInviteLink({ nonce: 'rt-nonce', groupId: 'rt-group' }));
 
-      const rumor = buildJoinRequestRumor({
-        requesterPubkeyHex: 'requester-pk',
-        adminPubkeyHex: 'admin-pk',
+      const params = {
+        requesterPubkeyHex: 'a1'.repeat(32),
+        adminPubkeyHex: 'b2'.repeat(32),
         nonce: 'rt-nonce',
         groupName: 'Test Group',
         requesterName: 'Carol',
-      });
+      };
+      const inbox = vi.fn(async (_input: { rumor: { content: string; pubkey: string } }) => ({ status: 'delivered' as const }));
+      await createJoinRequestSender({
+        inbox: { sendInboxRumor: inbox }, ownPubkey: params.requesterPubkeyHex,
+        now: Date.now, saveOutbound: async () => {},
+      }).send(params);
+      const rumor = inbox.mock.calls[0][0].rumor;
 
-      const result = await handleJoinRequest(
+      const result = await deliverJoinRequest(
         { pubkey: rumor.pubkey, content: rumor.content },
         'evt-rt',
         noMembers,
@@ -450,17 +455,23 @@ describe('joinRequestHandler', () => {
     });
 
     it('round-trips a request with no requesterName (older client) to an undefined nickname, never rejecting the rumor', async () => {
-      const { buildJoinRequestRumor } = await import('@/src/lib/marmot/joinRequestSender');
+      const { createJoinRequestSender } = await import('@/src/lib/marmot/joinRequestSender');
       inviteLinkStore.set('rt-nonce-2', makeInviteLink({ nonce: 'rt-nonce-2', groupId: 'rt-group-2' }));
 
-      const rumor = buildJoinRequestRumor({
-        requesterPubkeyHex: 'requester-pk',
-        adminPubkeyHex: 'admin-pk',
+      const params = {
+        requesterPubkeyHex: 'a1'.repeat(32),
+        adminPubkeyHex: 'b2'.repeat(32),
         nonce: 'rt-nonce-2',
         groupName: 'Test Group',
-      });
+      };
+      const inbox = vi.fn(async (_input: { rumor: { content: string; pubkey: string } }) => ({ status: 'delivered' as const }));
+      await createJoinRequestSender({
+        inbox: { sendInboxRumor: inbox }, ownPubkey: params.requesterPubkeyHex,
+        now: Date.now, saveOutbound: async () => {},
+      }).send(params);
+      const rumor = inbox.mock.calls[0][0].rumor;
 
-      const result = await handleJoinRequest(
+      const result = await deliverJoinRequest(
         { pubkey: rumor.pubkey, content: rumor.content },
         'evt-rt-2',
         noMembers,

@@ -15,11 +15,8 @@ import React, {
 import type { Poll, PollVote, PollOptionDef, PollResult } from '@/src/lib/marmot/pollPersistence';
 import {
   loadPolls,
-  savePoll,
   loadVotes,
   loadPendingVotes,
-  saveVoteIfNewer,
-  isNewerVote,
   allocateVoteSeq,
 } from '@/src/lib/marmot/pollPersistence';
 import { createVoteCaster } from '@/src/lib/marmot/pollCast';
@@ -34,17 +31,16 @@ import {
 import type { PollOpenPayload, PollVotePayload, PollClosePayload } from '@/src/lib/marmot/pollSync';
 import { useChatStore } from './ChatStoreContext';
 
-type MarmotGroupType = import('@internet-privacy/marmot-ts').MarmotGroup;
+import type { MarmotGroup as MarmotGroupType } from '@941design/marmot';
+import { useMarmot } from './MarmotContext';
 
 /**
  * Module-wide so casts on the same (group, poll) are serialised even across
- * provider remounts: the seq of a cast is derived from the stored own vote,
- * which the previous cast must have written first.
+ * provider remounts. A durable sequence reservation precedes each send.
  */
 const castPollVote = createVoteCaster({
   loadVotes,
   loadPendingVotes,
-  saveVoteIfNewer,
   allocateVoteSeq,
 });
 
@@ -81,51 +77,6 @@ interface PollStoreProviderProps {
   children: React.ReactNode;
 }
 
-/**
- * WORKAROUND: ts-mls forbids application messages when unappliedProposals
- * is non-empty. This catches the error, commits pending proposals, and
- * retries. Requires the sender to be an admin (commit() has an admin check).
- *
- * Root cause: admin promotion during invite can silently fail, leaving
- * members unable to commit. The real fix is to guarantee admin promotion
- * succeeds (retry / block invite until confirmed).
- *
- * See also: MarmotContext onMembersChanged auto-commit, ChatStoreContext
- * sendRumorSafe — same workaround applied there.
- */
-const MAX_RETRIES = 3;
-async function sendRumorSafe(
-  group: MarmotGroupType,
-  rumor: Parameters<MarmotGroupType['sendApplicationRumor']>[0],
-): Promise<void> {
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await group.sendApplicationRumor(rumor);
-      return;
-    } catch (err) {
-      const isUnapplied = err instanceof Error && err.message.includes('unapplied proposals');
-      if (!isUnapplied || attempt === MAX_RETRIES) throw err;
-      console.warn(`[sendRumorSafe] unapplied proposals (attempt ${attempt + 1}/${MAX_RETRIES + 1}), committing…`);
-      await group.commit();
-    }
-  }
-}
-
-/** Build a properly-hashed MIP-03 rumor for sendApplicationRumor. */
-async function buildRumor(kind: number, content: string, pubkey: string, tags: string[][] = []) {
-  const { getEventHash } = await import('applesauce-core/helpers/event');
-  const rumor = {
-    id: '',
-    kind,
-    pubkey,
-    created_at: Math.floor(Date.now() / 1000),
-    content,
-    tags,
-  };
-  rumor.id = getEventHash(rumor);
-  return rumor;
-}
-
 export function PollStoreProvider({
   groupId,
   group,
@@ -134,11 +85,11 @@ export function PollStoreProvider({
   children,
 }: PollStoreProviderProps) {
   const { sendMessage: sendChatMessage } = useChatStore();
+  const { groupSender } = useMarmot();
   const [polls, setPolls] = useState<Poll[]>([]);
   const [votes, setVotes] = useState<Record<string, PollVote[]>>({});
   const [loading, setLoading] = useState(false);
 
-  // Load polls from IDB on mount and when group changes
   useEffect(() => {
     if (!groupId) {
       setPolls([]);
@@ -146,45 +97,22 @@ export function PollStoreProvider({
       setLoading(false);
       return;
     }
-
     let active = true;
     setLoading(true);
-
-    loadPolls(groupId)
+    void loadPolls(groupId)
       .then(async (storedPolls) => {
+        const entries = await Promise.all(storedPolls.map(async ({ id }) => [id, await loadVotes(groupId, id)] as const));
         if (!active) return;
         setPolls(storedPolls);
-        // Load votes for all polls
-        const voteMap: Record<string, PollVote[]> = {};
-        for (const poll of storedPolls) {
-          voteMap[poll.id] = await loadVotes(groupId, poll.id);
-        }
-        if (active) setVotes(voteMap);
+        setVotes(Object.fromEntries(entries));
       })
-      .catch(() => {
-        if (active) {
-          setPolls([]);
-          setVotes({});
-        }
+      .catch((error) => {
+        if (active) console.warn('[polls] could not load the current snapshot', error);
       })
       .finally(() => {
         if (active) setLoading(false);
       });
-
     return () => { active = false; };
-  }, [groupId]);
-
-  // Re-read from IDB when MarmotContext persists a new poll message
-  useEffect(() => {
-    if (!groupId || pollVersion === undefined || pollVersion === 0) return;
-    loadPolls(groupId).then(async (storedPolls) => {
-      setPolls(storedPolls);
-      const voteMap: Record<string, PollVote[]> = {};
-      for (const poll of storedPolls) {
-        voteMap[poll.id] = await loadVotes(groupId, poll.id);
-      }
-      setVotes(voteMap);
-    }).catch(() => {});
   }, [groupId, pollVersion]);
 
   const createPoll = useCallback(
@@ -194,7 +122,7 @@ export function PollStoreProvider({
       options: { label: string }[],
       pollType: 'singlechoice' | 'multiplechoice',
     ): Promise<string | null> => {
-      if (!groupId || !group) return null;
+      if (!groupId || !group || !groupSender) return null;
 
       const pollId = crypto.randomUUID();
       const optionDefs: PollOptionDef[] = options.map((o, i) => ({
@@ -212,8 +140,7 @@ export function PollStoreProvider({
       };
 
       // Send poll-open MLS message (kind 10)
-      const openRumor = await buildRumor(POLL_OPEN_KIND, serialisePollOpen(openPayload), pubkey);
-      await sendRumorSafe(group, openRumor as any);
+      await groupSender.sendGroupRumor(group, POLL_OPEN_KIND, serialisePollOpen(openPayload), []);
 
       // Send chat announcement via ChatStoreContext (handles optimistic UI + MLS send)
       const chatContent = JSON.stringify({
@@ -224,62 +151,35 @@ export function PollStoreProvider({
       });
       await sendChatMessage(chatContent);
 
-      // Persist locally
-      const poll: Poll = {
-        id: pollId,
-        groupId,
-        title,
-        description,
-        options: optionDefs,
-        pollType,
-        creatorPubkey: pubkey,
-        createdAt: Date.now(),
-        closed: false,
-      };
-      await savePoll(poll);
-
-      // Optimistically update state
-      setPolls((prev) => [poll, ...prev]);
-
       return pollId;
     },
-    [groupId, group, pubkey, sendChatMessage],
+    [groupId, group, groupSender, pubkey, sendChatMessage],
   );
 
   const castVote = useCallback(
     async (pollId: string, responses: string[]) => {
-      if (!groupId || !group) return;
+      if (!groupId || !group || !groupSender) return;
 
       // Derive the vote's seq, send the vote MLS message (kind 11) and
-      // persist it through the compare-and-set — serialised per poll.
-      const vote = await castPollVote({
+      // let the own history echo apply it through the same path as peers.
+      await castPollVote({
         groupId,
         pollId,
         voterPubkey: pubkey,
         responses,
         send: async (votePayload: PollVotePayload) => {
-          const rumor = await buildRumor(POLL_VOTE_KIND, serialisePollVote(votePayload), pubkey);
-          await sendRumorSafe(group, rumor as any);
-          return rumor;
+          const prepared = groupSender.prepare(group, POLL_VOTE_KIND, serialisePollVote(votePayload), []);
+          await prepared.send();
+          return prepared.rumor;
         },
       });
-
-      // Optimistically update state — with the same order as the store, so a
-      // newer vote (e.g. from another device) already shown is not replaced.
-      setVotes((prev) => {
-        const existing = prev[pollId] ?? [];
-        const current = existing.find((v) => v.id === vote.id);
-        if (current && !isNewerVote(vote, current)) return prev;
-        const filtered = existing.filter((v) => v.id !== vote.id);
-        return { ...prev, [pollId]: [...filtered, vote] };
-      });
     },
-    [groupId, group, pubkey],
+    [groupId, group, groupSender, pubkey],
   );
 
   const closePoll = useCallback(
     async (pollId: string) => {
-      if (!groupId || !group) return;
+      if (!groupId || !group || !groupSender) return;
 
       const poll = polls.find((p) => p.id === pollId);
       if (!poll || poll.creatorPubkey !== pubkey) return;
@@ -306,8 +206,7 @@ export function PollStoreProvider({
       const closePayload: PollClosePayload = { pollId, results, totalVoters };
 
       // Send close MLS message (kind 12)
-      const closeRumor = await buildRumor(POLL_CLOSE_KIND, serialisePollClose(closePayload), pubkey);
-      await sendRumorSafe(group, closeRumor as any);
+      await groupSender.sendGroupRumor(group, POLL_CLOSE_KIND, serialisePollClose(closePayload), []);
 
       // Send chat results message via ChatStoreContext (handles optimistic UI + MLS send)
       const chatContent = JSON.stringify({
@@ -318,16 +217,8 @@ export function PollStoreProvider({
         totalVoters,
       });
       await sendChatMessage(chatContent);
-
-      // Update local poll record
-      const updated: Poll = { ...poll, closed: true, results, totalVoters };
-      // Resolves the stored poll: an earlier close wins (closing is final).
-      const stored = (await savePoll(updated)) ?? updated;
-
-      // Optimistically update state
-      setPolls((prev) => prev.map((p) => (p.id === pollId ? stored : p)));
     },
-    [groupId, group, pubkey, polls, votes, sendChatMessage],
+    [groupId, group, groupSender, pubkey, polls, votes, sendChatMessage],
   );
 
   return (
